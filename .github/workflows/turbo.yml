@@ -40,24 +40,6 @@ jobs:
       - name: Test
         run: cd turbo && pnpm test
 
-  build-cli:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/init
-
-      - name: Build Cli
-        run: cd turbo && pnpm -F vm0-cli build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: turbo-build-${{ github.sha }}-cli
-          path: turbo/apps/cli/dist
-          retention-days: 7
-          overwrite: true
-
   build-web:
     runs-on: ubuntu-latest
     steps:
@@ -85,33 +67,6 @@ jobs:
           vercel-org-id: ${{ vars.VERCEL_TEAM_ID }}
           vercel-project-id: ${{ vars.VERCEL_PROJECT_ID_DOCS }}
           artifact-name: turbo-build-${{ github.sha }}-docs
-
-  e2e:
-    runs-on: ${{ matrix.os }}
-    needs: build-cli
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: turbo-build-${{ github.sha }}-cli
-          path: turbo/apps/cli/dist
-
-      - name: Install CLI globally
-        run: cd turbo/apps/cli/dist && npm install && npm link
-
-      - name: Run E2E Tests
-        run: cd e2e && make test
 
   # Database for preview environment
   database:

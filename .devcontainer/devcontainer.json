@@ -1,18 +1,8 @@
 {
-  "name": "Node.js & TypeScript",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    },
-    "ghcr.io/devcontainers-extra/features/pnpm:2": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers-extra/features/lefthook-asdf:1": {},
-    "ghcr.io/itsmechlark/features/postgresql:1": {},
-    "ghcr.io/guiyomh/features/vim:0": {},
-    "ghcr.io/devcontainers-extra/features/ripgrep:1": {}
-  },
-  "forwardPorts": [4983],
+  "name": "VM0 Development Environment",
+  "image": "ghcr.io/vm0-ai/vm0-dev:main",
+  "features": {},
+  "forwardPorts": [3000, 3001, 4983],
   "remoteEnv": {
     "CLAUDE_CONFIG_DIR": "/home/vscode/.config/claude",
     "HISTFILE": "/home/vscode/.cache/.zsh_history",
@@ -21,9 +11,10 @@
   "mounts": [
     "source=config,target=/home/vscode/.config",
     "source=cache,target=/home/vscode/.cache",
-    "source=vercel,target=/home/vscode/.local/share/com.vercel.cli"
+    "source=vercel,target=/home/vscode/.local/share/com.vercel.cli",
+    "source=pnpm,target=/home/vscode/.local/share/pnpm"
   ],
-  "postCreateCommand": "sudo mkdir -p /home/vscode/.local/bin && sudo chown -R vscode:vscode /home/vscode/.config /home/vscode/.cache /home/vscode/.local && npm install -g vercel",
+  "postCreateCommand": "sudo mkdir -p /home/vscode/.local/bin && sudo chown -R vscode:vscode /home/vscode/.config /home/vscode/.cache /home/vscode/.local && cd turbo && pnpm install",
   "customizations": {
     "vscode": {
       "settings": {
@@ -36,7 +27,7 @@
             "name": "local",
             "username": "postgres",
             "database": "postgres",
-            "password": ""
+            "password": "postgres"
           }
         ],
         "terminal.integrated.defaultProfile.linux": "zsh",
@@ -45,7 +36,18 @@
             "path": "/usr/bin/zsh"
           }
         }
-      }
+      },
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "GitHub.vscode-pull-request-github",
+        "GitHub.copilot",
+        "bradlc.vscode-tailwindcss",
+        "ms-azuretools.vscode-docker",
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+        "Prisma.prisma"
+      ]
     }
   }
 }

@@ -10,6 +10,9 @@ jobs:
   # Change detection to optimize CI pipeline
   change-detection:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     outputs:
       web-changed: ${{ steps.changes.outputs.web }}
       docs-changed: ${{ steps.changes.outputs.docs }}
@@ -18,6 +21,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Need full history for PR change detection
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Detect changes
         id: changes
@@ -82,33 +88,32 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [change-detection]
     if: needs.change-detection.outputs.any-app-changed == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
 
-      # Add pnpm caching
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npx -y @evilmartians/lefthook run pre-commit --all-files
+        working-directory: turbo
+        run: pnpm lint
 
   test:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [change-detection]
     if: needs.change-detection.outputs.any-app-changed == 'true' || github.event_name == 'push'
     services:
@@ -121,55 +126,43 @@ jobs:
           --health-retries 5
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
 
-      # Add pnpm caching
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Test
-        run: cd turbo && pnpm test
+        working-directory: turbo
+        env:
+          DATABASE_URL: postgresql://postgres@postgres:5432/postgres
+        run: pnpm test
 
   build-web:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [change-detection, test]
     if: needs.change-detection.outputs.web-changed == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
 
-      # Add pnpm and build caching
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Setup build cache
         uses: actions/cache@v3
@@ -191,27 +184,22 @@ jobs:
 
   build-docs:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [change-detection, test]
     if: needs.change-detection.outputs.docs-changed == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
 
-      # Add pnpm and build caching
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Setup build cache
         uses: actions/cache@v3
@@ -234,6 +222,9 @@ jobs:
   # Database for preview environment
   database:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [change-detection, test, lint]
     if: github.event_name == 'pull_request' && needs.change-detection.outputs.web-changed == 'true'
     permissions:
@@ -244,7 +235,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Create Neon Branch and Run Migrations
         id: branch
@@ -258,6 +255,9 @@ jobs:
   # Deploy web application
   deploy-web:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [build-web, database, lint]
     if: |
       always() &&
@@ -271,7 +271,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -295,6 +301,9 @@ jobs:
   # Deploy docs application
   deploy-docs:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/vm0-ai/vm0-toolchain:main
+      options: --user root
     needs: [build-docs, lint]
     if: |
       always() &&
@@ -308,7 +317,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - uses: ./.github/actions/init
+
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Install dependencies
+        working-directory: turbo
+        run: pnpm install --frozen-lockfile
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4

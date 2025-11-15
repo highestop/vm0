@@ -228,6 +228,9 @@ importers:
       '@vm0/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
+      eslint:
+        specifier: ^9.34.0
+        version: 9.34.0(jiti@2.6.1)
       typescript:
         specifier: 5.9.2
         version: 5.9.2

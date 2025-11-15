@@ -1,8 +1,13 @@
 {
-  "name": "VM0 Development Environment",
-  "image": "ghcr.io/vm0-ai/vm0-dev:main",
-  "features": {},
-  "forwardPorts": [3000, 3001, 4983],
+  "name": "VM0 Development",
+  "image": "ghcr.io/vm0-ai/vm0-dev:latest",
+  "features": {
+    "ghcr.io/itsmechlark/features/postgresql:1": {
+      "version": "17"
+    }
+  },
+  "remoteUser": "vscode",
+  "forwardPorts": [3000, 3001, 4983, 5432],
   "remoteEnv": {
     "CLAUDE_CONFIG_DIR": "/home/vscode/.config/claude",
     "HISTFILE": "/home/vscode/.cache/.zsh_history",
@@ -14,9 +19,17 @@
     "source=vercel,target=/home/vscode/.local/share/com.vercel.cli",
     "source=pnpm,target=/home/vscode/.local/share/pnpm"
   ],
-  "postCreateCommand": "sudo mkdir -p /home/vscode/.local/bin && sudo chown -R vscode:vscode /home/vscode/.config /home/vscode/.cache /home/vscode/.local && cd turbo && pnpm install",
+  "postCreateCommand": "cd turbo && pnpm install",
   "customizations": {
     "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "vitest.explorer",
+        "mtxr.sqltools-driver-pg",
+        "foxundermoon.shell-format"
+      ],
       "settings": {
         "sqltools.connections": [
           {
@@ -27,7 +40,7 @@
             "name": "local",
             "username": "postgres",
             "database": "postgres",
-            "password": "postgres"
+            "password": ""
           }
         ],
         "terminal.integrated.defaultProfile.linux": "zsh",
@@ -36,18 +49,7 @@
             "path": "/usr/bin/zsh"
           }
         }
-      },
-      "extensions": [
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode",
-        "GitHub.vscode-pull-request-github",
-        "GitHub.copilot",
-        "bradlc.vscode-tailwindcss",
-        "ms-azuretools.vscode-docker",
-        "mtxr.sqltools",
-        "mtxr.sqltools-driver-pg",
-        "Prisma.prisma"
-      ]
+      }
     }
   }
 }

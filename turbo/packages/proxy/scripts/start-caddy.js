@@ -20,7 +20,7 @@ try {
 // Stop any existing Caddy instance
 try {
   console.log("Stopping any existing Caddy instances...");
-  execSync("pkill -f caddy || true", { stdio: "inherit" });
+  execSync("pkill -9 caddy 2>/dev/null || true", { stdio: "pipe" });
 } catch (error) {
   // Ignore errors if no Caddy is running
 }

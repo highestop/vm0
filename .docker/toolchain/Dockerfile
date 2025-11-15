@@ -95,9 +95,21 @@ RUN apt-get update && apt-get install -y \
     && mv mkcert-v*-linux-* /usr/local/bin/mkcert \
     && rm -rf /var/lib/apt/lists/*
 
+# Install 1Password CLI
+RUN curl -fsSL https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" | tee /etc/apt/sources.list.d/1password.list \
+    && mkdir -p /etc/debsig/policies/AC2D62742012EA22 \
+    && curl -fsSL https://downloads.1password.com/linux/debian/debsig/1password.pol | tee /etc/debsig/policies/AC2D62742012EA22/1password.pol \
+    && mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 \
+    && curl -fsSL https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg \
+    && apt-get update \
+    && apt-get install -y 1password-cli \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create vscode user with standard UID/GID for devcontainer compatibility
 # Following Microsoft's devcontainer pattern for better feature compatibility
-RUN groupadd --gid 1000 vscode \
+# Use -f flag to force group creation if GID already exists (1Password CLI creates GID 1000)
+RUN groupadd -f --gid 1000 vscode \
     && useradd --uid 1000 --gid vscode --shell /usr/bin/zsh --create-home vscode \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode \
     && chmod 0440 /etc/sudoers.d/vscode \

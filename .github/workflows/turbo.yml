@@ -93,6 +93,8 @@ jobs:
         working-directory: turbo
         env:
           DATABASE_URL: postgresql://postgres@postgres:5432/postgres
+          CLERK_SECRET_KEY: sk_test_mock_secret_key_for_testing
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_mock_instance.clerk.accounts.dev$
         run: pnpm test
 
   # Deploy web application with database
@@ -135,6 +137,8 @@ jobs:
           deployment-env: web
           environment-variables: |
             DATABASE_URL=${{ steps.branch.outputs.database-url }}
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+            CLERK_SECRET_KEY=${{ secrets.CLERK_SECRET_KEY }}
           meta-branch: ${{ github.head_ref }}
           meta-pr: ${{ github.event.pull_request.number }}
 

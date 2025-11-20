@@ -67,14 +67,35 @@ export class E2BService {
     let tempDir: string | null = null;
 
     try {
-      // Get API configuration
-      const apiUrl =
-        globalThis.services?.env?.VM0_API_URL || "http://localhost:3000";
+      // Get API configuration with dynamic fallback logic
+      // Priority: explicit VM0_API_URL > VERCEL_URL (for preview) > production URL > localhost
+      const envVars = globalThis.services?.env;
+
+      // Read Vercel system variables directly from process.env
+      // These may not be available through the validated env schema
+      const vercelEnv = process.env.VERCEL_ENV;
+      const vercelUrl = process.env.VERCEL_URL;
+
+      let apiUrl = envVars?.VM0_API_URL || process.env.VM0_API_URL;
+
+      if (!apiUrl) {
+        // If no explicit URL, determine based on VERCEL_ENV
+        if (vercelEnv === "preview" && vercelUrl) {
+          apiUrl = `https://${vercelUrl}`;
+        } else if (vercelEnv === "production") {
+          apiUrl = "https://www.vm0.ai";
+        } else {
+          apiUrl = "http://localhost:3000";
+        }
+      }
+
       const webhookEndpoint = `${apiUrl}/api/webhooks/agent-events`;
 
-      console.log(`[E2B] API URL: ${apiUrl}`);
-      console.log(`[E2B] Webhook endpoint: ${webhookEndpoint}`);
-      console.log(`[E2B] Run ID: ${runId}`);
+      console.log(
+        `[E2B] Environment - VERCEL_ENV: ${vercelEnv}, VERCEL_URL: ${vercelUrl}, VM0_API_URL: ${apiUrl}`,
+      );
+      console.log(`[E2B] Computed API URL: ${apiUrl}`);
+      console.log(`[E2B] Webhook: ${webhookEndpoint}`);
 
       // Resolve volumes from agent config
       const agentConfig = options.agentConfig as AgentVolumeConfig | undefined;
@@ -116,12 +137,23 @@ export class E2BService {
       }
 
       // Create E2B sandbox with environment variables
-      sandbox = await this.createSandbox({
+      const sandboxEnvVars: Record<string, string> = {
         VM0_API_URL: apiUrl,
         VM0_WEBHOOK_URL: webhookEndpoint,
         VM0_RUN_ID: runId,
         VM0_WEBHOOK_TOKEN: options.sandboxToken, // Temporary bearer token for webhook authentication
-      });
+      };
+
+      // Add Vercel protection bypass secret if available (for preview deployments)
+      const vercelBypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      if (vercelBypassSecret) {
+        sandboxEnvVars.VERCEL_PROTECTION_BYPASS = vercelBypassSecret;
+        console.log(
+          `[E2B] Added Vercel protection bypass for preview deployment`,
+        );
+      }
+
+      sandbox = await this.createSandbox(sandboxEnvVars);
       console.log(`[E2B] Sandbox created: ${sandbox.sandboxId}`);
 
       // Upload volumes to sandbox

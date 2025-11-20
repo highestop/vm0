@@ -4,7 +4,7 @@ import { spawn, ChildProcess } from "child_process";
 import * as dotenv from "dotenv";
 
 // Load environment variables
-dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local" });
 
 /**
  * Automate CLI authentication flow
@@ -31,14 +31,18 @@ export async function automateCliAuth(apiHost?: string) {
     const apiUrl = apiHost || process.env.API_HOST || "http://localhost:3000";
     console.log(`📡 Connecting to API: ${apiUrl}`);
 
-    // Always use globally installed uspark command
+    // Always use globally installed vm0 command
     // Both GitHub Actions and local development should install CLI via pnpm link --global first
-    cliProcess = spawn("uspark", ["auth", "login"], {
+    cliProcess = spawn("vm0", ["auth", "login"], {
       cwd: process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
-        API_HOST: apiUrl  // Set API_HOST environment variable
+        API_HOST: apiUrl,  // Set API_HOST environment variable
+        // Pass Vercel bypass secret if available (for CI/preview deployments)
+        ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+          VERCEL_AUTOMATION_BYPASS_SECRET: process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+        })
       }
     });
 
@@ -130,7 +134,16 @@ export async function automateCliAuth(apiHost?: string) {
     // Use configured API URL
     const baseUrl = apiUrl;
 
-    await page.goto(baseUrl);
+    // If Vercel bypass secret is available, set bypass cookie via query parameter
+    // This avoids CORS issues that occur when using HTTP headers
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    let initialUrl = baseUrl;
+    if (bypassSecret) {
+      initialUrl = `${baseUrl}?x-vercel-set-bypass-cookie=samesitenone&x-vercel-protection-bypass=${bypassSecret}`;
+      console.log("🔓 Setting Vercel bypass cookie via query parameter");
+    }
+
+    await page.goto(initialUrl);
     await clerk.signIn({
       page,
       emailAddress: "e2e+clerk_test@vm0.ai",
@@ -144,22 +157,14 @@ export async function automateCliAuth(apiHost?: string) {
     await page.waitForLoadState("networkidle");
 
     // Step 7: Enter device code
-    // Device code format: XXXX-XXXX, needs to be entered into multiple input boxes
+    // Device code format: XXXX-XXXX, entered into a single input field
     console.log(`📝 Entering device code: ${deviceCode}`);
 
-    // Remove hyphen to get pure characters
-    const codeChars = deviceCode.replace('-', '');
+    // Find the code input field
+    const codeInput = page.locator('input[type="text"]').first();
 
-    // Find all input boxes
-    const codeInputs = await page.locator('input[type="text"], input[maxlength="1"]').all();
-    console.log(`🔍 Found ${codeInputs.length} input boxes`);
-
-    // Enter each character into corresponding input box
-    for (let i = 0; i < codeChars.length && i < codeInputs.length; i++) {
-      await codeInputs[i].fill(codeChars[i]);
-      // Add small delay to simulate real input
-      await page.waitForTimeout(50);
-    }
+    // Fill the complete device code (with hyphen)
+    await codeInput.fill(deviceCode);
 
     console.log(`✅ Device code entered: ${deviceCode}`);
 
@@ -224,7 +229,7 @@ export async function automateCliAuth(apiHost?: string) {
     const fs = require("fs");
     const os = require("os");
     const path = require("path");
-    const configPath = path.join(os.homedir(), ".uspark", "config.json");
+    const configPath = path.join(os.homedir(), ".vm0", "config.json");
 
     if (fs.existsSync(configPath)) {
       console.log("✅ Auth file created:", configPath);

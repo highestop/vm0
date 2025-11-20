@@ -15,7 +15,6 @@
     "knip:production": "knip --production --strict",
     "generate-certs": "bash ../scripts/generate-certs.sh",
     "check-certs": "node packages/proxy/scripts/check-certs.js",
-    "sync:env": "eval $(op signin) && op inject -i ../.env.local.tpl -o apps/web/.env.local",
     "e2b:build": "npx tsx ../e2b/build.prod.ts",
     "e2b:build:dev": "npx tsx ../e2b/build.dev.ts"
   },

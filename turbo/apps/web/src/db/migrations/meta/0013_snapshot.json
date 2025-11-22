@@ -1,6 +1,6 @@
 {
-  "id": "ab5d1f54-2a38-4bc2-a8b9-53f201f6665f",
-  "prevId": "dd14b3bc-2f97-4f70-b226-668806332ffc",
+  "id": "3d9f1bc2-6c52-4e54-8548-a6d4d14db316",
+  "prevId": "fbba4282-9aa3-4601-9762-966fbd5343f0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -162,6 +162,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "resumed_from_checkpoint_id": {
+          "name": "resumed_from_checkpoint_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "varchar(20)",
@@ -299,7 +305,7 @@
           "tableTo": "agent_runs",
           "columnsFrom": ["run_id"],
           "columnsTo": ["id"],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "checkpoints_agent_config_id_agent_configs_id_fk": {

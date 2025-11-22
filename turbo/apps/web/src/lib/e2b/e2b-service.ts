@@ -7,7 +7,7 @@ import type {
   SandboxExecutionResult,
 } from "./types";
 import { volumeService } from "../volume/volume-service";
-import type { AgentVolumeConfig } from "../volume/types";
+import type { AgentVolumeConfig, PreparedVolume } from "../volume/types";
 import type { AgentConfigYaml } from "../../types/agent-config";
 import { RUN_AGENT_SCRIPT } from "./run-agent-script";
 
@@ -104,6 +104,7 @@ export class E2BService {
         options.prompt,
         options.sandboxToken,
         options.agentConfig,
+        volumeResult.preparedVolumes,
       );
 
       const executionTimeMs = Date.now() - startTime;
@@ -184,6 +185,7 @@ export class E2BService {
   /**
    * Upload run-agent.sh script to sandbox
    * The script content is embedded in the application code for reliable deployment
+   * Updated: Using jq for JSON generation in git snapshots
    */
   private async uploadRunAgentScript(sandbox: Sandbox): Promise<string> {
     const tempPath = "/tmp/run-agent.sh";
@@ -224,6 +226,7 @@ export class E2BService {
     prompt: string,
     sandboxToken: string,
     agentConfig?: unknown,
+    preparedVolumes?: PreparedVolume[],
   ): Promise<SandboxExecutionResult> {
     const execStart = Date.now();
 
@@ -250,6 +253,25 @@ export class E2BService {
       console.log(`[E2B] Working directory configured: ${workingDir}`);
     }
 
+    // Add volume information for checkpoint
+    if (preparedVolumes && preparedVolumes.length > 0) {
+      // Filter only Git volumes and format for checkpoint
+      const gitVolumes = preparedVolumes
+        .filter((v) => v.driver === "git")
+        .map((v) => ({
+          name: v.name,
+          driver: v.driver,
+          mountPath: v.mountPath,
+        }));
+
+      if (gitVolumes.length > 0) {
+        envs.VM0_GIT_VOLUMES = JSON.stringify(gitVolumes);
+        console.log(
+          `[E2B] Configured ${gitVolumes.length} Git volume(s) for checkpoint`,
+        );
+      }
+    }
+
     // Add Minimax API configuration if available
     const minimaxBaseUrl = env().MINIMAX_ANTHROPIC_BASE_URL;
     const minimaxApiKey = env().MINIMAX_API_KEY;
@@ -274,13 +296,15 @@ export class E2BService {
 
     const executionTimeMs = Date.now() - execStart;
 
+    // Always log stderr to capture [VM0] checkpoint logs (even on success)
+    console.log(`[E2B] stderr (${result.stderr.length} chars):`, result.stderr);
+
     if (result.exitCode === 0) {
       console.log(`[E2B] Run ${runId} completed successfully`);
     } else {
       console.error(
         `[E2B] Run ${runId} failed with exit code ${result.exitCode}`,
       );
-      console.error(`[E2B] stderr:`, result.stderr);
     }
 
     return {

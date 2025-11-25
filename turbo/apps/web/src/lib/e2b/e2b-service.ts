@@ -9,12 +9,14 @@ import {
   COMMON_SCRIPT,
   SEND_EVENT_SCRIPT,
   GIT_SNAPSHOT_SCRIPT,
+  VM0_SNAPSHOT_SCRIPT,
   CREATE_CHECKPOINT_SCRIPT,
   RUN_AGENT_SCRIPT,
   SCRIPT_PATHS,
 } from "./scripts";
 import type { ExecutionContext } from "../run/types";
 import { calculateSessionHistoryPath } from "../run/run-service";
+import { sendVm0ErrorEvent } from "../events";
 
 /**
  * E2B Service
@@ -46,6 +48,7 @@ export class E2BService {
           context.resumeVolumes,
           agentConfig,
           context.dynamicVars || {},
+          context.runId, // Pass runId for VM0 volume temp directory
         )
       : await volumeService.prepareVolumes(
           agentConfig,
@@ -144,6 +147,22 @@ export class E2BService {
         `[E2B] Run ${context.runId} completed in ${executionTimeMs}ms`,
       );
 
+      // If sandbox script failed, send vm0_error event
+      // This ensures CLI doesn't timeout waiting for events
+      if (result.exitCode !== 0) {
+        try {
+          await sendVm0ErrorEvent({
+            runId: context.runId,
+            error: result.stderr || "Agent execution failed",
+          });
+        } catch (e) {
+          console.error(
+            `[E2B] Failed to send vm0_error event for run ${context.runId}:`,
+            e,
+          );
+        }
+      }
+
       return {
         runId: context.runId,
         sandboxId: sandbox.sandboxId,
@@ -157,15 +176,30 @@ export class E2BService {
     } catch (error) {
       const executionTimeMs = Date.now() - startTime;
       const completedAt = new Date();
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
 
       console.error(`[E2B] Run ${context.runId} failed:`, error);
+
+      // Send vm0_error event so CLI doesn't timeout
+      try {
+        await sendVm0ErrorEvent({
+          runId: context.runId,
+          error: errorMessage,
+        });
+      } catch (e) {
+        console.error(
+          `[E2B] Failed to send vm0_error event for run ${context.runId}:`,
+          e,
+        );
+      }
 
       return {
         runId: context.runId,
         sandboxId: sandbox?.sandboxId || "unknown",
         status: "failed",
         output: "",
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: errorMessage,
         executionTimeMs,
         createdAt: new Date(startTime),
         completedAt,
@@ -275,6 +309,7 @@ export class E2BService {
       { content: COMMON_SCRIPT, path: SCRIPT_PATHS.common },
       { content: SEND_EVENT_SCRIPT, path: SCRIPT_PATHS.sendEvent },
       { content: GIT_SNAPSHOT_SCRIPT, path: SCRIPT_PATHS.gitSnapshot },
+      { content: VM0_SNAPSHOT_SCRIPT, path: SCRIPT_PATHS.vm0Snapshot },
       {
         content: CREATE_CHECKPOINT_SCRIPT,
         path: SCRIPT_PATHS.createCheckpoint,
@@ -352,10 +387,26 @@ export class E2BService {
     }
 
     // Add volume information for checkpoint
+    // Only dynamic volumes create new versions after agent runs
+    console.log(`[E2B] preparedVolumes count: ${preparedVolumes?.length ?? 0}`);
     if (preparedVolumes && preparedVolumes.length > 0) {
-      // Filter only Git volumes and format for checkpoint
+      // Debug: log all prepared volumes to understand filtering
+      console.log(
+        `[E2B] Prepared volumes for checkpoint filtering:`,
+        JSON.stringify(
+          preparedVolumes.map((v) => ({
+            name: v.name,
+            driver: v.driver,
+            isDynamic: v.isDynamic,
+            mountPath: v.mountPath,
+            vm0VolumeName: v.vm0VolumeName,
+          })),
+        ),
+      );
+
+      // Filter only dynamic Git volumes and format for checkpoint
       const gitVolumes = preparedVolumes
-        .filter((v) => v.driver === "git")
+        .filter((v) => v.driver === "git" && v.isDynamic)
         .map((v) => ({
           name: v.name,
           driver: v.driver,
@@ -365,8 +416,32 @@ export class E2BService {
       if (gitVolumes.length > 0) {
         envs.VM0_GIT_VOLUMES = JSON.stringify(gitVolumes);
         console.log(
-          `[E2B] Configured ${gitVolumes.length} Git volume(s) for checkpoint`,
+          `[E2B] Configured ${gitVolumes.length} dynamic Git volume(s) for checkpoint`,
         );
+      }
+
+      // Filter only dynamic VM0 volumes and format for checkpoint
+      const vm0Volumes = preparedVolumes
+        .filter((v) => v.driver === "vm0" && v.isDynamic)
+        .map((v) => ({
+          name: v.name,
+          driver: v.driver,
+          mountPath: v.mountPath,
+          vm0VolumeName: v.vm0VolumeName,
+          vm0VersionId: v.vm0VersionId,
+        }));
+
+      console.log(
+        `[E2B] Filtered VM0 volumes: ${vm0Volumes.length} (isDynamic filter applied)`,
+      );
+
+      if (vm0Volumes.length > 0) {
+        envs.VM0_VM0_VOLUMES = JSON.stringify(vm0Volumes);
+        console.log(
+          `[E2B] Configured ${vm0Volumes.length} dynamic VM0 volume(s) for checkpoint: ${JSON.stringify(vm0Volumes)}`,
+        );
+      } else {
+        console.log(`[E2B] No dynamic VM0 volumes found for checkpoint`);
       }
     }
 

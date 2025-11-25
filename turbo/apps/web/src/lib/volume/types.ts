@@ -25,6 +25,11 @@ export interface ResolvedVolume {
   gitBranch?: string;
   gitToken?: string;
   vm0VolumeName?: string;
+  /**
+   * Whether this volume is from dynamic_volumes (true) or static volumes (false)
+   * Only dynamic volumes create new versions after agent runs
+   */
+  isDynamic?: boolean;
 }
 
 /**
@@ -66,6 +71,13 @@ export interface PreparedVolume {
   gitUri?: string;
   gitBranch?: string;
   gitToken?: string;
+  vm0VolumeName?: string;
+  vm0VersionId?: string;
+  /**
+   * Whether this volume is from dynamic_volumes (true) or static volumes (false)
+   * Only dynamic volumes create new versions after agent runs
+   */
+  isDynamic?: boolean;
 }
 
 /**

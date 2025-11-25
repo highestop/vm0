@@ -248,6 +248,7 @@ describe("resolveVolumes", () => {
       driver: "vm0",
       mountPath: "/workspace/data",
       vm0VolumeName: "my-dataset",
+      isDynamic: false,
     });
     expect(result.errors).toHaveLength(0);
   });
@@ -275,6 +276,7 @@ describe("resolveVolumes", () => {
       driver: "vm0",
       mountPath: "/workspace/data",
       vm0VolumeName: "cifar10",
+      isDynamic: true,
     });
     expect(result.errors).toHaveLength(0);
   });

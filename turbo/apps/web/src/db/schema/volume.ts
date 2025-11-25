@@ -9,6 +9,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+/**
+ * Volumes table
+ * Main table for user volumes with HEAD pointer to current version
+ */
 export const volumes = pgTable(
   "volumes",
   {
@@ -18,6 +22,7 @@ export const volumes = pgTable(
     s3Prefix: text("s3_prefix").notNull(),
     size: bigint("size", { mode: "number" }).notNull().default(0),
     fileCount: integer("file_count").notNull().default(0),
+    headVersionId: uuid("head_version_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -28,3 +33,20 @@ export const volumes = pgTable(
     ),
   }),
 );
+
+/**
+ * Volume versions table
+ * Stores individual versions of each volume with versioned S3 paths
+ */
+export const volumeVersions = pgTable("volume_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  volumeId: uuid("volume_id")
+    .notNull()
+    .references(() => volumes.id, { onDelete: "cascade" }),
+  s3Key: text("s3_key").notNull(),
+  size: bigint("size", { mode: "number" }).notNull().default(0),
+  fileCount: integer("file_count").notNull().default(0),
+  message: text("message"),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});

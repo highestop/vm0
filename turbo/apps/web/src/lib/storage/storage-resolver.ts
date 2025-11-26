@@ -211,8 +211,13 @@ function resolveArtifact(
 
   // VM0 driver: artifact key is required at runtime
   if (!artifactKey) {
-    // No artifact key provided - this is valid, just means no artifact mounted
-    return { artifact: null, errors: [] };
+    errors.push({
+      volumeName: "artifact",
+      message:
+        "VM0 artifact configured but no artifact key provided. Use --artifact flag to specify artifact.",
+      type: "missing_artifact_key",
+    });
+    return { artifact: null, errors };
   }
 
   return {
@@ -230,12 +235,14 @@ function resolveArtifact(
  * @param config - Agent configuration with volume definitions
  * @param dynamicVars - Dynamic variables for template replacement
  * @param artifactKey - Artifact key for VM0 driver (optional)
+ * @param skipArtifact - Skip artifact resolution (used when resuming from checkpoint)
  * @returns Resolution result with resolved volumes, artifact, and errors
  */
 export function resolveVolumes(
   config: AgentVolumeConfig,
   dynamicVars: Record<string, string> = {},
   artifactKey?: string,
+  skipArtifact?: boolean,
 ): VolumeResolutionResult {
   const volumes: ResolvedVolume[] = [];
   const errors: VolumeError[] = [];
@@ -309,8 +316,8 @@ export function resolveVolumes(
     }
   }
 
-  // Process artifact configuration
-  if (config.agent?.artifact) {
+  // Process artifact configuration (skip when resuming from checkpoint)
+  if (config.agent?.artifact && !skipArtifact) {
     const { artifact: resolvedArtifact, errors: artifactErrors } =
       resolveArtifact(config.agent.artifact, dynamicVars, artifactKey);
 

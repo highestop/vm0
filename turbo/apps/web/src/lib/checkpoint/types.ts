@@ -11,37 +11,35 @@ export interface GitSnapshot {
 }
 
 /**
- * VM0 volume snapshot containing version information
+ * VM0 artifact snapshot containing version information
  */
 export interface Vm0Snapshot {
   versionId: string;
 }
 
 /**
- * Volume snapshot for Git-based volumes
+ * Artifact snapshot for Git-based artifacts
  */
-export interface GitVolumeSnapshot {
-  name: string;
+export interface GitArtifactSnapshot {
   driver: "git";
   mountPath: string;
   snapshot?: GitSnapshot;
 }
 
 /**
- * Volume snapshot for VM0 managed volumes
+ * Artifact snapshot for VM0 managed artifacts
  */
-export interface Vm0VolumeSnapshot {
-  name: string;
+export interface Vm0ArtifactSnapshot {
   driver: "vm0";
   mountPath: string;
-  vm0VolumeName: string;
+  vm0StorageName: string;
   snapshot?: Vm0Snapshot;
 }
 
 /**
- * Union type for all volume snapshots
+ * Union type for artifact snapshots
  */
-export type VolumeSnapshot = GitVolumeSnapshot | Vm0VolumeSnapshot;
+export type ArtifactSnapshot = GitArtifactSnapshot | Vm0ArtifactSnapshot;
 
 /**
  * Complete checkpoint data stored in database
@@ -52,7 +50,7 @@ export interface CheckpointData {
   sessionId: string;
   dynamicVars?: Record<string, string>;
   sessionHistory: string; // JSONL format
-  volumeSnapshots: VolumeSnapshot[];
+  artifactSnapshot: ArtifactSnapshot | null;
 }
 
 /**
@@ -62,7 +60,7 @@ export interface CheckpointRequest {
   runId: string;
   sessionId: string;
   sessionHistory: string;
-  volumeSnapshots: VolumeSnapshot[];
+  artifactSnapshot: ArtifactSnapshot | null;
 }
 
 /**
@@ -70,5 +68,5 @@ export interface CheckpointRequest {
  */
 export interface CheckpointResponse {
   checkpointId: string;
-  volumeSnapshots: number;
+  hasArtifact: boolean;
 }

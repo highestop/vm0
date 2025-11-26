@@ -19,20 +19,30 @@ function formatBytes(bytes: number): string {
 
 export const pullCommand = new Command()
   .name("pull")
-  .description("Pull cloud files to local directory")
+  .description("Pull cloud artifact to local directory")
   .action(async () => {
     try {
       const cwd = process.cwd();
 
-      // Read storage config
+      // Read config
       const config = await readStorageConfig(cwd);
       if (!config) {
-        console.error(chalk.red("✗ No volume initialized in this directory"));
-        console.error(chalk.gray("  Run: vm0 volume init"));
+        console.error(chalk.red("✗ No artifact initialized in this directory"));
+        console.error(chalk.gray("  Run: vm0 artifact init"));
         process.exit(1);
       }
 
-      console.log(chalk.cyan(`Pulling volume: ${config.name}`));
+      if (config.type !== "artifact") {
+        console.error(
+          chalk.red(
+            `✗ This directory is initialized as a volume, not an artifact`,
+          ),
+        );
+        console.error(chalk.gray("  Use: vm0 volume pull"));
+        process.exit(1);
+      }
+
+      console.log(chalk.cyan(`Pulling artifact: ${config.name}`));
 
       // Download from API
       console.log(chalk.gray("Downloading..."));
@@ -43,14 +53,14 @@ export const pullCommand = new Command()
 
       if (!response.ok) {
         if (response.status === 404) {
-          console.error(chalk.red(`✗ Volume "${config.name}" not found`));
+          console.error(chalk.red(`✗ Artifact "${config.name}" not found`));
           console.error(
             chalk.gray(
-              "  Make sure the volume name is correct in .vm0/storage.yaml",
+              "  Make sure the artifact name is correct in .vm0/storage.yaml",
             ),
           );
           console.error(
-            chalk.gray("  Or push the volume first with: vm0 volume push"),
+            chalk.gray("  Or push the artifact first with: vm0 artifact push"),
           );
         } else {
           const error = (await response.json()) as { error: string };

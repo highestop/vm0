@@ -16,10 +16,6 @@ teardown() {
     fi
 }
 
-# ============================================
-# Volume CLI Operations (no vm0 run needed)
-# ============================================
-
 @test "Initialize volume in directory" {
     mkdir -p "$TEST_VOLUME_DIR/$VOLUME_NAME"
     cd "$TEST_VOLUME_DIR/$VOLUME_NAME"
@@ -28,8 +24,8 @@ teardown() {
     assert_success
     assert_output --partial "$VOLUME_NAME"
 
-    # Verify .vm0/volume.yaml file is created
-    [ -f ".vm0/volume.yaml" ]
+    # Verify .vm0/storage.yaml file is created
+    [ -f ".vm0/storage.yaml" ]
 }
 
 @test "Initialize volume with auto-detected name" {
@@ -109,7 +105,7 @@ teardown() {
     NEW_DIR="$(mktemp -d)"
     cd "$NEW_DIR"
     mkdir -p .vm0
-    cat > .vm0/volume.yaml <<EOF
+    cat > .vm0/storage.yaml <<EOF
 name: $VOLUME_NAME
 EOF
 
@@ -124,71 +120,4 @@ EOF
     assert_output "version 3 - HEAD"
 
     rm -rf "$NEW_DIR"
-}
-
-# ============================================
-# Agent with vm0:// volume (single vm0 run)
-# This test verifies both volume mounting AND version (HEAD) behavior
-# ============================================
-
-@test "Agent reads HEAD version from vm0:// volume" {
-    # Create and push multiple versions to test HEAD behavior
-    mkdir -p "$TEST_VOLUME_DIR/$VOLUME_NAME"
-    cd "$TEST_VOLUME_DIR/$VOLUME_NAME"
-    $CLI_COMMAND volume init >/dev/null
-
-    # Push first version (will be overwritten)
-    echo "old content - should not see this" > message.txt
-    $CLI_COMMAND volume push >/dev/null
-
-    # Push second version (becomes HEAD)
-    echo "Hello from HEAD version" > message.txt
-    echo "42" > answer.txt
-    $CLI_COMMAND volume push >/dev/null
-
-    # Create agent config that uses this volume
-    CONFIG_DIR="$(mktemp -d)"
-    cat > "$CONFIG_DIR/test-config.yaml" <<EOF
-version: "1.0"
-
-agent:
-  name: test-vm0-volume-$VOLUME_NAME
-  description: "Test agent with VM0 volume"
-  image: vm0-claude-code-dev
-  provider: claude-code
-  working_dir: /workspace
-  volumes:
-    - test-data:/workspace
-
-volumes:
-  test-data:
-    driver: vm0
-    driver_opts:
-      uri: vm0://$VOLUME_NAME
-EOF
-
-    cd "$CONFIG_DIR"
-    $CLI_COMMAND build test-config.yaml >/dev/null
-
-    # Run agent - should see HEAD version content (verifies both mounting and versioning)
-    run $CLI_COMMAND run "test-vm0-volume-$VOLUME_NAME" \
-        "cat /workspace/message.txt && cat /workspace/answer.txt"
-
-    assert_success
-
-    # Verify mock-claude execution events (deterministic with mock-claude)
-    assert_output --partial "[tool_use] Bash"
-    assert_output --partial "cat /workspace/message.txt"
-    assert_output --partial "[tool_result]"
-    assert_output --partial "[result]"
-
-    # Verify HEAD version content (not old content)
-    # With mock-claude, the actual file content appears in tool_result
-    assert_output --partial "Hello from HEAD version"
-    assert_output --partial "42"
-
-    # Verify we did NOT get old content
-    refute_output --partial "old content - should not see this"
-
-    rm -rf "$CONFIG_DIR"
-}
+} 

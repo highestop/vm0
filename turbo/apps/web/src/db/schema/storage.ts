@@ -10,15 +10,23 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * Volumes table
- * Main table for user volumes with HEAD pointer to current version
+ * Storage type:
+ * - "volume": Static storage that doesn't auto-version after runs
+ * - "artifact": Work products that auto-version after runs
  */
-export const volumes = pgTable(
-  "volumes",
+export type StorageTypeEnum = "volume" | "artifact";
+
+/**
+ * Storages table
+ * Main table for user storage with HEAD pointer to current version
+ */
+export const storages = pgTable(
+  "storages",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
     name: varchar("name", { length: 64 }).notNull(),
+    type: varchar("type", { length: 16 }).notNull().default("volume"),
     s3Prefix: text("s3_prefix").notNull(),
     size: bigint("size", { mode: "number" }).notNull().default(0),
     fileCount: integer("file_count").notNull().default(0),
@@ -27,7 +35,7 @@ export const volumes = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => ({
-    userNameIdx: uniqueIndex("idx_volumes_user_name").on(
+    userNameIdx: uniqueIndex("idx_storages_user_name").on(
       table.userId,
       table.name,
     ),
@@ -35,14 +43,14 @@ export const volumes = pgTable(
 );
 
 /**
- * Volume versions table
- * Stores individual versions of each volume with versioned S3 paths
+ * Storage versions table
+ * Stores individual versions of each storage with versioned S3 paths
  */
-export const volumeVersions = pgTable("volume_versions", {
+export const storageVersions = pgTable("storage_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
-  volumeId: uuid("volume_id")
+  storageId: uuid("storage_id")
     .notNull()
-    .references(() => volumes.id, { onDelete: "cascade" }),
+    .references(() => storages.id, { onDelete: "cascade" }),
   s3Key: text("s3_key").notNull(),
   size: bigint("size", { mode: "number" }).notNull().default(0),
   fileCount: integer("file_count").notNull().default(0),

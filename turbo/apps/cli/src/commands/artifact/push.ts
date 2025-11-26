@@ -49,20 +49,30 @@ function formatBytes(bytes: number): string {
 
 export const pushCommand = new Command()
   .name("push")
-  .description("Push local files to cloud volume")
+  .description("Push local files to cloud artifact")
   .action(async () => {
     try {
       const cwd = process.cwd();
 
-      // Read storage config
+      // Read config
       const config = await readStorageConfig(cwd);
       if (!config) {
-        console.error(chalk.red("✗ No volume initialized in this directory"));
-        console.error(chalk.gray("  Run: vm0 volume init"));
+        console.error(chalk.red("✗ No artifact initialized in this directory"));
+        console.error(chalk.gray("  Run: vm0 artifact init"));
         process.exit(1);
       }
 
-      console.log(chalk.cyan(`Pushing volume: ${config.name}`));
+      if (config.type !== "artifact") {
+        console.error(
+          chalk.red(
+            `✗ This directory is initialized as a volume, not an artifact`,
+          ),
+        );
+        console.error(chalk.gray("  Use: vm0 volume push"));
+        process.exit(1);
+      }
+
+      console.log(chalk.cyan(`Pushing artifact: ${config.name}`));
 
       // Get all files
       console.log(chalk.gray("Collecting files..."));
@@ -103,11 +113,11 @@ export const pushCommand = new Command()
 
       const formData = new FormData();
       formData.append("name", config.name);
-      formData.append("type", "volume");
+      formData.append("type", "artifact");
       formData.append(
         "file",
         new Blob([zipBuffer], { type: "application/zip" }),
-        "volume.zip",
+        "artifact.zip",
       );
 
       const response = await apiClient.post("/api/storages", {

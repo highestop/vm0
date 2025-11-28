@@ -15,6 +15,9 @@ export interface Vm0StartEvent {
   prompt: string;
   templateVars?: Record<string, unknown>;
   resumedFromCheckpointId?: string;
+  continuedFromSessionId?: string;
+  artifact?: Record<string, string>; // { artifactName: version }
+  volumes?: Record<string, string>; // { volumeName: version }
   timestamp: string;
 }
 
@@ -28,7 +31,9 @@ export interface Vm0ResultEvent {
   status: "completed";
   checkpointId: string;
   agentSessionId: string;
-  hasArtifact: boolean;
+  conversationId: string;
+  artifact: Record<string, string>; // { artifactName: version }
+  volumes?: Record<string, string>; // { volumeName: version }
   timestamp: string;
 }
 

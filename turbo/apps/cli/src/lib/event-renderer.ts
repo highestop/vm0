@@ -135,6 +135,8 @@ export class EventRenderer {
     if (event.data.agentName) {
       console.log(`  Agent: ${chalk.gray(String(event.data.agentName))}`);
     }
+
+    this.renderArtifactAndVolumes(event.data);
   }
 
   private static renderVm0Result(event: ParsedEvent): void {
@@ -145,8 +147,32 @@ export class EventRenderer {
     console.log(
       `  Session: ${chalk.gray(String(event.data.agentSessionId || ""))}`,
     );
-    if (event.data.hasArtifact) {
-      console.log(`  Artifact: ${chalk.gray("saved")}`);
+    console.log(
+      `  Conversation: ${chalk.gray(String(event.data.conversationId || ""))}`,
+    );
+
+    this.renderArtifactAndVolumes(event.data);
+  }
+
+  /**
+   * Render artifact and volumes info
+   * Used by both vm0_start and vm0_result events
+   */
+  private static renderArtifactAndVolumes(data: Record<string, unknown>): void {
+    const artifact = data.artifact as Record<string, string> | undefined;
+    if (artifact && Object.keys(artifact).length > 0) {
+      console.log(`  Artifact:`);
+      for (const [name, version] of Object.entries(artifact)) {
+        console.log(`    ${name}: ${chalk.gray(version)}`);
+      }
+    }
+
+    const volumes = data.volumes as Record<string, string> | undefined;
+    if (volumes && Object.keys(volumes).length > 0) {
+      console.log(`  Volumes:`);
+      for (const [name, version] of Object.entries(volumes)) {
+        console.log(`    ${name}: ${chalk.gray(version)}`);
+      }
     }
   }
 

@@ -18,18 +18,6 @@ export interface CreateRunResponse {
   createdAt: string;
 }
 
-export interface ResumeRunResponse {
-  runId: string;
-  status: string;
-  createdAt: string;
-}
-
-export interface ContinueRunResponse {
-  runId: string;
-  status: string;
-  createdAt: string;
-}
-
 export interface AgentSessionResponse {
   session: {
     id: string;
@@ -143,12 +131,23 @@ class ApiClient {
     return (await response.json()) as CreateConfigResponse;
   }
 
+  /**
+   * Create a run with unified request format
+   * Supports new runs, checkpoint resume, and session continue
+   */
   async createRun(body: {
-    agentConfigId: string;
-    prompt: string;
-    templateVars?: Record<string, string>;
-    artifactName: string;
+    // Shortcuts (mutually exclusive)
+    checkpointId?: string;
+    sessionId?: string;
+    // Base parameters
+    agentConfigId?: string;
+    conversationId?: string;
+    artifactName?: string;
     artifactVersion?: string;
+    templateVars?: Record<string, string>;
+    volumeVersions?: Record<string, string>;
+    // Required
+    prompt: string;
   }): Promise<CreateRunResponse> {
     const baseUrl = await this.getBaseUrl();
     const headers = await this.getHeaders();
@@ -192,48 +191,6 @@ class ApiClient {
     }
 
     return (await response.json()) as GetEventsResponse;
-  }
-
-  async resumeRun(body: {
-    checkpointId: string;
-    prompt: string;
-  }): Promise<ResumeRunResponse> {
-    const baseUrl = await this.getBaseUrl();
-    const headers = await this.getHeaders();
-
-    const response = await fetch(`${baseUrl}/api/agent/runs/resume`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const error = (await response.json()) as ApiError;
-      throw new Error(error.error?.message || "Failed to resume run");
-    }
-
-    return (await response.json()) as ResumeRunResponse;
-  }
-
-  async continueSession(body: {
-    agentSessionId: string;
-    prompt: string;
-  }): Promise<ContinueRunResponse> {
-    const baseUrl = await this.getBaseUrl();
-    const headers = await this.getHeaders();
-
-    const response = await fetch(`${baseUrl}/api/agent/runs/continue`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const error = (await response.json()) as ApiError;
-      throw new Error(error.error?.message || "Failed to continue session");
-    }
-
-    return (await response.json()) as ContinueRunResponse;
   }
 
   async getAgentSession(id: string): Promise<AgentSessionResponse> {

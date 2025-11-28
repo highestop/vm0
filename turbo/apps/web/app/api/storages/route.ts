@@ -12,6 +12,14 @@ import * as path from "node:path";
 import * as os from "node:os";
 import AdmZip from "adm-zip";
 import { env } from "../../../src/env";
+import {
+  computeContentHash,
+  type FileEntry,
+} from "../../../src/lib/storage/content-hash";
+import { resolveVersionByPrefix } from "../../../src/lib/storage/version-resolver";
+import { logger } from "../../../src/lib/logger";
+
+const log = logger("api:storages");
 
 /**
  * Validate storage name format
@@ -80,8 +88,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(
-      `[Storage] Uploading storage "${storageName}" (type: ${storageType}) for user ${userId}`,
+    log.debug(
+      `Uploading storage "${storageName}" (type: ${storageType}) for user ${userId}`,
     );
 
     // Create temp directory for extraction
@@ -98,15 +106,22 @@ export async function POST(request: NextRequest) {
     const extractPath = path.join(tempDir, "extracted");
     zip.extractAllTo(extractPath, true);
 
-    console.log(`[Storage] Extracted zip to ${extractPath}`);
+    log.debug(`Extracted zip to ${extractPath}`);
 
-    // Calculate file count and size
-    const files = await getAllFiles(extractPath);
-    const fileCount = files.length;
+    // Calculate file count, size, and collect file entries for hashing
+    const filePaths = await getAllFiles(extractPath);
+    const fileCount = filePaths.length;
     let totalSize = 0;
-    for (const filePath of files) {
+    const fileEntries: FileEntry[] = [];
+
+    for (const filePath of filePaths) {
       const stats = await fs.promises.stat(filePath);
       totalSize += stats.size;
+
+      // Read file content for hash computation
+      const content = await fs.promises.readFile(filePath);
+      const relativePath = path.relative(extractPath, filePath);
+      fileEntries.push({ path: relativePath, content });
     }
 
     // Check if storage already exists (outside transaction for read)
@@ -140,15 +155,59 @@ export async function POST(request: NextRequest) {
         if (!storage) {
           throw new Error("Failed to create storage");
         }
-        console.log(`[Storage] Created new storage record: ${storage.id}`);
+        log.debug(`Created new storage record: ${storage.id}`);
       }
 
-      // Create new version record within transaction
+      // Compute content-addressable hash for version ID (includes storageId for uniqueness per storage)
+      const contentHash = computeContentHash(storage.id, fileEntries);
+      log.debug(`Computed content hash: ${contentHash}`);
+
+      // Check if version with same content hash already exists (deduplication)
+      const [existingVersion] = await tx
+        .select()
+        .from(storageVersions)
+        .where(
+          and(
+            eq(storageVersions.storageId, storage.id),
+            eq(storageVersions.id, contentHash),
+          ),
+        )
+        .limit(1);
+
+      if (existingVersion) {
+        // Content already exists, return existing version (deduplication)
+        log.debug(
+          `Version with same content already exists: ${existingVersion.id}`,
+        );
+
+        // Update HEAD pointer to existing version if needed
+        if (storage.headVersionId !== existingVersion.id) {
+          await tx
+            .update(storages)
+            .set({
+              headVersionId: existingVersion.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(storages.id, storage.id));
+        }
+
+        return {
+          name: storageName,
+          versionId: existingVersion.id,
+          size: Number(existingVersion.size),
+          fileCount: existingVersion.fileCount,
+          type: storageType,
+          deduplicated: true,
+        };
+      }
+
+      // Create new version record with content hash as ID
       const createdVersions = await tx
         .insert(storageVersions)
         .values({
+          id: contentHash,
           storageId: storage.id,
-          s3Key: `${userId}/${storageName}/${crypto.randomUUID()}`,
+          s3Key: `${userId}/${storageName}/${contentHash}`,
           size: totalSize,
           fileCount,
           message: null,
@@ -162,7 +221,7 @@ export async function POST(request: NextRequest) {
         throw new Error("Failed to create storage version");
       }
 
-      console.log(`[Storage] Created version: ${version.id}`);
+      log.debug(`Created version: ${version.id}`);
 
       // Upload files to versioned S3 path
       // If this fails, the transaction will be rolled back
@@ -173,7 +232,7 @@ export async function POST(request: NextRequest) {
         );
       }
       const s3Uri = `s3://${bucketName}/${version.s3Key}`;
-      console.log(`[Storage] Uploading ${fileCount} files to ${s3Uri}...`);
+      log.debug(`Uploading ${fileCount} files to ${s3Uri}...`);
       await uploadS3Directory(extractPath, s3Uri);
 
       // Update storage's HEAD pointer and metadata within transaction
@@ -187,8 +246,8 @@ export async function POST(request: NextRequest) {
         })
         .where(eq(storages.id, storage.id));
 
-      console.log(
-        `[Storage] Successfully uploaded storage "${storageName}" version ${version.id}`,
+      log.debug(
+        `Successfully uploaded storage "${storageName}" version ${version.id}`,
       );
 
       return {
@@ -197,6 +256,7 @@ export async function POST(request: NextRequest) {
         size: totalSize,
         fileCount,
         type: storageType,
+        deduplicated: false,
       };
     });
 
@@ -255,8 +315,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(
-      `[Storage] Downloading storage "${storageName}"${versionId ? ` version ${versionId}` : ""} for user ${userId}`,
+    log.debug(
+      `Downloading storage "${storageName}"${versionId ? ` version ${versionId}` : ""} for user ${userId}`,
     );
 
     // Check if storage exists and belongs to user
@@ -274,10 +334,17 @@ export async function GET(request: NextRequest) {
     }
 
     // Determine which version to download
-    let targetVersionId: string;
+    let version;
     if (versionId) {
-      // Use specified version
-      targetVersionId = versionId;
+      // Resolve version (supports short prefix)
+      const resolveResult = await resolveVersionByPrefix(storage.id, versionId);
+      if ("error" in resolveResult) {
+        return NextResponse.json(
+          { error: resolveResult.error },
+          { status: resolveResult.status },
+        );
+      }
+      version = resolveResult.version;
     } else {
       // Use HEAD version
       if (!storage.headVersionId) {
@@ -286,39 +353,24 @@ export async function GET(request: NextRequest) {
           { status: 404 },
         );
       }
-      targetVersionId = storage.headVersionId;
-    }
 
-    // Get version details
-    const [version] = await globalThis.services.db
-      .select()
-      .from(storageVersions)
-      .where(
-        and(
-          eq(storageVersions.id, targetVersionId),
-          eq(storageVersions.storageId, storage.id),
-        ),
-      )
-      .limit(1);
+      // Get HEAD version details
+      const [headVersion] = await globalThis.services.db
+        .select()
+        .from(storageVersions)
+        .where(eq(storageVersions.id, storage.headVersionId))
+        .limit(1);
 
-    if (!version) {
-      if (versionId) {
+      if (!headVersion) {
         return NextResponse.json(
-          {
-            error: `Version "${versionId}" not found for storage "${storageName}"`,
-          },
+          { error: `Storage "${storageName}" HEAD version not found` },
           { status: 404 },
         );
       }
-      return NextResponse.json(
-        { error: `Storage "${storageName}" HEAD version not found` },
-        { status: 404 },
-      );
+      version = headVersion;
     }
 
-    console.log(
-      `[Storage] Downloading version ${version.id} (${version.fileCount} files)`,
-    );
+    log.debug(`Downloading version ${version.id} (${version.fileCount} files)`);
 
     // Create temp directory for download
     tempDir = path.join(os.tmpdir(), `vm0-storage-${Date.now()}`);

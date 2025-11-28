@@ -16,6 +16,7 @@ import type { ArtifactSnapshot } from "../checkpoint/types";
 import { storages, storageVersions } from "../../db/schema/storage";
 import { eq, and } from "drizzle-orm";
 import { env } from "../../env";
+import { resolveVersionByPrefix, isResolutionError } from "./version-resolver";
 
 const log = logger("service:storage");
 
@@ -66,25 +67,25 @@ export class StorageService {
       return { versionId: headVersion.id, s3Key: headVersion.s3Key };
     }
 
-    // Query for specific version by ID (hash)
-    const [specificVersion] = await globalThis.services.db
-      .select()
-      .from(storageVersions)
-      .where(
-        and(
-          eq(storageVersions.storageId, dbStorage.id),
-          eq(storageVersions.id, version),
-        ),
-      )
-      .limit(1);
+    // Use shared version resolver for exact match and prefix match
+    const result = await resolveVersionByPrefix(dbStorage.id, version);
 
-    if (!specificVersion) {
-      throw new Error(
-        `Storage "${storageName}" version "${version}" not found`,
-      );
+    if (isResolutionError(result)) {
+      // Add storage name context to error message
+      if (result.error.includes("not found")) {
+        throw new Error(
+          `Storage "${storageName}" version "${version}" not found`,
+        );
+      }
+      if (result.error.includes("Ambiguous")) {
+        throw new Error(
+          `Ambiguous version prefix "${version}" for storage "${storageName}". Please use more characters.`,
+        );
+      }
+      throw new Error(result.error);
     }
 
-    return { versionId: specificVersion.id, s3Key: specificVersion.s3Key };
+    return { versionId: result.version.id, s3Key: result.version.s3Key };
   }
 
   /**

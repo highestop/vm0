@@ -78,7 +78,7 @@ export class CheckpointService {
     // Build agent config snapshot
     const agentConfigSnapshot: AgentConfigSnapshot = {
       config: config.config as AgentConfigYaml,
-      templateVars: (run.dynamicVars as Record<string, string>) || undefined,
+      templateVars: (run.templateVars as Record<string, string>) || undefined,
     };
 
     // Store checkpoint in database
@@ -109,7 +109,7 @@ export class CheckpointService {
     // Find or create agent session
     const artifactSnapshot = request.artifactSnapshot as ArtifactSnapshot;
     const templateVars =
-      (run.dynamicVars as Record<string, string>) || undefined;
+      (run.templateVars as Record<string, string>) || undefined;
     const { session: agentSession } = await agentSessionService.findOrCreate(
       run.userId,
       run.agentConfigId,

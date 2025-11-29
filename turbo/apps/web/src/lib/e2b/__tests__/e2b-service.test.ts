@@ -20,19 +20,10 @@ vi.mock("../config", () => ({
 
 // Mock StorageService - use vi.hoisted to ensure mock is defined before vi.mock runs
 const mockStorageService = vi.hoisted(() => ({
-  prepareStorages: vi.fn().mockResolvedValue({
-    preparedStorages: [],
-    preparedArtifact: null,
-    tempDir: null,
-    errors: [],
+  prepareStorageManifest: vi.fn().mockResolvedValue({
+    storages: [],
+    artifact: null,
   }),
-  prepareArtifactFromSnapshot: vi.fn().mockResolvedValue({
-    preparedArtifact: null,
-    tempDir: null,
-    errors: [],
-  }),
-  mountStorages: vi.fn().mockResolvedValue(undefined),
-  cleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../storage/storage-service", () => ({
@@ -65,16 +56,9 @@ describe("E2B Service - mocked unit tests", () => {
     vi.clearAllMocks();
 
     // Reset mock implementations to defaults
-    mockStorageService.prepareStorages.mockResolvedValue({
-      preparedStorages: [],
-      preparedArtifact: null,
-      tempDir: null,
-      errors: [],
-    });
-    mockStorageService.prepareArtifactFromSnapshot.mockResolvedValue({
-      preparedArtifact: null,
-      tempDir: null,
-      errors: [],
+    mockStorageService.prepareStorageManifest.mockResolvedValue({
+      storages: [],
+      artifact: null,
     });
   });
 
@@ -145,6 +129,7 @@ describe("E2B Service - mocked unit tests", () => {
 
       // Verify sandbox methods were called
       // commands.run called: 1 (mkdir) + 8 (mv/chmod for each script) + 1 (execute) = 10 times
+      // Note: download-storages.sh is only uploaded when there are files to download
       expect(mockSandbox.commands.run).toHaveBeenCalledTimes(10);
       expect(mockSandbox.kill).toHaveBeenCalledTimes(1);
     });
@@ -193,35 +178,30 @@ describe("E2B Service - mocked unit tests", () => {
         mockSandbox as unknown as Sandbox,
       );
 
-      // Mock storage service to return prepared artifact and volumes
-      mockStorageService.prepareStorages.mockResolvedValueOnce({
-        preparedStorages: [
+      // Mock storage service to return manifest with artifact and volumes
+      mockStorageService.prepareStorageManifest.mockResolvedValueOnce({
+        storages: [
           {
             name: "data-volume",
-            driver: "vas",
-            localPath: "/tmp/data",
             mountPath: "/data",
             vasStorageName: "data-storage",
             vasVersionId: "vol-version-abc",
+            files: [],
           },
           {
             name: "models",
-            driver: "vas",
-            localPath: "/tmp/models",
             mountPath: "/models",
             vasStorageName: "models-storage",
             vasVersionId: "vol-version-xyz",
+            files: [],
           },
         ],
-        preparedArtifact: {
-          driver: "vas",
-          localPath: "/tmp/artifact",
+        artifact: {
           mountPath: "/workspace",
           vasStorageName: "my-artifact",
           vasVersionId: "art-version-123",
+          files: [],
         },
-        tempDir: "/tmp/e2b-test",
-        errors: [],
       });
 
       const context: ExecutionContext = {
@@ -507,17 +487,11 @@ describe("E2B Service - mocked unit tests", () => {
       expect(Sandbox.create).toHaveBeenCalledTimes(1);
     });
 
-    it("should fail when storage preparation returns errors", async () => {
-      // Arrange - Mock storage service to return errors
-      mockStorageService.prepareStorages.mockResolvedValueOnce({
-        preparedStorages: [],
-        preparedArtifact: null,
-        tempDir: null,
-        errors: [
-          'claude-system: Storage "claude-files" has no versions',
-          "data: S3 download failed",
-        ],
-      });
+    it("should fail when storage manifest preparation throws error", async () => {
+      // Arrange - Mock storage service to throw error
+      mockStorageService.prepareStorageManifest.mockRejectedValueOnce(
+        new Error('Storage "claude-files" has no versions'),
+      );
 
       const context: ExecutionContext = {
         runId: "run-test-storage-error",
@@ -533,16 +507,11 @@ describe("E2B Service - mocked unit tests", () => {
       // Assert - Should return failed status with storage errors
       expect(result.status).toBe("failed");
       expect(result.error).toBeDefined();
-      expect(result.error).toContain("Storage preparation failed");
       expect(result.error).toContain("claude-files");
-      expect(result.error).toContain("S3 download failed");
       expect(result.sandboxId).toBe("unknown");
 
       // Verify sandbox was never created since storage prep failed
       expect(Sandbox.create).not.toHaveBeenCalled();
-
-      // Verify cleanup was still called
-      expect(mockStorageService.cleanup).toHaveBeenCalled();
     });
   });
 

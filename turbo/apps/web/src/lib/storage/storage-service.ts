@@ -1,18 +1,12 @@
-import type { Sandbox } from "@e2b/code-interpreter";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { resolveVolumes } from "./storage-resolver";
-import { downloadS3Directory } from "../s3/s3-client";
+import { generatePresignedUrlsForPrefix } from "../s3/s3-client";
 import { logger } from "../logger";
 import type {
   AgentVolumeConfig,
-  PreparedStorage,
-  PreparedArtifact,
-  StoragePreparationResult,
-  ResolvedArtifact,
-  ResolvedVolume,
+  StorageManifest,
+  ManifestStorage,
+  ManifestArtifact,
 } from "./types";
-import type { ArtifactSnapshot } from "../checkpoint/types";
 import { storages, storageVersions } from "../../db/schema/storage";
 import { eq, and } from "drizzle-orm";
 import { env } from "../../env";
@@ -89,427 +83,137 @@ export class StorageService {
   }
 
   /**
-   * Prepare storages: resolve configurations and download from S3 to temp directory
+   * Prepare storage manifest with presigned URLs for direct download to sandbox
+   * This method generates presigned URLs instead of downloading files to local temp
+   *
    * @param agentConfig - Agent configuration containing volume definitions
    * @param templateVars - Template variables for placeholder replacement
-   * @param runId - Run ID for temp directory naming
    * @param userId - User ID for storage access
-   * @param artifactName - Artifact storage name (required)
+   * @param artifactName - Artifact storage name
    * @param artifactVersion - Artifact version (defaults to "latest")
-   * @param skipArtifact - Skip artifact resolution (used when resuming from checkpoint)
-   * @param volumeVersionOverrides - Optional volume version overrides (volume name -> version)
-   * @returns Storage preparation result with prepared storages and temp directory
+   * @param volumeVersionOverrides - Optional volume version overrides
+   * @param resumeArtifact - Optional artifact snapshot for resume (overrides artifactName/artifactVersion)
+   * @param resumeArtifactMountPath - Mount path for resume artifact
+   * @returns Storage manifest with presigned URLs
    */
-  async prepareStorages(
+  async prepareStorageManifest(
     agentConfig: AgentVolumeConfig | undefined,
     templateVars: Record<string, string>,
-    runId: string,
     userId: string,
     artifactName?: string,
     artifactVersion?: string,
-    skipArtifact?: boolean,
     volumeVersionOverrides?: Record<string, string>,
-  ): Promise<StoragePreparationResult> {
-    const errors: string[] = [];
+    resumeArtifact?: { artifactName: string; artifactVersion: string },
+    resumeArtifactMountPath?: string,
+  ): Promise<StorageManifest> {
+    log.debug("Preparing storage manifest with presigned URLs...");
 
-    log.debug(
-      `prepareStorages called with volumeVersionOverrides=${JSON.stringify(volumeVersionOverrides)}`,
-    );
-    log.debug(
-      `agentConfig volumes: ${JSON.stringify((agentConfig as { volumes?: unknown })?.volumes)}`,
-    );
-    log.debug(
-      `agentConfig agents: ${JSON.stringify((agentConfig as { agents?: unknown })?.agents)}`,
-    );
-
-    // If no agent config, return empty result
-    if (!agentConfig) {
-      return {
-        preparedStorages: [],
-        preparedArtifact: null,
-        tempDir: null,
-        errors: [],
-      };
+    const bucketName = env().S3_USER_STORAGES_NAME;
+    if (!bucketName) {
+      throw new Error("S3_USER_STORAGES_NAME environment variable is not set");
     }
 
-    // Resolve volumes from agent config (with optional version overrides)
-    const volumeResult = resolveVolumes(
-      agentConfig,
-      templateVars,
-      artifactName,
-      artifactVersion,
-      skipArtifact,
-      volumeVersionOverrides,
-    );
+    // For resume scenario, use resumeArtifact; otherwise use artifactName/artifactVersion
+    const effectiveArtifactName = resumeArtifact?.artifactName ?? artifactName;
+    const effectiveArtifactVersion =
+      resumeArtifact?.artifactVersion ?? artifactVersion;
+    // Skip artifact in resolveVolumes if we're using resumeArtifact (we'll handle it separately)
+    const skipArtifact = !!resumeArtifact;
 
-    // Log volume resolution errors but don't fail the preparation
-    if (volumeResult.errors.length > 0) {
-      log.warn(`Volume resolution errors:`, volumeResult.errors);
-      errors.push(
-        ...volumeResult.errors.map((e) => `${e.volumeName}: ${e.message}`),
-      );
+    // If no agent config and no resume artifact, return empty manifest
+    if (!agentConfig && !resumeArtifact) {
+      return { storages: [], artifact: null };
     }
 
-    // Check if we need a temp directory (for VAS storages/artifacts)
-    const hasVasStorages = volumeResult.volumes.length > 0;
-    const hasVasArtifact = volumeResult.artifact !== null;
-    const needsTempDir = hasVasStorages || hasVasArtifact;
+    // Resolve volumes from agent config
+    const volumeResult = agentConfig
+      ? resolveVolumes(
+          agentConfig,
+          templateVars,
+          skipArtifact ? undefined : effectiveArtifactName,
+          skipArtifact ? undefined : effectiveArtifactVersion,
+          skipArtifact,
+          volumeVersionOverrides,
+        )
+      : { volumes: [], artifact: null, errors: [] };
 
-    let tempDir: string | null = null;
-    if (needsTempDir) {
-      tempDir = `/tmp/vas-run-${runId}`;
-      await fs.promises.mkdir(tempDir, { recursive: true });
-    }
-
-    log.debug(
-      `Preparing ${volumeResult.volumes.length} storages and ${volumeResult.artifact ? "1 artifact" : "no artifact"}...`,
-    );
-
-    // Process all volumes and artifact in parallel for better performance
+    // Process all volumes and artifact in parallel
     const volumePromises = volumeResult.volumes.map(async (volume) => {
-      try {
-        return await this.prepareVolume(volume, tempDir!, userId);
-      } catch (error) {
-        log.error(`Failed to prepare storage "${volume.name}":`, error);
-        errors.push(
-          `${volume.name}: Failed to prepare - ${error instanceof Error ? error.message : "Unknown error"}`,
-        );
-        return null;
-      }
+      const { versionId, s3Key } = await this.resolveVersion(
+        userId,
+        volume.vasStorageName,
+        volume.vasVersion,
+      );
+
+      const files = await generatePresignedUrlsForPrefix(bucketName, s3Key);
+
+      const manifestStorage: ManifestStorage = {
+        name: volume.name,
+        mountPath: volume.mountPath,
+        vasStorageName: volume.vasStorageName,
+        vasVersionId: versionId,
+        files,
+      };
+
+      log.debug(
+        `Generated ${files.length} presigned URLs for volume "${volume.name}"`,
+      );
+
+      return manifestStorage;
     });
 
-    const artifactPromise = volumeResult.artifact
+    // Handle artifact: either from resumeArtifact or from volumeResult
+    const artifactSource = resumeArtifact
+      ? {
+          vasStorageName: resumeArtifact.artifactName,
+          vasVersion: resumeArtifact.artifactVersion,
+          mountPath: resumeArtifactMountPath || "/workspace",
+        }
+      : volumeResult.artifact;
+
+    const artifactPromise = artifactSource
       ? (async () => {
-          try {
-            return await this.prepareArtifact(
-              volumeResult.artifact!,
-              tempDir!,
-              userId,
-            );
-          } catch (error) {
-            log.error(`Failed to prepare artifact:`, error);
-            errors.push(
-              `artifact: Failed to prepare - ${error instanceof Error ? error.message : "Unknown error"}`,
-            );
-            return null;
-          }
+          const { versionId, s3Key } = await this.resolveVersion(
+            userId,
+            artifactSource.vasStorageName,
+            artifactSource.vasVersion,
+          );
+
+          const files = await generatePresignedUrlsForPrefix(bucketName, s3Key);
+
+          const manifestArtifact: ManifestArtifact = {
+            mountPath: artifactSource.mountPath,
+            vasStorageName: artifactSource.vasStorageName,
+            vasVersionId: versionId,
+            files,
+          };
+
+          log.debug(
+            `Generated ${files.length} presigned URLs for artifact "${artifactSource.vasStorageName}"`,
+          );
+
+          return manifestArtifact;
         })()
       : Promise.resolve(null);
 
-    // Wait for all downloads to complete in parallel
-    const [volumeResults, preparedArtifact] = await Promise.all([
+    // Wait for all URL generation to complete in parallel
+    const [storageResults, artifact] = await Promise.all([
       Promise.all(volumePromises),
       artifactPromise,
     ]);
 
-    // Filter out failed volumes (nulls)
-    const preparedStorages = volumeResults.filter(
-      (v): v is PreparedStorage => v !== null,
+    const totalFiles =
+      storageResults.reduce((sum, s) => sum + s.files.length, 0) +
+      (artifact?.files.length || 0);
+
+    log.debug(
+      `Storage manifest prepared: ${storageResults.length} storages, ${artifact ? "1 artifact" : "no artifact"}, ${totalFiles} total files`,
     );
 
     return {
-      preparedStorages,
-      preparedArtifact,
-      tempDir,
-      errors,
+      storages: storageResults,
+      artifact,
     };
-  }
-
-  /**
-   * Prepare a single volume
-   */
-  private async prepareVolume(
-    volume: ResolvedVolume,
-    tempDir: string,
-    userId: string,
-  ): Promise<PreparedStorage> {
-    // Resolve version
-    const { versionId, s3Key } = await this.resolveVersion(
-      userId,
-      volume.vasStorageName,
-      volume.vasVersion,
-    );
-
-    // Download from S3
-    const bucketName = env().S3_USER_STORAGES_NAME;
-    if (!bucketName) {
-      throw new Error("S3_USER_STORAGES_NAME environment variable is not set");
-    }
-    const s3Uri = `s3://${bucketName}/${s3Key}`;
-    const localPath = path.join(tempDir, volume.name);
-
-    const downloadResult = await downloadS3Directory(s3Uri, localPath);
-    log.debug(
-      `Downloaded VAS storage "${volume.name}" (${volume.vasStorageName}) version ${versionId}: ${downloadResult.filesDownloaded} files, ${downloadResult.totalBytes} bytes`,
-    );
-
-    return {
-      name: volume.name,
-      driver: "vas",
-      localPath,
-      mountPath: volume.mountPath,
-      vasStorageName: volume.vasStorageName,
-      vasVersionId: versionId,
-    };
-  }
-
-  /**
-   * Prepare a single artifact
-   */
-  private async prepareArtifact(
-    artifact: ResolvedArtifact,
-    tempDir: string,
-    userId: string,
-  ): Promise<PreparedArtifact> {
-    // Resolve version
-    const { versionId, s3Key } = await this.resolveVersion(
-      userId,
-      artifact.vasStorageName,
-      artifact.vasVersion,
-    );
-
-    // Download from S3
-    const bucketName = env().S3_USER_STORAGES_NAME;
-    if (!bucketName) {
-      throw new Error("S3_USER_STORAGES_NAME environment variable is not set");
-    }
-    const s3Uri = `s3://${bucketName}/${s3Key}`;
-    const localPath = path.join(tempDir, "artifact");
-
-    const downloadResult = await downloadS3Directory(s3Uri, localPath);
-    log.debug(
-      `Downloaded VAS artifact (${artifact.vasStorageName}) version ${versionId}: ${downloadResult.filesDownloaded} files, ${downloadResult.totalBytes} bytes`,
-    );
-
-    return {
-      driver: "vas",
-      localPath,
-      mountPath: artifact.mountPath,
-      vasStorageName: artifact.vasStorageName,
-      vasVersionId: versionId,
-    };
-  }
-
-  /**
-   * Prepare artifact from checkpoint snapshot (for resume functionality)
-   * @param snapshot - Artifact snapshot from checkpoint (artifactName + artifactVersion)
-   * @param mountPath - Mount path for the artifact in sandbox
-   * @param runId - Run ID for temp directory naming
-   * @param userId - User ID for storage access (required for resolving "latest" version)
-   * @returns Prepared artifact
-   */
-  async prepareArtifactFromSnapshot(
-    snapshot: ArtifactSnapshot,
-    mountPath: string,
-    runId: string,
-    userId: string,
-  ): Promise<{
-    preparedArtifact: PreparedArtifact | null;
-    tempDir: string | null;
-    errors: string[];
-  }> {
-    // VAS artifact: download from specific version
-    if (!snapshot.artifactVersion) {
-      return {
-        preparedArtifact: null,
-        tempDir: null,
-        errors: ["Artifact snapshot missing artifactVersion"],
-      };
-    }
-
-    log.debug(
-      `Preparing artifact from snapshot: ${snapshot.artifactName}@${snapshot.artifactVersion}`,
-    );
-
-    const tempDir = `/tmp/vas-run-${runId}`;
-    await fs.promises.mkdir(tempDir, { recursive: true });
-
-    // Resolve version (handles "latest" by looking up HEAD)
-    let versionId: string;
-    let s3Key: string;
-    try {
-      const resolved = await this.resolveVersion(
-        userId,
-        snapshot.artifactName,
-        snapshot.artifactVersion,
-      );
-      versionId = resolved.versionId;
-      s3Key = resolved.s3Key;
-    } catch (error) {
-      return {
-        preparedArtifact: null,
-        tempDir,
-        errors: [
-          `Failed to resolve artifact version: ${error instanceof Error ? error.message : "Unknown error"}`,
-        ],
-      };
-    }
-
-    // Download from the resolved version's S3 path
-    const bucketName = env().S3_USER_STORAGES_NAME;
-    if (!bucketName) {
-      return {
-        preparedArtifact: null,
-        tempDir,
-        errors: ["S3_USER_STORAGES_NAME environment variable is not set"],
-      };
-    }
-    const s3Uri = `s3://${bucketName}/${s3Key}`;
-    const localPath = path.join(tempDir, "artifact");
-
-    const downloadResult = await downloadS3Directory(s3Uri, localPath);
-    log.debug(
-      `Downloaded VAS artifact (${snapshot.artifactName}) version ${versionId}: ${downloadResult.filesDownloaded} files, ${downloadResult.totalBytes} bytes`,
-    );
-
-    return {
-      preparedArtifact: {
-        driver: "vas",
-        localPath,
-        mountPath,
-        vasStorageName: snapshot.artifactName,
-        vasVersionId: versionId,
-      },
-      tempDir,
-      errors: [],
-    };
-  }
-
-  /**
-   * Mount storages and artifact: upload prepared storages from local temp to sandbox
-   * @param sandbox - E2B sandbox instance
-   * @param preparedStorages - Storages that have been downloaded to local temp
-   * @param preparedArtifact - Artifact that has been prepared (optional)
-   */
-  async mountStorages(
-    sandbox: Sandbox,
-    preparedStorages: PreparedStorage[],
-    preparedArtifact?: PreparedArtifact | null,
-  ): Promise<void> {
-    const totalMounts = preparedStorages.length + (preparedArtifact ? 1 : 0);
-
-    if (totalMounts === 0) {
-      return;
-    }
-
-    log.debug(`Mounting ${totalMounts} items to sandbox...`);
-
-    // Mount all storages and artifact in parallel for better performance
-    const mountPromises: Promise<void>[] = [];
-
-    // Add storage mount promises
-    for (const storage of preparedStorages) {
-      mountPromises.push(
-        (async () => {
-          const stat = await fs.promises
-            .stat(storage.localPath!)
-            .catch(() => null);
-          if (stat) {
-            await this.uploadDirectoryToSandbox(
-              sandbox,
-              storage.localPath!,
-              storage.mountPath,
-            );
-            log.debug(
-              `Uploaded VAS storage "${storage.name}" to ${storage.mountPath}`,
-            );
-          }
-        })(),
-      );
-    }
-
-    // Add artifact mount promise
-    if (preparedArtifact) {
-      mountPromises.push(
-        (async () => {
-          const stat = await fs.promises
-            .stat(preparedArtifact.localPath!)
-            .catch(() => null);
-          if (stat) {
-            await this.uploadDirectoryToSandbox(
-              sandbox,
-              preparedArtifact.localPath!,
-              preparedArtifact.mountPath,
-            );
-            log.debug(`Uploaded VAS artifact to ${preparedArtifact.mountPath}`);
-          }
-        })(),
-      );
-    }
-
-    // Wait for all mounts to complete in parallel
-    const results = await Promise.allSettled(mountPromises);
-
-    // Check for failures and throw the first error
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if (result && result.status === "rejected") {
-        const isArtifact = i >= preparedStorages.length;
-        const name = isArtifact
-          ? "artifact"
-          : preparedStorages[i]?.name || "unknown";
-        log.error(`Failed to mount ${name}:`, result.reason);
-        throw result.reason;
-      }
-    }
-  }
-
-  /**
-   * Upload directory contents to E2B sandbox recursively
-   * Files within a directory are uploaded in parallel for better performance
-   * @param sandbox - E2B sandbox instance
-   * @param localDir - Local directory path
-   * @param remotePath - Remote path in sandbox
-   */
-  private async uploadDirectoryToSandbox(
-    sandbox: Sandbox,
-    localDir: string,
-    remotePath: string,
-  ): Promise<void> {
-    const entries = await fs.promises.readdir(localDir, {
-      withFileTypes: true,
-    });
-
-    // Upload all entries in parallel
-    await Promise.all(
-      entries.map(async (entry) => {
-        const localPath = path.join(localDir, entry.name);
-        const remoteFilePath = path.posix.join(remotePath, entry.name);
-
-        if (entry.isDirectory()) {
-          await this.uploadDirectoryToSandbox(
-            sandbox,
-            localPath,
-            remoteFilePath,
-          );
-        } else {
-          const content = await fs.promises.readFile(localPath);
-          // Convert Buffer to ArrayBuffer for E2B
-          const arrayBuffer = content.buffer.slice(
-            content.byteOffset,
-            content.byteOffset + content.byteLength,
-          ) as ArrayBuffer;
-          await sandbox.files.write(remoteFilePath, arrayBuffer);
-        }
-      }),
-    );
-  }
-
-  /**
-   * Cleanup: remove temporary directory
-   * @param tempDir - Temporary directory path to remove
-   */
-  async cleanup(tempDir: string | null): Promise<void> {
-    if (!tempDir) {
-      return;
-    }
-
-    try {
-      await fs.promises.rm(tempDir, { recursive: true, force: true });
-      log.debug(`Cleaned up temp directory: ${tempDir}`);
-    } catch (error) {
-      log.error(`Failed to cleanup temp directory:`, error);
-    }
   }
 }
 

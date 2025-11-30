@@ -5,18 +5,24 @@ import {
   PutObjectCommand,
   DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../../env";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
+import archiver from "archiver";
 import type {
   S3Uri,
   S3Object,
   DownloadResult,
   UploadResult,
   PresignedFile,
+  S3StorageManifest,
+  UploadWithManifestResult,
 } from "./types";
 import { S3DownloadError, S3UploadError } from "./types";
+import { hashFileContent, type FileEntry } from "../storage/content-hash";
 
 /**
  * Parse S3 URI into bucket and prefix
@@ -246,6 +252,37 @@ export async function uploadS3Object(
 }
 
 /**
+ * Upload buffer data directly to S3
+ * @param bucket - S3 bucket name
+ * @param key - S3 object key
+ * @param data - Buffer data to upload
+ */
+export async function uploadS3Buffer(
+  bucket: string,
+  key: string,
+  data: Buffer,
+): Promise<void> {
+  const client = getS3Client();
+
+  try {
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: data,
+    });
+
+    await client.send(command);
+  } catch (error) {
+    throw new S3UploadError(
+      `Failed to upload buffer to s3://${bucket}/${key}`,
+      bucket,
+      key,
+      error instanceof Error ? error : undefined,
+    );
+  }
+}
+
+/**
  * Upload entire directory to S3
  * @param localPath - Local directory path to upload from
  * @param s3Uri - S3 URI in format s3://bucket/prefix
@@ -291,6 +328,35 @@ export async function uploadS3Directory(
     filesUploaded: files.length,
     totalBytes,
   };
+}
+
+/**
+ * Delete specific S3 objects by key
+ * @param bucket - S3 bucket name
+ * @param keys - Array of S3 object keys to delete
+ */
+export async function deleteS3Objects(
+  bucket: string,
+  keys: string[],
+): Promise<void> {
+  if (keys.length === 0) return;
+
+  const client = getS3Client();
+
+  // Delete in batches of 1000 (AWS limit)
+  const batchSize = 1000;
+  for (let i = 0; i < keys.length; i += batchSize) {
+    const batch = keys.slice(i, i + batchSize);
+
+    const command = new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: {
+        Objects: batch.map((key) => ({ Key: key })),
+      },
+    });
+
+    await client.send(command);
+  }
 }
 
 /**
@@ -410,4 +476,109 @@ export async function generatePresignedUrlsForPrefix(
   );
 
   return presignedFiles;
+}
+
+/**
+ * Stream tar.gz archive directly to S3 using multipart upload
+ * Avoids loading entire archive into memory
+ *
+ * @param bucket - S3 bucket name
+ * @param key - S3 object key
+ * @param fileEntries - Array of file entries with content
+ */
+async function streamTarGzToS3(
+  bucket: string,
+  key: string,
+  fileEntries: FileEntry[],
+): Promise<void> {
+  const client = getS3Client();
+  const passThrough = new PassThrough();
+
+  // Create archiver and pipe to passthrough stream
+  const archive = archiver("tar", { gzip: true });
+  archive.pipe(passThrough);
+
+  // Start multipart upload with streaming
+  const upload = new Upload({
+    client,
+    params: {
+      Bucket: bucket,
+      Key: key,
+      Body: passThrough,
+      ContentType: "application/gzip",
+    },
+    // Use 5MB parts (minimum for multipart)
+    partSize: 5 * 1024 * 1024,
+    // Upload parts concurrently
+    queueSize: 4,
+  });
+
+  // Add files to archive (this starts the streaming)
+  for (const file of fileEntries) {
+    archive.append(file.content, { name: file.path });
+  }
+
+  // Finalize archive (signals end of data)
+  const finalizePromise = archive.finalize();
+
+  // Wait for both archive finalization and upload completion
+  await Promise.all([finalizePromise, upload.done()]);
+}
+
+/**
+ * Upload storage version with manifest.json and archive.tar.gz
+ *
+ * Creates the new S3 structure:
+ * - {prefix}/manifest.json - File manifest with blob hashes
+ * - {prefix}/archive.tar.gz - Streaming tar.gz archive for fast download
+ *
+ * Note: Blobs are uploaded separately by the blob service
+ *
+ * @param s3Uri - S3 URI in format s3://bucket/prefix
+ * @param versionId - Version ID (content hash) for the manifest
+ * @param fileEntries - Array of file entries with content
+ * @param blobHashes - Map of file path to blob hash (from blob service)
+ * @returns Upload result with manifest
+ */
+export async function uploadStorageVersionArchive(
+  s3Uri: string,
+  versionId: string,
+  fileEntries: FileEntry[],
+  blobHashes: Map<string, string>,
+): Promise<UploadWithManifestResult> {
+  const { bucket, prefix } = parseS3Uri(s3Uri);
+
+  // Calculate total size
+  const totalSize = fileEntries.reduce((sum, f) => sum + f.content.length, 0);
+
+  // 1. Create manifest with blob hashes
+  const manifest: S3StorageManifest = {
+    version: versionId,
+    createdAt: new Date().toISOString(),
+    totalSize,
+    fileCount: fileEntries.length,
+    files: fileEntries.map((f) => ({
+      path: f.path,
+      hash: blobHashes.get(f.path) || hashFileContent(f.content),
+      size: f.content.length,
+    })),
+  };
+
+  // 2. Upload manifest.json
+  const manifestJson = JSON.stringify(manifest, null, 2);
+  await uploadS3Buffer(
+    bucket,
+    `${prefix}/manifest.json`,
+    Buffer.from(manifestJson),
+  );
+
+  // 3. Stream archive.tar.gz directly to S3 using multipart upload
+  await streamTarGzToS3(bucket, `${prefix}/archive.tar.gz`, fileEntries);
+
+  return {
+    s3Prefix: prefix,
+    filesUploaded: fileEntries.length,
+    totalBytes: totalSize,
+    manifest,
+  };
 }

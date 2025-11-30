@@ -103,15 +103,6 @@ export interface StoragePreparationResult {
 }
 
 /**
- * File entry in storage manifest with presigned URL
- */
-export interface ManifestFile {
-  path: string;
-  url: string;
-  size: number;
-}
-
-/**
  * Storage entry in manifest
  */
 export interface ManifestStorage {
@@ -119,7 +110,10 @@ export interface ManifestStorage {
   mountPath: string;
   vasStorageName: string;
   vasVersionId: string;
-  files: ManifestFile[];
+  /** Presigned URL for downloading archive.tar.gz */
+  archiveUrl: string;
+  /** Size of archive.tar.gz in bytes */
+  archiveSize: number;
 }
 
 /**
@@ -129,7 +123,10 @@ export interface ManifestArtifact {
   mountPath: string;
   vasStorageName: string;
   vasVersionId: string;
-  files: ManifestFile[];
+  /** Presigned URL for downloading archive.tar.gz */
+  archiveUrl: string;
+  /** Size of archive.tar.gz in bytes */
+  archiveSize: number;
 }
 
 /**

@@ -17,6 +17,7 @@ async function runMigrations() {
     await migrate(db, {
       migrationsFolder: DRIZZLE_MIGRATE_OUT,
     });
+    console.log("Migrations complete");
   } finally {
     await sql.end();
   }

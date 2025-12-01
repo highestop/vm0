@@ -1,20 +1,38 @@
 import * as fs from "fs";
 import * as path from "path";
-import type AdmZip from "adm-zip";
+import * as tar from "tar";
 
 /**
- * Extract file paths from zip entries, normalizing path separators.
+ * Filter function for tar.create to exclude .vm0 directory.
+ * Paths come as "./.vm0" or ".vm0" depending on tar version.
  */
-export function getRemoteFilesFromZip(
-  zipEntries: AdmZip.IZipEntry[],
-): Set<string> {
-  const remoteFiles = new Set<string>();
-  for (const entry of zipEntries) {
-    if (!entry.isDirectory) {
-      remoteFiles.add(entry.entryName.replace(/\\/g, "/"));
-    }
-  }
-  return remoteFiles;
+export function excludeVm0Filter(filePath: string): boolean {
+  const shouldExclude =
+    filePath === ".vm0" ||
+    filePath.startsWith(".vm0/") ||
+    filePath.startsWith("./.vm0");
+  return !shouldExclude;
+}
+
+/**
+ * List files in tar.gz buffer using streaming parser.
+ */
+export function listTarFiles(tarPath: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const files: string[] = [];
+
+    tar
+      .list({
+        file: tarPath,
+        onReadEntry: (entry) => {
+          if (entry.type === "File") {
+            files.push(entry.path);
+          }
+        },
+      })
+      .then(() => resolve(files))
+      .catch(reject);
+  });
 }
 
 /**

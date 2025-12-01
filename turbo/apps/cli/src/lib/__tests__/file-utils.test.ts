@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import AdmZip from "adm-zip";
-import { getRemoteFilesFromZip, removeExtraFiles } from "../file-utils";
+import * as tar from "tar";
+import {
+  excludeVm0Filter,
+  listTarFiles,
+  removeExtraFiles,
+} from "../file-utils";
 
 describe("file-utils", () => {
   let tempDir: string;
@@ -16,46 +20,87 @@ describe("file-utils", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  describe("getRemoteFilesFromZip", () => {
-    it("should extract file paths from zip entries", () => {
-      const zip = new AdmZip();
-      zip.addFile("file1.txt", Buffer.from("content1"));
-      zip.addFile("file2.txt", Buffer.from("content2"));
-
-      const remoteFiles = getRemoteFilesFromZip(zip.getEntries());
-
-      expect(remoteFiles.size).toBe(2);
-      expect(remoteFiles.has("file1.txt")).toBe(true);
-      expect(remoteFiles.has("file2.txt")).toBe(true);
+  describe("excludeVm0Filter", () => {
+    it("should exclude .vm0 directory", () => {
+      expect(excludeVm0Filter(".vm0")).toBe(false);
     });
 
-    it("should handle nested paths", () => {
-      const zip = new AdmZip();
-      zip.addFile("dir/subdir/file.txt", Buffer.from("content"));
-
-      const remoteFiles = getRemoteFilesFromZip(zip.getEntries());
-
-      expect(remoteFiles.size).toBe(1);
-      expect(remoteFiles.has("dir/subdir/file.txt")).toBe(true);
+    it("should exclude .vm0/ paths", () => {
+      expect(excludeVm0Filter(".vm0/")).toBe(false);
+      expect(excludeVm0Filter(".vm0/config.yaml")).toBe(false);
     });
 
-    it("should exclude directory entries", () => {
-      const zip = new AdmZip();
-      zip.addFile("dir/", Buffer.alloc(0));
-      zip.addFile("dir/file.txt", Buffer.from("content"));
-
-      const remoteFiles = getRemoteFilesFromZip(zip.getEntries());
-
-      expect(remoteFiles.size).toBe(1);
-      expect(remoteFiles.has("dir/file.txt")).toBe(true);
+    it("should exclude ./.vm0 paths (tar prefix format)", () => {
+      expect(excludeVm0Filter("./.vm0")).toBe(false);
+      expect(excludeVm0Filter("./.vm0/")).toBe(false);
+      expect(excludeVm0Filter("./.vm0/config.yaml")).toBe(false);
     });
 
-    it("should return empty set for empty zip", () => {
-      const zip = new AdmZip();
+    it("should include regular files", () => {
+      expect(excludeVm0Filter("file.txt")).toBe(true);
+      expect(excludeVm0Filter("src/index.ts")).toBe(true);
+      expect(excludeVm0Filter("./file.txt")).toBe(true);
+    });
 
-      const remoteFiles = getRemoteFilesFromZip(zip.getEntries());
+    it("should include files with vm0 in name but not .vm0 directory", () => {
+      expect(excludeVm0Filter("vm0-config.txt")).toBe(true);
+      expect(excludeVm0Filter("my.vm0.txt")).toBe(true);
+    });
+  });
 
-      expect(remoteFiles.size).toBe(0);
+  describe("listTarFiles", () => {
+    it("should extract file paths from tar.gz", async () => {
+      // Create source files
+      const sourceDir = path.join(tempDir, "source");
+      fs.mkdirSync(sourceDir);
+      fs.writeFileSync(path.join(sourceDir, "file1.txt"), "content1");
+      fs.writeFileSync(path.join(sourceDir, "file2.txt"), "content2");
+
+      // Create tar.gz
+      const tarPath = path.join(tempDir, "test.tar.gz");
+      await tar.create({ gzip: true, file: tarPath, cwd: sourceDir }, [
+        "file1.txt",
+        "file2.txt",
+      ]);
+
+      const files = await listTarFiles(tarPath);
+
+      expect(files.length).toBe(2);
+      expect(files).toContain("file1.txt");
+      expect(files).toContain("file2.txt");
+    });
+
+    it("should handle nested paths", async () => {
+      // Create nested source files
+      const sourceDir = path.join(tempDir, "source");
+      const subDir = path.join(sourceDir, "dir", "subdir");
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(subDir, "file.txt"), "content");
+
+      // Create tar.gz
+      const tarPath = path.join(tempDir, "test.tar.gz");
+      await tar.create({ gzip: true, file: tarPath, cwd: sourceDir }, [
+        "dir/subdir/file.txt",
+      ]);
+
+      const files = await listTarFiles(tarPath);
+
+      expect(files.length).toBe(1);
+      expect(files).toContain("dir/subdir/file.txt");
+    });
+
+    it("should return empty array for empty tar.gz", async () => {
+      // Create empty source directory
+      const sourceDir = path.join(tempDir, "source");
+      fs.mkdirSync(sourceDir);
+
+      // Create tar.gz of empty directory
+      const tarPath = path.join(tempDir, "test.tar.gz");
+      await tar.create({ gzip: true, file: tarPath, cwd: sourceDir }, ["."]);
+
+      const files = await listTarFiles(tarPath);
+
+      expect(files.length).toBe(0);
     });
   });
 

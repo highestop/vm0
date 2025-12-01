@@ -30,6 +30,17 @@ import { logger } from "../logger";
 const log = logger("service:e2b");
 
 /**
+ * Get the first agent from config (currently only one agent is supported)
+ */
+function getFirstAgent(
+  config?: AgentConfigYaml,
+): AgentConfigYaml["agents"][string] | undefined {
+  if (!config?.agents) return undefined;
+  const values = Object.values(config.agents);
+  return values[0];
+}
+
+/**
  * E2B Service
  * Manages E2B sandbox creation and execution
  * Agnostic to run type (new run or resume)
@@ -58,8 +69,8 @@ export class E2BService {
     const agentConfigYaml = context.agentConfig as AgentConfigYaml | undefined;
 
     // Get mount path from agent config (used for resume artifact)
-    const artifactMountPath =
-      agentConfigYaml?.agents?.[0]?.working_dir || "/workspace";
+    const firstAgent = getFirstAgent(agentConfigYaml);
+    const artifactMountPath = firstAgent?.working_dir || "/workspace";
 
     try {
       // Prepare storage manifest with presigned URLs for direct download to sandbox
@@ -319,19 +330,19 @@ export class E2BService {
       envs: envVars, // Pass environment variables to sandbox
     };
 
-    // Priority: agents[0].image > E2B_TEMPLATE_NAME
-    const templateName =
-      agentConfig?.agents?.[0]?.image || e2bConfig.defaultTemplate;
+    // Priority: agent.image > E2B_TEMPLATE_NAME
+    const agent = getFirstAgent(agentConfig);
+    const templateName = agent?.image || e2bConfig.defaultTemplate;
 
     if (!templateName) {
       throw new Error(
-        "[E2B] No template specified. Either set agents[0].image in vm0.config.yaml or E2B_TEMPLATE_NAME environment variable.",
+        "[E2B] No template specified. Either set agent.image in vm0.config.yaml or E2B_TEMPLATE_NAME environment variable.",
       );
     }
 
     log.debug(`Using template: ${templateName}`);
     log.debug(
-      `Template source: ${agentConfig?.agents?.[0]?.image ? "agents[0].image" : "E2B_TEMPLATE_NAME"}`,
+      `Template source: ${agent?.image ? "agent.image" : "E2B_TEMPLATE_NAME"}`,
     );
     log.debug(`Sandbox env vars:`, Object.keys(envVars));
 
@@ -419,7 +430,7 @@ export class E2BService {
 
     // Extract working_dir from agent config
     const config = agentConfig as AgentConfigYaml | undefined;
-    const workingDir = config?.agents?.[0]?.working_dir;
+    const workingDir = getFirstAgent(config)?.working_dir;
 
     // Set environment variables
     const envs: Record<string, string> = {

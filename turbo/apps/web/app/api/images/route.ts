@@ -3,11 +3,19 @@ import { initServices } from "../../../src/lib/init-services";
 import { getUserId } from "../../../src/lib/auth/get-user-id";
 import { successResponse, errorResponse } from "../../../src/lib/api-response";
 import { BadRequestError, UnauthorizedError } from "../../../src/lib/errors";
-import { buildImage, listImages } from "../../../src/lib/image/image-service";
+import {
+  buildImage,
+  listImages,
+  deleteImageByAlias,
+  getImageByAlias,
+  generateE2bAlias,
+  tryDeleteE2bTemplateByAlias,
+} from "../../../src/lib/image/image-service";
 
 interface CreateImageRequest {
   dockerfile: string;
   alias: string;
+  deleteExisting?: boolean;
 }
 
 interface CreateImageResponse {
@@ -59,7 +67,7 @@ export async function POST(request: NextRequest) {
     const body: CreateImageRequest = await request.json();
 
     // Validate request
-    const { dockerfile, alias } = body;
+    const { dockerfile, alias, deleteExisting } = body;
 
     if (!dockerfile) {
       throw new BadRequestError("Missing dockerfile");
@@ -82,6 +90,20 @@ export async function POST(request: NextRequest) {
       throw new BadRequestError(
         'Invalid alias. User images cannot start with "vm0-" prefix (reserved for system templates).',
       );
+    }
+
+    // Delete existing image if requested
+    if (deleteExisting) {
+      // First try to delete from our database
+      const existingImage = await getImageByAlias(userId, alias);
+      if (existingImage) {
+        await deleteImageByAlias(userId, alias);
+      }
+
+      // Also try to delete from E2B directly in case database record is stale
+      // This handles the case where DB was cleaned up but E2B template still exists
+      const e2bAlias = generateE2bAlias(userId, alias);
+      await tryDeleteE2bTemplateByAlias(e2bAlias);
     }
 
     // Start image build

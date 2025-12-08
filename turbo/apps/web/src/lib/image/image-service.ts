@@ -2,7 +2,10 @@ import { eq, and, desc } from "drizzle-orm";
 
 import { images } from "../../db/schema/image";
 import { BadRequestError, NotFoundError, ForbiddenError } from "../errors";
+import { logger } from "../logger";
 import type { ImageStatusEnum } from "../../db/schema/image";
+
+const log = logger("service:image");
 
 // Note: E2B SDK is imported dynamically in functions that need it
 // to avoid loading the heavy SDK in routes that only use validation functions
@@ -22,6 +25,36 @@ export function isSystemTemplate(alias: string): boolean {
   return alias.startsWith("vm0-");
 }
 
+/**
+ * Try to delete an E2B template by its alias
+ * This is needed when database record doesn't exist but E2B template might
+ * E2B API accepts alias as templateID parameter (same as buildInBackground)
+ */
+export async function tryDeleteE2bTemplateByAlias(
+  e2bAlias: string,
+): Promise<void> {
+  const { ApiClient, ConnectionConfig } = await import("e2b");
+  const config = new ConnectionConfig({});
+  const client = new ApiClient(config);
+
+  log.debug("attempting to delete E2B template", { e2bAlias });
+
+  try {
+    // E2B API accepts alias as templateID - same as how buildInBackground uses alias
+    await client.api.DELETE("/templates/{templateID}", {
+      params: { path: { templateID: e2bAlias } },
+    });
+    log.debug("E2B template deleted successfully", { e2bAlias });
+  } catch (error) {
+    // Template may not exist - this is expected when --delete-existing is used
+    // and the image has never been built before
+    log.debug("E2B template deletion skipped (may not exist)", {
+      e2bAlias,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 interface BuildResult {
   imageId: string;
   buildId: string;
@@ -39,16 +72,42 @@ export async function buildImage(
   alias: string,
 ): Promise<BuildResult> {
   // Dynamic import to avoid loading E2B SDK in routes that don't need it
-  const { Template } = await import("e2b");
+  const { Template, BuildError } = await import("e2b");
 
   const e2bAlias = generateE2bAlias(userId, alias);
+
+  log.debug("starting image build", { userId, alias, e2bAlias });
 
   // Create template from Dockerfile content
   const template = Template().fromDockerfile(dockerfile);
 
   // Start background build
-  const buildInfo = await Template.buildInBackground(template, {
-    alias: e2bAlias,
+  let buildInfo;
+  try {
+    buildInfo = await Template.buildInBackground(template, {
+      alias: e2bAlias,
+    });
+  } catch (error) {
+    // Convert E2B BuildError to BadRequestError so it's returned to user
+    if (error instanceof BuildError) {
+      const message = error.message;
+      log.debug("E2B build error", { alias, e2bAlias, message });
+      // Provide helpful message for alias conflict (E2B buildInBackground bug)
+      if (message.includes("403") && message.includes("already used")) {
+        throw new BadRequestError(
+          `Image "${alias}" already exists. Delete it first with: vm0 image delete ${alias}`,
+        );
+      }
+      throw new BadRequestError(message);
+    }
+    throw error;
+  }
+
+  log.debug("E2B build started", {
+    alias,
+    e2bAlias,
+    buildId: buildInfo.buildId,
+    templateId: buildInfo.templateId,
   });
 
   // Insert record into database
@@ -74,6 +133,8 @@ export async function buildImage(
       },
     })
     .returning();
+
+  log.debug("image record created", { imageId: image!.id, alias });
 
   return {
     imageId: image!.id,
@@ -302,8 +363,7 @@ export async function getImageById(imageId: string) {
 
 /**
  * Delete an image by ID
- * Note: This only deletes from our database. E2B templates remain and will
- * be garbage collected by E2B based on their retention policy.
+ * Deletes from both our database and E2B
  */
 export async function deleteImage(
   userId: string,
@@ -320,7 +380,46 @@ export async function deleteImage(
     throw new ForbiddenError("You don't have access to this image");
   }
 
+  log.debug("deleting image", { imageId, alias: image.alias, userId });
+
+  // Delete from E2B
+  if (image.e2bTemplateId) {
+    const { ApiClient, ConnectionConfig } = await import("e2b");
+    const config = new ConnectionConfig({});
+    const client = new ApiClient(config);
+
+    try {
+      await client.api.DELETE("/templates/{templateID}", {
+        params: { path: { templateID: image.e2bTemplateId } },
+      });
+      log.debug("E2B template deleted", { templateId: image.e2bTemplateId });
+    } catch (error) {
+      // Template may already be deleted on E2B side
+      log.debug("E2B template deletion failed (may already be deleted)", {
+        templateId: image.e2bTemplateId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // Delete from database
-  // Note: E2B template cleanup is handled by E2B's retention policy
   await globalThis.services.db.delete(images).where(eq(images.id, imageId));
+  log.debug("image deleted from database", { imageId });
+}
+
+/**
+ * Delete an image by alias
+ * Deletes from both our database and E2B
+ */
+export async function deleteImageByAlias(
+  userId: string,
+  alias: string,
+): Promise<void> {
+  const image = await getImageByAlias(userId, alias);
+
+  if (!image) {
+    throw new NotFoundError(`Image "${alias}" not found`);
+  }
+
+  await deleteImage(userId, image.id);
 }

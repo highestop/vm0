@@ -342,6 +342,11 @@ class ApiClient {
       Authorization: `Bearer ${token}`,
     };
 
+    // Add Content-Type for JSON bodies (string bodies are assumed to be JSON)
+    if (typeof options?.body === "string") {
+      headers["Content-Type"] = "application/json";
+    }
+
     // Add Vercel bypass secret if available
     const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
     if (bypassSecret) {
@@ -382,27 +387,7 @@ class ApiClient {
   }
 }
 
-/**
- * Response types for secrets API
- */
-export interface SecretInfo {
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ListSecretsResponse {
-  secrets: SecretInfo[];
-}
-
-export interface SetSecretResponse {
-  name: string;
-  action: "created" | "updated";
-}
-
-export interface DeleteSecretResponse {
-  name: string;
-  deleted: boolean;
-}
+// Note: Secrets API types are now defined in @vm0/core contracts
+// and used via the type-safe client in ./secrets-client.ts
 
 export const apiClient = new ApiClient();

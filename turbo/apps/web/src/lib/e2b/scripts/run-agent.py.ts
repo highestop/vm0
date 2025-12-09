@@ -23,8 +23,7 @@ sys.path.insert(0, "/usr/local/bin/vm0-agent/lib")
 
 from common import (
     WORKING_DIR, PROMPT, RESUME_SESSION_ID, COMPLETE_URL, RUN_ID,
-    SESSION_ID_FILE, SESSION_HISTORY_PATH_FILE, EVENT_ERROR_FLAG, STDERR_FILE,
-    HEARTBEAT_URL, HEARTBEAT_INTERVAL,
+    EVENT_ERROR_FLAG, HEARTBEAT_URL, HEARTBEAT_INTERVAL, AGENT_LOG_FILE,
     validate_config
 )
 from log import log_info, log_error, log_warn
@@ -103,51 +102,81 @@ def main():
     cmd = [claude_bin] + claude_args + [PROMPT]
 
     # Execute Claude and process output stream
-    # Redirect stderr to file for error capture, process stdout (JSONL) in pipe
+    # Capture both stdout and stderr, write to log file, keep stderr in memory for error extraction
     claude_exit_code = 0
+    stderr_lines = []  # Keep stderr in memory for error message extraction
+    log_file = None
 
     try:
-        with open(STDERR_FILE, "w") as stderr_file:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-                text=True,
-                bufsize=1  # Line buffered for real-time processing
-            )
+        # Open log file directly in /tmp (no need to create directory)
+        log_file = open(AGENT_LOG_FILE, "w")
 
-            # Process JSONL output line by line
-            for line in proc.stdout:
-                line = line.strip()
+        # Python subprocess.PIPE can deadlock if buffer fills up
+        # Use a background thread to drain stderr while we read stdout
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1  # Line buffered for real-time processing
+        )
 
-                # Skip empty lines
-                if not line:
-                    continue
+        # Read stderr in background to prevent buffer deadlock
+        def read_stderr():
+            try:
+                for line in proc.stderr:
+                    stderr_lines.append(line)
+                    if log_file and not log_file.closed:
+                        log_file.write(f"[STDERR] {line}")
+                        log_file.flush()
+            except Exception:
+                pass  # Ignore errors if file closed
 
-                # Check if line is valid JSON (stdout should only contain JSONL)
-                try:
-                    event = json.loads(line)
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
 
-                    # Valid JSONL - send immediately
-                    send_event(event)
+        # Process JSONL output line by line from stdout
+        for line in proc.stdout:
+            # Write raw line to log file
+            if log_file and not log_file.closed:
+                log_file.write(line)
+                log_file.flush()
 
-                    # Extract result from "result" event for stdout
-                    if event.get("type") == "result":
-                        result_content = event.get("result", "")
-                        if result_content:
-                            print(result_content)
+            stripped = line.strip()
 
-                except json.JSONDecodeError:
-                    # Not valid JSON, skip
-                    pass
+            # Skip empty lines
+            if not stripped:
+                continue
 
-            # Wait for process to complete
-            proc.wait()
-            claude_exit_code = proc.returncode
+            # Check if line is valid JSON (stdout should only contain JSONL)
+            try:
+                event = json.loads(stripped)
+
+                # Valid JSONL - send immediately
+                send_event(event)
+
+                # Extract result from "result" event for stdout
+                if event.get("type") == "result":
+                    result_content = event.get("result", "")
+                    if result_content:
+                        print(result_content)
+
+            except json.JSONDecodeError:
+                # Not valid JSON, skip
+                pass
+
+        # Wait for process to complete
+        proc.wait()
+        # Wait for stderr thread to finish (with timeout to avoid hanging)
+        stderr_thread.join(timeout=10)
+        claude_exit_code = proc.returncode
 
     except Exception as e:
         log_error(f"Failed to execute Claude: {e}")
         claude_exit_code = 1
+    finally:
+        if log_file and not log_file.closed:
+            log_file.close()
 
     # Print newline after output
     print()
@@ -175,17 +204,10 @@ def main():
         if claude_exit_code != 0:
             log_info(f"Claude Code failed with exit code {claude_exit_code}")
 
-            # Try to get detailed error from stderr file
-            if os.path.exists(STDERR_FILE) and os.path.getsize(STDERR_FILE) > 0:
-                try:
-                    with open(STDERR_FILE) as f:
-                        lines = f.readlines()
-                        # Get last few lines of stderr, clean up formatting
-                        last_lines = lines[-5:] if len(lines) >= 5 else lines
-                        error_message = " ".join(line.strip() for line in last_lines)
-                    log_info(f"Captured stderr: {error_message}")
-                except IOError:
-                    error_message = f"Agent exited with code {claude_exit_code}"
+            # Get detailed error from captured stderr lines in memory
+            if stderr_lines:
+                error_message = " ".join(line.strip() for line in stderr_lines)
+                log_info(f"Captured stderr: {error_message}")
             else:
                 error_message = f"Agent exited with code {claude_exit_code}"
 
@@ -209,12 +231,7 @@ def main():
     shutdown_event.set()
     log_info("Heartbeat thread stopped")
 
-    # Cleanup temp files
-    for temp_file in [SESSION_ID_FILE, SESSION_HISTORY_PATH_FILE, EVENT_ERROR_FLAG, STDERR_FILE]:
-        try:
-            os.remove(temp_file)
-        except OSError:
-            pass
+    # Note: Keep all temp files for debugging (SESSION_ID_FILE, SESSION_HISTORY_PATH_FILE, EVENT_ERROR_FLAG)
 
     sys.exit(final_exit_code)
 

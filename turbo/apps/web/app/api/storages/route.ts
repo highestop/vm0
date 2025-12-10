@@ -148,10 +148,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if storage already exists (outside transaction for read)
+    // Must include type in query since same name can exist for different types
     const existingStorages = await globalThis.services.db
       .select()
       .from(storages)
-      .where(and(eq(storages.userId, userId), eq(storages.name, storageName)))
+      .where(
+        and(
+          eq(storages.userId, userId),
+          eq(storages.name, storageName),
+          eq(storages.type, storageType),
+        ),
+      )
       .limit(1);
 
     const existingStorage = existingStorages[0];
@@ -168,7 +175,7 @@ export async function POST(request: NextRequest) {
           .values({
             userId,
             name: storageName,
-            s3Prefix: `${userId}/${storageName}`,
+            s3Prefix: `${userId}/${storageType}/${storageName}`,
             size: totalSize,
             fileCount,
             type: storageType,
@@ -231,7 +238,7 @@ export async function POST(request: NextRequest) {
 
       // Create new version record with content hash as ID
       // Use onConflictDoNothing to handle force upload case where version already exists
-      const s3Key = `${userId}/${storageName}/${contentHash}`;
+      const s3Key = `${userId}/${storageType}/${storageName}/${contentHash}`;
       const createdVersions = await tx
         .insert(storageVersions)
         .values({
@@ -355,21 +362,42 @@ export async function GET(request: NextRequest) {
     // Get query parameters
     const { searchParams } = new URL(request.url);
     const storageName = searchParams.get("name");
+    const storageType = searchParams.get("type");
     const versionId = searchParams.get("version");
 
     if (!storageName) {
       return errorResponse("Missing name parameter", "BAD_REQUEST", 400);
     }
 
+    if (!storageType) {
+      return errorResponse("Missing type parameter", "BAD_REQUEST", 400);
+    }
+
+    // Validate storage type
+    if (storageType !== "volume" && storageType !== "artifact") {
+      return errorResponse(
+        "Invalid type. Must be 'volume' or 'artifact'",
+        "BAD_REQUEST",
+        400,
+      );
+    }
+
     log.debug(
-      `Downloading storage "${storageName}"${versionId ? ` version ${versionId}` : ""} for user ${userId}`,
+      `Downloading storage "${storageName}" (type: ${storageType})${versionId ? ` version ${versionId}` : ""} for user ${userId}`,
     );
 
     // Check if storage exists and belongs to user
+    // Must include type in query since same name can exist for different types
     const [storage] = await globalThis.services.db
       .select()
       .from(storages)
-      .where(and(eq(storages.userId, userId), eq(storages.name, storageName)))
+      .where(
+        and(
+          eq(storages.userId, userId),
+          eq(storages.name, storageName),
+          eq(storages.type, storageType),
+        ),
+      )
       .limit(1);
 
     if (!storage) {

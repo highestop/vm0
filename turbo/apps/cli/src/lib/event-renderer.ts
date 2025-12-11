@@ -30,6 +30,8 @@ export interface RenderOptions {
   previousTimestamp?: Date;
   /** Start timestamp for total time calculation */
   startTimestamp?: Date;
+  /** Whether to show timestamp prefix (useful for historical log viewing) */
+  showTimestamp?: boolean;
 }
 
 export class EventRenderer {
@@ -69,30 +71,41 @@ export class EventRenderer {
   }
 
   /**
+   * Format timestamp for display
+   */
+  static formatTimestamp(timestamp: Date): string {
+    return timestamp.toISOString();
+  }
+
+  /**
    * Render a parsed event to console
    */
   static render(event: ParsedEvent, options?: RenderOptions): void {
+    const timestampPrefix = options?.showTimestamp
+      ? chalk.gray(`[${this.formatTimestamp(event.timestamp)}] `)
+      : "";
     const elapsedPrefix =
       options?.verbose && options?.previousTimestamp
         ? chalk.gray(
             this.formatElapsed(options.previousTimestamp, event.timestamp),
           )
         : "";
+    const prefix = timestampPrefix + elapsedPrefix;
     switch (event.type) {
       case "init":
-        this.renderInit(event, elapsedPrefix);
+        this.renderInit(event, prefix);
         break;
       case "text":
-        this.renderText(event, elapsedPrefix);
+        this.renderText(event, prefix);
         break;
       case "tool_use":
-        this.renderToolUse(event, elapsedPrefix);
+        this.renderToolUse(event, prefix);
         break;
       case "tool_result":
-        this.renderToolResult(event, elapsedPrefix);
+        this.renderToolResult(event, prefix);
         break;
       case "result":
-        this.renderResult(event, elapsedPrefix);
+        this.renderResult(event, prefix);
         break;
     }
   }
@@ -154,10 +167,8 @@ export class EventRenderer {
     console.log(`  Error: ${chalk.red(error || "Unknown error")}`);
   }
 
-  private static renderInit(event: ParsedEvent, elapsedPrefix: string): void {
-    console.log(
-      chalk.cyan("[init]") + elapsedPrefix + " Starting Claude Code agent",
-    );
+  private static renderInit(event: ParsedEvent, prefix: string): void {
+    console.log(chalk.cyan("[init]") + prefix + " Starting Claude Code agent");
     console.log(`  Session: ${chalk.gray(String(event.data.sessionId || ""))}`);
     console.log(`  Model: ${chalk.gray(String(event.data.model || ""))}`);
     console.log(
@@ -169,17 +180,14 @@ export class EventRenderer {
     );
   }
 
-  private static renderText(event: ParsedEvent, elapsedPrefix: string): void {
+  private static renderText(event: ParsedEvent, prefix: string): void {
     const text = String(event.data.text || "");
-    console.log(chalk.blue("[text]") + elapsedPrefix + " " + text);
+    console.log(chalk.blue("[text]") + prefix + " " + text);
   }
 
-  private static renderToolUse(
-    event: ParsedEvent,
-    elapsedPrefix: string,
-  ): void {
+  private static renderToolUse(event: ParsedEvent, prefix: string): void {
     const tool = String(event.data.tool || "");
-    console.log(chalk.yellow("[tool_use]") + elapsedPrefix + " " + tool);
+    console.log(chalk.yellow("[tool_use]") + prefix + " " + tool);
 
     // Show full input without truncation
     const input = event.data.input as Record<string, unknown>;
@@ -196,27 +204,24 @@ export class EventRenderer {
     }
   }
 
-  private static renderToolResult(
-    event: ParsedEvent,
-    elapsedPrefix: string,
-  ): void {
+  private static renderToolResult(event: ParsedEvent, prefix: string): void {
     const isError = Boolean(event.data.isError);
     const status = isError ? "Error" : "Completed";
     const color = isError ? chalk.red : chalk.green;
 
-    console.log(color("[tool_result]") + elapsedPrefix + " " + status);
+    console.log(color("[tool_result]") + prefix + " " + status);
 
     // Show full result without truncation
     const result = String(event.data.result || "");
     console.log(`  ${chalk.gray(result)}`);
   }
 
-  private static renderResult(event: ParsedEvent, elapsedPrefix: string): void {
+  private static renderResult(event: ParsedEvent, prefix: string): void {
     const success = Boolean(event.data.success);
     const status = success ? "✓ completed successfully" : "✗ failed";
     const color = success ? chalk.green : chalk.red;
 
-    console.log(color("[result]") + elapsedPrefix + " " + status);
+    console.log(color("[result]") + prefix + " " + status);
 
     const durationMs = Number(event.data.durationMs || 0);
     const durationSec = (durationMs / 1000).toFixed(1);

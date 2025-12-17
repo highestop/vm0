@@ -248,7 +248,7 @@ describe("Storages API Route", () => {
         formData.append("type", "artifact");
         formData.append(
           "file",
-          new Blob([tarBuffer], { type: "application/gzip" }),
+          new Blob([new Uint8Array(tarBuffer)], { type: "application/gzip" }),
           "empty.tar.gz",
         );
 

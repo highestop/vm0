@@ -45,7 +45,7 @@ Before diving into code, ask the user any clarifying questions needed to underst
 
 ### Phase 2: Research Execution
 
-1. **Create research file** at `/tmp/claude/research/{name}.md` where `{name}` is a short descriptive name you choose based on the task.
+1. **Create research file** at `/tmp/deep-dive/{task-name}/research.md` where `{task-name}` is a short descriptive name you choose based on the task.
 
 2. **Systematically analyze**:
    - Identify core files and functions related to the task
@@ -64,7 +64,7 @@ When research is complete:
 2. Briefly summarize what you've learned (facts only, no recommendations)
 3. Ask the user: **"What would you like to do next?"**
    - Continue exploring specific areas
-   - Move to solution discussion
+   - Move to `/deep-innovate` to brainstorm potential approaches
    - Something else entirely
 
 ## TASK TO RESEARCH

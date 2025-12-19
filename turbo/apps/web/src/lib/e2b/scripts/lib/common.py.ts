@@ -25,17 +25,18 @@ ARTIFACT_DRIVER = os.environ.get("VM0_ARTIFACT_DRIVER", "")
 ARTIFACT_MOUNT_PATH = os.environ.get("VM0_ARTIFACT_MOUNT_PATH", "")
 ARTIFACT_VOLUME_NAME = os.environ.get("VM0_ARTIFACT_VOLUME_NAME", "")
 ARTIFACT_VERSION_ID = os.environ.get("VM0_ARTIFACT_VERSION_ID", "")
-ARTIFACT_MANIFEST_URL = os.environ.get("VM0_ARTIFACT_MANIFEST_URL", "")
 
 # Construct webhook endpoint URLs
 WEBHOOK_URL = f"{API_URL}/api/webhooks/agent/events"
 CHECKPOINT_URL = f"{API_URL}/api/webhooks/agent/checkpoints"
 COMPLETE_URL = f"{API_URL}/api/webhooks/agent/complete"
-STORAGE_WEBHOOK_URL = f"{API_URL}/api/webhooks/agent/storages"
-INCREMENTAL_WEBHOOK_URL = f"{API_URL}/api/webhooks/agent/storages/incremental"
 HEARTBEAT_URL = f"{API_URL}/api/webhooks/agent/heartbeat"
 TELEMETRY_URL = f"{API_URL}/api/webhooks/agent/telemetry"
 PROXY_URL = f"{API_URL}/api/webhooks/agent/proxy"
+
+# Direct S3 upload endpoints (webhook versions for sandbox - uses JWT auth)
+STORAGE_PREPARE_URL = f"{API_URL}/api/webhooks/agent/storages/prepare"
+STORAGE_COMMIT_URL = f"{API_URL}/api/webhooks/agent/storages/commit"
 
 # Proxy configuration (for beta_network_security feature)
 PROXY_ENABLED = os.environ.get("VM0_PROXY_ENABLED", "false").lower() == "true"

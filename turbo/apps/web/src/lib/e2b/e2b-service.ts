@@ -16,8 +16,7 @@ import {
   LOG_SCRIPT,
   HTTP_SCRIPT,
   EVENTS_SCRIPT,
-  VAS_SNAPSHOT_SCRIPT,
-  INCREMENTAL_SCRIPT,
+  DIRECT_UPLOAD_SCRIPT,
   DOWNLOAD_SCRIPT,
   CHECKPOINT_SCRIPT,
   MOCK_CLAUDE_SCRIPT,
@@ -200,12 +199,6 @@ export class E2BService {
           artifactForCommand.vasStorageName;
         sandboxEnvVars.VM0_ARTIFACT_VERSION_ID =
           artifactForCommand.vasVersionId;
-
-        // Pass manifest URL for incremental upload
-        if (artifactForCommand.manifestUrl) {
-          sandboxEnvVars.VM0_ARTIFACT_MANIFEST_URL =
-            artifactForCommand.manifestUrl;
-        }
       }
 
       // Add user-defined environment variables (expanded from ${{ vars.X }} by server)
@@ -442,8 +435,7 @@ export class E2BService {
       { content: LOG_SCRIPT, path: SCRIPT_PATHS.log },
       { content: HTTP_SCRIPT, path: SCRIPT_PATHS.httpClient },
       { content: EVENTS_SCRIPT, path: SCRIPT_PATHS.events },
-      { content: VAS_SNAPSHOT_SCRIPT, path: SCRIPT_PATHS.vasSnapshot },
-      { content: INCREMENTAL_SCRIPT, path: SCRIPT_PATHS.incremental },
+      { content: DIRECT_UPLOAD_SCRIPT, path: SCRIPT_PATHS.directUpload },
       { content: DOWNLOAD_SCRIPT, path: SCRIPT_PATHS.download },
       { content: CHECKPOINT_SCRIPT, path: SCRIPT_PATHS.checkpoint },
       { content: MOCK_CLAUDE_SCRIPT, path: SCRIPT_PATHS.mockClaude },

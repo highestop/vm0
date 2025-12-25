@@ -41,12 +41,12 @@ export class EventRenderer {
    * Called immediately after run is created, before polling events
    */
   static renderRunStarted(info: RunStartedInfo): void {
-    console.log(chalk.blue("▶ Run started"));
-    console.log(`  Run ID:   ${chalk.gray(info.runId)}`);
+    console.log(chalk.bold("▶ Run started"));
+    console.log(`  Run ID:   ${chalk.dim(info.runId)}`);
     if (info.sandboxId) {
-      console.log(`  Sandbox:  ${chalk.gray(info.sandboxId)}`);
+      console.log(`  Sandbox:  ${chalk.dim(info.sandboxId)}`);
     }
-    console.log(chalk.gray(`  (use "vm0 logs ${info.runId}" to view logs)`));
+    console.log(chalk.dim(`  (use "vm0 logs ${info.runId}" to view logs)`));
     console.log();
   }
 
@@ -88,7 +88,7 @@ export class EventRenderer {
     const elapsedSuffix =
       options?.verbose && options?.previousTimestamp
         ? " " +
-          chalk.gray(
+          chalk.dim(
             this.formatElapsed(options.previousTimestamp, event.timestamp),
           )
         : "";
@@ -126,26 +126,22 @@ export class EventRenderer {
     console.log(chalk.green("✓ Run completed successfully"));
 
     if (result) {
-      console.log(`  Checkpoint:    ${chalk.gray(result.checkpointId)}`);
-      console.log(`  Session:       ${chalk.gray(result.agentSessionId)}`);
-      console.log(`  Conversation:  ${chalk.gray(result.conversationId)}`);
+      console.log(`  Checkpoint:    ${chalk.dim(result.checkpointId)}`);
+      console.log(`  Session:       ${chalk.dim(result.agentSessionId)}`);
+      console.log(`  Conversation:  ${chalk.dim(result.conversationId)}`);
 
       // Render artifact and volumes
       if (result.artifact && Object.keys(result.artifact).length > 0) {
         console.log(`  Artifact:`);
         for (const [name, version] of Object.entries(result.artifact)) {
-          console.log(
-            `    ${name}: ${chalk.gray(this.formatVersion(version))}`,
-          );
+          console.log(`    ${name}: ${chalk.dim(this.formatVersion(version))}`);
         }
       }
 
       if (result.volumes && Object.keys(result.volumes).length > 0) {
         console.log(`  Volumes:`);
         for (const [name, version] of Object.entries(result.volumes)) {
-          console.log(
-            `    ${name}: ${chalk.gray(this.formatVersion(version))}`,
-          );
+          console.log(`    ${name}: ${chalk.dim(this.formatVersion(version))}`);
         }
       }
     }
@@ -153,7 +149,7 @@ export class EventRenderer {
     // Show total time in verbose mode
     if (options?.verbose && options?.startTimestamp) {
       const totalTime = this.formatTotalTime(options.startTimestamp, now);
-      console.log(`  Total time:    ${chalk.gray(totalTime)}`);
+      console.log(`  Total time:    ${chalk.dim(totalTime)}`);
     }
   }
 
@@ -167,7 +163,7 @@ export class EventRenderer {
     console.log(chalk.red("✗ Run failed"));
     console.log(`  Error: ${chalk.red(error || "Unknown error")}`);
     console.log(
-      chalk.gray(`  (use "vm0 logs ${runId} --system" to view system logs)`),
+      chalk.dim(`  (use "vm0 logs ${runId} --system" to view system logs)`),
     );
   }
 
@@ -180,15 +176,13 @@ export class EventRenderer {
     const displayName = isSupportedProvider(providerStr)
       ? getProviderDisplayName(providerStr)
       : providerStr;
-    console.log(
-      prefix + chalk.cyan("[init]") + suffix + ` Starting ${displayName} agent`,
-    );
-    console.log(`  Session: ${chalk.gray(String(event.data.sessionId || ""))}`);
+    console.log(prefix + "[init]" + suffix + ` Starting ${displayName} agent`);
+    console.log(`  Session: ${chalk.dim(String(event.data.sessionId || ""))}`);
     if (event.data.model) {
-      console.log(`  Model: ${chalk.gray(String(event.data.model))}`);
+      console.log(`  Model: ${chalk.dim(String(event.data.model))}`);
     }
     console.log(
-      `  Tools: ${chalk.gray(
+      `  Tools: ${chalk.dim(
         Array.isArray(event.data.tools)
           ? event.data.tools.join(", ")
           : String(event.data.tools || ""),
@@ -202,7 +196,7 @@ export class EventRenderer {
     suffix: string,
   ): void {
     const text = String(event.data.text || "");
-    console.log(prefix + chalk.blue("[text]") + suffix + " " + text);
+    console.log(prefix + "[text]" + suffix + " " + text);
   }
 
   private static renderToolUse(
@@ -211,7 +205,7 @@ export class EventRenderer {
     suffix: string,
   ): void {
     const tool = String(event.data.tool || "");
-    console.log(prefix + chalk.yellow("[tool_use]") + suffix + " " + tool);
+    console.log(prefix + "[tool_use]" + suffix + " " + tool);
 
     // Show full input without truncation
     const input = event.data.input as Record<string, unknown>;
@@ -222,7 +216,7 @@ export class EventRenderer {
             typeof value === "object"
               ? JSON.stringify(value, null, 2)
               : String(value);
-          console.log(`  ${key}: ${chalk.gray(displayValue)}`);
+          console.log(`  ${key}: ${chalk.dim(displayValue)}`);
         }
       }
     }
@@ -241,7 +235,7 @@ export class EventRenderer {
 
     // Show full result without truncation
     const result = String(event.data.result || "");
-    console.log(`  ${chalk.gray(result)}`);
+    console.log(`  ${chalk.dim(result)}`);
   }
 
   private static renderResult(
@@ -257,13 +251,13 @@ export class EventRenderer {
 
     const durationMs = Number(event.data.durationMs || 0);
     const durationSec = (durationMs / 1000).toFixed(1);
-    console.log(`  Duration: ${chalk.gray(durationSec + "s")}`);
+    console.log(`  Duration: ${chalk.dim(durationSec + "s")}`);
 
     const cost = Number(event.data.cost || 0);
-    console.log(`  Cost: ${chalk.gray("$" + cost.toFixed(4))}`);
+    console.log(`  Cost: ${chalk.dim("$" + cost.toFixed(4))}`);
 
     const numTurns = Number(event.data.numTurns || 0);
-    console.log(`  Turns: ${chalk.gray(String(numTurns))}`);
+    console.log(`  Turns: ${chalk.dim(String(numTurns))}`);
 
     const usage = event.data.usage as Record<string, unknown>;
     if (usage && typeof usage === "object") {
@@ -278,7 +272,7 @@ export class EventRenderer {
       };
 
       console.log(
-        `  Tokens: ${chalk.gray(
+        `  Tokens: ${chalk.dim(
           `input=${formatTokens(inputTokens)} output=${formatTokens(outputTokens)}`,
         )}`,
       );

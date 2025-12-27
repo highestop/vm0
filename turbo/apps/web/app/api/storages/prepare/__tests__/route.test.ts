@@ -10,6 +10,7 @@ import {
   beforeAll,
   afterAll,
 } from "vitest";
+import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { initServices } from "../../../../../src/lib/init-services";
 import {
@@ -17,7 +18,7 @@ import {
   storageVersions,
 } from "../../../../../src/db/schema/storage";
 
-// Mock external dependencies
+// Mock external dependencies - vi.mock() is hoisted, so mocks are ready before imports
 vi.mock("../../../../../src/lib/auth/get-user-id", () => ({
   getUserId: vi.fn().mockResolvedValue("test-user-prepare"),
 }));
@@ -32,6 +33,11 @@ vi.mock("../../../../../src/lib/s3/s3-client", () => ({
 
 // Set required environment variables
 process.env.R2_USER_STORAGES_BUCKET_NAME = "test-storages-bucket";
+
+// Static imports - mocks are already in place due to hoisting
+import { POST } from "../route";
+import { getUserId } from "../../../../../src/lib/auth/get-user-id";
+import { verifyS3FilesExist } from "../../../../../src/lib/s3/s3-client";
 
 // Test constants
 const TEST_USER_ID = "test-user-prepare";
@@ -91,88 +97,82 @@ describe("POST /api/storages/prepare", () => {
   });
 
   it("should return 401 when not authenticated", async () => {
-    // Override mock to return null
-    const { getUserId } = await import(
-      "../../../../../src/lib/auth/get-user-id"
-    );
+    // Override mock to return null for this test
     vi.mocked(getUserId).mockResolvedValueOnce(null);
 
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName: "test",
-        storageType: "volume",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName: "test",
+          storageType: "volume",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(401);
   });
 
   it("should return 400 when storageName is missing", async () => {
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageType: "volume",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageType: "volume",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(400);
     const json = await response.json();
     expect(json.error.code).toBe("BAD_REQUEST");
   });
 
   it("should return 400 when storageType is invalid", async () => {
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName: "test",
-        storageType: "invalid",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName: "test",
+          storageType: "invalid",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(400);
     const json = await response.json();
     expect(json.error.code).toBe("BAD_REQUEST");
   });
 
   it("should create new storage when it does not exist", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}new-storage`;
 
-    const request = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "volume",
-        files: [{ path: "test.txt", hash: "abc123", size: 100 }],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "volume",
+          files: [{ path: "test.txt", hash: "a".repeat(64), size: 100 }],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(200);
 
     const json = await response.json();
@@ -192,7 +192,6 @@ describe("POST /api/storages/prepare", () => {
   });
 
   it("should return existing=true when version already exists", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}existing-version`;
 
     // Create storage first
@@ -209,16 +208,17 @@ describe("POST /api/storages/prepare", () => {
       .returning();
 
     // Prepare with same files to get the version ID
-    const files = [{ path: "test.txt", hash: "abc123def456", size: 100 }];
-    const request1 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "volume", files }),
-    });
-
-    const response1 = await POST(
-      request1 as unknown as import("next/server").NextRequest,
+    const files = [{ path: "test.txt", hash: "b".repeat(64), size: 100 }];
+    const request1 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "volume", files }),
+      },
     );
+
+    const response1 = await POST(request1);
     const json1 = await response1.json();
     const versionId = json1.versionId;
 
@@ -233,15 +233,16 @@ describe("POST /api/storages/prepare", () => {
     });
 
     // Prepare again with same files
-    const request2 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "volume", files }),
-    });
-
-    const response2 = await POST(
-      request2 as unknown as import("next/server").NextRequest,
+    const request2 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "volume", files }),
+      },
     );
+
+    const response2 = await POST(request2);
     expect(response2.status).toBe(200);
 
     const json2 = await response2.json();
@@ -251,7 +252,6 @@ describe("POST /api/storages/prepare", () => {
   });
 
   it("should compute deterministic version ID from files", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}deterministic`;
 
     // Create storage
@@ -265,29 +265,31 @@ describe("POST /api/storages/prepare", () => {
     });
 
     const files = [
-      { path: "a.txt", hash: "hash1", size: 10 },
-      { path: "b.txt", hash: "hash2", size: 20 },
+      { path: "a.txt", hash: "c".repeat(64), size: 10 },
+      { path: "b.txt", hash: "d".repeat(64), size: 20 },
     ];
 
     // Make two requests with same files
-    const request1 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "artifact", files }),
-    });
-
-    const request2 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "artifact", files }),
-    });
-
-    const response1 = await POST(
-      request1 as unknown as import("next/server").NextRequest,
+    const request1 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "artifact", files }),
+      },
     );
-    const response2 = await POST(
-      request2 as unknown as import("next/server").NextRequest,
+
+    const request2 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "artifact", files }),
+      },
     );
+
+    const response1 = await POST(request1);
+    const response2 = await POST(request2);
 
     const json1 = await response1.json();
     const json2 = await response2.json();
@@ -298,11 +300,6 @@ describe("POST /api/storages/prepare", () => {
   });
 
   it("should return upload URLs when version exists but S3 files are missing", async () => {
-    // Import mock to control verifyS3FilesExist behavior
-    const s3Mock = await import("../../../../../src/lib/s3/s3-client");
-    const verifyS3FilesMock = vi.mocked(s3Mock.verifyS3FilesExist);
-
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}s3missing`;
 
     // Create storage
@@ -319,16 +316,17 @@ describe("POST /api/storages/prepare", () => {
       .returning();
 
     // Prepare with files to get the version ID
-    const files = [{ path: "test.txt", hash: "abc123missing", size: 100 }];
-    const request1 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "volume", files }),
-    });
-
-    const response1 = await POST(
-      request1 as unknown as import("next/server").NextRequest,
+    const files = [{ path: "test.txt", hash: "e".repeat(64), size: 100 }];
+    const request1 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "volume", files }),
+      },
     );
+
+    const response1 = await POST(request1);
     const json1 = await response1.json();
     const versionId = json1.versionId;
 
@@ -343,18 +341,19 @@ describe("POST /api/storages/prepare", () => {
     });
 
     // Mock S3 files as missing
-    verifyS3FilesMock.mockResolvedValueOnce(false);
+    vi.mocked(verifyS3FilesExist).mockResolvedValueOnce(false);
 
     // Prepare again with same files - should get upload URLs since S3 missing
-    const request2 = new Request("http://localhost:3000/api/storages/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageName, storageType: "volume", files }),
-    });
-
-    const response2 = await POST(
-      request2 as unknown as import("next/server").NextRequest,
+    const request2 = new NextRequest(
+      "http://localhost:3000/api/storages/prepare",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storageName, storageType: "volume", files }),
+      },
     );
+
+    const response2 = await POST(request2);
     expect(response2.status).toBe(200);
 
     const json2 = await response2.json();

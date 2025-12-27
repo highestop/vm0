@@ -10,6 +10,7 @@ import {
   beforeAll,
   afterAll,
 } from "vitest";
+import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { initServices } from "../../../../../src/lib/init-services";
 import {
@@ -31,6 +32,14 @@ vi.mock("../../../../../src/lib/s3/s3-client", () => ({
 
 // Set required environment variables
 process.env.R2_USER_STORAGES_BUCKET_NAME = "test-storages-bucket";
+
+// Static imports - mocks are already in place due to hoisting
+import { POST } from "../route";
+import { getUserId } from "../../../../../src/lib/auth/get-user-id";
+import {
+  s3ObjectExists,
+  verifyS3FilesExist,
+} from "../../../../../src/lib/s3/s3-client";
 
 // Test constants
 const TEST_USER_ID = "test-user-commit";
@@ -90,71 +99,64 @@ describe("POST /api/storages/commit", () => {
   });
 
   it("should return 401 when not authenticated", async () => {
-    const { getUserId } = await import(
-      "../../../../../src/lib/auth/get-user-id"
-    );
     vi.mocked(getUserId).mockResolvedValueOnce(null);
 
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName: "test",
-        storageType: "volume",
-        versionId: "abc123",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName: "test",
+          storageType: "volume",
+          versionId: "abc123",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(401);
   });
 
   it("should return 400 when storageName is missing", async () => {
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageType: "volume",
-        versionId: "abc123",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageType: "volume",
+          versionId: "abc123",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(400);
   });
 
   it("should return 404 when storage does not exist", async () => {
-    const { POST } = await import("../route");
-
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName: "nonexistent-storage",
-        storageType: "volume",
-        versionId: "abc123",
-        files: [],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName: "nonexistent-storage",
+          storageType: "volume",
+          versionId: "abc123",
+          files: [],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(404);
   });
 
   it("should return 400 when versionId does not match computed hash", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}mismatch`;
 
     // Create storage
@@ -167,32 +169,29 @@ describe("POST /api/storages/commit", () => {
       fileCount: 0,
     });
 
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "volume",
-        versionId: "wrong_version_id",
-        files: [{ path: "test.txt", hash: "abc123", size: 100 }],
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "volume",
+          versionId: "wrong_version_id",
+          files: [{ path: "test.txt", hash: "a".repeat(64), size: 100 }],
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(400);
     const json = await response.json();
     expect(json.error.message).toContain("mismatch");
   });
 
   it("should return 400 when S3 objects do not exist", async () => {
-    const { s3ObjectExists } = await import(
-      "../../../../../src/lib/s3/s3-client"
-    );
     vi.mocked(s3ObjectExists).mockResolvedValueOnce(false); // manifest doesn't exist
 
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}missing-s3`;
 
     // Create storage
@@ -208,30 +207,30 @@ describe("POST /api/storages/commit", () => {
       })
       .returning();
 
-    const files = [{ path: "test.txt", hash: "abc123", size: 100 }];
+    const files = [{ path: "test.txt", hash: "b".repeat(64), size: 100 }];
     const versionId = computeContentHashFromHashes(storage!.id, files);
 
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "volume",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "volume",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(400);
     const json = await response.json();
     expect(json.error.message).toContain("not uploaded");
   });
 
   it("should create version and update HEAD on successful commit", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}success`;
 
     // Create storage
@@ -250,31 +249,32 @@ describe("POST /api/storages/commit", () => {
     const files = [
       {
         path: "file1.txt",
-        hash: "hash1_abcdef1234567890abcdef1234567890abcdef1234",
+        hash: "e".repeat(64),
         size: 100,
       },
       {
         path: "file2.txt",
-        hash: "hash2_abcdef1234567890abcdef1234567890abcdef1234",
+        hash: "f".repeat(64),
         size: 200,
       },
     ];
     const versionId = computeContentHashFromHashes(storage!.id, files);
 
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "artifact",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "artifact",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(200);
 
     const json = await response.json();
@@ -301,22 +301,18 @@ describe("POST /api/storages/commit", () => {
     // Clean up blobs created
     await globalThis.services.db
       .delete(blobs)
-      .where(eq(blobs.hash, files[0]!.hash));
+      .where(eq(blobs.hash, "e".repeat(64)));
     await globalThis.services.db
       .delete(blobs)
-      .where(eq(blobs.hash, files[1]!.hash));
+      .where(eq(blobs.hash, "f".repeat(64)));
   });
 
   it("should commit empty artifact without requiring archive in S3", async () => {
     // This test verifies the fix for issue #617:
     // Empty artifacts (fileCount === 0) should not require archive.tar.gz in S3
-    const { s3ObjectExists } = await import(
-      "../../../../../src/lib/s3/s3-client"
-    );
     // Mock: manifest exists (only one call expected for empty artifact)
     vi.mocked(s3ObjectExists).mockResolvedValueOnce(true); // manifest exists
 
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}empty`;
 
     // Create storage
@@ -336,20 +332,21 @@ describe("POST /api/storages/commit", () => {
     const files: { path: string; hash: string; size: number }[] = [];
     const versionId = computeContentHashFromHashes(storage!.id, files);
 
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "artifact",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "artifact",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(200);
 
     const json = await response.json();
@@ -370,7 +367,6 @@ describe("POST /api/storages/commit", () => {
   });
 
   it("should return deduplicated=true when version already exists", async () => {
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}idempotent`;
 
     // Create storage
@@ -389,7 +385,7 @@ describe("POST /api/storages/commit", () => {
     const files = [
       {
         path: "test.txt",
-        hash: "idempotent_hash_abcdef1234567890abcdef",
+        hash: "d".repeat(64),
         size: 100,
       },
     ];
@@ -412,20 +408,21 @@ describe("POST /api/storages/commit", () => {
       .where(eq(storages.id, storage!.id));
 
     // Commit again
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "volume",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "volume",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(200);
 
     const json = await response.json();
@@ -436,13 +433,9 @@ describe("POST /api/storages/commit", () => {
   it("should return 409 when version exists but S3 files are missing", async () => {
     // This test verifies the fix for issue #658:
     // Commit should fail with 409 if S3 files are missing for existing version
-    const s3Mock = await import("../../../../../src/lib/s3/s3-client");
-    const verifyS3FilesMock = vi.mocked(s3Mock.verifyS3FilesExist);
-
     // Mock S3 files as missing for existing version
-    verifyS3FilesMock.mockResolvedValueOnce(false);
+    vi.mocked(verifyS3FilesExist).mockResolvedValueOnce(false);
 
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}s3missing`;
 
     // Create storage
@@ -461,7 +454,7 @@ describe("POST /api/storages/commit", () => {
     const files = [
       {
         path: "test.txt",
-        hash: "s3missing_hash_abcdef1234567890abcdef",
+        hash: "c".repeat(64),
         size: 100,
       },
     ];
@@ -478,20 +471,21 @@ describe("POST /api/storages/commit", () => {
     });
 
     // Commit should fail because S3 files are missing
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "volume",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "volume",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
     expect(response.status).toBe(409);
 
     const json = await response.json();
@@ -505,7 +499,6 @@ describe("POST /api/storages/commit", () => {
     // the code verifies the version exists before updating HEAD pointer.
     // If the version doesn't exist (concurrent transaction hasn't committed),
     // the commit should fail with a clear error message instead of FK violation.
-    const { POST } = await import("../route");
     const storageName = `${TEST_PREFIX}race-condition`;
 
     // Create storage
@@ -524,7 +517,7 @@ describe("POST /api/storages/commit", () => {
     const files = [
       {
         path: "race.txt",
-        hash: "race_hash_abcdef1234567890abcdef1234567890",
+        hash: "f".repeat(64),
         size: 50,
       },
     ];
@@ -563,20 +556,21 @@ describe("POST /api/storages/commit", () => {
         },
       ) as typeof originalTransaction;
 
-    const request = new Request("http://localhost:3000/api/storages/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storageName,
-        storageType: "artifact",
-        versionId,
-        files,
-      }),
-    });
-
-    const response = await POST(
-      request as unknown as import("next/server").NextRequest,
+    const request = new NextRequest(
+      "http://localhost:3000/api/storages/commit",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storageName,
+          storageType: "artifact",
+          versionId,
+          files,
+        }),
+      },
     );
+
+    const response = await POST(request);
 
     // Should return 500 with clear error message about concurrent transaction
     expect(response.status).toBe(500);

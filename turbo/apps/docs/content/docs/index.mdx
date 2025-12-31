@@ -8,7 +8,7 @@ Welcome to VM0 documentation. Get started with building AI agents.
 <Cards>
   <Card
     title="Quick Start"
-    href="/docs/introduction/quick-start"
+    href="/docs/quick-start"
     description="From zero to agent in 5 minutes"
   />
 </Cards>
@@ -16,6 +16,16 @@ Welcome to VM0 documentation. Get started with building AI agents.
 ## Core Concepts
 
 <Cards>
+  <Card
+    title="Agent Anatomy"
+    href="/docs/core-concept/agent-anatomy"
+    description="Understanding what makes up a VM0 agent"
+  />
+  <Card
+    title="Container Image"
+    href="/docs/core-concept/container-image"
+    description="Custom Docker images"
+  />
   <Card
     title="Instructions"
     href="/docs/core-concept/instructions"
@@ -27,6 +37,11 @@ Welcome to VM0 documentation. Get started with building AI agents.
     description="Add SaaS integrations to your agent"
   />
   <Card
+    title="Volume"
+    href="/docs/core-concept/volume"
+    description="Underlying implementation of skills and instructions"
+  />
+  <Card
     title="Artifact"
     href="/docs/core-concept/artifact"
     description="Persistent storage for agent files"
@@ -36,30 +51,60 @@ Welcome to VM0 documentation. Get started with building AI agents.
     href="/docs/core-concept/environment-variable"
     description="Configure secrets and variables"
   />
-  <Card
-    title="Container Image"
-    href="/docs/core-concept/container-image"
-    description="Custom Docker images"
-  />
 </Cards>
 
 ## Usage
 
 <Cards>
   <Card
-    title="Run & Debug Agent"
+    title="Run Agent"
     href="/docs/usage/run-agent"
-    description="Execute and debug agent sessions"
+    description="Execute agent sessions"
+  />
+  <Card
+    title="Debugging"
+    href="/docs/usage/debugging"
+    description="Debug and troubleshoot agents"
   />
   <Card
     title="GitHub Actions"
     href="/docs/usage/github-actions"
     description="CI/CD integration"
   />
+</Cards>
+
+## Model Selection
+
+<Cards>
   <Card
-    title="Model Selection"
-    href="/docs/usage/model-selection"
+    title="Overview"
+    href="/docs/model-selection"
     description="Configure LLM providers"
+  />
+  <Card
+    title="OpenRouter"
+    href="/docs/model-selection/openrouter"
+    description="Multiple model providers"
+  />
+  <Card
+    title="Moonshot"
+    href="/docs/model-selection/moonshot"
+    description="Kimi models"
+  />
+  <Card
+    title="MiniMax"
+    href="/docs/model-selection/minimax"
+    description="MiniMax models"
+  />
+  <Card
+    title="DeepSeek"
+    href="/docs/model-selection/deepseek"
+    description="DeepSeek models"
+  />
+  <Card
+    title="Z.AI"
+    href="/docs/model-selection/zai"
+    description="GLM models"
   />
 </Cards>
 
@@ -67,9 +112,9 @@ Welcome to VM0 documentation. Get started with building AI agents.
 
 <Cards>
   <Card
-    title="Firecrawl"
-    href="/docs/integration/firecrawl"
-    description="Web scraping"
+    title="GitHub"
+    href="/docs/integration/github"
+    description="Code hosting"
   />
   <Card
     title="Slack"
@@ -77,13 +122,48 @@ Welcome to VM0 documentation. Get started with building AI agents.
     description="Team communication"
   />
   <Card
+    title="Discord"
+    href="/docs/integration/discord"
+    description="Community platform"
+  />
+  <Card
     title="Notion"
     href="/docs/integration/notion"
     description="Documentation"
   />
   <Card
-    title="GitHub"
-    href="/docs/integration/github"
-    description="Code hosting"
+    title="Linear"
+    href="/docs/integration/linear"
+    description="Issue tracking"
+  />
+  <Card
+    title="Jira"
+    href="/docs/integration/jira"
+    description="Project management"
+  />
+  <Card
+    title="Supabase"
+    href="/docs/integration/supabase"
+    description="Backend as a service"
+  />
+  <Card
+    title="Firecrawl"
+    href="/docs/integration/firecrawl"
+    description="Web scraping"
+  />
+</Cards>
+
+## Reference
+
+<Cards>
+  <Card
+    title="vm0.yaml"
+    href="/docs/reference/vm0-yaml"
+    description="Agent configuration file reference"
+  />
+  <Card
+    title="storage.yaml"
+    href="/docs/reference/storage-yaml"
+    description="Volume and artifact configuration"
   />
 </Cards>

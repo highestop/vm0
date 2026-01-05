@@ -264,6 +264,7 @@ jobs:
     if: |
       (github.event_name == 'pull_request' && (needs.change-detection.outputs.cli-changed == 'true' || needs.change-detection.outputs.web-changed == 'true') && needs.deploy-web.outputs.preview-url != '') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.run_cli_e2e == 'true' && needs.deploy-web.outputs.preview-url != '')
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -325,18 +326,85 @@ jobs:
           chmod 600 /tmp/.ssh/metal.pem
           echo "SSH key setup for runner tests"
 
+      - name: Start Runner (if deployed)
+        if: needs.deploy-runner.outputs.runner-deployed == 'true'
+        env:
+          RUNNER_DIR: ${{ needs.deploy-runner.outputs.runner-dir }}
+          VM0_API_URL: ${{ needs.deploy-web.outputs.preview-url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          METAL_USER: ${{ secrets.CI_AWS_METAL_RUNNER_USER }}
+          METAL_HOST: ${{ secrets.CI_AWS_METAL_RUNNER_HOST }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          USE_MOCK_CLAUDE: "true"
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/.ssh/metal.pem"
+          SSH_TARGET="${METAL_USER}@${METAL_HOST}"
+
+          # Generate config locally (needs CLI token from CI)
+          CONFIG_FILE="/tmp/runner-pr-${PR_NUMBER}.yaml"
+          turbo/scripts/deploy-runner/generate-config.sh "${PR_NUMBER}" "${VM0_API_URL}" "$CONFIG_FILE"
+
+          # Copy config to Metal and start runner
+          scp $SSH_OPTS "$CONFIG_FILE" "${SSH_TARGET}:${RUNNER_DIR}/runner.yaml"
+          ssh $SSH_OPTS "$SSH_TARGET" "VERCEL_AUTOMATION_BYPASS_SECRET='${VERCEL_AUTOMATION_BYPASS_SECRET}' USE_MOCK_CLAUDE='${USE_MOCK_CLAUDE}' ${RUNNER_DIR}/deploy-runner/start-runner.sh '${RUNNER_DIR}' '${PR_NUMBER}'"
+
+          # Export runner group for tests
+          echo "RUNNER_GROUP=e2e-stable/pr-${PR_NUMBER}" >> $GITHUB_ENV
+
       - name: Run CLI E2E Tests
         run: |
+          # Track exit codes
+          RUNNER_EXIT=0
+          SERIAL_EXIT=0
+          PARALLEL_EXIT=0
+
           # Step 1: Run serial tests sequentially (establishes stable scope)
-          ./e2e/test/libs/bats/bin/bats ./e2e/tests/01-serial/*.bats
-          # Step 2: Run parallel tests with -j 10
-          ./e2e/test/libs/bats/bin/bats -j 10 --no-parallelize-within-files ./e2e/tests/02-parallel/*.bats
-          # Step 3: Run runner tests if runner was deployed
+          # Must run first so runner tests can use e2e-stable scope
+          echo "=== Running Serial E2E Tests ==="
+          ./e2e/test/libs/bats/bin/bats ./e2e/tests/01-serial/*.bats || SERIAL_EXIT=$?
+
+          if [ $SERIAL_EXIT -ne 0 ]; then
+            echo ""
+            echo "❌ Serial tests failed - skipping remaining tests"
+            exit 1
+          fi
+          echo "✅ Serial tests passed"
+
+          # Step 2: Run runner tests if runner was deployed
+          # These use e2e-stable scope established by serial tests
           if [ "$RUNNER_DEPLOYED" = "true" ]; then
-            echo "Running runner E2E tests..."
-            ./e2e/test/libs/bats/bin/bats ./e2e/tests/03-experimental-runner/*.bats
+            echo ""
+            echo "=== Running Runner E2E Tests (4 parallel) ==="
+            ./e2e/test/libs/bats/bin/bats -j 4 --no-parallelize-within-files ./e2e/tests/03-experimental-runner/*.bats || RUNNER_EXIT=$?
+
+            if [ $RUNNER_EXIT -ne 0 ]; then
+              echo ""
+              echo "❌ Runner tests failed - skipping parallel tests"
+              exit 1
+            fi
+            echo "✅ Runner tests passed"
           else
+            echo ""
             echo "Skipping runner tests (runner not deployed)"
+          fi
+
+          # Step 3: Run parallel tests with -j 10
+          echo ""
+          echo "=== Running Parallel E2E Tests ==="
+          ./e2e/test/libs/bats/bin/bats -j 10 --no-parallelize-within-files ./e2e/tests/02-parallel/*.bats || PARALLEL_EXIT=$?
+
+          # Report results and exit with failure if any suite failed
+          echo ""
+          echo "=== Test Results ==="
+          echo "Serial tests: PASSED"
+          if [ "$RUNNER_DEPLOYED" = "true" ]; then
+            echo "Runner tests: PASSED"
+          fi
+          echo "Parallel tests: $([ $PARALLEL_EXIT -eq 0 ] && echo 'PASSED' || echo 'FAILED')"
+
+          # Exit with failure if parallel tests failed
+          if [ $PARALLEL_EXIT -ne 0 ]; then
+            exit 1
           fi
         env:
           VM0_API_URL: ${{ needs.deploy-web.outputs.preview-url }}
@@ -347,6 +415,19 @@ jobs:
           SSH_KEY_PATH: /tmp/.ssh/metal.pem
           CI_AWS_METAL_RUNNER_USER: ${{ secrets.CI_AWS_METAL_RUNNER_USER }}
           CI_AWS_METAL_RUNNER_HOST: ${{ secrets.CI_AWS_METAL_RUNNER_HOST }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # RUNNER_GROUP is set dynamically in "Start Runner" step
+
+      - name: Stop Runner (if deployed)
+        if: always() && needs.deploy-runner.outputs.runner-deployed == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          METAL_USER: ${{ secrets.CI_AWS_METAL_RUNNER_USER }}
+          METAL_HOST: ${{ secrets.CI_AWS_METAL_RUNNER_HOST }}
+        run: |
+          SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/.ssh/metal.pem"
+          SSH_TARGET="${METAL_USER}@${METAL_HOST}"
+          ssh $SSH_OPTS "$SSH_TARGET" "/opt/vm0-runner/scripts/stop-runner.sh '${PR_NUMBER}' --show-logs"
 
       - name: Stop Cron Simulator
         if: always()
@@ -407,29 +488,51 @@ jobs:
           SSH_OPTS="-o StrictHostKeyChecking=no -i /tmp/.ssh/metal.pem"
           SSH_TARGET="${METAL_USER}@${METAL_HOST}"
 
-          # Stop any existing runner for this PR (ignore if none running)
-          ssh $SSH_OPTS "$SSH_TARGET" "pkill -f 'vm0-runner.*pr-${PR_NUMBER}'" || true
+          # Stop any existing runner for this PR via pm2
+          ssh $SSH_OPTS "$SSH_TARGET" "pm2 delete vm0-runner-pr-${PR_NUMBER} 2>/dev/null || true"
 
           # Create PR-specific directory on Metal
           ssh $SSH_OPTS "$SSH_TARGET" "sudo mkdir -p ${RUNNER_DIR} && sudo chown \$(whoami) ${RUNNER_DIR}"
 
-          # Create production-only package.json (remove workspace refs)
-          node -e "
-            const pkg = require('./turbo/apps/runner/package.json');
-            const prodPkg = {
-              name: pkg.name,
-              version: pkg.version,
-              type: pkg.type,
-              dependencies: pkg.dependencies
-            };
-            console.log(JSON.stringify(prodPkg, null, 2));
-          " > /tmp/package.json
+          # Create staging directory with built files
+          # Note: dist/package.json is already production-ready (postbuild removes @vm0/core)
+          STAGING_DIR="/tmp/vm0-runner-bundle"
+          rm -rf "$STAGING_DIR"
+          mkdir -p "$STAGING_DIR"
+          cp -r turbo/apps/runner/dist/* "$STAGING_DIR/"
 
-          # Copy built files to Metal
-          scp $SSH_OPTS -r turbo/apps/runner/dist/* /tmp/package.json "${SSH_TARGET}:${RUNNER_DIR}/"
+          # Install dependencies on CI (where npm registry is accessible)
+          echo "Installing dependencies on CI..."
+          cd "$STAGING_DIR" && npm install --omit=dev
+          cd -
 
-          # Install dependencies
-          ssh $SSH_OPTS "$SSH_TARGET" "cd ${RUNNER_DIR} && npm install --omit=dev"
+          # Create tarball of the complete bundle
+          tar -czf /tmp/vm0-runner-bundle.tar.gz -C /tmp vm0-runner-bundle
+
+          # Copy tarball to Metal and extract
+          echo "Uploading bundle to Metal..."
+          scp $SSH_OPTS /tmp/vm0-runner-bundle.tar.gz "${SSH_TARGET}:/tmp/"
+          ssh $SSH_OPTS "$SSH_TARGET" "rm -rf ${RUNNER_DIR}/* && tar -xzf /tmp/vm0-runner-bundle.tar.gz -C /tmp && cp -r /tmp/vm0-runner-bundle/* ${RUNNER_DIR}/ && rm -rf /tmp/vm0-runner-bundle /tmp/vm0-runner-bundle.tar.gz"
+
+          # Copy deploy scripts to Metal (PR-specific and global location)
+          echo "Copying deploy scripts to Metal..."
+          scp $SSH_OPTS -r turbo/scripts/deploy-runner "${SSH_TARGET}:${RUNNER_DIR}/"
+          ssh $SSH_OPTS "$SSH_TARGET" "sudo mkdir -p /opt/vm0-runner/scripts && sudo cp ${RUNNER_DIR}/deploy-runner/*.sh /opt/vm0-runner/scripts/ && sudo chmod +x /opt/vm0-runner/scripts/*.sh"
+
+          # Install Firecracker if not present (global, one-time)
+          echo "Checking/Installing Firecracker..."
+          ssh $SSH_OPTS "$SSH_TARGET" "cd ${RUNNER_DIR}/deploy-runner && ./install-firecracker.sh"
+
+          # Build rootfs from Dockerfile (global, shared across all PRs)
+          # Only rebuild if not exists or FORCE_REBUILD_ROOTFS is set
+          GLOBAL_ROOTFS="/opt/firecracker/rootfs.ext4"
+          echo "Checking global rootfs at ${GLOBAL_ROOTFS}..."
+          if ssh $SSH_OPTS "$SSH_TARGET" "[ -f ${GLOBAL_ROOTFS} ]"; then
+            echo "Global rootfs already exists, skipping build"
+          else
+            echo "Building global rootfs from Dockerfile..."
+            ssh $SSH_OPTS "$SSH_TARGET" "cd ${RUNNER_DIR}/deploy-runner && ./build-rootfs.sh ${GLOBAL_ROOTFS}"
+          fi
 
           echo "Runner deployed to ${RUNNER_DIR} for PR #${PR_NUMBER}"
           echo "runner-deployed=true" >> $GITHUB_OUTPUT

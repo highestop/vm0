@@ -3,13 +3,14 @@ import {
   tsr,
   TsRestResponse,
 } from "../../../../src/lib/ts-rest-handler";
-import { runsMainContract } from "@vm0/core";
+import { runsMainContract, type StoredExecutionContext } from "@vm0/core";
 import { initServices } from "../../../../src/lib/init-services";
 import {
   agentComposes,
   agentComposeVersions,
 } from "../../../../src/db/schema/agent-compose";
 import { agentRuns } from "../../../../src/db/schema/agent-run";
+import { runnerJobQueue } from "../../../../src/db/schema/runner-job-queue";
 import { eq } from "drizzle-orm";
 import { runService } from "../../../../src/lib/run";
 import { getUserId } from "../../../../src/lib/auth/get-user-id";
@@ -17,9 +18,42 @@ import { generateSandboxToken } from "../../../../src/lib/auth/sandbox-token";
 import type { AgentComposeYaml } from "../../../../src/types/agent-compose";
 import { extractTemplateVars } from "../../../../src/lib/config-validator";
 import { assertImageAccess } from "../../../../src/lib/image/image-service";
+import { storageService } from "../../../../src/lib/storage/storage-service";
 import { logger } from "../../../../src/lib/logger";
+import { encryptSecrets } from "../../../../src/lib/crypto/secrets-encryption";
+import { validateRunnerGroupScope } from "../../../../src/lib/scope/scope-service";
 
 const log = logger("api:runs");
+
+/**
+ * Extract working directory from agent compose config
+ */
+function extractWorkingDir(agentCompose: unknown): string {
+  const compose = agentCompose as AgentComposeYaml | undefined;
+  if (!compose?.agents) return "/workspace";
+  const agents = Object.values(compose.agents);
+  return agents[0]?.working_dir || "/workspace";
+}
+
+/**
+ * Extract CLI agent type from agent compose config
+ */
+function extractCliAgentType(agentCompose: unknown): string {
+  const compose = agentCompose as AgentComposeYaml | undefined;
+  if (!compose?.agents) return "claude-code";
+  const agents = Object.values(compose.agents);
+  return agents[0]?.provider || "claude-code";
+}
+
+/**
+ * Resolve runner group from agent compose config
+ */
+function resolveRunnerGroup(agentCompose: unknown): string | null {
+  const compose = agentCompose as AgentComposeYaml | undefined;
+  if (!compose?.agents) return null;
+  const agents = Object.values(compose.agents);
+  return agents[0]?.experimental_runner?.group ?? null;
+}
 
 const router = tsr.router(runsMainContract, {
   create: async ({ body }) => {
@@ -381,24 +415,24 @@ const router = tsr.router(runsMainContract, {
 
     log.debug(`Created run record: ${run.id}`);
 
-    // Generate temporary bearer token for E2B sandbox
+    // Fetch compose content if not already available (needed for checkpoint/session resume)
+    if (!composeContent) {
+      const [version] = await globalThis.services.db
+        .select()
+        .from(agentComposeVersions)
+        .where(eq(agentComposeVersions.id, agentComposeVersionId))
+        .limit(1);
+      if (version) {
+        composeContent = version.content as AgentComposeYaml;
+      }
+    }
+
+    // Generate temporary bearer token (needed for both runner and E2B paths)
     const sandboxToken = await generateSandboxToken(userId, run.id);
     log.debug(`Generated sandbox token for run: ${run.id}`);
 
-    // Update run status to 'running' before starting E2B execution
-    // Initialize lastHeartbeatAt for sandbox cleanup monitoring
-    await globalThis.services.db
-      .update(agentRuns)
-      .set({
-        status: "running",
-        startedAt: new Date(),
-        lastHeartbeatAt: new Date(),
-      })
-      .where(eq(agentRuns.id, run.id));
-
-    // Build execution context and start sandbox (fire-and-forget)
-    // vm0_start event is sent by E2B service after storage preparation
-    // Final status will be updated by webhook when run-agent.sh completes
+    // Build execution context FIRST (for both paths - late routing)
+    // This ensures runner jobs get the same context preparation as E2B jobs
     try {
       const context = await runService.buildExecutionContext({
         checkpointId: body.checkpointId,
@@ -420,6 +454,81 @@ const router = tsr.router(runsMainContract, {
         resumedFromCheckpointId: body.checkpointId,
         continuedFromSessionId: body.sessionId,
       });
+
+      // LATE ROUTING DECISION - after context is built
+      // Check for experimental_runner routing
+      const runnerGroup = resolveRunnerGroup(context.agentCompose);
+
+      if (runnerGroup) {
+        log.debug(`Run ${run.id} routed to runner group: ${runnerGroup}`);
+
+        // Validate runner group scope matches user's scope
+        await validateRunnerGroupScope(userId, runnerGroup);
+
+        // Prepare storage manifest with presigned URLs for runner
+        const workingDir = extractWorkingDir(context.agentCompose);
+        const storageManifest = await storageService.prepareStorageManifest(
+          context.agentCompose as AgentComposeYaml,
+          context.vars || {},
+          userId,
+          context.artifactName,
+          context.artifactVersion,
+          context.volumeVersions,
+          context.resumeArtifact,
+          workingDir,
+        );
+
+        // Encrypt secrets before storing
+        const secretValues = context.secrets
+          ? Object.values(context.secrets)
+          : null;
+        const encryptedSecrets = encryptSecrets(
+          secretValues,
+          globalThis.services.env.SECRETS_ENCRYPTION_KEY,
+        );
+
+        // Build stored execution context with encrypted secrets
+        const storedContext: StoredExecutionContext = {
+          workingDir,
+          storageManifest,
+          environment: context.environment || null,
+          resumeSession: context.resumeSession || null,
+          encryptedSecrets, // Encrypted secrets (replaces secretValues)
+          cliAgentType: extractCliAgentType(context.agentCompose),
+          experimentalNetworkSecurity: context.experimentalNetworkSecurity,
+        };
+
+        // Insert into runner job queue - separate table for runner jobs
+        // TTL: 24 hours for job expiration
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        await globalThis.services.db.insert(runnerJobQueue).values({
+          runId: run.id,
+          runnerGroup,
+          executionContext: storedContext,
+          expiresAt,
+        });
+
+        // Return early - run will be picked up by polling runner
+        return {
+          status: 201 as const,
+          body: {
+            runId: run.id,
+            status: "pending" as const,
+            createdAt: run.createdAt.toISOString(),
+          },
+        };
+      }
+
+      // E2B path - update run status to 'running' before starting execution
+      // Initialize lastHeartbeatAt for sandbox cleanup monitoring
+      await globalThis.services.db
+        .update(agentRuns)
+        .set({
+          status: "running",
+          startedAt: new Date(),
+          lastHeartbeatAt: new Date(),
+        })
+        .where(eq(agentRuns.id, run.id));
 
       // Start execution - returns immediately after sandbox is prepared
       // Agent execution continues in background (fire-and-forget)

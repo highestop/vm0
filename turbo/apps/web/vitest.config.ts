@@ -1,5 +1,4 @@
 import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { config } from "dotenv";
 import { existsSync } from "fs";
@@ -11,7 +10,6 @@ if (existsSync(envLocalPath)) {
 }
 
 export default defineConfig({
-  plugins: [react()],
   test: {
     globals: true,
     environment: "node",

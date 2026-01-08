@@ -31,6 +31,10 @@ export {
   agentDefinitionSchema,
   agentComposeContentSchema,
   composeResponseSchema,
+  SUPPORTED_APPS,
+  SUPPORTED_APP_TAGS,
+  type SupportedApp,
+  type SupportedAppTag,
 } from "./composes";
 export {
   runsMainContract,
@@ -110,19 +114,6 @@ export {
   type CliAuthTokenContract,
 } from "./cli-auth";
 export { authContract, type AuthContract } from "./auth";
-export {
-  imagesMainContract,
-  imagesByIdContract,
-  imageBuildsContract,
-  buildStatusSchema,
-  imageInfoSchema,
-  createImageRequestSchema,
-  createImageResponseSchema,
-  buildStatusResponseSchema,
-  type ImagesMainContract,
-  type ImagesByIdContract,
-  type ImageBuildsContract,
-} from "./images";
 export {
   cronCleanupSandboxesContract,
   cleanupResultSchema,

@@ -40,7 +40,7 @@ EOF
     assert_output --partial "Compose created"
 }
 
-@test "vm0 compose with explicit image skips image auto-config" {
+@test "vm0 compose with explicit image shows deprecation warning" {
     echo "# Creating config with explicit image but without working_dir..."
     cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
@@ -56,10 +56,11 @@ EOF
     run $CLI_COMMAND compose "$TEST_DIR/vm0.yaml"
     assert_success
 
-    echo "# Verifying only working_dir was auto-configured..."
+    echo "# Verifying deprecation warning and working_dir auto-configured..."
+    assert_output --partial "deprecated"
     refute_output --partial "Auto-configured image"
     assert_output --partial "Auto-configured working_dir"
-    assert_output --partial "Compose created"
+    assert_output --partial "Compose"
 }
 
 @test "vm0 compose with explicit working_dir skips working_dir auto-config" {
@@ -71,7 +72,7 @@ agents:
   $AGENT_NAME:
     description: "Test agent with explicit config"
     provider: claude-code
-    image: vm0-github-cli-dev
+    image: vm0/claude-code-github:dev
     working_dir: /custom/path
 EOF
 
@@ -81,6 +82,67 @@ EOF
 
     echo "# Verifying no auto-configuration..."
     refute_output --partial "Auto-configured"
+}
+
+@test "vm0 compose with apps selects github image variant" {
+    echo "# Creating config with apps field..."
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+version: "1.0"
+
+agents:
+  $AGENT_NAME:
+    description: "Test agent with apps"
+    provider: claude-code
+    apps:
+      - github
+EOF
+
+    echo "# Running vm0 compose..."
+    run $CLI_COMMAND compose "$TEST_DIR/vm0.yaml"
+    assert_success
+
+    echo "# Verifying github image variant was auto-configured..."
+    assert_output --partial "Auto-configured image"
+    assert_output --partial "claude-code-github"
+    assert_output --partial "Compose"
+}
+
+@test "vm0 compose rejects invalid app" {
+    echo "# Creating config with invalid app..."
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+version: "1.0"
+
+agents:
+  $AGENT_NAME:
+    description: "Test agent with invalid app"
+    provider: claude-code
+    apps:
+      - invalid-app
+EOF
+
+    echo "# Running vm0 compose (should fail)..."
+    run $CLI_COMMAND compose "$TEST_DIR/vm0.yaml"
+    assert_failure
+    assert_output --partial "Invalid app"
+}
+
+@test "vm0 compose rejects invalid app tag" {
+    echo "# Creating config with invalid app tag..."
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+version: "1.0"
+
+agents:
+  $AGENT_NAME:
+    description: "Test agent with invalid app tag"
+    provider: claude-code
+    apps:
+      - github:invalid-tag
+EOF
+
+    echo "# Running vm0 compose (should fail)..."
+    run $CLI_COMMAND compose "$TEST_DIR/vm0.yaml"
+    assert_failure
+    assert_output --partial "Invalid app tag"
 }
 
 @test "vm0 compose requires image for unsupported provider" {
@@ -171,13 +233,14 @@ EOF
 
 @test "vm0 compose with skills downloads and uploads skill" {
     echo "# Creating config with skills..."
+    # Note: Using base image since github variant may not exist yet
     cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
 
 agents:
   $AGENT_NAME:
     provider: claude-code
-    image: vm0-github-cli-dev
+    image: vm0/claude-code:dev
     skills:
       - https://github.com/vm0-ai/vm0-skills/tree/main/github
 EOF
@@ -194,13 +257,14 @@ EOF
 
 @test "vm0 compose with skills deduplicates unchanged skill" {
     echo "# Creating config with skills..."
+    # Note: Using base image since github variant may not exist yet
     cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
 
 agents:
   $AGENT_NAME:
     provider: claude-code
-    image: vm0-github-cli-dev
+    image: vm0/claude-code:dev
     skills:
       - https://github.com/vm0-ai/vm0-skills/tree/main/github
 EOF
@@ -222,13 +286,14 @@ EOF
 
 @test "vm0 compose with both instructions and skills" {
     echo "# Creating config with both instructions and skills..."
+    # Note: Using base image since github variant may not exist yet
     cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
 
 agents:
   $AGENT_NAME:
     provider: claude-code
-    image: vm0-github-cli-dev
+    image: vm0/claude-code:dev
     instructions: AGENTS.md
     skills:
       - https://github.com/vm0-ai/vm0-skills/tree/main/github
@@ -299,13 +364,15 @@ EOF
 
 @test "vm0 run with skills mounts skill directory" {
     echo "# Creating config with skills..."
+    # Note: Using base image since github variant may not exist yet
+    # Skills work with any image - they're just file mounts
     cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
 
 agents:
   $AGENT_NAME:
     provider: claude-code
-    image: vm0-github-cli-dev
+    image: vm0/claude-code:dev
     skills:
       - https://github.com/vm0-ai/vm0-skills/tree/main/github
 EOF
@@ -332,6 +399,39 @@ EOF
 
     echo "# Verifying skill directory contains SKILL.md..."
     assert_output --partial "SKILL.md"
+}
+
+@test "vm0 run with apps github:dev has gh cli installed" {
+    echo "# Creating config with apps: [github:dev]..."
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+version: "1.0"
+
+agents:
+  $AGENT_NAME:
+    provider: claude-code
+    apps:
+      - github:dev
+EOF
+
+    echo "# Running vm0 compose..."
+    run $CLI_COMMAND compose "$TEST_DIR/vm0.yaml"
+    assert_success
+
+    echo "# Initializing artifact storage..."
+    mkdir -p "$TEST_DIR/$ARTIFACT_NAME"
+    cd "$TEST_DIR/$ARTIFACT_NAME"
+    $CLI_COMMAND artifact init --name "$ARTIFACT_NAME" >/dev/null
+    run $CLI_COMMAND artifact push
+    assert_success
+
+    echo "# Running agent to verify gh cli is installed..."
+    run $CLI_COMMAND run "$AGENT_NAME" \
+        --artifact-name "$ARTIFACT_NAME" \
+        "gh --version"
+    assert_success
+
+    echo "# Verifying gh version output..."
+    assert_output --partial "gh version"
 }
 
 # ============================================

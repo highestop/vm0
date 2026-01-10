@@ -1,8 +1,8 @@
-<p align="center">
+<p>
   <img src="https://github.com/vm0-ai/vm0/blob/main/turbo/apps/web/public/assets/Logo_VM0_combo_black_bg.svg" alt="VM0 Logo" width="120" />
 </p>
 
-<p align="center">
+<p>
   <a href="https://deepwiki.com/vm0-ai/vm0">
     <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
   </a>
@@ -14,89 +14,41 @@
   </a>
 </p>
 
-<p align="center">
-  <strong>Build agents and automate workflows with natural language</strong>
-</p>
-
-<p align="center">
+<p>
   <a href="https://www.vm0.ai">Website</a> •
+  <a href="https://docs.vm0.ai">Documentation</a> •
   <a href="https://www.vm0.ai/sign-up">Join Waitlist</a> •
-  <a href="https://discord.gg/WMpAmHFfp6">Discord</a> •
-  <a href="mailto:ethan@vm0.ai">Contact</a>
+  <a href="https://discord.gg/WMpAmHFfp6">Discord</a>
 </p>
 
 ---
 
-## What is VM0?
+![Alt](https://repobeats.axiom.co/api/embed/ef46db5e11f5146fcc8af07077a79d789efdfbe5.svg "Repobeats analytics image")
 
-VM0 helps you build agents and automated workflows using natural language.
+---
 
-It also provides a full agent runtime with:
-- Secure cloud sandbox: isolated execution environments for running agents safely
-- Versioned storage: track, reproduce, and roll back agent state and artifacts
-- Persistent execution: resume, fork, and iterate on agent runs with full history
-- Complete observability: logs, metrics, and network visibility for every run
+## Skill workflows, while you sleep
 
-You can build and extend agents using:
-- Natural language workflows: define agent behavior in plain text, without complex graphs or pipelines
-- Pluggable skills: add capabilities through reusable [agent skills](https://github.com/vm0-ai/vm0-skills)
-  
-**Supported agents:**
-- Claude Code
-- OpenAI Codex (in beta)
-- Gemini CLI (coming soon)
-- More coming soon...
+- **Cloud sandbox**, run Claude Code or Codex agents in isolated containers
+- **60+ skills**, GitHub, Slack, Notion, Firecrawl, and [more](https://github.com/vm0-ai/vm0-skills)
+- **Persistence**, continue chat, resume, fork, and version your workflow sessions
+- **Observability**, logs, metrics, and network visibility for every run
 
-## Installation
+**Supported**: Claude Code, Codex · **Coming soon**: Gemini CLI, DeepAgent CLI, OpenCode
+
+## [Quick Start](https://docs.vm0.ai/docs/quick-start)
+
+From zero to workflow agent in 5 minutes
 
 ```bash
 npm install -g @vm0/cli
-```
-
-> VM0 is in beta. [Join the waitlist](https://www.vm0.ai/sign-up) to get access.
-
-## Quick Start
-
-```bash
-# 1. Login
 vm0 auth login
-
-# 2. Create project directory
 mkdir my-agent && cd my-agent
 
-# 3. Initialize project
 vm0 init
-
-# 4. Get Claude Code token and save to .env
-claude setup-token
-echo "CLAUDE_CODE_OAUTH_TOKEN=<your-token>" > .env
-
-# 5. Run your agent
-vm0 cook "let's start working."
-# Agent follows AGENTS.md: curates AI news from HackerNews and writes to content.md
+cat AGENTS.md # check the workflow which your agent will run
+vm0 cook "run your workflow"
 ```
-
-### What just happened?
-
-- `vm0 init` created `vm0.yaml` (agent config) and `AGENTS.md` (agent instructions)
-- `vm0 cook` initialized storage, composed the agent, and ran your prompt
-- Results are in the `artifact/` directory
-
-### Next steps
-
-- Edit `AGENTS.md` to customize agent instructions
-- Edit `vm0.yaml` to configure [agent skills](https://github.com/vm0-ai/vm0-skills)
-
-> For full documentation, visit [docs.vm0.ai](https://docs.vm0.ai/docs).
-
-## Resources
-
-- [vm0-cookbooks](https://github.com/vm0-ai/vm0-cookbooks) - Ready-to-run examples
-- [vm0-skills](https://github.com/vm0-ai/vm0-skills) - Agent skills library
-- [Contributing guide](./CONTRIBUTING.md) - Development setup
-- [Website](https://www.vm0.ai) - Official website
-- [Discord](https://discord.gg/WMpAmHFfp6) - Join our community
-- [Email](mailto:ethan@vm0.ai) - Questions and support
 
 ## License
 

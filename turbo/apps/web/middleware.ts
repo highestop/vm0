@@ -27,9 +27,10 @@ const intlMiddleware = createIntlMiddleware({
 });
 
 export default clerkMiddleware(async (auth, request: NextRequest) => {
-  // Skip i18n for API routes, static files, CLI auth, sign-up, and Next.js internals
+  // Skip i18n for API routes (including /v1), static files, CLI auth, sign-up, and Next.js internals
   if (
     request.nextUrl.pathname.startsWith("/api/") ||
+    request.nextUrl.pathname.startsWith("/v1/") ||
     request.nextUrl.pathname.startsWith("/_next/") ||
     request.nextUrl.pathname.startsWith("/cli-auth") ||
     request.nextUrl.pathname.startsWith("/sign-up") ||
@@ -38,7 +39,10 @@ export default clerkMiddleware(async (auth, request: NextRequest) => {
       request.nextUrl.pathname,
     )
   ) {
-    if (request.nextUrl.pathname.startsWith("/api/")) {
+    if (
+      request.nextUrl.pathname.startsWith("/api/") ||
+      request.nextUrl.pathname.startsWith("/v1/")
+    ) {
       // Check if this might be a CLI token request BEFORE handling CORS
       const authHeader = request.headers.get("Authorization");
       const hasCliToken = authHeader && authHeader.includes("vm0_live_");
@@ -72,5 +76,8 @@ export default clerkMiddleware(async (auth, request: NextRequest) => {
 });
 
 export const config = {
-  matcher: ["/((?!_next|_vercel|assets|.*\\..*|api).*)", "/(api|trpc)(.*)"],
+  matcher: [
+    "/((?!_next|_vercel|assets|.*\\..*|api|v1).*)",
+    "/(api|v1|trpc)(.*)",
+  ],
 };

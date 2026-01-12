@@ -13,7 +13,8 @@ import {
 import type { NavItem } from "../../types/navigation.ts";
 import { navigateInReact$ } from "../../signals/route.ts";
 
-const ICON_MAP: Record<string, LucideIcon> = {
+// eslint-disable-next-line ccstate/no-package-variable -- static readonly icon mapping
+const ICON_MAP = {
   Bot,
   CircleDot,
   FileBarChart,
@@ -22,7 +23,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Receipt,
   HelpCircle,
   Rocket,
-};
+} as const satisfies Record<string, LucideIcon>;
 
 interface NavLinkProps {
   item: NavItem;

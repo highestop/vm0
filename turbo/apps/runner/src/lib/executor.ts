@@ -32,6 +32,7 @@ import type { RunnerConfig } from "./config.js";
 import { getAllScripts } from "./scripts/utils.js";
 import { SCRIPT_PATHS, ENV_LOADER_PATH } from "./scripts/index.js";
 import { getVMRegistry } from "./proxy/index.js";
+import { withSandboxTiming, recordRunnerOperation } from "./metrics/index.js";
 
 /**
  * Execution result
@@ -456,7 +457,7 @@ export async function executeJob(
     // Create and start VM
     log(`[Executor] Creating VM ${vmId}...`);
     vm = new FirecrackerVM(vmConfig);
-    await vm.start();
+    await withSandboxTiming("vm_create", () => vm!.start());
 
     // Get VM IP for SSH connection
     guestIp = vm.getGuestIp();
@@ -471,7 +472,9 @@ export async function executeJob(
     const privateKeyPath = getRunnerSSHKeyPath();
     const ssh = createVMSSHClient(guestIp, "user", privateKeyPath || undefined);
     log(`[Executor] Waiting for SSH on ${guestIp}...`);
-    await ssh.waitUntilReachable(120000, 2000); // 2 minute timeout, check every 2s
+    await withSandboxTiming("ssh_wait", () =>
+      ssh.waitUntilReachable(120000, 2000),
+    ); // 2 minute timeout, check every 2s
 
     log(`[Executor] SSH ready on ${guestIp}`);
 
@@ -511,21 +514,25 @@ export async function executeJob(
 
     // Upload all Python scripts
     log(`[Executor] Uploading scripts...`);
-    await uploadScripts(ssh);
+    await withSandboxTiming("script_upload", () => uploadScripts(ssh));
     log(`[Executor] Scripts uploaded to ${SCRIPT_PATHS.baseDir}`);
 
     // Download storages if manifest provided
     if (context.storageManifest) {
-      await downloadStorages(ssh, context.storageManifest);
+      await withSandboxTiming("storage_download", () =>
+        downloadStorages(ssh, context.storageManifest!),
+      );
     }
 
     // Restore session history if resuming
     if (context.resumeSession) {
-      await restoreSessionHistory(
-        ssh,
-        context.resumeSession,
-        context.workingDir,
-        context.cliAgentType || "claude-code",
+      await withSandboxTiming("session_restore", () =>
+        restoreSessionHistory(
+          ssh,
+          context.resumeSession!,
+          context.workingDir,
+          context.cliAgentType || "claude-code",
+        ),
       );
     }
 
@@ -581,15 +588,29 @@ export async function executeJob(
       }
     }
 
-    const duration = Math.round((Date.now() - startTime) / 1000);
+    const durationMs = Date.now() - startTime;
+    const duration = Math.round(durationMs / 1000);
 
     if (!completed) {
       log(`[Executor] Agent timed out after ${duration}s`);
+      // Record agent_execute metric for timeout
+      recordRunnerOperation({
+        actionType: "agent_execute",
+        durationMs,
+        success: false,
+      });
       return {
         exitCode: 1,
         error: `Agent execution timed out after ${duration}s`,
       };
     }
+
+    // Record agent_execute metric
+    recordRunnerOperation({
+      actionType: "agent_execute",
+      durationMs,
+      success: exitCode === 0,
+    });
 
     log(`[Executor] Agent finished in ${duration}s with exit code ${exitCode}`);
 
@@ -649,7 +670,7 @@ export async function executeJob(
     // Always cleanup VM - let errors propagate (fail-fast principle)
     if (vm) {
       log(`[Executor] Cleaning up VM ${vmId}...`);
-      await vm.kill();
+      await withSandboxTiming("cleanup", () => vm!.kill());
     }
   }
 }

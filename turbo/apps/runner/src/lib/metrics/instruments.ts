@@ -1,38 +1,44 @@
-import { getMeter, isMetricsEnabled } from "./provider";
+import { getMeter, isMetricsEnabled, getRunnerLabel } from "./provider";
 import type { Counter, Histogram } from "@opentelemetry/api";
 
 // Lazy-initialized instruments (created after initMetrics is called)
-let httpRequestTotal: Counter | null = null;
-let httpRequestErrorsTotal: Counter | null = null;
-let httpRequestDuration: Histogram | null = null;
+let runnerOperationTotal: Counter | null = null;
+let runnerOperationErrorsTotal: Counter | null = null;
+let runnerOperationDuration: Histogram | null = null;
 let sandboxOperationTotal: Counter | null = null;
 let sandboxOperationErrorsTotal: Counter | null = null;
 let sandboxOperationDuration: Histogram | null = null;
 
-function getApiInstruments() {
-  if (!httpRequestTotal) {
-    const meter = getMeter("vm0-web");
-    httpRequestTotal = meter.createCounter("http_request_total", {
-      description: "Total number of HTTP requests",
+function getRunnerInstruments() {
+  if (!runnerOperationTotal) {
+    const meter = getMeter("vm0-runner");
+    runnerOperationTotal = meter.createCounter("runner_operation_total", {
+      description: "Total number of runner operations",
     });
-    httpRequestErrorsTotal = meter.createCounter("http_request_errors_total", {
-      description: "Total number of HTTP request errors (4xx/5xx)",
-    });
-    httpRequestDuration = meter.createHistogram("http_request_duration_ms", {
-      description: "HTTP request duration in milliseconds",
-      unit: "ms",
-    });
+    runnerOperationErrorsTotal = meter.createCounter(
+      "runner_operation_errors_total",
+      {
+        description: "Total number of runner operation errors",
+      },
+    );
+    runnerOperationDuration = meter.createHistogram(
+      "runner_operation_duration_ms",
+      {
+        description: "Runner operation duration in milliseconds",
+        unit: "ms",
+      },
+    );
   }
   return {
-    httpRequestTotal: httpRequestTotal!,
-    httpRequestErrorsTotal: httpRequestErrorsTotal!,
-    httpRequestDuration: httpRequestDuration!,
+    runnerOperationTotal: runnerOperationTotal!,
+    runnerOperationErrorsTotal: runnerOperationErrorsTotal!,
+    runnerOperationDuration: runnerOperationDuration!,
   };
 }
 
 function getSandboxInstruments() {
   if (!sandboxOperationTotal) {
-    const meter = getMeter("vm0-web");
+    const meter = getMeter("vm0-runner");
     sandboxOperationTotal = meter.createCounter("sandbox_operation_total", {
       description: "Total number of sandbox operations",
     });
@@ -57,44 +63,40 @@ function getSandboxInstruments() {
   };
 }
 
-export function recordApiRequest(attrs: {
-  method: string;
-  pathTemplate: string;
-  statusCode: number;
-  host: string;
+export function recordRunnerOperation(attrs: {
+  actionType: string;
   durationMs: number;
+  success: boolean;
 }): void {
   if (!isMetricsEnabled()) return;
 
-  const { httpRequestTotal, httpRequestErrorsTotal, httpRequestDuration } =
-    getApiInstruments();
+  const {
+    runnerOperationTotal,
+    runnerOperationErrorsTotal,
+    runnerOperationDuration,
+  } = getRunnerInstruments();
 
   const labels = {
-    method: attrs.method,
-    path_template: attrs.pathTemplate,
-    host: attrs.host,
+    action_type: attrs.actionType,
+    runner_label: getRunnerLabel(),
   };
 
   // Always increment total counter
-  httpRequestTotal.add(1, labels);
+  runnerOperationTotal.add(1, labels);
 
-  // Increment error counter if status >= 400
-  if (attrs.statusCode >= 400) {
-    httpRequestErrorsTotal.add(1, {
-      ...labels,
-      status_code: String(attrs.statusCode),
-    });
+  // Increment error counter if failed
+  if (!attrs.success) {
+    runnerOperationErrorsTotal.add(1, labels);
   }
 
   // Always record duration histogram
-  httpRequestDuration.record(attrs.durationMs, {
+  runnerOperationDuration.record(attrs.durationMs, {
     ...labels,
-    status_code: String(attrs.statusCode),
+    success: String(attrs.success),
   });
 }
 
 export function recordSandboxOperation(attrs: {
-  sandboxType: "runner" | "e2b";
   actionType: string;
   durationMs: number;
   success: boolean;
@@ -108,7 +110,7 @@ export function recordSandboxOperation(attrs: {
   } = getSandboxInstruments();
 
   const labels = {
-    sandbox_type: attrs.sandboxType,
+    sandbox_type: "runner",
     action_type: attrs.actionType,
   };
 

@@ -1,15 +1,20 @@
 import { Pool as PgPool } from "pg";
 import { Pool as NeonPool } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/node-postgres";
+import { drizzle as drizzleNodePg } from "drizzle-orm/node-postgres";
+import { drizzle as drizzleNeonServerless } from "drizzle-orm/neon-serverless";
 import { schema } from "../db/db";
 import { env, type Env } from "../env";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { NeonDatabase } from "drizzle-orm/neon-serverless";
 import type { Services } from "../types/global";
 
 // Private variables for singleton instances
 let _env: Env | undefined;
 let _pool: PgPool | NeonPool | undefined;
-let _db: NodePgDatabase<typeof schema> | undefined;
+let _db:
+  | NodePgDatabase<typeof schema>
+  | NeonDatabase<typeof schema>
+  | undefined;
 let _services: Services | undefined;
 
 /**
@@ -64,7 +69,17 @@ export function initServices(): void {
     },
     get db() {
       if (!_db) {
-        _db = drizzle(this.pool, { schema });
+        if (isVercel) {
+          // Use Neon serverless driver with drizzle for Vercel
+          // This supports interactive transactions (required for storage commit)
+          _db = drizzleNeonServerless({
+            client: this.pool as NeonPool,
+            schema,
+          });
+        } else {
+          // Use regular pg driver with drizzle for local development
+          _db = drizzleNodePg(this.pool as PgPool, { schema });
+        }
       }
       return _db;
     },

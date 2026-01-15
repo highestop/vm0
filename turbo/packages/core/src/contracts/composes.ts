@@ -60,22 +60,59 @@ export const SUPPORTED_APP_TAGS = ["latest", "dev"] as const;
 export type SupportedAppTag = (typeof SUPPORTED_APP_TAGS)[number];
 
 /**
+ * App name format regex: lowercase letters, numbers, and hyphens
+ */
+const APP_NAME_REGEX = /^[a-z0-9-]+$/;
+
+/**
  * App string format: "app" or "app:tag"
  * Examples: "github", "github:dev", "github:latest"
+ *
+ * Validation order:
+ * 1. Check app name format (lowercase letters, numbers, hyphens)
+ * 2. Check app name is in SUPPORTED_APPS
+ * 3. If tag present, check tag is in SUPPORTED_APP_TAGS
  */
-const appStringSchema = z
-  .string()
-  .regex(
-    /^[a-z]+(:(?:latest|dev))?$/,
-    "App must be in format 'app' or 'app:tag' (e.g., 'github', 'github:dev')",
-  )
-  .refine(
-    (val) => {
-      const [app] = val.split(":");
-      return SUPPORTED_APPS.includes(app as SupportedApp);
-    },
-    `Unsupported app. Supported apps: ${SUPPORTED_APPS.join(", ")}`,
-  );
+const appStringSchema = z.string().superRefine((val, ctx) => {
+  const [appName, tag] = val.split(":");
+
+  // Validate app name format
+  if (!appName || !APP_NAME_REGEX.test(appName)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "App name must contain only lowercase letters, numbers, and hyphens",
+    });
+    return;
+  }
+
+  // Validate app name is supported
+  if (!SUPPORTED_APPS.includes(appName as SupportedApp)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid app: "${appName}". Supported apps: ${SUPPORTED_APPS.join(", ")}`,
+    });
+    return;
+  }
+
+  // Validate tag if present
+  if (
+    tag !== undefined &&
+    !SUPPORTED_APP_TAGS.includes(tag as SupportedAppTag)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid app tag: "${tag}". Supported tags: ${SUPPORTED_APP_TAGS.join(", ")}`,
+    });
+  }
+});
+
+/**
+ * Non-empty string array schema for experimental fields
+ */
+const nonEmptyStringArraySchema = z.array(
+  z.string().min(1, "Array entries cannot be empty strings"),
+);
 
 /**
  * Agent definition schema
@@ -102,7 +139,10 @@ const agentDefinitionSchema = z.object({
    * Path to instructions file (e.g., AGENTS.md).
    * Auto-uploaded as volume and mounted at /home/user/.claude/CLAUDE.md
    */
-  instructions: z.string().optional(),
+  instructions: z
+    .string()
+    .min(1, "Instructions path cannot be empty")
+    .optional(),
   /**
    * Array of GitHub tree URLs for agent skills.
    * Each skill is auto-downloaded and mounted at /home/user/.claude/skills/{skillName}/
@@ -128,6 +168,16 @@ const agentDefinitionSchema = z.object({
    * When enabled, filters outbound traffic by domain/IP rules.
    */
   experimental_firewall: experimentalFirewallSchema.optional(),
+  /**
+   * Array of secret names to inject from the scope's secret store.
+   * Each entry must be a non-empty string.
+   */
+  experimental_secrets: nonEmptyStringArraySchema.optional(),
+  /**
+   * Array of variable names to inject from the scope's variable store.
+   * Each entry must be a non-empty string.
+   */
+  experimental_vars: nonEmptyStringArraySchema.optional(),
 });
 
 /**

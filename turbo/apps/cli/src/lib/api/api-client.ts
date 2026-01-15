@@ -1,3 +1,5 @@
+import { initClient } from "@ts-rest/core";
+import { runsMainContract, type ApiErrorResponse } from "@vm0/core";
 import { getApiUrl, getToken } from "./config";
 
 // Import types from @vm0/core contracts
@@ -17,7 +19,6 @@ import type {
   CheckpointResponse,
   AgentComposeSnapshot as CoreAgentComposeSnapshot,
   ComposeResponse,
-  ApiErrorResponse,
   ScopeResponse as CoreScopeResponse,
 } from "@vm0/core";
 
@@ -50,13 +51,17 @@ export interface CreateComposeResponse {
   updatedAt?: string;
 }
 
+/**
+ * CreateRunResponse type
+ * TODO: In future phases, this can be replaced with inferred type from @vm0/core
+ */
 export interface CreateRunResponse {
   runId: string;
   status: RunStatus;
-  sandboxId: string;
-  output: string;
+  sandboxId?: string;
+  output?: string;
   error?: string;
-  executionTimeMs: number;
+  executionTimeMs?: number;
   createdAt: string;
 }
 
@@ -213,19 +218,25 @@ class ApiClient {
     const baseUrl = await this.getBaseUrl();
     const headers = await this.getHeaders();
 
-    const response = await fetch(`${baseUrl}/api/agent/runs`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
+    // Create ts-rest client with config
+    const client = initClient(runsMainContract, {
+      baseUrl,
+      baseHeaders: headers,
+      jsonQuery: true,
     });
 
-    if (!response.ok) {
-      const error = (await response.json()) as ApiError;
-      const message = error.error?.message || "Failed to create run";
-      throw new Error(message);
+    const result = await client.create({ body });
+
+    // ts-rest returns discriminated union based on status code
+    if (result.status === 201) {
+      // Success - result.body is typed and validated
+      return result.body;
     }
 
-    return (await response.json()) as CreateRunResponse;
+    // Error cases - result.body is typed as ApiErrorResponse
+    const errorBody = result.body as ApiErrorResponse;
+    const message = errorBody.error?.message || "Failed to create run";
+    throw new Error(message);
   }
 
   async getEvents(

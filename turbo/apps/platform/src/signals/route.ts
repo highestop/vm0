@@ -175,9 +175,7 @@ export const generateRouterPath = <T extends RoutePath>(
   return _path;
 };
 
-export const setupPageWrapper = (
-  fn: Command<Promise<void> | void, [AbortSignal]>,
-) => {
+const setupPageWrapper = (fn: Command<Promise<void> | void, [AbortSignal]>) => {
   return command(async ({ set }, signal: AbortSignal) => {
     set(setPageSignal$, signal);
     await set(fn, signal);

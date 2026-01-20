@@ -16,7 +16,10 @@ import { executeJob as executeJobInVM } from "../lib/executor.js";
 import {
   checkNetworkPrerequisites,
   setupBridge,
+  cleanupOrphanedProxyRules,
+  flushBridgeArpCache,
 } from "../lib/firecracker/network.js";
+import { cleanupOrphanedAllocations } from "../lib/firecracker/ip-pool.js";
 import {
   initProxyManager,
   initVMRegistry,
@@ -149,6 +152,21 @@ export const startCommand = new Command("start")
       // Set up bridge network
       console.log("Setting up network bridge...");
       await setupBridge();
+
+      // Flush bridge ARP cache to clear stale entries from previous runs
+      // This prevents routing issues when IPs are reused with different MACs
+      console.log("Flushing bridge ARP cache...");
+      await flushBridgeArpCache();
+
+      // Clean up orphaned proxy rules from previous runs
+      // This handles rules left behind after crashes or SIGKILL
+      console.log("Cleaning up orphaned proxy rules...");
+      await cleanupOrphanedProxyRules(config.name);
+
+      // Clean up orphaned IP allocations from previous runs
+      // This reconciles the IP registry with actual TAP devices
+      console.log("Cleaning up orphaned IP allocations...");
+      await cleanupOrphanedAllocations();
 
       // Initialize proxy for network security mode
       // The proxy is always started but only used when experimentalFirewall is enabled

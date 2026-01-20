@@ -46,6 +46,12 @@ cat AGENTS.md # check the workflow which your agent will run
 vm0 cook "run your workflow"
 ```
 
+## 📚 Documentation
+
+- **[Architecture Documentation](./docs/architecture.md)** - Comprehensive technical reference covering sandbox technologies (E2B, Firecracker), infrastructure components and network architecture
+
+For user-facing guides and tutorials, visit [docs.vm0.ai](https://docs.vm0.ai).
+
 ## 🤝 Contribute
 
 <p><a href="https://github.com/vm0-ai/vm0/blob/main/CONTRIBUTING.md">

@@ -14,11 +14,6 @@ describe("cook command - environment variable check", () => {
   let tempDir: string;
   let originalCwd: string;
 
-  const mockConsoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
-  const mockConsoleError = vi
-    .spyOn(console, "error")
-    .mockImplementation(() => {});
-
   beforeEach(() => {
     vi.clearAllMocks();
     tempDir = mkdtempSync(path.join(os.tmpdir(), "test-cook-"));
@@ -30,8 +25,6 @@ describe("cook command - environment variable check", () => {
     process.chdir(originalCwd);
     rmSync(tempDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
-    mockConsoleLog.mockClear();
-    mockConsoleError.mockClear();
   });
 
   describe("checkMissingVariables", () => {

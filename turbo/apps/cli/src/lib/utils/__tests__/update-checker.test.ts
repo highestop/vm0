@@ -9,11 +9,6 @@ import {
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server";
 
-// Mock child_process module
-vi.mock("child_process", () => ({
-  spawn: vi.fn(),
-}));
-
 describe("update-checker", () => {
   describe("detectPackageManager", () => {
     const originalArgv = process.argv;

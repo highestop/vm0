@@ -45,6 +45,7 @@ const router = tsr.router(credentialsByNameContract, {
         id: credential.id,
         name: credential.name,
         description: credential.description,
+        type: credential.type,
         createdAt: credential.createdAt.toISOString(),
         updatedAt: credential.updatedAt.toISOString(),
       },

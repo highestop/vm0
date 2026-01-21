@@ -1,0 +1,49 @@
+import {
+  createHandler,
+  tsr,
+  validationErrorHandler,
+} from "../../../../src/lib/ts-rest-handler";
+import { modelProvidersByTypeContract, createErrorResponse } from "@vm0/core";
+import { initServices } from "../../../../src/lib/init-services";
+import { getUserId } from "../../../../src/lib/auth/get-user-id";
+import { deleteModelProvider } from "../../../../src/lib/model-provider/model-provider-service";
+import { logger } from "../../../../src/lib/logger";
+import { NotFoundError } from "../../../../src/lib/errors";
+
+const log = logger("api:model-providers");
+
+const router = tsr.router(modelProvidersByTypeContract, {
+  /**
+   * DELETE /api/model-providers/:type - Delete a model provider
+   */
+  delete: async ({ params }) => {
+    initServices();
+
+    const userId = await getUserId();
+    if (!userId) {
+      return createErrorResponse("UNAUTHORIZED", "Not authenticated");
+    }
+
+    log.debug("deleting model provider", { userId, type: params.type });
+
+    try {
+      await deleteModelProvider(userId, params.type);
+
+      return {
+        status: 204 as const,
+        body: undefined,
+      };
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return createErrorResponse("NOT_FOUND", error.message);
+      }
+      throw error;
+    }
+  },
+});
+
+const handler = createHandler(modelProvidersByTypeContract, router, {
+  errorHandler: validationErrorHandler,
+});
+
+export { handler as DELETE };

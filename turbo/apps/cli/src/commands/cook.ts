@@ -320,6 +320,7 @@ cookCmd
   .addOption(new Option("--debug-no-mock-claude").hideHelp())
   .addOption(new Option("--no-auto-update").hideHelp())
   .action(
+    // eslint-disable-next-line complexity -- TODO: refactor complex function
     async (
       prompt: string | undefined,
       options: {

@@ -49,7 +49,7 @@ describe("GET /api/cron/cleanup-sandboxes", () => {
     mockSandboxConnect.mockResolvedValue(mockSandbox as unknown as Sandbox);
 
     // Set CRON_SECRET for tests
-    process.env.CRON_SECRET = cronSecret;
+    vi.stubEnv("CRON_SECRET", cronSecret);
 
     // Mock Clerk auth for compose API
     mockAuth.mockResolvedValue({

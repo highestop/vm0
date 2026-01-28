@@ -1,3 +1,5 @@
+import { SKILLS_API_URL } from "./constants";
+
 interface SkillMetadata {
   name: string;
   description: string;
@@ -8,10 +10,7 @@ interface SkillMetadata {
 
 export async function getSkills(): Promise<SkillMetadata[]> {
   // Fetch skills from web app API
-  const webAppUrl = process.env.WEB_APP_URL || "http://localhost:3000";
-  const response = await fetch(`${webAppUrl}/api/web/skills`, {
-    next: { revalidate: 3600 },
-  });
+  const response = await fetch(SKILLS_API_URL);
 
   if (!response.ok) {
     throw new Error(`Failed to fetch skills: ${response.statusText}`);

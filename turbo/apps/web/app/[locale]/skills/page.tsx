@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import SkillsClient from "./SkillsClient";
+import { GET } from "../../api/web/skills/route";
 
 export const metadata: Metadata = {
   title: "VM0 Agent Skills - Pre-built Integrations",
@@ -13,8 +14,8 @@ export const metadata: Metadata = {
   },
 };
 
-// Revalidate every hour
-export const revalidate = 3600;
+// Static generation at build time - skills data fetched once during build
+export const dynamic = "force-static";
 
 interface SkillMetadata {
   name: string;
@@ -25,9 +26,8 @@ interface SkillMetadata {
 }
 
 async function getSkills(): Promise<SkillMetadata[]> {
-  // Import the API handler directly for server-side rendering
+  // Call the API handler directly for server-side rendering
   // This avoids issues with VERCEL_URL vs custom domain
-  const { GET } = await import("../../api/web/skills/route");
   const response = await GET();
   const data = await response.json();
   return data.skills || [];

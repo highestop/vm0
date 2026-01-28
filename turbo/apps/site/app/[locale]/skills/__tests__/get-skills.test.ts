@@ -2,9 +2,35 @@ import { describe, it, expect } from "vitest";
 import { server } from "../../../../src/mocks/server";
 import { http, HttpResponse } from "msw";
 import { getSkills } from "../get-skills";
+import { SKILLS_API_URL } from "../constants";
 
 describe("getSkills", () => {
   it("should fetch skills from web app API successfully", async () => {
+    server.use(
+      http.get(SKILLS_API_URL, () => {
+        return HttpResponse.json({
+          success: true,
+          skills: [
+            {
+              name: "Slack",
+              category: "Communication",
+              description: "Slack integration",
+            },
+            {
+              name: "GitHub",
+              category: "Development",
+              description: "GitHub integration",
+            },
+            {
+              name: "Notion",
+              category: "Productivity",
+              description: "Notion integration",
+            },
+          ],
+        });
+      }),
+    );
+
     const skills = await getSkills();
 
     expect(skills).toBeInstanceOf(Array);
@@ -17,7 +43,7 @@ describe("getSkills", () => {
 
   it("should handle API errors gracefully", async () => {
     server.use(
-      http.get("http://localhost:3000/api/web/skills", () => {
+      http.get(SKILLS_API_URL, () => {
         return HttpResponse.json(
           { error: "Internal Server Error" },
           { status: 500 },
@@ -32,7 +58,7 @@ describe("getSkills", () => {
 
   it("should return empty array when API returns no skills", async () => {
     server.use(
-      http.get("http://localhost:3000/api/web/skills", () => {
+      http.get(SKILLS_API_URL, () => {
         return HttpResponse.json({
           success: true,
           total: 0,
@@ -44,23 +70,5 @@ describe("getSkills", () => {
     const skills = await getSkills();
 
     expect(skills).toEqual([]);
-  });
-
-  it("should use WEB_APP_URL environment variable", async () => {
-    const originalEnv = process.env.WEB_APP_URL;
-    process.env.WEB_APP_URL = "https://test-api.vm0.ai";
-
-    server.use(
-      http.get("https://test-api.vm0.ai/api/web/skills", () => {
-        return HttpResponse.json({ skills: [] });
-      }),
-    );
-
-    const skills = await getSkills();
-
-    expect(skills).toEqual([]);
-
-    // Restore
-    process.env.WEB_APP_URL = originalEnv;
   });
 });

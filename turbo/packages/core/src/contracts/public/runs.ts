@@ -97,9 +97,7 @@ export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
  * Run list query parameters
  */
 export const runListQuerySchema = listQuerySchema.extend({
-  agentId: z.string().optional(),
   status: publicRunStatusSchema.optional(),
-  since: timestampSchema.optional(),
 });
 
 export type RunListQuery = z.infer<typeof runListQuerySchema>;
@@ -119,7 +117,7 @@ export const publicRunsListContract = c.router({
       500: publicApiErrorSchema,
     },
     summary: "List runs",
-    description: "List runs with optional filtering by agent, status, and time",
+    description: "List runs with optional filtering by status",
   },
   create: {
     method: "POST",

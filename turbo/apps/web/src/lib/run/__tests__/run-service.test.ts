@@ -47,6 +47,7 @@ let RunService: typeof import("../run-service").RunService;
 let NotFoundError: typeof import("../../errors").NotFoundError;
 let UnauthorizedError: typeof import("../../errors").UnauthorizedError;
 let BadRequestError: typeof import("../../errors").BadRequestError;
+let ConcurrentRunLimitError: typeof import("../../errors").ConcurrentRunLimitError;
 let agentSessionService: typeof import("../../agent-session").agentSessionService;
 
 // Test user ID and scope for isolation
@@ -64,6 +65,7 @@ describe("run-service", () => {
     NotFoundError = errorsModule.NotFoundError;
     UnauthorizedError = errorsModule.UnauthorizedError;
     BadRequestError = errorsModule.BadRequestError;
+    ConcurrentRunLimitError = errorsModule.ConcurrentRunLimitError;
 
     const agentSessionModule = await import("../../agent-session");
     agentSessionService = agentSessionModule.agentSessionService;
@@ -254,6 +256,208 @@ describe("run-service", () => {
 
         expect(context.vars).toBeUndefined();
         expect(context.secrets).toBeUndefined();
+      });
+    });
+
+    describe("checkConcurrencyLimit", () => {
+      // Test setup using real database operations
+      const LIMIT_TEST_USER = `concurrent-limit-test-${Date.now()}`;
+      const LIMIT_TEST_SCOPE_ID = randomUUID();
+      let limitTestComposeId: string;
+      let limitTestVersionId: string;
+
+      beforeAll(async () => {
+        // Create test scope
+        await globalThis.services.db.insert(scopes).values({
+          id: LIMIT_TEST_SCOPE_ID,
+          slug: `limit-test-${LIMIT_TEST_SCOPE_ID.slice(0, 8)}`,
+          type: "personal",
+          ownerId: LIMIT_TEST_USER,
+        });
+
+        // Create test compose
+        limitTestComposeId = randomUUID();
+        await globalThis.services.db.insert(agentComposes).values({
+          id: limitTestComposeId,
+          name: "limit-test-compose",
+          userId: LIMIT_TEST_USER,
+          scopeId: LIMIT_TEST_SCOPE_ID,
+        });
+
+        // Create test version
+        limitTestVersionId = `limit-test-version-${Date.now()}`;
+        await globalThis.services.db.insert(agentComposeVersions).values({
+          id: limitTestVersionId,
+          composeId: limitTestComposeId,
+          content: { agents: { test: { working_dir: "/workspace" } } },
+          createdBy: LIMIT_TEST_USER,
+        });
+      });
+
+      afterAll(async () => {
+        // Clean up in reverse order of creation
+        await globalThis.services.db
+          .delete(agentRuns)
+          .where(eq(agentRuns.userId, LIMIT_TEST_USER));
+        await globalThis.services.db
+          .delete(agentComposeVersions)
+          .where(eq(agentComposeVersions.id, limitTestVersionId));
+        await globalThis.services.db
+          .delete(agentComposes)
+          .where(eq(agentComposes.id, limitTestComposeId));
+        await globalThis.services.db
+          .delete(scopes)
+          .where(eq(scopes.id, LIMIT_TEST_SCOPE_ID));
+      });
+
+      afterEach(async () => {
+        // Clean up runs after each test
+        await globalThis.services.db
+          .delete(agentRuns)
+          .where(eq(agentRuns.userId, LIMIT_TEST_USER));
+      });
+
+      test("passes when no active runs exist for user", async () => {
+        // User has no runs in DB - should pass
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 1),
+        ).resolves.toBeUndefined();
+      });
+
+      test("skips check entirely when limit is 0 (no limit)", async () => {
+        // Create an active run
+        await globalThis.services.db.insert(agentRuns).values({
+          userId: LIMIT_TEST_USER,
+          agentComposeVersionId: limitTestVersionId,
+          status: "running",
+          prompt: "test",
+        });
+
+        // With limit 0, should pass regardless of active runs
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 0),
+        ).resolves.toBeUndefined();
+      });
+
+      test("respects higher limit values", async () => {
+        // Create one active run
+        await globalThis.services.db.insert(agentRuns).values({
+          userId: LIMIT_TEST_USER,
+          agentComposeVersionId: limitTestVersionId,
+          status: "running",
+          prompt: "test",
+        });
+
+        // With high limit, should pass
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 100),
+        ).resolves.toBeUndefined();
+      });
+
+      test("throws ConcurrentRunLimitError when active runs >= limit", async () => {
+        // Create one active run
+        await globalThis.services.db.insert(agentRuns).values({
+          userId: LIMIT_TEST_USER,
+          agentComposeVersionId: limitTestVersionId,
+          status: "running",
+          prompt: "test",
+        });
+
+        // Limit is 1, user has 1 active run - should throw
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 1),
+        ).rejects.toThrow(ConcurrentRunLimitError);
+      });
+
+      test("throws ConcurrentRunLimitError when active runs exceed limit", async () => {
+        // Create multiple active runs
+        await globalThis.services.db.insert(agentRuns).values([
+          {
+            userId: LIMIT_TEST_USER,
+            agentComposeVersionId: limitTestVersionId,
+            status: "running",
+            prompt: "test 1",
+          },
+          {
+            userId: LIMIT_TEST_USER,
+            agentComposeVersionId: limitTestVersionId,
+            status: "pending",
+            prompt: "test 2",
+          },
+        ]);
+
+        // Limit is 1, user has 2 active runs - should throw
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 1),
+        ).rejects.toThrow(ConcurrentRunLimitError);
+      });
+
+      test("passes when active runs below limit", async () => {
+        // Create one active run
+        await globalThis.services.db.insert(agentRuns).values({
+          userId: LIMIT_TEST_USER,
+          agentComposeVersionId: limitTestVersionId,
+          status: "running",
+          prompt: "test",
+        });
+
+        // Limit is 3, user has 1 active run - should pass
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 3),
+        ).resolves.toBeUndefined();
+      });
+
+      test("only counts pending and running statuses", async () => {
+        // Create runs with non-active statuses
+        await globalThis.services.db.insert(agentRuns).values([
+          {
+            userId: LIMIT_TEST_USER,
+            agentComposeVersionId: limitTestVersionId,
+            status: "completed",
+            prompt: "completed run",
+          },
+          {
+            userId: LIMIT_TEST_USER,
+            agentComposeVersionId: limitTestVersionId,
+            status: "failed",
+            prompt: "failed run",
+          },
+          {
+            userId: LIMIT_TEST_USER,
+            agentComposeVersionId: limitTestVersionId,
+            status: "timeout",
+            prompt: "timeout run",
+          },
+        ]);
+
+        // No pending/running runs, should pass with limit 1
+        await expect(
+          runService.checkConcurrencyLimit(LIMIT_TEST_USER, 1),
+        ).resolves.toBeUndefined();
+      });
+
+      test("ConcurrentRunLimitError has descriptive message", () => {
+        const error = new ConcurrentRunLimitError();
+        expect(error.message).toMatch(/concurrent/i);
+        expect(error.message).toMatch(/limit/i);
+      });
+
+      test("ConcurrentRunLimitError returns 429 status code", () => {
+        const error = new ConcurrentRunLimitError();
+        expect(error.statusCode).toBe(429);
+      });
+
+      test("falls back to default when CONCURRENT_RUN_LIMIT is invalid", async () => {
+        vi.stubEnv("CONCURRENT_RUN_LIMIT", "invalid");
+
+        try {
+          // User has no runs, should pass with default limit of 1
+          await expect(
+            runService.checkConcurrencyLimit(LIMIT_TEST_USER),
+          ).resolves.toBeUndefined();
+        } finally {
+          vi.unstubAllEnvs();
+        }
       });
     });
 

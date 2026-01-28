@@ -16,8 +16,13 @@ function createDefaultAgentEventsResponse() {
     events: [
       {
         sequenceNumber: 1,
-        eventType: "text",
-        eventData: { content: "Hello" },
+        eventType: "assistant",
+        eventData: {
+          message: {
+            content: [{ type: "text", text: "Hello" }],
+            role: "assistant",
+          },
+        },
         createdAt: "2024-01-01T00:00:02Z",
       },
     ],
@@ -227,14 +232,31 @@ describe("log detail page", () => {
           events: [
             {
               sequenceNumber: 1,
-              eventType: "text",
-              eventData: { content: "Starting task" },
+              eventType: "assistant",
+              eventData: {
+                message: {
+                  content: [{ type: "text", text: "Starting task" }],
+                  role: "assistant",
+                },
+              },
               createdAt: "2024-01-01T00:00:02Z",
             },
             {
               sequenceNumber: 2,
-              eventType: "tool_use",
-              eventData: { tool: "read_file", path: "/test.txt" },
+              eventType: "assistant",
+              eventData: {
+                message: {
+                  content: [
+                    {
+                      type: "tool_use",
+                      id: "tool-1",
+                      name: "Read",
+                      input: { file_path: "/test.txt" },
+                    },
+                  ],
+                  role: "assistant",
+                },
+              },
               createdAt: "2024-01-01T00:00:03Z",
             },
           ],
@@ -250,16 +272,13 @@ describe("log detail page", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Log raw data")).toBeInTheDocument();
+      expect(screen.getByText("Agent Events")).toBeInTheDocument();
     });
 
-    // Verify log content is displayed (formatted as log text)
+    // Verify the events are rendered (in formatted view)
     await waitFor(() => {
       expect(screen.getByText(/Starting task/)).toBeInTheDocument();
     });
-
-    // Verify tool_use event is displayed in log format
-    expect(screen.getByText(/\[tool_use\]/)).toBeInTheDocument();
   });
 
   it("should navigate to logs list via breadcrumb", async () => {

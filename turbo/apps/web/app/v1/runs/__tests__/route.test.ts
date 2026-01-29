@@ -214,6 +214,27 @@ describe("Public API v1 - Runs Endpoints", () => {
       expect(response.status).toBe(404);
       expect(data.error.type).toBe("not_found_error");
     });
+
+    it("should kill E2B sandbox when cancelling running run", async () => {
+      // Create a running run (this will have sandboxId from mock)
+      const run = await createTestV1Run(testAgentId, "Run with sandbox");
+
+      // Clear mock to track new calls
+      context.mocks.e2b.sandbox.kill.mockClear();
+
+      const request = createTestRequest(
+        `http://localhost:3000/v1/runs/${run.id}/cancel`,
+        { method: "POST" },
+      );
+
+      const response = await cancelRun(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.status).toBe("cancelled");
+      // Verify sandbox kill was called via Sandbox.connect
+      expect(context.mocks.e2b.sandbox.kill).toHaveBeenCalled();
+    });
   });
 
   describe("GET /v1/runs/:id/logs - Get Run Logs", () => {

@@ -16,6 +16,8 @@ import { POST as createComposeRoute } from "../../app/api/agent/composes/route";
 import { POST as createScopeRoute } from "../../app/api/scope/route";
 import { PUT as setCredentialRoute } from "../../app/api/credentials/route";
 import { PUT as upsertModelProviderRoute } from "../../app/api/model-providers/route";
+import { POST as checkpointWebhook } from "../../app/api/webhooks/agent/checkpoints/route";
+import { POST as completeWebhook } from "../../app/api/webhooks/agent/complete/route";
 
 /**
  * Helper to create a NextRequest for testing.
@@ -36,26 +38,55 @@ export function createTestRequest(
   });
 }
 
+interface ComposeConfigOptions {
+  /** Override agent properties (merged with defaults) */
+  overrides?: Partial<AgentComposeYaml["agents"][string]>;
+  /** Skip adding default ANTHROPIC_API_KEY (creates empty environment: {}) */
+  skipDefaultApiKey?: boolean;
+  /** Skip adding environment block entirely (for testing auto-injection) */
+  noEnvironmentBlock?: boolean;
+}
+
 /**
- * Default compose configuration for testing
- * Includes ANTHROPIC_API_KEY in environment to satisfy model provider validation
+ * Default compose configuration for testing.
+ * By default includes ANTHROPIC_API_KEY in environment.
+ *
+ * Options:
+ * - skipDefaultApiKey: true  → environment: {} (empty object)
+ * - noEnvironmentBlock: true → no environment key at all
  */
 export function createDefaultComposeConfig(
   agentName: string,
-  overrides?: Partial<AgentComposeYaml["agents"][string]>,
+  options?: ComposeConfigOptions | Partial<AgentComposeYaml["agents"][string]>,
 ): AgentComposeYaml {
+  // Support both old signature (overrides only) and new signature (options object)
+  const opts: ComposeConfigOptions =
+    options &&
+    ("skipDefaultApiKey" in options || "noEnvironmentBlock" in options)
+      ? options
+      : { overrides: options as Partial<AgentComposeYaml["agents"][string]> };
+
+  // Build base agent config without environment
+  const baseAgent: Record<string, unknown> = {
+    image: "vm0/claude-code:dev",
+    framework: "claude-code",
+    working_dir: "/home/user/workspace",
+  };
+
+  // Add environment unless noEnvironmentBlock is set
+  if (!opts.noEnvironmentBlock) {
+    baseAgent.environment = opts.skipDefaultApiKey
+      ? {}
+      : { ANTHROPIC_API_KEY: "test-api-key" };
+  }
+
   return {
     version: "1.0",
     agents: {
       [agentName]: {
-        image: "vm0/claude-code:dev",
-        framework: "claude-code",
-        working_dir: "/home/user/workspace",
-        environment: {
-          ANTHROPIC_API_KEY: "test-api-key",
-        },
-        ...overrides,
-      },
+        ...baseAgent,
+        ...opts.overrides,
+      } as AgentComposeYaml["agents"][string],
     },
   };
 }
@@ -156,14 +187,14 @@ export async function createTestScope(
  * Create a test compose via API route handler.
  *
  * @param agentName - The agent name
- * @param overrides - Optional overrides for the agent config
+ * @param options - Optional config options or overrides for the agent config
  * @returns The created compose with composeId and versionId
  */
 export async function createTestCompose(
   agentName: string,
-  overrides?: Partial<AgentComposeYaml["agents"][string]>,
+  options?: ComposeConfigOptions | Partial<AgentComposeYaml["agents"][string]>,
 ): Promise<{ composeId: string; versionId: string }> {
-  const config = createDefaultComposeConfig(agentName, overrides);
+  const config = createDefaultComposeConfig(agentName, options);
   const request = createTestRequest(
     "http://localhost:3000/api/agent/composes",
     {
@@ -238,4 +269,131 @@ export async function createTestModelProvider(
   }
   const data = await response.json();
   return data.provider;
+}
+
+/**
+ * Create a test checkpoint via webhook route handler.
+ * This is required before completing a run with exitCode=0.
+ * Used internally by completeTestRun.
+ */
+async function createTestCheckpoint(
+  userId: string,
+  runId: string,
+): Promise<{
+  checkpointId: string;
+  agentSessionId: string;
+  conversationId: string;
+}> {
+  const sandboxToken = await generateSandboxToken(userId, runId);
+  const request = createTestRequest(
+    "http://localhost:3000/api/webhooks/agent/checkpoints",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        runId,
+        cliAgentType: "test-agent",
+        cliAgentSessionId: `test-session-${runId}`,
+        cliAgentSessionHistory: JSON.stringify([
+          { role: "user", content: "test" },
+        ]),
+      }),
+    },
+  );
+  const response = await checkpointWebhook(request);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(
+      `Failed to create checkpoint: ${error.error?.message || response.status}`,
+    );
+  }
+  return response.json();
+}
+
+/**
+ * Fail a test run via complete webhook.
+ * Sets the run status to "failed".
+ *
+ * @param userId - The user ID
+ * @param runId - The run ID
+ * @param error - Optional error message
+ */
+export async function failTestRun(
+  userId: string,
+  runId: string,
+  error?: string,
+): Promise<void> {
+  const sandboxToken = await generateSandboxToken(userId, runId);
+  const request = createTestRequest(
+    "http://localhost:3000/api/webhooks/agent/complete",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        runId,
+        exitCode: 1,
+        error: error ?? "Test failure",
+      }),
+    },
+  );
+  const response = await completeWebhook(request);
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(
+      `Failed to fail run: ${errorData.error?.message || response.status}`,
+    );
+  }
+}
+
+/**
+ * Complete a test run via checkpoint + complete webhooks.
+ * Creates a checkpoint first, then completes the run with exitCode=0.
+ * Sets the run status to "completed".
+ *
+ * @param userId - The user ID
+ * @param runId - The run ID
+ * @returns The checkpoint details
+ */
+export async function completeTestRun(
+  userId: string,
+  runId: string,
+): Promise<{
+  checkpointId: string;
+  agentSessionId: string;
+  conversationId: string;
+}> {
+  // First create checkpoint (required for completed status)
+  const checkpoint = await createTestCheckpoint(userId, runId);
+
+  // Then complete the run
+  const sandboxToken = await generateSandboxToken(userId, runId);
+  const request = createTestRequest(
+    "http://localhost:3000/api/webhooks/agent/complete",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        runId,
+        exitCode: 0,
+      }),
+    },
+  );
+  const response = await completeWebhook(request);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(
+      `Failed to complete run: ${error.error?.message || response.status}`,
+    );
+  }
+
+  return checkpoint;
 }

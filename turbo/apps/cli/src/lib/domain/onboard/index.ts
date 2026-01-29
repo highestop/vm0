@@ -6,4 +6,9 @@ export {
   setupModelProvider,
 } from "./model-provider.js";
 
-export { installClaudeSkill } from "./claude-setup.js";
+export {
+  installAllClaudeSkills,
+  handleFetchError,
+  SKILLS,
+  PRIMARY_SKILL_NAME,
+} from "./claude-setup.js";

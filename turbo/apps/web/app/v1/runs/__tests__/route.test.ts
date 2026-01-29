@@ -8,12 +8,12 @@ import { randomUUID } from "crypto";
 import {
   createTestRequest,
   createTestCompose,
+  createTestV1Run,
   completeTestRun,
   createTestModelProvider,
 } from "../../../../src/__tests__/api-test-helpers";
 import {
   testContext,
-  setupUser,
   type UserContext,
 } from "../../../../src/__tests__/test-helpers";
 import { mockClerk } from "../../../../src/__tests__/clerk-mock";
@@ -26,28 +26,6 @@ vi.mock("@axiomhq/js");
 
 const context = testContext();
 
-/**
- * Helper to create a run via v1 API and return the run ID.
- */
-async function createV1Run(
-  agentId: string,
-  prompt: string,
-): Promise<{ id: string; status: string }> {
-  const request = createTestRequest("http://localhost:3000/v1/runs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, prompt }),
-  });
-  const response = await createRun(request);
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(
-      `Failed to create run: ${data.error?.message || response.status}`,
-    );
-  }
-  return data;
-}
-
 describe("Public API v1 - Runs Endpoints", () => {
   let user: UserContext;
   let testAgentId: string;
@@ -59,7 +37,7 @@ describe("Public API v1 - Runs Endpoints", () => {
     context.setupMocks();
 
     // Create unique user for this test
-    user = await setupUser();
+    user = await context.setupUser();
 
     // Create test agent with compose
     testAgentName = `agent-${Date.now()}`;
@@ -67,7 +45,7 @@ describe("Public API v1 - Runs Endpoints", () => {
     testAgentId = composeId;
 
     // Create a completed test run for read operations
-    const run = await createV1Run(testAgentId, "Test prompt for runs API");
+    const run = await createTestV1Run(testAgentId, "Test prompt for runs API");
     testRunId = run.id;
 
     // Complete the run so it doesn't block concurrent limit
@@ -162,14 +140,17 @@ describe("Public API v1 - Runs Endpoints", () => {
 
     it("should return 404 for run belonging to another user", async () => {
       // Create another user and their run
-      const otherUser = await setupUser({ prefix: "other-user" });
+      const otherUser = await context.setupUser({ prefix: "other-user" });
       const { composeId: otherComposeId } = await createTestCompose(
         `other-agent-${Date.now()}`,
       );
 
       // Create run as other user
       mockClerk({ userId: otherUser.userId });
-      const otherRun = await createV1Run(otherComposeId, "Other user prompt");
+      const otherRun = await createTestV1Run(
+        otherComposeId,
+        "Other user prompt",
+      );
       await completeTestRun(otherUser.userId, otherRun.id);
 
       // Switch back to original user and try to access other user's run
@@ -189,7 +170,7 @@ describe("Public API v1 - Runs Endpoints", () => {
   describe("POST /v1/runs/:id/cancel - Cancel Run", () => {
     it("should cancel a pending run", async () => {
       // Create a new run (starts as running)
-      const run = await createV1Run(testAgentId, "Run to cancel");
+      const run = await createTestV1Run(testAgentId, "Run to cancel");
 
       const request = createTestRequest(
         `http://localhost:3000/v1/runs/${run.id}/cancel`,
@@ -403,7 +384,7 @@ describe("Public API v1 - Runs Endpoints", () => {
 
       try {
         // First run should succeed (creates running run)
-        const run1 = await createV1Run(testAgentId, "First concurrent run");
+        const run1 = await createTestV1Run(testAgentId, "First concurrent run");
         expect(run1.status).toBe("running");
 
         // Second run should fail with 429
@@ -433,9 +414,9 @@ describe("Public API v1 - Runs Endpoints", () => {
 
       try {
         // Create multiple runs - all should succeed
-        const run1 = await createV1Run(testAgentId, "Run 1 with no limit");
-        const run2 = await createV1Run(testAgentId, "Run 2 with no limit");
-        const run3 = await createV1Run(testAgentId, "Run 3 with no limit");
+        const run1 = await createTestV1Run(testAgentId, "Run 1 with no limit");
+        const run2 = await createTestV1Run(testAgentId, "Run 2 with no limit");
+        const run3 = await createTestV1Run(testAgentId, "Run 3 with no limit");
 
         expect(run1.status).toBe("running");
         expect(run2.status).toBe("running");

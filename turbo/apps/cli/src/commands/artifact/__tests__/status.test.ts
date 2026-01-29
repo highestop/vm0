@@ -1,18 +1,26 @@
+/**
+ * Tests for artifact status command
+ *
+ * Covers:
+ * - Config validation (no config, wrong type)
+ * - Remote status check (found, not found, empty)
+ * - Error handling (API errors, network errors)
+ */
+
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { http, HttpResponse } from "msw";
-import { server } from "../../mocks/server";
-import { statusCommand } from "../artifact/status";
-import * as storageUtils from "../../lib/storage/storage-utils";
-import * as config from "../../lib/api/config";
+import { server } from "../../../mocks/server";
+import { statusCommand } from "../status";
+import { mkdtempSync, rmSync } from "fs";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
+import chalk from "chalk";
 
-// Mock dependencies
-vi.mock("../../lib/storage/storage-utils");
-vi.mock("../../lib/api/config", () => ({
-  getApiUrl: vi.fn(),
-  getToken: vi.fn(),
-}));
+describe("artifact status", () => {
+  let tempDir: string;
+  let originalCwd: string;
 
-describe("artifact status command", () => {
   const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {
     throw new Error("process.exit called");
   }) as never);
@@ -23,20 +31,27 @@ describe("artifact status command", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(config.getApiUrl).mockResolvedValue("http://localhost:3000");
-    vi.mocked(config.getToken).mockResolvedValue("test-token");
+    chalk.level = 0;
+    vi.stubEnv("VM0_API_URL", "http://localhost:3000");
+    vi.stubEnv("VM0_TOKEN", "test-token");
+
+    // Setup temp directory
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "test-artifact-status-"));
+    originalCwd = process.cwd();
+    process.chdir(tempDir);
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(tempDir, { recursive: true, force: true });
     mockExit.mockClear();
     mockConsoleLog.mockClear();
     mockConsoleError.mockClear();
+    vi.unstubAllEnvs();
   });
 
-  describe("local config validation", () => {
-    it("should exit with error if no config exists", async () => {
-      vi.mocked(storageUtils.readStorageConfig).mockResolvedValue(null);
-
+  describe("config validation", () => {
+    it("should fail if no config exists", async () => {
       await expect(async () => {
         await statusCommand.parseAsync(["node", "cli"]);
       }).rejects.toThrow("process.exit called");
@@ -50,11 +65,12 @@ describe("artifact status command", () => {
       expect(mockExit).toHaveBeenCalledWith(1);
     });
 
-    it("should exit with error if config type is volume", async () => {
-      vi.mocked(storageUtils.readStorageConfig).mockResolvedValue({
-        name: "test-volume",
-        type: "volume",
-      });
+    it("should fail if config type is volume", async () => {
+      await fs.mkdir(path.join(tempDir, ".vm0"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".vm0", "storage.yaml"),
+        "name: test-volume\ntype: volume",
+      );
 
       await expect(async () => {
         await statusCommand.parseAsync(["node", "cli"]);
@@ -71,14 +87,15 @@ describe("artifact status command", () => {
   });
 
   describe("remote status check", () => {
-    beforeEach(() => {
-      vi.mocked(storageUtils.readStorageConfig).mockResolvedValue({
-        name: "test-artifact",
-        type: "artifact",
-      });
+    beforeEach(async () => {
+      await fs.mkdir(path.join(tempDir, ".vm0"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".vm0", "storage.yaml"),
+        "name: test-artifact\ntype: artifact",
+      );
     });
 
-    it("should show start message", async () => {
+    it("should show checking message", async () => {
       server.use(
         http.get("http://localhost:3000/api/storages/download", () => {
           return HttpResponse.json({
@@ -98,35 +115,7 @@ describe("artifact status command", () => {
       );
     });
 
-    it("should exit with error if remote returns 404", async () => {
-      server.use(
-        http.get("http://localhost:3000/api/storages/download", () => {
-          return HttpResponse.json(
-            {
-              error: {
-                message: 'Storage "test-artifact" not found',
-                code: "NOT_FOUND",
-              },
-            },
-            { status: 404 },
-          );
-        }),
-      );
-
-      await expect(async () => {
-        await statusCommand.parseAsync(["node", "cli"]);
-      }).rejects.toThrow("process.exit called");
-
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Not found on remote"),
-      );
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining("vm0 artifact push"),
-      );
-      expect(mockExit).toHaveBeenCalledWith(1);
-    });
-
-    it("should display version info when remote exists", async () => {
+    it("should display version info when found", async () => {
       server.use(
         http.get("http://localhost:3000/api/storages/download", () => {
           return HttpResponse.json({
@@ -155,7 +144,7 @@ describe("artifact status command", () => {
       );
     });
 
-    it("should display empty indicator for empty storage", async () => {
+    it("should display empty indicator for empty artifact", async () => {
       server.use(
         http.get("http://localhost:3000/api/storages/download", () => {
           return HttpResponse.json({
@@ -177,14 +166,43 @@ describe("artifact status command", () => {
         expect.stringContaining("Version: a1b2c3d4"),
       );
     });
+
+    it("should show not found error with push suggestion", async () => {
+      server.use(
+        http.get("http://localhost:3000/api/storages/download", () => {
+          return HttpResponse.json(
+            {
+              error: {
+                message: 'Storage "test-artifact" not found',
+                code: "NOT_FOUND",
+              },
+            },
+            { status: 404 },
+          );
+        }),
+      );
+
+      await expect(async () => {
+        await statusCommand.parseAsync(["node", "cli"]);
+      }).rejects.toThrow("process.exit called");
+
+      expect(mockConsoleError).toHaveBeenCalledWith(
+        expect.stringContaining("Not found on remote"),
+      );
+      expect(mockConsoleError).toHaveBeenCalledWith(
+        expect.stringContaining("vm0 artifact push"),
+      );
+      expect(mockExit).toHaveBeenCalledWith(1);
+    });
   });
 
   describe("error handling", () => {
-    beforeEach(() => {
-      vi.mocked(storageUtils.readStorageConfig).mockResolvedValue({
-        name: "test-artifact",
-        type: "artifact",
-      });
+    beforeEach(async () => {
+      await fs.mkdir(path.join(tempDir, ".vm0"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".vm0", "storage.yaml"),
+        "name: test-artifact\ntype: artifact",
+      );
     });
 
     it("should handle API errors", async () => {

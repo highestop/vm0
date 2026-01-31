@@ -18,14 +18,13 @@ import {
   findMitmproxyProcess,
 } from "../lib/firecracker/process.js";
 import {
-  listTapDevices,
   checkBridgeStatus,
   isPortInUse,
   listIptablesNatRules,
   findOrphanedIptablesRules,
   BRIDGE_NAME,
 } from "../lib/firecracker/network.js";
-import { getIPForVm, getAllocations } from "../lib/firecracker/ip-pool.js";
+import { getIPForVm, getAllocations } from "../lib/firecracker/ip-registry.js";
 
 interface RunnerStatus {
   mode: string;
@@ -141,7 +140,6 @@ export const doctorCommand = new Command("doctor")
 
         // Scan resources first to get active VM IPs
         const processes = findFirecrackerProcesses();
-        const tapDevices = await listTapDevices();
         const workspaces = existsSync(workspacesDir)
           ? readdirSync(workspacesDir).filter((d) => d.startsWith("vm0-"))
           : [];
@@ -149,7 +147,7 @@ export const doctorCommand = new Command("doctor")
         // Build job info with IP addresses
         const jobs: JobInfo[] = [];
         const statusVmIds = new Set<string>();
-        // IP pool manager prevents collisions at allocation time, so we just read from registry
+        // IP allocations include vmId for diagnostic purposes
         const allocations = getAllocations();
 
         if (status?.active_run_ids) {
@@ -158,7 +156,7 @@ export const doctorCommand = new Command("doctor")
             if (!vmId) continue;
             statusVmIds.add(vmId);
             const proc = processes.find((p) => p.vmId === vmId);
-            // Look up IP from the registry (allocated by IP pool manager)
+            // Look up IP from the registry
             const ip = getIPForVm(vmId) ?? "not allocated";
 
             jobs.push({
@@ -174,9 +172,11 @@ export const doctorCommand = new Command("doctor")
         // Check for any stale allocations in registry (IPs allocated but no active job)
         const ipToVmIds = new Map<string, string[]>();
         for (const [ip, allocation] of allocations) {
-          const existing = ipToVmIds.get(ip) ?? [];
-          existing.push(allocation.vmId);
-          ipToVmIds.set(ip, existing);
+          if (allocation.vmId) {
+            const existing = ipToVmIds.get(ip) ?? [];
+            existing.push(allocation.vmId);
+            ipToVmIds.set(ip, existing);
+          }
         }
 
         // Display runs
@@ -239,15 +239,8 @@ export const doctorCommand = new Command("doctor")
           }
         }
 
-        // Orphan TAP devices
-        for (const tap of tapDevices) {
-          const vmId = tap.replace("tap", "");
-          if (!processVmIds.has(vmId) && !statusVmIds.has(vmId)) {
-            warnings.push({
-              message: `Orphan TAP device: ${tap} (no matching job or process)`,
-            });
-          }
-        }
+        // Note: TAP devices are managed by TapPool, which handles orphan cleanup
+        // during init(). No need to check for orphan TAPs here.
 
         // Orphan workspaces
         for (const ws of workspaces) {

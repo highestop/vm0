@@ -56,10 +56,11 @@ describe("IPRegistry", () => {
       const data = JSON.parse(
         fs.readFileSync(path.join(testDir, "ip-registry.json"), "utf-8"),
       );
-      expect(data.allocations["172.16.0.2"]).toEqual({
+      expect(data.allocations["172.16.0.2"]).toMatchObject({
         tapDevice: "tap000",
         vmId: null,
       });
+      expect(data.allocations["172.16.0.2"].runnerPid).toBe(process.pid);
     });
 
     it("should allocate sequential IPs", async () => {
@@ -72,9 +73,16 @@ describe("IPRegistry", () => {
 
     it("should throw when all IPs are exhausted", async () => {
       // Pre-fill registry with all IPs
-      const allocations: Record<string, { tapDevice: string; vmId: null }> = {};
+      const allocations: Record<
+        string,
+        { runnerPid: number; tapDevice: string; vmId: null }
+      > = {};
       for (let i = 2; i <= 254; i++) {
-        allocations[`172.16.0.${i}`] = { tapDevice: `tap${i}`, vmId: null };
+        allocations[`172.16.0.${i}`] = {
+          runnerPid: process.pid,
+          tapDevice: `tap${i}`,
+          vmId: null,
+        };
       }
       fs.writeFileSync(
         path.join(testDir, "ip-registry.json"),
@@ -156,10 +164,11 @@ describe("IPRegistry", () => {
 
       expect(allocations).toBeInstanceOf(Map);
       expect(allocations.size).toBe(2);
-      expect(allocations.get("172.16.0.2")).toEqual({
+      expect(allocations.get("172.16.0.2")).toMatchObject({
         tapDevice: "tap000",
         vmId: "vm1",
       });
+      expect(allocations.get("172.16.0.2")?.runnerPid).toBe(process.pid);
     });
 
     it("getIPForVm should find IP by vmId", async () => {
@@ -214,6 +223,152 @@ describe("IPRegistry", () => {
 
       // File should not have been modified
       expect(afterMtime).toBe(beforeMtime);
+    });
+
+    it("should remove IPs and return orphaned TAPs when runner PID is dead", async () => {
+      // Manually write registry with a dead PID
+      const deadPid = 999999; // Assume this PID is not running
+      const allocations = {
+        "172.16.0.2": {
+          runnerPid: deadPid,
+          tapDevice: "tap000",
+          vmId: null,
+        },
+        "172.16.0.3": {
+          runnerPid: process.pid, // Current process is alive
+          tapDevice: "tap001",
+          vmId: null,
+        },
+      };
+      fs.writeFileSync(
+        path.join(testDir, "ip-registry.json"),
+        JSON.stringify({ allocations }),
+      );
+
+      // Both TAPs exist on system
+      mockTapDevices = new Set(["tap000", "tap001"]);
+
+      const orphanedTaps = await registry.cleanupOrphanedIPs();
+
+      const data = JSON.parse(
+        fs.readFileSync(path.join(testDir, "ip-registry.json"), "utf-8"),
+      );
+      // IP with dead runner PID should be removed
+      expect(data.allocations["172.16.0.2"]).toBeUndefined();
+      // IP with alive runner PID should be kept
+      expect(data.allocations["172.16.0.3"]).toBeDefined();
+
+      // Should return the orphaned TAP for caller to delete
+      expect(orphanedTaps).toEqual(["tap000"]);
+    });
+
+    it("should return multiple orphaned TAPs when multiple runners are dead", async () => {
+      const deadPid = 999999;
+      const allocations = {
+        "172.16.0.2": {
+          runnerPid: deadPid,
+          tapDevice: "tap000",
+          vmId: null,
+        },
+        "172.16.0.3": {
+          runnerPid: deadPid,
+          tapDevice: "tap001",
+          vmId: null,
+        },
+      };
+      fs.writeFileSync(
+        path.join(testDir, "ip-registry.json"),
+        JSON.stringify({ allocations }),
+      );
+
+      // Both TAPs exist
+      mockTapDevices = new Set(["tap000", "tap001"]);
+
+      const orphanedTaps = await registry.cleanupOrphanedIPs();
+
+      const data = JSON.parse(
+        fs.readFileSync(path.join(testDir, "ip-registry.json"), "utf-8"),
+      );
+      // Both IPs should be removed from registry
+      expect(data.allocations["172.16.0.2"]).toBeUndefined();
+      expect(data.allocations["172.16.0.3"]).toBeUndefined();
+
+      // Should return both orphaned TAPs
+      expect(orphanedTaps).toHaveLength(2);
+      expect(orphanedTaps).toContain("tap000");
+      expect(orphanedTaps).toContain("tap001");
+    });
+
+    it("should remove IP but not return TAP when runner is dead and TAP not in scan", async () => {
+      // Runner dead, TAP already deleted (not in scan)
+      const deadPid = 999999;
+      const allocations = {
+        "172.16.0.2": {
+          runnerPid: deadPid,
+          tapDevice: "tap000",
+          vmId: null,
+        },
+      };
+      fs.writeFileSync(
+        path.join(testDir, "ip-registry.json"),
+        JSON.stringify({ allocations }),
+      );
+
+      // TAP does NOT exist on system
+      mockTapDevices = new Set();
+
+      const orphanedTaps = await registry.cleanupOrphanedIPs();
+
+      const data = JSON.parse(
+        fs.readFileSync(path.join(testDir, "ip-registry.json"), "utf-8"),
+      );
+      // IP should be removed
+      expect(data.allocations["172.16.0.2"]).toBeUndefined();
+      // No orphaned TAPs to return (TAP already gone)
+      expect(orphanedTaps).toEqual([]);
+    });
+
+    it("should keep IP when runner PID check returns EPERM (process exists but no permission)", async () => {
+      // PID 1 (init) typically returns EPERM when checked by non-root user
+      // Skip test if running as root (where PID 1 check succeeds)
+      let pid1ReturnsEperm = false;
+      try {
+        process.kill(1, 0);
+        // If we reach here, we have permission (running as root)
+      } catch (err) {
+        pid1ReturnsEperm = (err as NodeJS.ErrnoException).code === "EPERM";
+      }
+
+      if (!pid1ReturnsEperm) {
+        // Running as root, skip this test
+        return;
+      }
+
+      // Use PID 1 which will return EPERM
+      const allocations = {
+        "172.16.0.2": {
+          runnerPid: 1,
+          tapDevice: "tap000",
+          vmId: null,
+        },
+      };
+      fs.writeFileSync(
+        path.join(testDir, "ip-registry.json"),
+        JSON.stringify({ allocations }),
+      );
+
+      // TAP exists on system
+      mockTapDevices = new Set(["tap000"]);
+
+      const orphanedTaps = await registry.cleanupOrphanedIPs();
+
+      const data = JSON.parse(
+        fs.readFileSync(path.join(testDir, "ip-registry.json"), "utf-8"),
+      );
+      // IP should be KEPT (EPERM means process exists, just no permission)
+      expect(data.allocations["172.16.0.2"]).toBeDefined();
+      // No orphaned TAPs (runner is considered alive)
+      expect(orphanedTaps).toEqual([]);
     });
   });
 

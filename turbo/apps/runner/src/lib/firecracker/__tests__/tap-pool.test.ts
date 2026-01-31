@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { TapPool } from "../tap-pool.js";
+import { initIPRegistry, resetIPRegistry } from "../ip-registry.js";
 
 describe("TapPool", () => {
+  let testDir: string;
+  let activePools: TapPool[] = []; // Track pools to cleanup after each test
+
   let createTapCalls: string[] = [];
   let deleteTapCalls: string[] = [];
   let setMacCalls: { tap: string; mac: string }[] = [];
-  let allocateIPCalls: string[] = [];
-  let releaseIPCalls: string[] = [];
 
   const mockCreateTap = vi.fn(async (name: string) => {
     createTapCalls.push(name);
@@ -20,50 +25,71 @@ describe("TapPool", () => {
     setMacCalls.push({ tap, mac });
   });
 
-  let ipCounter = 2;
-  const mockAllocateIP = vi.fn(async (tapDevice: string) => {
-    allocateIPCalls.push(tapDevice);
-    return `172.16.0.${ipCounter++}`;
-  });
+  // Mock TAP scanning for IPRegistry (always returns empty - no TAPs on system)
+  let mockTapDevices: Set<string> = new Set();
+  const mockScanTapDevices = vi.fn(async () => mockTapDevices);
+  const mockCheckTapExists = vi.fn(async (tap: string) =>
+    mockTapDevices.has(tap),
+  );
+  const mockEnsureRunDir = vi.fn(async () => {});
 
-  const mockReleaseIP = vi.fn(async (ip: string) => {
-    releaseIPCalls.push(ip);
-  });
+  /** Helper to read IP registry and get allocation count */
+  function getIPAllocationCount(): number {
+    const registryPath = path.join(testDir, "ip-registry.json");
+    if (!fs.existsSync(registryPath)) return 0;
+    const data = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+    return Object.keys(data.allocations || {}).length;
+  }
 
-  const mockCleanupOrphanedIPs = vi.fn(async () => {});
-
-  const mockAssignVmIdToIP = vi.fn(async () => {});
-
-  const mockClearVmIdFromIP = vi.fn(async () => {});
+  /** Helper to create a pool and register it for cleanup */
+  function createPool(
+    config: ConstructorParameters<typeof TapPool>[0],
+  ): TapPool {
+    const pool = new TapPool(config);
+    activePools.push(pool);
+    return pool;
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
     createTapCalls = [];
     deleteTapCalls = [];
     setMacCalls = [];
-    allocateIPCalls = [];
-    releaseIPCalls = [];
-    ipCounter = 2;
+    mockTapDevices = new Set();
+    activePools = [];
+
+    // Create temp directory and initialize global IPRegistry
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-pool-test-"));
+    initIPRegistry({
+      runDir: testDir,
+      lockPath: path.join(testDir, "ip-pool.lock"),
+      registryPath: path.join(testDir, "ip-registry.json"),
+      ensureRunDir: mockEnsureRunDir,
+      scanTapDevices: mockScanTapDevices,
+      checkTapExists: mockCheckTapExists,
+    });
   });
 
   afterEach(() => {
+    // Cleanup all pools to terminate any pending async operations (e.g., replenish)
+    for (const pool of activePools) {
+      pool.cleanup();
+    }
     vi.restoreAllMocks();
+    resetIPRegistry();
+    // Clean up temp directory
+    fs.rmSync(testDir, { recursive: true, force: true });
   });
 
   describe("init", () => {
     it("should create TAP devices and allocate IPs up to pool size", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 3,
         replenishThreshold: 2,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -74,45 +100,35 @@ describe("TapPool", () => {
         "vm078f6669b001",
         "vm078f6669b002",
       ]);
-      expect(allocateIPCalls).toHaveLength(3);
+      expect(getIPAllocationCount()).toBe(3);
     });
 
     it("should handle empty pool size", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 0,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
 
       expect(createTapCalls).toHaveLength(0);
-      expect(allocateIPCalls).toHaveLength(0);
+      expect(getIPAllocationCount()).toBe(0);
     });
   });
 
   describe("acquire", () => {
     it("should return TAP and IP from pool", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 2,
         replenishThreshold: 1,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -129,18 +145,13 @@ describe("TapPool", () => {
     });
 
     it("should set MAC address on acquire", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -152,23 +163,17 @@ describe("TapPool", () => {
     });
 
     it("should create pair on-demand when pool is exhausted", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
       createTapCalls = [];
-      allocateIPCalls = [];
 
       // First acquire uses pool
       await pool.acquire("vm1");
@@ -177,23 +182,17 @@ describe("TapPool", () => {
       const config = await pool.acquire("vm2");
 
       expect(createTapCalls).toHaveLength(1);
-      expect(allocateIPCalls).toHaveLength(1);
       expect(config.tapDevice).toBe("vm078f6669b001");
     });
 
     it("should trigger replenishment when below threshold", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 3,
         replenishThreshold: 2,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -213,44 +212,34 @@ describe("TapPool", () => {
   });
 
   describe("release", () => {
-    it("should return pair to pool (IP not released)", async () => {
-      const pool = new TapPool({
+    it("should return pair to pool (IP kept in registry)", async () => {
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
+      const initialCount = getIPAllocationCount();
 
       const config = await pool.acquire("test-vm");
-
       await pool.release(config.tapDevice, config.guestIp, "test-vm");
 
-      // Pair is returned to pool, IP should NOT be released
-      expect(releaseIPCalls).toHaveLength(0);
+      // Pair is returned to pool, IP should still be allocated
+      expect(getIPAllocationCount()).toBe(initialCount);
     });
 
     it("should make pair available for next acquire after release", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -261,29 +250,22 @@ describe("TapPool", () => {
 
       // Reset counters
       createTapCalls = [];
-      allocateIPCalls = [];
       const config2 = await pool.acquire("vm2");
 
-      // Should reuse the pair (no new TAP or IP created)
+      // Should reuse the pair (no new TAP created)
       expect(createTapCalls).toHaveLength(0);
-      expect(allocateIPCalls).toHaveLength(0);
       expect(config2.tapDevice).toBe(config1.tapDevice);
       expect(config2.guestIp).toBe(config1.guestIp);
     });
 
     it("should ignore duplicate release of same pair", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 2,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -303,44 +285,33 @@ describe("TapPool", () => {
     });
 
     it("should delete non-pooled TAP devices and release IP", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
 
       // Release a non-pooled TAP (doesn't match pool prefix)
-      await pool.release("tap-legacy", "172.16.0.5", "legacy-vm");
+      await pool.release("tap-legacy", "172.16.0.99", "legacy-vm");
 
       expect(deleteTapCalls).toContain("tap-legacy");
-      expect(releaseIPCalls).toContain("172.16.0.5");
     });
   });
 
   describe("cleanup", () => {
     it("should delete all TAPs and release all IPs in pool", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 3,
         replenishThreshold: 2,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -350,18 +321,13 @@ describe("TapPool", () => {
     });
 
     it("should handle cleanup when pool is empty", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 0,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -370,36 +336,26 @@ describe("TapPool", () => {
     });
 
     it("should handle cleanup when not initialized", () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 3,
         replenishThreshold: 2,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       expect(() => pool.cleanup()).not.toThrow();
     });
 
     it("should delete TAP and release IP when release is called after cleanup", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -407,29 +363,22 @@ describe("TapPool", () => {
 
       pool.cleanup();
       deleteTapCalls = [];
-      releaseIPCalls = [];
 
       await pool.release(config.tapDevice, config.guestIp, "vm1");
 
       expect(deleteTapCalls).toContain(config.tapDevice);
-      expect(releaseIPCalls).toContain(config.guestIp);
     });
   });
 
   describe("TAP naming", () => {
     it("should generate sequential TAP names", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 5,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -444,18 +393,13 @@ describe("TapPool", () => {
     });
 
     it("should continue sequence after on-demand creation", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -470,18 +414,13 @@ describe("TapPool", () => {
     });
 
     it("should recognize TAP names with index > 999 as pooled", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -498,18 +437,13 @@ describe("TapPool", () => {
 
   describe("concurrent operations", () => {
     it("should handle concurrent acquires", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 5,
         replenishThreshold: 2,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -542,18 +476,13 @@ describe("TapPool", () => {
         }
       });
 
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 3,
         replenishThreshold: 2,
         createTap: slowCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -603,18 +532,13 @@ describe("TapPool", () => {
         }
       });
 
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 2,
         replenishThreshold: 2, // High threshold to trigger on first acquire
         createTap: controlledCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -634,32 +558,21 @@ describe("TapPool", () => {
       // Wait for background replenishment
       await vi.waitFor(
         () => {
-          // Should have created: 1 on-demand + 2 from replenish (to fill pool)
+          // Should have created: 1 on-demand + some from replenish
           expect(createTapCalls.length).toBeGreaterThanOrEqual(1);
         },
         { timeout: 500 },
       );
-
-      // Verify replenish was triggered by checking we can acquire without on-demand
-      createTapCalls = [];
-      await pool.acquire("vm4");
-      // If replenish worked, this should come from pool (no new createTap)
-      // But since replenish might still be running, we just verify it was triggered
     });
 
     it("should not trigger replenish when pool is exhausted and threshold = 0", async () => {
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0, // disabled
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -693,18 +606,13 @@ describe("TapPool", () => {
         }
       });
 
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 2,
         replenishThreshold: 2, // Trigger replenish on first acquire
         createTap: controlledCreateTap,
         deleteTap: mockDeleteTap,
         setMac: mockSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -714,7 +622,6 @@ describe("TapPool", () => {
       blockReplenish = true;
       createTapCalls = [];
       deleteTapCalls = [];
-      releaseIPCalls = [];
 
       // Acquire triggers replenish (pool goes from 2 to 1, below threshold 2)
       await pool.acquire("vm1");
@@ -735,12 +642,12 @@ describe("TapPool", () => {
         resolve();
       }
 
-      // Wait for replenish to detect shutdown and cleanup the in-flight pair
+      // Wait for ALL delete operations to complete:
+      // 1. cleanup() fire-and-forget deletes pool pair (index 1)
+      // 2. replenish cleanup deletes in-flight pair (index 2)
       await vi.waitFor(
         () => {
-          // The in-flight pair should be cleaned up (TAP deleted, IP released)
-          expect(deleteTapCalls.length).toBeGreaterThanOrEqual(1);
-          expect(releaseIPCalls.length).toBeGreaterThanOrEqual(1);
+          expect(deleteTapCalls.length).toBeGreaterThanOrEqual(2);
         },
         { timeout: 500 },
       );
@@ -748,49 +655,18 @@ describe("TapPool", () => {
   });
 
   describe("error recovery", () => {
-    it("should delete TAP when IP allocation fails during pair creation", async () => {
-      const failingAllocateIP = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("No IPs available"));
-
-      const pool = new TapPool({
-        name: "test-runner",
-        size: 1,
-        replenishThreshold: 0,
-        createTap: mockCreateTap,
-        deleteTap: mockDeleteTap,
-        setMac: mockSetMac,
-        allocateIP: failingAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
-      });
-
-      // init() should not throw even if pair creation fails
-      await pool.init();
-
-      // Pool should be empty (pair creation failed)
-      expect(deleteTapCalls).toContain("vm078f6669b000");
-    });
-
     it("should return pair to pool when MAC set fails", async () => {
       const failingSetMac = vi
         .fn()
         .mockRejectedValueOnce(new Error("MAC failed"));
 
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: failingSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -798,17 +674,15 @@ describe("TapPool", () => {
       // Acquire should fail at MAC setting
       await expect(pool.acquire("vm1")).rejects.toThrow("MAC failed");
 
-      // Pair should be returned to pool (not deleted, not IP released)
+      // Pair should be returned to pool (not deleted)
       expect(deleteTapCalls).toHaveLength(0);
 
       // Next acquire should work (pair was returned to pool)
       failingSetMac.mockResolvedValueOnce(undefined);
       createTapCalls = [];
-      allocateIPCalls = [];
       const config = await pool.acquire("vm2");
 
       expect(createTapCalls).toHaveLength(0);
-      expect(allocateIPCalls).toHaveLength(0);
       expect(config.tapDevice).toBe("vm078f6669b000");
     });
 
@@ -821,18 +695,13 @@ describe("TapPool", () => {
         }
       });
 
-      const pool = new TapPool({
+      const pool = createPool({
         name: "test-runner",
         size: 1,
         replenishThreshold: 0,
         createTap: mockCreateTap,
         deleteTap: mockDeleteTap,
         setMac: conditionalSetMac,
-        allocateIP: mockAllocateIP,
-        releaseIP: mockReleaseIP,
-        cleanupOrphanedIPs: mockCleanupOrphanedIPs,
-        assignVmIdToIP: mockAssignVmIdToIP,
-        clearVmIdFromIP: mockClearVmIdFromIP,
       });
 
       await pool.init();
@@ -840,14 +709,12 @@ describe("TapPool", () => {
       // First acquire succeeds
       await pool.acquire("vm1");
       deleteTapCalls = [];
-      releaseIPCalls = [];
 
       // Second (on-demand) acquire fails at MAC
       await expect(pool.acquire("vm2")).rejects.toThrow("MAC failed");
 
-      // On-demand TAP should be deleted and IP released
+      // On-demand TAP should be deleted
       expect(deleteTapCalls).toContain("vm078f6669b001");
-      expect(releaseIPCalls).toContain("172.16.0.3");
     });
   });
 });

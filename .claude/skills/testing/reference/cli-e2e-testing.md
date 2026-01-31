@@ -1,14 +1,9 @@
----
-name: cli-e2e-testing
-description: CLI E2E testing patterns with BATS - parallelization, state sharing, and timeout management
-context: fork
----
+# CLI E2E Testing Patterns
 
-# CLI E2E Testing Skill
+This guide covers BATS-based E2E testing for the CLI, including parallelization, state sharing, and timeout management.
 
-## When to Use This Skill
+## When to Use
 
-Use this skill when:
 - Writing new CLI E2E tests in `e2e/tests/`
 - Reviewing E2E test code
 - Debugging slow or timing out E2E tests
@@ -20,7 +15,7 @@ Use this skill when:
 
 ### 1. Happy Path Only
 
-E2E tests verify the system works end-to-end. Error cases belong in unit tests.
+E2E tests verify the system works end-to-end. Error cases belong in CLI Command Integration Tests.
 
 ```bash
 # ✅ E2E: Test that the feature works
@@ -29,8 +24,8 @@ E2E tests verify the system works end-to-end. Error cases belong in unit tests.
     assert_success
 }
 
-# ❌ Don't test error cases in E2E - use unit tests instead
-@test "vm0 run fails with invalid agent" { ... }  # Move to unit test
+# ❌ Don't test error cases in E2E - use CLI Command Integration Tests instead
+@test "vm0 run fails with invalid agent" { ... }  # Move to Command Integration Test
 ```
 
 ### 2. `vm0 run` is Expensive (~15s)
@@ -128,8 +123,14 @@ e2e/tests/
 ```bash
 setup_file() {
     # One-time setup: compose agent (runs once per file)
-    export AGENT_NAME="e2e-session-$(date +%s%3N)"
+    local AGENT_NAME="e2e-session-$(date +%s%3N)"
+    echo "$AGENT_NAME" > "$BATS_FILE_TMPDIR/agent_name"
     vm0 compose "$CONFIG"
+}
+
+setup() {
+    # Load shared state before each test
+    AGENT_NAME=$(cat "$BATS_FILE_TMPDIR/agent_name")
 }
 
 @test "step 1: create session" {
@@ -186,15 +187,17 @@ EOF
 
 load '../../helpers/setup'
 
-# File-level constants
-AGENT_NAME="e2e-feature-$(date +%s%3N)"
-
 setup_file() {
-    # Create config and compose agent ONCE
-    export TEST_DIR="$(mktemp -d)"
-    export TEST_CONFIG="$TEST_DIR/vm0.yaml"
+    # Generate unique names
+    local AGENT_NAME="e2e-feature-$(date +%s%3N)-$RANDOM"
+    local TEST_DIR="$(mktemp -d)"
 
-    cat > "$TEST_CONFIG" <<EOF
+    # Save to BATS_FILE_TMPDIR for persistence across tests
+    echo "$AGENT_NAME" > "$BATS_FILE_TMPDIR/agent_name"
+    echo "$TEST_DIR" > "$BATS_FILE_TMPDIR/test_dir"
+
+    # Create config and compose agent ONCE
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
 version: "1.0"
 agents:
   ${AGENT_NAME}:
@@ -203,21 +206,27 @@ agents:
     image: "vm0/claude-code:dev"
 EOF
 
-    vm0 compose "$TEST_CONFIG"
+    cd "$TEST_DIR"
+    vm0 compose vm0.yaml
 }
 
 setup() {
-    # Per-test setup: unique resources
-    export ARTIFACT_NAME="art-$(date +%s%3N)-$RANDOM"
-}
+    # Load shared state from files (runs before each test)
+    AGENT_NAME=$(cat "$BATS_FILE_TMPDIR/agent_name")
+    TEST_DIR=$(cat "$BATS_FILE_TMPDIR/test_dir")
+    cd "$TEST_DIR"
 
-teardown() {
-    # Per-test cleanup (if needed)
+    # Per-test unique resources
+    ARTIFACT_NAME="art-$(date +%s%3N)-$RANDOM"
 }
 
 teardown_file() {
-    # File cleanup
-    rm -rf "$TEST_DIR"
+    # Load state and cleanup
+    local AGENT_NAME=$(cat "$BATS_FILE_TMPDIR/agent_name" 2>/dev/null || true)
+    local TEST_DIR=$(cat "$BATS_FILE_TMPDIR/test_dir" 2>/dev/null || true)
+
+    [ -n "$AGENT_NAME" ] && vm0 schedule delete "$AGENT_NAME" --force 2>/dev/null || true
+    [ -d "$TEST_DIR" ] && rm -rf "$TEST_DIR"
 }
 
 @test "step 1: create session with vm0 run" {
@@ -321,7 +330,7 @@ setup_file() {
 ### AP-4: Testing Error Cases in E2E
 
 ```bash
-# ❌ BAD: Error cases belong in unit tests
+# ❌ BAD: Error cases belong in CLI Command Integration Tests
 @test "vm0 run fails with missing artifact" {
     run vm0 run "$AGENT" --artifact-name "nonexistent"
     assert_failure
@@ -344,13 +353,64 @@ ARTIFACT_NAME="test-artifact"
 ARTIFACT_NAME="test-artifact-$(date +%s%3N)-$RANDOM"
 ```
 
+### AP-6: Using Export Instead of BATS_FILE_TMPDIR
+
+**CRITICAL**: In BATS parallel mode (`--no-parallelize-within-files`), each `@test` runs in an independent subshell. Variables exported in `setup_file()` do NOT persist to test functions.
+
+```bash
+# ❌ BAD: Exported variables don't persist in BATS parallel mode
+setup_file() {
+    export AGENT_NAME="test-agent-$(date +%s%3N)"
+    export TEST_DIR="$(mktemp -d)"
+    # These will be EMPTY in @test functions!
+}
+
+@test "test 1" {
+    echo $AGENT_NAME  # ❌ Empty!
+}
+
+# ✅ GOOD: Save to BATS_FILE_TMPDIR files, load in setup()
+setup_file() {
+    local AGENT_NAME="test-agent-$(date +%s%3N)"
+    local TEST_DIR="$(mktemp -d)"
+
+    # Save to files for persistence
+    echo "$AGENT_NAME" > "$BATS_FILE_TMPDIR/agent_name"
+    echo "$TEST_DIR" > "$BATS_FILE_TMPDIR/test_dir"
+
+    # Do expensive setup
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+...
+EOF
+    vm0 compose "$TEST_DIR/vm0.yaml"
+}
+
+setup() {
+    # Load from files before each test (cheap - just file read)
+    AGENT_NAME=$(cat "$BATS_FILE_TMPDIR/agent_name")
+    TEST_DIR=$(cat "$BATS_FILE_TMPDIR/test_dir")
+    cd "$TEST_DIR"
+}
+
+teardown_file() {
+    # Also load from files in teardown
+    local TEST_DIR=$(cat "$BATS_FILE_TMPDIR/test_dir" 2>/dev/null || true)
+    [ -d "$TEST_DIR" ] && rm -rf "$TEST_DIR"
+}
+```
+
+**Why this works**:
+- `setup_file()`: Runs once, does expensive work, saves state to files
+- `setup()`: Runs before each test, loads state from files (fast)
+- `$BATS_FILE_TMPDIR`: Persists across all tests in the file
+
 ---
 
 ## Quick Checklist
 
 Before committing E2E tests:
 
-- [ ] Happy path only (error cases → unit tests)
+- [ ] Happy path only (error cases → CLI Command Integration Tests)
 - [ ] Max ONE `vm0 run` per test case (timeout safety)
 - [ ] State-sharing tests in same file, independent tests in separate files
 - [ ] Use `setup_file()` for expensive one-time setup (compose)

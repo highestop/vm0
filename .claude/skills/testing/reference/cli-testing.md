@@ -254,13 +254,16 @@ expect(mockExit).toHaveBeenCalledWith(1);
 
 ## Interactive Prompts
 
-Only test non-interactive mode. Do not mock prompt libraries.
+Test both interactive and non-interactive modes. Use `prompts.inject()` for interactive mode testing.
 
-**Rationale**: When `isInteractive()` returns `false` (default in test environment), prompts return `undefined` automatically. Tests should verify non-interactive behavior.
+### Non-Interactive Mode
+
+When `isInteractive()` returns `false` (non-TTY environment), prompts return `undefined` automatically. Test that commands handle this gracefully.
 
 ```typescript
-// Test that command works in non-interactive mode
+// Test that command requires flags in non-interactive mode
 it("should require --name flag in non-interactive mode", async () => {
+  // Non-TTY by default in test environment
   await expect(async () => {
     await initCommand.parseAsync(["node", "cli"]);
   }).rejects.toThrow("process.exit called");
@@ -277,6 +280,51 @@ it("should create files with --name flag", async () => {
   expect(existsSync(path.join(tempDir, "vm0.yaml"))).toBe(true);
 });
 ```
+
+### Interactive Mode
+
+Use `prompts.inject()` - the library's native testing feature - to simulate user responses. This is NOT mocking; it's using the official testing API provided by the `prompts` library.
+
+**Prerequisites**:
+1. Import prompts at top of file: `import prompts from "prompts"`
+2. Enable TTY mode (usually done in test file's `beforeEach`)
+3. Inject ALL prompt responses in the order they will be asked
+
+**Example**: Testing that onboard shows `vm0 init` when user skips plugin installation.
+
+```typescript
+import prompts from "prompts";
+
+it("should show vm0 init when plugin installation is skipped", async () => {
+  // Inject responses in order:
+  // 1. "my-vm0-agent" for agent name prompt
+  // 2. false for "Install VM0 Claude Plugin?" confirmation
+  prompts.inject(["my-vm0-agent", false]);
+
+  await onboardCommand.parseAsync(["node", "cli"]);
+
+  const logCalls = vi.mocked(console.log).mock.calls.flat().join("\n");
+  expect(logCalls).toContain("cd my-vm0-agent && vm0 init");
+  expect(logCalls).not.toContain("/vm0-agent");
+});
+```
+
+**TTY Setup** (if not already in beforeEach):
+
+```typescript
+beforeEach(() => {
+  Object.defineProperty(process.stdout, "isTTY", {
+    value: true,
+    writable: true,
+    configurable: true,
+  });
+});
+```
+
+**Key Points**:
+- Use static import: `import prompts from "prompts"`
+- Inject ALL responses in prompt order - missing values will cause prompts to hang or return undefined
+- `prompts.inject([new Error()])` - Simulate user cancellation (Ctrl+C)
 
 ---
 

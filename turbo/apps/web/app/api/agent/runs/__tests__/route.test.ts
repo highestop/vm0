@@ -683,6 +683,68 @@ describe("POST /api/agent/runs - Internal Runs API", () => {
       expect(envs?.ANTHROPIC_MODEL).toBe("kimi-k2.5");
     });
 
+    it("should pass mapped env vars for openrouter-api-key provider with selected model", async () => {
+      vi.mocked(Sandbox.create).mockClear();
+
+      await createTestModelProvider(
+        "openrouter-api-key",
+        "sk-or-test-key",
+        "anthropic/claude-sonnet-4.5",
+      );
+
+      const { composeId } = await createTestCompose(
+        `openrouter-mp-env-${Date.now()}`,
+        {
+          skipDefaultApiKey: true,
+          overrides: { framework: "claude-code" },
+        },
+      );
+
+      const data = await createTestRun(composeId, "Test openrouter env vars");
+      expect(data.status).toBe("running");
+
+      // Verify Sandbox.create was called with mapped env vars
+      expect(Sandbox.create).toHaveBeenCalled();
+      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
+      const envs = createCall?.[1]?.envs as Record<string, string> | undefined;
+
+      // OpenRouter provider maps to ANTHROPIC_* env vars
+      expect(envs?.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-test-key");
+      expect(envs?.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+      expect(envs?.ANTHROPIC_API_KEY).toBe("");
+      expect(envs?.ANTHROPIC_MODEL).toBe("anthropic/claude-sonnet-4.5");
+    });
+
+    it("should not set ANTHROPIC_MODEL when openrouter provider uses auto mode (empty defaultModel)", async () => {
+      vi.mocked(Sandbox.create).mockClear();
+
+      // Create openrouter provider without selectedModel (auto mode)
+      await createTestModelProvider("openrouter-api-key", "sk-or-key");
+
+      const { composeId } = await createTestCompose(
+        `openrouter-auto-env-${Date.now()}`,
+        {
+          skipDefaultApiKey: true,
+          overrides: { framework: "claude-code" },
+        },
+      );
+
+      const data = await createTestRun(composeId, "Test openrouter auto mode");
+      expect(data.status).toBe("running");
+
+      // Verify ANTHROPIC_MODEL is not set in auto mode
+      expect(Sandbox.create).toHaveBeenCalled();
+      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
+      const envs = createCall?.[1]?.envs as Record<string, string> | undefined;
+
+      // These should be set
+      expect(envs?.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-key");
+      expect(envs?.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+      expect(envs?.ANTHROPIC_API_KEY).toBe("");
+      // ANTHROPIC_MODEL should NOT be set in auto mode (empty defaultModel)
+      expect(envs?.ANTHROPIC_MODEL).toBeUndefined();
+    });
+
     it("should pass CLAUDE_CODE_OAUTH_TOKEN env var for oauth-token provider", async () => {
       vi.mocked(Sandbox.create).mockClear();
 

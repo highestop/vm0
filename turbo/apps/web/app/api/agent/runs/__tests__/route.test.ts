@@ -134,6 +134,91 @@ describe("POST /api/agent/runs - Internal Runs API", () => {
       expect(response.status).toBe(400);
       expect(data.error.message).toContain("both checkpointId and sessionId");
     });
+
+    it("should fail run when required secrets are not provided", async () => {
+      // Create compose that requires secrets
+      const { composeId: secretComposeId } = await createTestCompose(
+        `secret-required-${Date.now()}`,
+        {
+          overrides: {
+            environment: {
+              ANTHROPIC_API_KEY: "test-key",
+              MY_SECRET: "${{ secrets.MY_SECRET }}",
+            },
+          },
+        },
+      );
+
+      // Try to create run WITHOUT providing required secrets
+      const data = await createTestRun(secretComposeId, "Test without secrets");
+
+      // Route creates run first, then fails during preparation
+      expect(data.status).toBe("failed");
+
+      // Verify error via API
+      const run = await getTestRun(data.runId);
+
+      expect(run.error).toMatch(/Missing required secrets/i);
+      expect(run.error).toContain("MY_SECRET");
+      expect(run.error).toContain("--secrets");
+    });
+
+    it("should fail run when only some secrets are provided", async () => {
+      // Create compose that requires multiple secrets
+      const { composeId: multiSecretComposeId } = await createTestCompose(
+        `multi-secret-${Date.now()}`,
+        {
+          overrides: {
+            environment: {
+              ANTHROPIC_API_KEY: "test-key",
+              SECRET_A: "${{ secrets.SECRET_A }}",
+              SECRET_B: "${{ secrets.SECRET_B }}",
+            },
+          },
+        },
+      );
+
+      // Try to create run with only one secret
+      const data = await createTestRun(
+        multiSecretComposeId,
+        "Test with partial secrets",
+        { secrets: { SECRET_A: "value-a" } }, // Missing SECRET_B
+      );
+
+      // Route creates run first, then fails during preparation
+      expect(data.status).toBe("failed");
+
+      // Verify error via API
+      const run = await getTestRun(data.runId);
+
+      expect(run.error).toMatch(/Missing required secrets/i);
+      expect(run.error).toContain("SECRET_B");
+      // SECRET_A should NOT be in the error (it was provided)
+      expect(run.error).not.toContain("SECRET_A");
+    });
+
+    it("should succeed when all required secrets are provided", async () => {
+      // Create compose that requires secrets
+      const { composeId: secretComposeId } = await createTestCompose(
+        `secret-success-${Date.now()}`,
+        {
+          overrides: {
+            environment: {
+              ANTHROPIC_API_KEY: "test-key",
+              MY_SECRET: "${{ secrets.MY_SECRET }}",
+            },
+          },
+        },
+      );
+
+      // Create run WITH required secrets
+      const data = await createTestRun(secretComposeId, "Test with secrets", {
+        secrets: { MY_SECRET: "secret-value" },
+      });
+
+      // Should succeed (running, not failed)
+      expect(data.status).toBe("running");
+    });
   });
 
   describe("Authorization", () => {
@@ -571,5 +656,73 @@ describe("POST /api/agent/runs - Internal Runs API", () => {
       expect(response.status).toBe(404);
       expect(data.error.message).toMatch(/session/i);
     });
+
+    // Note: "Missing required secrets" validation for session continue is tested via
+    // unit tests in expand-environment.test.ts which validates the error is thrown
+    // with correct message when secrets are not provided.
+  });
+
+  describe("Checkpoint Resume", () => {
+    it("should return 404 when checkpoint not found", async () => {
+      const request = createTestRequest(
+        "http://localhost:3000/api/agent/runs",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            checkpointId: randomUUID(),
+            prompt: "Resume checkpoint",
+          }),
+        },
+      );
+
+      const response = await POST(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(data.error.message).toMatch(/checkpoint/i);
+    });
+
+    it("should return 404 when checkpoint belongs to different user (security)", async () => {
+      // Create another user with their own compose and run
+      const otherUser = await context.setupUser({ prefix: "other-cp" });
+      const { composeId: otherComposeId } = await createTestCompose(
+        `other-cp-agent-${Date.now()}`,
+      );
+
+      // Create and complete run for other user (creates checkpoint)
+      const otherRun = await createTestRun(otherComposeId, "Other user run");
+      const { checkpointId } = await completeTestRun(
+        otherUser.userId,
+        otherRun.runId,
+      );
+
+      // Switch back to original user
+      mockClerk({ userId: user.userId });
+
+      // Try to resume other user's checkpoint
+      const request = createTestRequest(
+        "http://localhost:3000/api/agent/runs",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            checkpointId,
+            prompt: "Resume other checkpoint",
+          }),
+        },
+      );
+
+      const response = await POST(request);
+      const data = await response.json();
+
+      // Returns 404 for security (don't leak checkpoint existence)
+      expect(response.status).toBe(404);
+      expect(data.error.message).toMatch(/checkpoint/i);
+    });
+
+    // Note: "Missing required secrets" validation for checkpoint resume is tested via
+    // unit tests in expand-environment.test.ts which validates the error is thrown
+    // with correct message when secrets are not provided.
   });
 });

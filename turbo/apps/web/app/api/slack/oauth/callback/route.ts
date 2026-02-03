@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { initServices } from "../../../../../src/lib/init-services";
 import { env } from "../../../../../src/env";
-import { exchangeOAuthCode } from "../../../../../src/lib/slack/client";
+import {
+  exchangeOAuthCode,
+  getSlackRedirectBaseUrl,
+} from "../../../../../src/lib/slack";
 import { encryptCredentialValue } from "../../../../../src/lib/crypto/secrets-encryption";
 import { slackInstallations } from "../../../../../src/db/schema/slack-installation";
 
@@ -17,12 +20,8 @@ import { slackInstallations } from "../../../../../src/db/schema/slack-installat
 export async function GET(request: Request) {
   initServices();
 
-  const {
-    SLACK_CLIENT_ID,
-    SLACK_CLIENT_SECRET,
-    SECRETS_ENCRYPTION_KEY,
-    SLACK_REDIRECT_BASE_URL,
-  } = env();
+  const { SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SECRETS_ENCRYPTION_KEY } =
+    env();
 
   if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
     return NextResponse.json(
@@ -34,9 +33,26 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
+  const state = url.searchParams.get("state");
+
+  // Parse state to get Slack user info (for combined install + link flow)
+  let slackUserId: string | null = null;
+  let channelId: string | null = null;
+  if (state) {
+    try {
+      const parsed = JSON.parse(state) as {
+        u?: string;
+        c?: string;
+      };
+      slackUserId = parsed.u ?? null;
+      channelId = parsed.c ?? null;
+    } catch {
+      // Ignore parse errors
+    }
+  }
 
   // Use configured base URL or fall back to request URL
-  const baseUrl = SLACK_REDIRECT_BASE_URL ?? `${url.protocol}//${url.host}`;
+  const baseUrl = getSlackRedirectBaseUrl(request.url);
 
   // Handle user cancellation or error
   if (error) {
@@ -88,7 +104,21 @@ export async function GET(request: Request) {
         },
       });
 
-    // Redirect to success page with workspace info
+    // If we have user info from state, redirect to link page for combined flow
+    if (slackUserId) {
+      const linkParams = new URLSearchParams({
+        w: oauthResult.teamId,
+        u: slackUserId,
+      });
+      if (channelId) {
+        linkParams.set("c", channelId);
+      }
+      return NextResponse.redirect(
+        `${baseUrl}/slack/link?${linkParams.toString()}`,
+      );
+    }
+
+    // Otherwise redirect to success page
     return NextResponse.redirect(
       `${baseUrl}/slack/success?workspace=${encodeURIComponent(oauthResult.teamName)}&workspace_id=${encodeURIComponent(oauthResult.teamId)}`,
     );

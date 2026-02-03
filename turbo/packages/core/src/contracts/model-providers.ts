@@ -5,13 +5,37 @@ import { apiErrorSchema } from "./errors";
 const c = initContract();
 
 /**
+ * Credential field configuration for multi-credential providers
+ */
+export interface CredentialFieldConfig {
+  label: string;
+  required: boolean;
+  placeholder?: string;
+  helpText?: string;
+}
+
+/**
+ * Auth method configuration for providers with multiple auth options
+ */
+export interface AuthMethodConfig {
+  label: string;
+  helpText?: string;
+  credentials: Record<string, CredentialFieldConfig>;
+}
+
+/**
  * Model Provider type configuration
  * Maps type to framework, credential name, and display info
  *
  * For providers with `environmentMapping`, the credential is mapped to framework variables:
- * - `$credential` → the stored credential value
+ * - `$credential` → the stored credential value (legacy single credential)
+ * - `$credentials.X` → lookup credential X from the credentials map (multi-credential)
  * - `$model` → the selected model (or default)
  * - Other values are passed through as literals
+ *
+ * Provider types:
+ * - Legacy providers: use `credentialName` for single credential
+ * - Multi-auth providers: use `authMethods` for multiple auth options with different credentials
  */
 export const MODEL_PROVIDER_TYPES = {
   "claude-code-oauth-token": {
@@ -97,6 +121,72 @@ export const MODEL_PROVIDER_TYPES = {
     models: ["MiniMax-M2.1"] as string[],
     defaultModel: "MiniMax-M2.1",
   },
+  "aws-bedrock": {
+    framework: "claude-code" as const,
+    label: "AWS Bedrock",
+    helpText:
+      "Run Claude on AWS Bedrock.\nSetup guide: https://docs.anthropic.com/en/docs/claude-code/bedrock",
+    authMethods: {
+      "api-key": {
+        label: "Bedrock API Key",
+        helpText: "Use a Bedrock API key for authentication",
+        credentials: {
+          AWS_BEARER_TOKEN_BEDROCK: {
+            label: "AWS_BEARER_TOKEN_BEDROCK",
+            required: true,
+            helpText: "Bedrock API key from AWS console",
+          },
+          AWS_REGION: {
+            label: "AWS_REGION",
+            required: true,
+            placeholder: "us-east-1",
+            helpText: "e.g., us-east-1, us-west-2",
+          },
+        },
+      },
+      "access-keys": {
+        label: "IAM Access Keys",
+        helpText: "Use IAM access key credentials",
+        credentials: {
+          AWS_ACCESS_KEY_ID: {
+            label: "AWS_ACCESS_KEY_ID",
+            required: true,
+            helpText: "IAM access key ID",
+          },
+          AWS_SECRET_ACCESS_KEY: {
+            label: "AWS_SECRET_ACCESS_KEY",
+            required: true,
+            helpText: "IAM secret access key",
+          },
+          AWS_SESSION_TOKEN: {
+            label: "AWS_SESSION_TOKEN",
+            required: false,
+            helpText: "Optional, for temporary credentials",
+          },
+          AWS_REGION: {
+            label: "AWS_REGION",
+            required: true,
+            placeholder: "us-east-1",
+            helpText: "e.g., us-east-1, us-west-2",
+          },
+        },
+      },
+    } as Record<string, AuthMethodConfig>,
+    defaultAuthMethod: "api-key",
+    environmentMapping: {
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "$credentials.AWS_REGION",
+      AWS_BEARER_TOKEN_BEDROCK: "$credentials.AWS_BEARER_TOKEN_BEDROCK",
+      AWS_ACCESS_KEY_ID: "$credentials.AWS_ACCESS_KEY_ID",
+      AWS_SECRET_ACCESS_KEY: "$credentials.AWS_SECRET_ACCESS_KEY",
+      AWS_SESSION_TOKEN: "$credentials.AWS_SESSION_TOKEN",
+      ANTHROPIC_MODEL: "$model",
+    } as Record<string, string>,
+    models: [] as string[],
+    defaultModel: "",
+    allowCustomModel: true,
+    customModelPlaceholder: "anthropic.claude-sonnet-4-20250514-v1:0",
+  },
 } as const;
 
 export type ModelProviderType = keyof typeof MODEL_PROVIDER_TYPES;
@@ -108,6 +198,7 @@ export const modelProviderTypeSchema = z.enum([
   "openrouter-api-key",
   "moonshot-api-key",
   "minimax-api-key",
+  "aws-bedrock",
 ]);
 
 export const modelProviderFrameworkSchema = z.enum(["claude-code", "codex"]);
@@ -122,10 +213,75 @@ export function getFrameworkForType(
 }
 
 /**
- * Get credential name for a model provider type
+ * Get credential name for a model provider type (legacy single-credential providers)
+ * Returns undefined for multi-auth providers
  */
-export function getCredentialNameForType(type: ModelProviderType): string {
-  return MODEL_PROVIDER_TYPES[type].credentialName;
+export function getCredentialNameForType(
+  type: ModelProviderType,
+): string | undefined {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "credentialName" in config ? config.credentialName : undefined;
+}
+
+/**
+ * Check if a model provider type has multiple auth methods
+ */
+export function hasAuthMethods(type: ModelProviderType): boolean {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "authMethods" in config;
+}
+
+/**
+ * Get auth methods for a model provider type
+ * Returns undefined for legacy single-credential providers
+ */
+export function getAuthMethodsForType(
+  type: ModelProviderType,
+): Record<string, AuthMethodConfig> | undefined {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "authMethods" in config ? config.authMethods : undefined;
+}
+
+/**
+ * Get default auth method for a model provider type
+ * Returns undefined for legacy single-credential providers
+ */
+export function getDefaultAuthMethod(
+  type: ModelProviderType,
+): string | undefined {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "defaultAuthMethod" in config ? config.defaultAuthMethod : undefined;
+}
+
+/**
+ * Get credentials config for a specific auth method
+ * Returns undefined if provider doesn't have auth methods or auth method doesn't exist
+ */
+export function getCredentialsForAuthMethod(
+  type: ModelProviderType,
+  authMethod: string,
+): Record<string, CredentialFieldConfig> | undefined {
+  const authMethods = getAuthMethodsForType(type);
+  if (!authMethods || !(authMethod in authMethods)) {
+    return undefined;
+  }
+  const method = authMethods[authMethod];
+  return method?.credentials;
+}
+
+/**
+ * Get credential names for a specific auth method
+ * Returns array of credential names required for the auth method
+ */
+export function getCredentialNamesForAuthMethod(
+  type: ModelProviderType,
+  authMethod: string,
+): string[] | undefined {
+  const credentials = getCredentialsForAuthMethod(type, authMethod);
+  if (!credentials) {
+    return undefined;
+  }
+  return Object.keys(credentials);
 }
 
 /**
@@ -162,7 +318,31 @@ export function getDefaultModel(type: ModelProviderType): string | undefined {
  */
 export function hasModelSelection(type: ModelProviderType): boolean {
   const config = MODEL_PROVIDER_TYPES[type];
-  return "models" in config && config.models.length > 0;
+  // Has predefined models OR allows custom model input
+  return (
+    ("models" in config && config.models.length > 0) ||
+    ("allowCustomModel" in config && config.allowCustomModel === true)
+  );
+}
+
+/**
+ * Check if a model provider allows custom model input
+ */
+export function allowsCustomModel(type: ModelProviderType): boolean {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "allowCustomModel" in config && config.allowCustomModel === true;
+}
+
+/**
+ * Get custom model placeholder for a model provider type
+ */
+export function getCustomModelPlaceholder(
+  type: ModelProviderType,
+): string | undefined {
+  const config = MODEL_PROVIDER_TYPES[type];
+  return "customModelPlaceholder" in config
+    ? config.customModelPlaceholder
+    : undefined;
 }
 
 /**
@@ -172,7 +352,9 @@ export const modelProviderResponseSchema = z.object({
   id: z.string().uuid(),
   type: modelProviderTypeSchema,
   framework: modelProviderFrameworkSchema,
-  credentialName: z.string(),
+  credentialName: z.string().nullable(), // Legacy single-credential (deprecated for multi-auth)
+  authMethod: z.string().nullable(), // For multi-auth providers
+  credentialNames: z.array(z.string()).nullable(), // For multi-auth providers
   isDefault: z.boolean(),
   selectedModel: z.string().nullable(),
   createdAt: z.string(),
@@ -194,10 +376,15 @@ export type ModelProviderListResponse = z.infer<
 
 /**
  * Create/update model provider request
+ *
+ * Legacy providers use `credential` (single string)
+ * Multi-auth providers use `authMethod` + `credentials` (map)
  */
 export const upsertModelProviderRequestSchema = z.object({
   type: modelProviderTypeSchema,
-  credential: z.string().min(1, "Credential is required"),
+  credential: z.string().min(1).optional(), // Legacy single credential
+  authMethod: z.string().optional(), // For multi-auth providers
+  credentials: z.record(z.string(), z.string()).optional(), // For multi-auth providers
   convert: z.boolean().optional(),
   selectedModel: z.string().optional(),
 });

@@ -679,16 +679,17 @@ async function handleAgentAddSubmission(
   // Create binding
   await globalThis.services.db.insert(slackBindings).values({
     slackUserLinkId: userLink.id,
+    vm0UserId: userLink.vm0UserId,
+    slackWorkspaceId: payload.team.id,
     composeId: formValues.composeId,
     agentName,
     encryptedSecrets,
     enabled: true,
   });
 
-  // Fire-and-forget: confirmation message is non-critical, failure should not
-  // affect the binding creation. Log errors for debugging but don't propagate.
+  // Await message to prevent serverless function from terminating before it's sent
   if (channelId) {
-    sendConfirmationMessage(
+    await sendConfirmationMessage(
       payload.team.id,
       agentName,
       channelId,
@@ -750,9 +751,9 @@ async function handleAgentRemoveSubmission(
     .delete(slackBindings)
     .where(inArray(slackBindings.id, selectedAgentIds));
 
-  // Send confirmation message to channel
+  // Await message to prevent serverless function from terminating before it's sent
   if (channelId && agentNames.length > 0) {
-    sendRemovalConfirmationMessage(
+    await sendRemovalConfirmationMessage(
       payload.team.id,
       agentNames,
       channelId,
@@ -928,9 +929,9 @@ async function handleAgentUpdateSubmission(
     .set({ encryptedSecrets })
     .where(eq(slackBindings.id, bindingId));
 
-  // Send confirmation message
+  // Await message to prevent serverless function from terminating before it's sent
   if (channelId) {
-    sendUpdateConfirmationMessage(
+    await sendUpdateConfirmationMessage(
       payload.team.id,
       binding.agentName,
       Object.keys(newSecrets),

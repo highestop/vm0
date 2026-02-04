@@ -1,4 +1,4 @@
-import { eq, desc, and, gte, asc } from "drizzle-orm";
+import { eq, desc, and, gte } from "drizzle-orm";
 import {
   agentComposes,
   agentComposeVersions,
@@ -9,6 +9,8 @@ import { generateSandboxToken } from "../../auth/sandbox-token";
 import { buildExecutionContext, prepareAndDispatchRun } from "../../run";
 import { queryAxiom, getDatasetName, DATASETS } from "../../axiom";
 import { logger } from "../../logger";
+import { getUserScopeByClerkId } from "../../scope/scope-service";
+import { getSecretValues } from "../../secret/secret-service";
 
 const log = logger("slack:run-agent");
 
@@ -80,9 +82,11 @@ export async function runAgentForSlack(
       versionId = latestVersion.id;
     }
 
-    // Note: encryptedSecrets column has been removed from slack_bindings
-    // Secrets are no longer stored per-binding; they will be resolved from the user's scope
-    const secrets: Record<string, string> = {};
+    // Load secrets from user's scope
+    const scope = await getUserScopeByClerkId(userId);
+    const secrets: Record<string, string> = scope
+      ? await getSecretValues(scope.id)
+      : {};
 
     // Build the full prompt with thread context
     const fullPrompt = threadContext
@@ -134,8 +138,8 @@ export async function runAgentForSlack(
       pollIntervalMs: 5000, // 5 second polling interval
     });
 
-    // If no existing session, find the session created for this run
-    // Use run.createdAt to avoid race conditions with concurrent runs
+    // If no existing session, find the session created/updated for this run
+    // Use updatedAt >= run.createdAt to catch both new and updated sessions
     let resultSessionId = sessionId;
     if (!sessionId && result.status === "completed") {
       const [newSession] = await globalThis.services.db
@@ -145,10 +149,10 @@ export async function runAgentForSlack(
           and(
             eq(agentSessions.userId, userId),
             eq(agentSessions.agentComposeId, binding.composeId),
-            gte(agentSessions.createdAt, run.createdAt),
+            gte(agentSessions.updatedAt, run.createdAt),
           ),
         )
-        .orderBy(asc(agentSessions.createdAt))
+        .orderBy(desc(agentSessions.updatedAt))
         .limit(1);
 
       resultSessionId = newSession?.id;

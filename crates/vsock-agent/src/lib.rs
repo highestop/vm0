@@ -33,7 +33,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -51,6 +51,7 @@ const VSOCK_CID_HOST: u32 = 2;
 // Protocol constants
 const HEADER_SIZE: usize = 4;
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024; // 16MB
+const READ_BUFFER_SIZE: usize = 64 * 1024; // 64KB read buffer
 
 // Message types
 const MSG_READY: u8 = 0x00;
@@ -70,7 +71,39 @@ const MSG_ERROR: u8 = 0xFF;
 /// Exit code returned when command times out (same as bash/Python)
 const EXIT_CODE_TIMEOUT: i32 = 124;
 
+/// Maximum length for command preview in logs
+const COMMAND_PREVIEW_MAX_LEN: usize = 100;
+
 static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+/// Truncate a command string for logging, preserving UTF-8 boundaries
+fn truncate_preview(s: &str) -> String {
+    if s.len() <= COMMAND_PREVIEW_MAX_LEN {
+        return s.to_string();
+    }
+    // Find a safe UTF-8 boundary at or before the max length
+    let end = s
+        .char_indices()
+        .take_while(|(i, _)| *i < COMMAND_PREVIEW_MAX_LEN)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(COMMAND_PREVIEW_MAX_LEN);
+    format!("{}...", &s[..end])
+}
+
+/// Extract exit code from ExitStatus, mapping signals to 128 + signal number
+#[cfg(unix)]
+fn extract_exit_code(status: ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status
+        .code()
+        .unwrap_or_else(|| status.signal().map(|sig| 128 + sig).unwrap_or(1))
+}
+
+#[cfg(not(unix))]
+fn extract_exit_code(status: ExitStatus) -> i32 {
+    status.code().unwrap_or(1)
+}
 
 /// Log a message with timestamp
 pub fn log(level: &str, msg: &str) {
@@ -193,19 +226,11 @@ fn wait_with_timeout(child: Child, timeout_ms: u32) -> (i32, Vec<u8>, Vec<u8>) {
             if killed_by_timeout.load(Ordering::SeqCst) {
                 return (EXIT_CODE_TIMEOUT, output.stdout, b"Timeout".to_vec());
             }
-            // Map exit status like tini does: normal exit returns code,
-            // signal termination returns 128 + signal number
-            #[cfg(unix)]
-            let exit_code = {
-                use std::os::unix::process::ExitStatusExt;
-                output
-                    .status
-                    .code()
-                    .unwrap_or_else(|| output.status.signal().map(|sig| 128 + sig).unwrap_or(1))
-            };
-            #[cfg(not(unix))]
-            let exit_code = output.status.code().unwrap_or(1);
-            (exit_code, output.stdout, output.stderr)
+            (
+                extract_exit_code(output.status),
+                output.stdout,
+                output.stderr,
+            )
         }
         Err(e) => (1, Vec::new(), format!("Failed to wait: {}", e).into_bytes()),
     }
@@ -229,21 +254,13 @@ fn handle_exec(payload: &[u8]) -> (i32, Vec<u8>, Vec<u8>) {
         Err(_) => return (1, Vec::new(), b"Invalid UTF-8 in command".to_vec()),
     };
 
-    let preview = if command.len() > 100 {
-        // Find a safe UTF-8 boundary at or before byte 100
-        let end = command
-            .char_indices()
-            .take_while(|(i, _)| *i < 100)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(100);
-        format!("{}...", &command[..end])
-    } else {
-        command.to_string()
-    };
     log(
         "INFO",
-        &format!("exec: {} (timeout={}ms)", preview, timeout_ms),
+        &format!(
+            "exec: {} (timeout={}ms)",
+            truncate_preview(command),
+            timeout_ms
+        ),
     );
 
     // Create new process group so we can kill the entire tree on timeout
@@ -353,6 +370,7 @@ fn handle_write_file(payload: &[u8]) -> (bool, String) {
             && let Err(e) = stdin.write_all(content)
         {
             let _ = child.kill();
+            let _ = child.wait(); // Prevent zombie process
             return (false, format!("Failed to write to stdin: {}", e));
         }
         // stdin is dropped here, closing the pipe
@@ -414,20 +432,13 @@ fn handle_spawn_watch(payload: &[u8], seq: u32, writer: Arc<Mutex<UnixStream>>) 
         Err(_) => return encode_error(seq, "Invalid UTF-8 in command"),
     };
 
-    let preview = if command.len() > 100 {
-        let end = command
-            .char_indices()
-            .take_while(|(i, _)| *i < 100)
-            .last()
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(100);
-        format!("{}...", &command[..end])
-    } else {
-        command.clone()
-    };
     log(
         "INFO",
-        &format!("spawn_watch: {} (timeout={}ms)", preview, timeout_ms),
+        &format!(
+            "spawn_watch: {} (timeout={}ms)",
+            truncate_preview(&command),
+            timeout_ms
+        ),
     );
 
     // Create new process group so we can kill the entire tree on timeout
@@ -462,18 +473,11 @@ fn handle_spawn_watch(payload: &[u8], seq: u32, writer: Arc<Mutex<UnixStream>>) 
                 } else {
                     // No timeout - wait indefinitely
                     match child.wait_with_output() {
-                        Ok(output) => {
-                            #[cfg(unix)]
-                            let exit_code = {
-                                use std::os::unix::process::ExitStatusExt;
-                                output.status.code().unwrap_or_else(|| {
-                                    output.status.signal().map(|sig| 128 + sig).unwrap_or(1)
-                                })
-                            };
-                            #[cfg(not(unix))]
-                            let exit_code = output.status.code().unwrap_or(1);
-                            (exit_code, output.stdout, output.stderr)
-                        }
+                        Ok(output) => (
+                            extract_exit_code(output.status),
+                            output.stdout,
+                            output.stderr,
+                        ),
                         Err(e) => (1, Vec::new(), format!("Failed to wait: {}", e).into_bytes()),
                     }
                 };
@@ -539,7 +543,7 @@ impl Decoder {
         // Pre-allocate buffer to avoid frequent reallocations
         // 64KB matches the read buffer size in handle_connection
         Self {
-            buf: Vec::with_capacity(65536),
+            buf: Vec::with_capacity(READ_BUFFER_SIZE),
         }
     }
 
@@ -653,7 +657,7 @@ pub fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
     }
     log("INFO", "Sent ready signal");
 
-    let mut buf = [0u8; 65536];
+    let mut buf = [0u8; READ_BUFFER_SIZE];
     loop {
         // Read from stream (reader is separate, no lock needed)
         let n = reader.read(&mut buf)?;

@@ -491,9 +491,8 @@ fn handle_spawn_watch(payload: &[u8], seq: u32, writer: Arc<Mutex<UnixStream>>) 
 
                 // Send process_exit notification
                 let exit_msg = encode_process_exit(pid, result.0, &result.1, &result.2);
-                if let Ok(mut w) = writer.lock()
-                    && let Err(e) = w.write_all(&exit_msg)
-                {
+                let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+                if let Err(e) = w.write_all(&exit_msg) {
                     log("ERROR", &format!("Failed to send process_exit: {}", e));
                 }
             });
@@ -544,7 +543,8 @@ impl Decoder {
         }
     }
 
-    fn decode(&mut self, data: &[u8]) -> Vec<(u8, u32, Vec<u8>)> {
+    /// Decode messages from data. Returns Err on protocol error (caller should reconnect).
+    fn decode(&mut self, data: &[u8]) -> std::io::Result<Vec<(u8, u32, Vec<u8>)>> {
         self.buf.extend_from_slice(data);
         let mut messages = Vec::new();
 
@@ -555,13 +555,19 @@ impl Decoder {
             if length > MAX_MESSAGE_SIZE {
                 log("ERROR", &format!("Message too large: {}", length));
                 self.buf.clear();
-                break;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Message too large: {}", length),
+                ));
             }
 
             if length < 5 {
                 log("ERROR", &format!("Message too small: {}", length));
                 self.buf.clear();
-                break;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Message too small: {}", length),
+                ));
             }
 
             let total = HEADER_SIZE + length;
@@ -577,7 +583,7 @@ impl Decoder {
             self.buf.drain(..total);
         }
 
-        messages
+        Ok(messages)
     }
 }
 
@@ -642,7 +648,7 @@ pub fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
     // Send ready signal
     {
         let ready = encode(MSG_READY, 0, &[]);
-        let mut w = writer.lock().unwrap();
+        let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
         w.write_all(&ready)?;
     }
     log("INFO", "Sent ready signal");
@@ -656,7 +662,7 @@ pub fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
             break;
         }
 
-        for (msg_type, seq, payload) in decoder.decode(&buf[..n]) {
+        for (msg_type, seq, payload) in decoder.decode(&buf[..n])? {
             // Handle spawn_watch separately since it needs the writer Arc
             let response = if msg_type == MSG_SPAWN_WATCH {
                 Some(handle_spawn_watch(&payload, seq, Arc::clone(&writer)))
@@ -665,7 +671,7 @@ pub fn handle_connection(stream: UnixStream) -> std::io::Result<()> {
             };
 
             if let Some(msg) = response {
-                let mut w = writer.lock().unwrap();
+                let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
                 w.write_all(&msg)?;
             }
         }

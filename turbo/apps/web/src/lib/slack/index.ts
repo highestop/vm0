@@ -47,8 +47,10 @@ export {
   buildErrorMessage,
   buildLoginPromptMessage,
   buildHelpMessage,
+  buildWelcomeMessage,
   buildSuccessMessage,
   buildMarkdownMessage,
+  buildAgentResponseMessage,
 } from "./blocks";
 
 // Thread context

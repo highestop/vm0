@@ -67,6 +67,31 @@ export function buildAgentAddModal(
     },
   ];
 
+  // Add description field only after agent is selected
+  if (selectedAgent) {
+    blocks.push({
+      type: "input",
+      block_id: "agent_description",
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "description_input",
+        placeholder: {
+          type: "plain_text",
+          text: "e.g., Helps with code reviews and bug fixes",
+        },
+      },
+      label: {
+        type: "plain_text",
+        text: "Description",
+      },
+      hint: {
+        type: "plain_text",
+        text: "Helps route messages to the right agent when you have multiple agents",
+      },
+    });
+  }
+
   // Add secrets fields if agent is selected and has required secrets
   if (selectedAgent && selectedAgent.requiredSecrets.length > 0) {
     blocks.push({
@@ -154,12 +179,10 @@ export function buildAgentAddModal(
       type: "plain_text",
       text: "Add Agent",
     },
-    submit: selectedAgent
-      ? {
-          type: "plain_text",
-          text: "Add",
-        }
-      : undefined,
+    submit: {
+      type: "plain_text",
+      text: "Add",
+    },
     close: {
       type: "plain_text",
       text: "Cancel",
@@ -176,6 +199,7 @@ interface AgentBinding {
 interface AgentUpdateOption {
   id: string;
   name: string;
+  description: string | null;
   requiredSecrets: string[];
   existingSecrets: string[];
 }
@@ -233,6 +257,34 @@ export function buildAgentUpdateModal(
       },
     },
   ];
+
+  // Add description field only after agent is selected
+  if (selectedAgent) {
+    blocks.push({
+      type: "input",
+      block_id: "agent_description",
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "description_input",
+        placeholder: {
+          type: "plain_text",
+          text: "e.g., Helps with code reviews and bug fixes",
+        },
+        ...(selectedAgent.description && {
+          initial_value: selectedAgent.description,
+        }),
+      },
+      label: {
+        type: "plain_text",
+        text: "Description",
+      },
+      hint: {
+        type: "plain_text",
+        text: "Helps route messages to the right agent when you have multiple agents",
+      },
+    });
+  }
 
   // Add secrets fields if agent is selected and has required secrets
   if (selectedAgent && selectedAgent.requiredSecrets.length > 0) {
@@ -485,6 +537,58 @@ export function buildLoginPromptMessage(
   ];
 }
 
+interface WelcomeAgentInfo {
+  agentName: string;
+  description: string | null;
+}
+
+/**
+ * Build a welcome message for non-agent requests (greetings, casual chat)
+ * Explains what VM0 can do and lists available agents
+ *
+ * @param agents - User's available agents
+ * @returns Block Kit blocks
+ */
+export function buildWelcomeMessage(
+  agents: WelcomeAgentInfo[],
+): (Block | KnownBlock)[] {
+  const agentList =
+    agents.length > 0
+      ? agents
+          .map(
+            (a) => `• \`${a.agentName}\`: ${a.description ?? "No description"}`,
+          )
+          .join("\n")
+      : "_No agents configured yet._";
+
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: ":wave: *Hi! I'm VM0.*\n\nI can connect you to AI agents to help with your tasks.",
+      },
+    },
+    {
+      type: "divider",
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*Your Available Agents*\n${agentList}`,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*How to Use*\n• Just describe what you need help with\n• Or use `@VM0 use <agent> <message>` to specify an agent",
+      },
+    },
+  ];
+}
+
 /**
  * Build a help message
  *
@@ -613,6 +717,48 @@ export function buildMarkdownMessage(content: string): (Block | KnownBlock)[] {
       },
     });
     remaining = remaining.substring(splitIndex).trimStart();
+  }
+
+  return blocks;
+}
+
+/**
+ * Build an agent response message with agent name context and optional logs link
+ *
+ * @param content - The agent's response content
+ * @param agentName - The name of the agent that responded
+ * @param logsUrl - Optional URL to the run logs
+ * @returns Block Kit blocks with agent context header
+ */
+export function buildAgentResponseMessage(
+  content: string,
+  agentName: string,
+  logsUrl?: string,
+): (Block | KnownBlock)[] {
+  const blocks: (Block | KnownBlock)[] = [
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `:robot_face: *${agentName}*`,
+        },
+      ],
+    },
+    ...buildMarkdownMessage(content),
+  ];
+
+  // Add logs link at the end if provided
+  if (logsUrl) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `<${logsUrl}|:clipboard: View logs>`,
+        },
+      ],
+    });
   }
 
   return blocks;

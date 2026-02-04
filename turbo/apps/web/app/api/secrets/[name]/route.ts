@@ -1,11 +1,10 @@
-import { NextRequest } from "next/server";
 import {
   createHandler,
   tsr,
   TsRestResponse,
 } from "../../../../src/lib/ts-rest-handler";
 import {
-  credentialsByNameContract,
+  secretsByNameContract,
   createErrorResponse,
   ApiError,
 } from "@vm0/core";
@@ -18,11 +17,11 @@ import {
 import { logger } from "../../../../src/lib/logger";
 import { isNotFound } from "../../../../src/lib/errors";
 
-const log = logger("api:credentials");
+const log = logger("api:secrets");
 
-const router = tsr.router(credentialsByNameContract, {
+const router = tsr.router(secretsByNameContract, {
   /**
-   * GET /api/credentials/:name - Get a credential by name
+   * GET /api/secrets/:name - Get a secret by name
    */
   get: async ({ params, headers }) => {
     initServices();
@@ -36,7 +35,7 @@ const router = tsr.router(credentialsByNameContract, {
     if (!credential) {
       return createErrorResponse(
         "NOT_FOUND",
-        `Credential "${params.name}" not found`,
+        `Secret "${params.name}" not found`,
       );
     }
 
@@ -54,7 +53,7 @@ const router = tsr.router(credentialsByNameContract, {
   },
 
   /**
-   * DELETE /api/credentials/:name - Delete a credential
+   * DELETE /api/secrets/:name - Delete a secret
    */
   delete: async ({ params, headers }) => {
     initServices();
@@ -64,7 +63,7 @@ const router = tsr.router(credentialsByNameContract, {
       return createErrorResponse("UNAUTHORIZED", "Not authenticated");
     }
 
-    log.debug("deleting credential", { userId, name: params.name });
+    log.debug("deleting secret", { userId, name: params.name });
 
     try {
       await deleteCredential(userId, params.name);
@@ -83,7 +82,7 @@ const router = tsr.router(credentialsByNameContract, {
 });
 
 /**
- * Custom error handler for credentials by name API
+ * Custom error handler for secrets by name API
  */
 function errorHandler(err: unknown): TsRestResponse | void {
   // Handle ts-rest RequestValidationError
@@ -112,24 +111,8 @@ function errorHandler(err: unknown): TsRestResponse | void {
   return undefined;
 }
 
-const baseHandler = createHandler(credentialsByNameContract, router, {
+const handler = createHandler(secretsByNameContract, router, {
   errorHandler,
 });
 
-/**
- * Deprecation warning for /api/credentials endpoints
- */
-const DEPRECATION_WARNING =
-  "This endpoint is deprecated. Please upgrade your CLI and use /api/secrets instead.";
-
-function addDeprecationHeader(response: Response): Response {
-  response.headers.set("X-Deprecation-Warning", DEPRECATION_WARNING);
-  return response;
-}
-
-async function deprecatedHandler(request: NextRequest): Promise<Response> {
-  const response = await baseHandler(request);
-  return addDeprecationHeader(response);
-}
-
-export { deprecatedHandler as GET, deprecatedHandler as DELETE };
+export { handler as GET, handler as DELETE };

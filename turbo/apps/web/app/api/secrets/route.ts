@@ -1,14 +1,9 @@
-import { NextRequest } from "next/server";
 import {
   createHandler,
   tsr,
   TsRestResponse,
 } from "../../../src/lib/ts-rest-handler";
-import {
-  credentialsMainContract,
-  createErrorResponse,
-  ApiError,
-} from "@vm0/core";
+import { secretsMainContract, createErrorResponse, ApiError } from "@vm0/core";
 import { initServices } from "../../../src/lib/init-services";
 import { getUserId } from "../../../src/lib/auth/get-user-id";
 import {
@@ -18,11 +13,11 @@ import {
 import { logger } from "../../../src/lib/logger";
 import { isBadRequest } from "../../../src/lib/errors";
 
-const log = logger("api:credentials");
+const log = logger("api:secrets");
 
-const router = tsr.router(credentialsMainContract, {
+const router = tsr.router(secretsMainContract, {
   /**
-   * GET /api/credentials - List all credentials
+   * GET /api/secrets - List all secrets
    */
   list: async ({ headers }) => {
     initServices();
@@ -37,7 +32,7 @@ const router = tsr.router(credentialsMainContract, {
     return {
       status: 200 as const,
       body: {
-        credentials: credentials.map((c) => ({
+        secrets: credentials.map((c) => ({
           id: c.id,
           name: c.name,
           description: c.description,
@@ -50,7 +45,7 @@ const router = tsr.router(credentialsMainContract, {
   },
 
   /**
-   * PUT /api/credentials - Create or update a credential
+   * PUT /api/secrets - Create or update a secret
    */
   set: async ({ body, headers }) => {
     initServices();
@@ -62,7 +57,7 @@ const router = tsr.router(credentialsMainContract, {
 
     const { name, value, description } = body;
 
-    log.debug("setting credential", { userId, name });
+    log.debug("setting secret", { userId, name });
 
     try {
       const credential = await setCredential(userId, name, value, description);
@@ -88,7 +83,7 @@ const router = tsr.router(credentialsMainContract, {
 });
 
 /**
- * Custom error handler for credentials API
+ * Custom error handler for secrets API
  */
 function errorHandler(err: unknown): TsRestResponse | void {
   // Handle ts-rest RequestValidationError
@@ -121,24 +116,8 @@ function errorHandler(err: unknown): TsRestResponse | void {
   return undefined;
 }
 
-const baseHandler = createHandler(credentialsMainContract, router, {
+const handler = createHandler(secretsMainContract, router, {
   errorHandler,
 });
 
-/**
- * Deprecation warning for /api/credentials endpoints
- */
-const DEPRECATION_WARNING =
-  "This endpoint is deprecated. Please upgrade your CLI and use /api/secrets instead.";
-
-function addDeprecationHeader(response: Response): Response {
-  response.headers.set("X-Deprecation-Warning", DEPRECATION_WARNING);
-  return response;
-}
-
-async function deprecatedHandler(request: NextRequest): Promise<Response> {
-  const response = await baseHandler(request);
-  return addDeprecationHeader(response);
-}
-
-export { deprecatedHandler as GET, deprecatedHandler as PUT };
+export { handler as GET, handler as PUT };

@@ -3,6 +3,9 @@
   "ui": "tui",
   "globalEnv": [
     "DATABASE_URL",
+    "DB_POOL_MAX",
+    "DB_POOL_IDLE_TIMEOUT_MS",
+    "DB_POOL_CONNECT_TIMEOUT_MS",
     "VM0_DEBUG",
     "NODE_ENV",
     "SKIP_ENV_VALIDATION",

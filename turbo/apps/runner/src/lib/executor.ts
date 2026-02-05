@@ -177,7 +177,7 @@ export async function executeJob(
     if (config.firecracker.snapshot) {
       // Use host timestamp directly (faster than hwclock which accesses RTC device)
       const timestamp = (Date.now() / 1000).toFixed(3);
-      await guest.exec(`date -s "@${timestamp}"`);
+      await guest.exec(`sudo date -s "@${timestamp}"`);
     }
 
     // Download storages if manifest provided
@@ -258,7 +258,7 @@ export async function executeJob(
     // Check for OOM kill (exit code 137 = 128 + SIGKILL)
     if (exitCode === 137 || exitCode === 9) {
       const dmesgCheck = await guest.exec(
-        `dmesg | tail -20 | grep -iE "killed|oom" 2>/dev/null`,
+        `sudo dmesg | tail -20 | grep -iE "killed|oom" 2>/dev/null`,
       );
       if (
         dmesgCheck.stdout.toLowerCase().includes("oom") ||

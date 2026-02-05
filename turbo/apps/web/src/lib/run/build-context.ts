@@ -3,11 +3,11 @@ import {
   extractVariableReferences,
   groupVariablesBySource,
   getFrameworkForType,
-  getCredentialNameForType,
+  getSecretNameForType,
   getEnvironmentMapping,
   getDefaultModel,
   hasAuthMethods,
-  getCredentialNamesForAuthMethod,
+  getSecretNamesForAuthMethod,
   MODEL_PROVIDER_TYPES,
   type ModelProviderType,
   type ModelProviderFramework,
@@ -91,11 +91,11 @@ async function resolveProviderType(
 /**
  * Resolve environment mapping for a provider type
  * Substitutes placeholders with actual values:
- * - $credential → legacy single credential value
- * - $credentials.X → lookup credential X from credentials map (multi-auth)
+ * - $secret → single secret value
+ * - $secrets.X → lookup secret X from secrets map (multi-auth)
  * - $model → selected model or default
  *
- * For providers without mapping, returns a single credential entry
+ * For providers without mapping, returns a single secret entry
  * For providers with mapping (e.g., moonshot), returns multiple env vars
  */
 function resolveEnvironmentMapping(
@@ -108,7 +108,7 @@ function resolveEnvironmentMapping(
 
   if (!mapping) {
     // No mapping - return credential directly under its natural name
-    const credentialName = getCredentialNameForType(providerType);
+    const credentialName = getSecretNameForType(providerType);
     if (!credentialName || !credentialValue) {
       // Multi-auth providers should have environmentMapping, this shouldn't happen
       return {};
@@ -121,8 +121,8 @@ function resolveEnvironmentMapping(
 
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(mapping)) {
-    if (value === "$credential") {
-      // Legacy single credential
+    if (value === "$secret") {
+      // Single secret value
       if (credentialValue) {
         result[key] = credentialValue;
       }
@@ -130,14 +130,14 @@ function resolveEnvironmentMapping(
       if (model) {
         result[key] = model;
       }
-    } else if (value.startsWith("$credentials.")) {
-      // Multi-auth: lookup credential from map
-      const credName = value.slice("$credentials.".length);
+    } else if (value.startsWith("$secrets.")) {
+      // Multi-auth: lookup secret from map
+      const credName = value.slice("$secrets.".length);
       const credValue = credentialsMap?.[credName];
       if (credValue) {
         result[key] = credValue;
       }
-      // Skip if undefined (optional credential)
+      // Skip if undefined (optional secret)
     } else {
       // Literal value (e.g., base URL)
       result[key] = value;
@@ -218,7 +218,7 @@ async function resolveModelProviderCredential(
     }
 
     // Get credential names for this auth method
-    const credentialNames = getCredentialNamesForAuthMethod(
+    const credentialNames = getSecretNamesForAuthMethod(
       providerType,
       authMethod,
     );
@@ -271,7 +271,7 @@ async function resolveModelProviderCredential(
   }
 
   // Handle legacy single-credential providers
-  const credentialName = getCredentialNameForType(providerType);
+  const credentialName = getSecretNameForType(providerType);
   if (!credentialName) {
     return { credentials, injectedEnvVars: undefined };
   }

@@ -209,6 +209,9 @@ export async function givenLinkedSlackUser(
 function createSlackInteractiveRequest(payload: object): Request {
   initServices();
   const { SLACK_SIGNING_SECRET } = env();
+  if (!SLACK_SIGNING_SECRET) {
+    throw new Error("SLACK_SIGNING_SECRET must be set in test environment");
+  }
 
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const payloadStr = JSON.stringify(payload);

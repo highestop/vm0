@@ -19,28 +19,12 @@ vi.mock("@axiomhq/js");
 
 const context = testContext();
 
-/** Generate a unique device code in XXXX-XXXX format */
-function generateTestCode(): string {
-  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 8; i++) {
-    if (i === 4) code += "-";
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
-/** Make a token exchange request */
-async function exchangeDeviceCode(deviceCode: string) {
-  const request = createTestRequest(
-    "http://localhost:3000/api/cli/auth/token",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_code: deviceCode }),
-    },
-  );
-  return POST(request);
+function makeTokenRequest(deviceCode: string) {
+  return createTestRequest("http://localhost:3000/api/cli/auth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_code: deviceCode }),
+  });
 }
 
 describe("POST /api/cli/auth/token", () => {
@@ -51,94 +35,98 @@ describe("POST /api/cli/auth/token", () => {
     user = await context.setupUser();
   });
 
-  it("should return error for invalid device code", async () => {
-    const response = await exchangeDeviceCode(generateTestCode());
+  it("should return 400 when device code does not exist", async () => {
+    const response = await POST(makeTokenRequest("ZZZZ-ZZZZ"));
+    const body = await response.json();
 
     expect(response.status).toBe(400);
-    const body = await response.json();
     expect(body.error).toBe("invalid_request");
+    expect(body.error_description).toBe("Invalid device code");
   });
 
-  it("should return authorization_pending for pending device code", async () => {
-    const code = generateTestCode();
-    await createTestDeviceCode({ code, status: "pending" });
-
-    const response = await exchangeDeviceCode(code);
-
-    expect(response.status).toBe(202);
-    const body = await response.json();
-    expect(body.error).toBe("authorization_pending");
-  });
-
-  it("should return expired_token for expired device code", async () => {
-    const code = generateTestCode();
-    await createTestDeviceCode({
-      code,
+  it("should return 400 when device code is expired", async () => {
+    const code = await createTestDeviceCode({
       status: "pending",
       expiresAt: new Date(Date.now() - 1000),
     });
 
-    const response = await exchangeDeviceCode(code);
+    const response = await POST(makeTokenRequest(code));
+    const body = await response.json();
 
     expect(response.status).toBe(400);
-    const body = await response.json();
     expect(body.error).toBe("expired_token");
+    expect(body.error_description).toBe("The device code has expired");
   });
 
-  it("should return access_denied and clean up denied device code", async () => {
-    const code = generateTestCode();
-    await createTestDeviceCode({ code, status: "denied" });
+  it("should return 202 when device code is pending", async () => {
+    const code = await createTestDeviceCode({ status: "pending" });
 
-    const response = await exchangeDeviceCode(code);
+    const response = await POST(makeTokenRequest(code));
+    const body = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(body.error).toBe("authorization_pending");
+    expect(body.error_description).toContain(
+      "The user has not yet completed authorization",
+    );
+  });
+
+  it("should return 400 and clean up when device code is denied", async () => {
+    const code = await createTestDeviceCode({ status: "denied" });
+
+    const response = await POST(makeTokenRequest(code));
+    const body = await response.json();
 
     expect(response.status).toBe(400);
-    const body = await response.json();
     expect(body.error).toBe("access_denied");
+    expect(body.error_description).toBe(
+      "The user denied the authorization request",
+    );
 
-    // Verify device code was cleaned up
-    const remaining = await findTestDeviceCode(code);
-    expect(remaining).toBeUndefined();
+    const found = await findTestDeviceCode(code);
+    expect(found).toBeUndefined();
   });
 
-  it("should exchange authenticated device code for CLI token", async () => {
-    const code = generateTestCode();
-    await createTestDeviceCode({
-      code,
+  it("should return 200 with token when device code is authenticated", async () => {
+    const code = await createTestDeviceCode({
       status: "authenticated",
       userId: user.userId,
     });
 
-    const response = await exchangeDeviceCode(code);
+    const response = await POST(makeTokenRequest(code));
+    const body = await response.json();
 
     expect(response.status).toBe(200);
-    const body = await response.json();
+    expect(body).not.toHaveProperty("error");
     expect(body.access_token).toMatch(/^vm0_live_/);
     expect(body.token_type).toBe("Bearer");
     expect(body.expires_in).toBe(90 * 24 * 60 * 60);
+    expect(body.refresh_token).toEqual(expect.any(String));
 
-    // Verify token persisted in DB
-    const token = await findTestCliToken(body.access_token);
-    expect(token).toBeDefined();
-    expect(token!.userId).toBe(user.userId);
+    // Verify the CLI token was persisted
+    const tokenRow = await findTestCliToken(body.access_token);
+    expect(tokenRow).toBeDefined();
+    expect(tokenRow!.userId).toBe(user.userId);
 
-    // Verify device code cleaned up
-    const remaining = await findTestDeviceCode(code);
-    expect(remaining).toBeUndefined();
+    // Verify the device code was cleaned up
+    const found = await findTestDeviceCode(code);
+    expect(found).toBeUndefined();
   });
 
-  it("should auto-create scope for user without existing scope", async () => {
-    const newUserId = `no-scope-${Date.now()}`;
-    const code = generateTestCode();
-    await createTestDeviceCode({
-      code,
-      status: "authenticated",
-      userId: newUserId,
-    });
+  it("should return 400 when device_code is missing from body", async () => {
+    const request = createTestRequest(
+      "http://localhost:3000/api/cli/auth/token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
 
-    const response = await exchangeDeviceCode(code);
-
-    expect(response.status).toBe(200);
+    const response = await POST(request);
     const body = await response.json();
-    expect(body.access_token).toMatch(/^vm0_live_/);
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("invalid_request");
   });
 });

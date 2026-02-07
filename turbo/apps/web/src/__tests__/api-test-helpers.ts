@@ -12,8 +12,8 @@ import {
   generateComposeJobToken,
 } from "../lib/auth/sandbox-token";
 import { cliTokens } from "../db/schema/cli-tokens";
-import { agentRuns } from "../db/schema/agent-run";
 import { deviceCodes } from "../db/schema/device-codes";
+import { agentRuns } from "../db/schema/agent-run";
 import { eq } from "drizzle-orm";
 
 // Route handlers - imported here so callers don't need to pass them
@@ -138,66 +138,6 @@ export async function createTestSandboxToken(
 }
 
 // ============================================================================
-// Device Code Test Helpers
-// ============================================================================
-
-/**
- * Insert a device code directly into DB for test setup.
- * Used by CLI auth token tests to set up various device code states.
- *
- * @param options - Device code configuration
- */
-export async function createTestDeviceCode(options: {
-  code: string;
-  status: "pending" | "authenticated" | "denied";
-  userId?: string;
-  expiresAt?: Date;
-}): Promise<void> {
-  await globalThis.services.db.insert(deviceCodes).values({
-    code: options.code,
-    status: options.status,
-    userId: options.userId ?? null,
-    expiresAt: options.expiresAt ?? new Date(Date.now() + 900_000),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-}
-
-/**
- * Look up a device code in the database for verification.
- *
- * @param code - The device code string
- * @returns The device code record, or undefined if not found
- */
-export async function findTestDeviceCode(
-  code: string,
-): Promise<
-  { code: string; status: string; userId: string | null } | undefined
-> {
-  const [row] = await globalThis.services.db
-    .select()
-    .from(deviceCodes)
-    .where(eq(deviceCodes.code, code));
-  return row;
-}
-
-/**
- * Look up a CLI token in the database for verification.
- *
- * @param token - The token string
- * @returns The CLI token record, or undefined if not found
- */
-export async function findTestCliToken(
-  token: string,
-): Promise<{ token: string; userId: string } | undefined> {
-  const [row] = await globalThis.services.db
-    .select()
-    .from(cliTokens)
-    .where(eq(cliTokens.token, token));
-  return row;
-}
-
-// ============================================================================
 // CLI Token Test Helpers
 // ============================================================================
 
@@ -249,6 +189,74 @@ export async function deleteTestCliToken(token: string): Promise<void> {
   await globalThis.services.db
     .delete(cliTokens)
     .where(eq(cliTokens.token, token));
+}
+
+/**
+ * Create a test device code directly in the database.
+ * Uses direct DB insert because no API route exists for creating
+ * denied/expired device codes — the POST /api/cli/auth/device route
+ * always creates "pending" codes with server-controlled expiration.
+ *
+ * @param options - Device code options
+ * @param options.status - The device code status (default: "pending")
+ * @param options.userId - The user ID (required for "authenticated" status)
+ * @param options.expiresAt - When the code expires (default: 15 minutes from now)
+ * @returns The device code string
+ */
+export async function createTestDeviceCode(options?: {
+  status?: "pending" | "authenticated" | "expired" | "denied";
+  userId?: string;
+  expiresAt?: Date;
+}): Promise<string> {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const part = () =>
+    Array.from(
+      { length: 4 },
+      () => chars[Math.floor(Math.random() * chars.length)],
+    ).join("");
+  const code = `${part()}-${part()}`;
+
+  const status = options?.status ?? "pending";
+  const expiresAt = options?.expiresAt ?? new Date(Date.now() + 15 * 60 * 1000);
+
+  await globalThis.services.db.insert(deviceCodes).values({
+    code,
+    status,
+    userId: options?.userId ?? null,
+    expiresAt,
+  });
+
+  return code;
+}
+
+/**
+ * Find a device code by its code string.
+ *
+ * @param code - The device code to look up
+ * @returns The device code row or undefined
+ */
+export async function findTestDeviceCode(code: string) {
+  const [row] = await globalThis.services.db
+    .select()
+    .from(deviceCodes)
+    .where(eq(deviceCodes.code, code))
+    .limit(1);
+  return row;
+}
+
+/**
+ * Find a CLI token by its token string.
+ *
+ * @param token - The token to look up
+ * @returns The CLI token row or undefined
+ */
+export async function findTestCliToken(token: string) {
+  const [row] = await globalThis.services.db
+    .select()
+    .from(cliTokens)
+    .where(eq(cliTokens.token, token))
+    .limit(1);
+  return row;
 }
 
 /**

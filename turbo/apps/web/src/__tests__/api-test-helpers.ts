@@ -13,6 +13,7 @@ import {
 } from "../lib/auth/sandbox-token";
 import { cliTokens } from "../db/schema/cli-tokens";
 import { agentRuns } from "../db/schema/agent-run";
+import { deviceCodes } from "../db/schema/device-codes";
 import { eq } from "drizzle-orm";
 
 // Route handlers - imported here so callers don't need to pass them
@@ -131,6 +132,70 @@ export async function createTestSandboxToken(
 ): Promise<string> {
   return generateSandboxToken(userId, runId);
 }
+
+// ============================================================================
+// Device Code Test Helpers
+// ============================================================================
+
+/**
+ * Insert a device code directly into DB for test setup.
+ * Used by CLI auth token tests to set up various device code states.
+ *
+ * @param options - Device code configuration
+ */
+export async function createTestDeviceCode(options: {
+  code: string;
+  status: "pending" | "authenticated" | "denied";
+  userId?: string;
+  expiresAt?: Date;
+}): Promise<void> {
+  await globalThis.services.db.insert(deviceCodes).values({
+    code: options.code,
+    status: options.status,
+    userId: options.userId ?? null,
+    expiresAt: options.expiresAt ?? new Date(Date.now() + 900_000),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+}
+
+/**
+ * Look up a device code in the database for verification.
+ *
+ * @param code - The device code string
+ * @returns The device code record, or undefined if not found
+ */
+export async function findTestDeviceCode(
+  code: string,
+): Promise<
+  { code: string; status: string; userId: string | null } | undefined
+> {
+  const [row] = await globalThis.services.db
+    .select()
+    .from(deviceCodes)
+    .where(eq(deviceCodes.code, code));
+  return row;
+}
+
+/**
+ * Look up a CLI token in the database for verification.
+ *
+ * @param token - The token string
+ * @returns The CLI token record, or undefined if not found
+ */
+export async function findTestCliToken(
+  token: string,
+): Promise<{ token: string; userId: string } | undefined> {
+  const [row] = await globalThis.services.db
+    .select()
+    .from(cliTokens)
+    .where(eq(cliTokens.token, token));
+  return row;
+}
+
+// ============================================================================
+// CLI Token Test Helpers
+// ============================================================================
 
 /**
  * Create a test compose job JWT token for webhook endpoints

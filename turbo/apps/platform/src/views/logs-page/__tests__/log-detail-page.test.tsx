@@ -799,4 +799,164 @@ describe("log detail page", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  describe("collapsed tool groups", () => {
+    function setupCollapsedToolHandlers() {
+      server.use(
+        http.get("*/api/platform/logs/:id", () => {
+          return HttpResponse.json({
+            id: "run-collapsed-tools",
+            sessionId: null,
+            agentName: "Tool Agent",
+            framework: "claude-code",
+            status: "completed",
+            prompt: "Read some files",
+            error: null,
+            createdAt: "2024-01-01T00:00:00Z",
+            startedAt: "2024-01-01T00:00:01Z",
+            completedAt: "2024-01-01T00:00:10Z",
+            artifact: { name: null, version: null },
+          });
+        }),
+        http.get("*/api/agent/runs/:id/telemetry/agent", () => {
+          return HttpResponse.json({
+            events: [
+              {
+                sequenceNumber: 1,
+                eventType: "assistant",
+                eventData: {
+                  message: {
+                    content: [
+                      { type: "text", text: "Let me read those files" },
+                      {
+                        type: "tool_use",
+                        id: "read-1",
+                        name: "Read",
+                        input: { file_path: "/src/index.ts" },
+                      },
+                      {
+                        type: "tool_use",
+                        id: "read-2",
+                        name: "Read",
+                        input: { file_path: "/src/utils.ts" },
+                      },
+                      {
+                        type: "tool_use",
+                        id: "read-3",
+                        name: "Read",
+                        input: { file_path: "/src/config.ts" },
+                      },
+                    ],
+                    role: "assistant",
+                  },
+                },
+                createdAt: "2024-01-01T00:00:02Z",
+              },
+              {
+                sequenceNumber: 2,
+                eventType: "user",
+                eventData: {
+                  message: {
+                    content: [
+                      {
+                        type: "tool_result",
+                        tool_use_id: "read-1",
+                        content: "file content 1",
+                      },
+                      {
+                        type: "tool_result",
+                        tool_use_id: "read-2",
+                        content: "file content 2",
+                      },
+                      {
+                        type: "tool_result",
+                        tool_use_id: "read-3",
+                        content: "file content 3",
+                      },
+                    ],
+                    role: "user",
+                  },
+                },
+                createdAt: "2024-01-01T00:00:03Z",
+              },
+              {
+                sequenceNumber: 3,
+                eventType: "assistant",
+                eventData: {
+                  message: {
+                    content: [
+                      {
+                        type: "tool_use",
+                        id: "bash-1",
+                        name: "Bash",
+                        input: { command: "npm test" },
+                      },
+                    ],
+                    role: "assistant",
+                  },
+                },
+                createdAt: "2024-01-01T00:00:04Z",
+              },
+              {
+                sequenceNumber: 4,
+                eventType: "user",
+                eventData: {
+                  message: {
+                    content: [
+                      {
+                        type: "tool_result",
+                        tool_use_id: "bash-1",
+                        content: "all tests passed",
+                      },
+                    ],
+                    role: "user",
+                  },
+                },
+                createdAt: "2024-01-01T00:00:05Z",
+              },
+            ],
+            hasMore: false,
+            framework: "claude-code",
+          });
+        }),
+      );
+    }
+
+    it("should collapse consecutive same-type tool calls with count badge", async () => {
+      setupCollapsedToolHandlers();
+
+      await setupPage({
+        context,
+        path: "/logs/run-collapsed-tools",
+      });
+
+      // Wait for assistant text to render
+      await waitFor(() => {
+        expect(screen.getByText(/Let me read those files/)).toBeInTheDocument();
+      });
+
+      // The 3 Read operations should be collapsed into a group with "3 files" badge
+      await waitFor(() => {
+        expect(screen.getByText("3 files")).toBeInTheDocument();
+      });
+    });
+
+    it("should not collapse single tool calls", async () => {
+      setupCollapsedToolHandlers();
+
+      await setupPage({
+        context,
+        path: "/logs/run-collapsed-tools",
+      });
+
+      // Wait for collapsed group to render (proves events loaded)
+      await waitFor(() => {
+        expect(screen.getByText("3 files")).toBeInTheDocument();
+      });
+
+      // "1 calls" badge should NOT appear — single operations render individually
+      expect(screen.queryByText("1 calls")).not.toBeInTheDocument();
+      expect(screen.queryByText("1 call")).not.toBeInTheDocument();
+    });
+  });
 });

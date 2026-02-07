@@ -9,8 +9,10 @@ import {
   groupEventsIntoMessages,
   getVisibleGroupedMessageText,
   groupedMessageMatchesSearch,
+  type ToolOperation,
 } from "../utils.ts";
 import type { AgentEvent } from "../../../../signals/logs-page/types.ts";
+import { groupConsecutiveTools } from "../../components/grouped-message-card.tsx";
 
 describe("log-detail utils", () => {
   describe("formatTime", () => {
@@ -914,5 +916,73 @@ describe("log-detail utils", () => {
       };
       expect(groupedMessageMatchesSearch(message, "nonexistent")).toBeFalsy();
     });
+  });
+});
+
+function makeOp(toolName: string, id?: string): ToolOperation {
+  return {
+    toolUseId: id ?? `tool_${Math.random().toString(36).slice(2)}`,
+    toolName,
+    keyParam: `/path/${toolName.toLowerCase()}`,
+    input: {},
+  };
+}
+
+describe("groupConsecutiveTools", () => {
+  it("should return empty array for empty input", () => {
+    expect(groupConsecutiveTools([])).toStrictEqual([]);
+  });
+
+  it("should keep single operations ungrouped", () => {
+    const ops = [makeOp("Read"), makeOp("Bash"), makeOp("Grep")];
+    const groups = groupConsecutiveTools(ops);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]!.toolName).toBe("Read");
+    expect(groups[0]!.operations).toHaveLength(1);
+    expect(groups[1]!.toolName).toBe("Bash");
+    expect(groups[2]!.toolName).toBe("Grep");
+  });
+
+  it("should group consecutive same-type operations", () => {
+    const ops = [
+      makeOp("Read", "r1"),
+      makeOp("Read", "r2"),
+      makeOp("Read", "r3"),
+      makeOp("Bash", "b1"),
+    ];
+    const groups = groupConsecutiveTools(ops);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]!.toolName).toBe("Read");
+    expect(groups[0]!.operations).toHaveLength(3);
+    expect(groups[1]!.toolName).toBe("Bash");
+    expect(groups[1]!.operations).toHaveLength(1);
+  });
+
+  it("should not group non-consecutive same-type operations", () => {
+    const ops = [
+      makeOp("Read", "r1"),
+      makeOp("Bash", "b1"),
+      makeOp("Read", "r2"),
+    ];
+    const groups = groupConsecutiveTools(ops);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]!.toolName).toBe("Read");
+    expect(groups[1]!.toolName).toBe("Bash");
+    expect(groups[2]!.toolName).toBe("Read");
+  });
+
+  it("should preserve operation order within groups", () => {
+    const ops = [
+      makeOp("Grep", "g1"),
+      makeOp("Grep", "g2"),
+      makeOp("Grep", "g3"),
+    ];
+    const groups = groupConsecutiveTools(ops);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.operations.map((o) => o.toolUseId)).toStrictEqual([
+      "g1",
+      "g2",
+      "g3",
+    ]);
   });
 });

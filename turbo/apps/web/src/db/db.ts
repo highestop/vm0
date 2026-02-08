@@ -23,6 +23,7 @@ import * as slackThreadSessionSchema from "./schema/slack-thread-session";
 import * as variableSchema from "./schema/variable";
 import * as composeJobSchema from "./schema/compose-job";
 import * as connectorSchema from "./schema/connector";
+import * as usageDailySchema from "./schema/usage-daily";
 
 export const schema = {
   ...userSchema,
@@ -50,4 +51,5 @@ export const schema = {
   ...variableSchema,
   ...composeJobSchema,
   ...connectorSchema,
+  ...usageDailySchema,
 };

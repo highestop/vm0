@@ -512,6 +512,13 @@
       "when": 1769700000000,
       "tag": "0072_add_dm_welcome_sent",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1769800000000,
+      "tag": "0073_add_usage_daily",
+      "breakpoints": true
     }
   ]
 }

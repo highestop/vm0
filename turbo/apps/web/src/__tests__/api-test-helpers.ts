@@ -16,7 +16,8 @@ import { deviceCodes } from "../db/schema/device-codes";
 import { agentRuns } from "../db/schema/agent-run";
 import { composeJobs } from "../db/schema/compose-job";
 import { storages, storageVersions } from "../db/schema/storage";
-import { eq } from "drizzle-orm";
+import { usageDaily } from "../db/schema/usage-daily";
+import { and, eq } from "drizzle-orm";
 
 // Route handlers - imported here so callers don't need to pass them
 import { POST as createComposeRoute } from "../../app/api/agent/composes/route";
@@ -1363,5 +1364,52 @@ export async function findTestComposeJob(
     .select({ status: composeJobs.status, error: composeJobs.error })
     .from(composeJobs)
     .where(eq(composeJobs.id, jobId));
+  return row;
+}
+
+/**
+ * Create a completed agent run with controlled timestamps.
+ *
+ * Direct DB insert is required because createdAt uses PostgreSQL defaultNow()
+ * which cannot be controlled via the API or JavaScript fake timers. Tests for
+ * date-range logic (cron aggregation, usage API boundaries) need runs placed
+ * at specific historical dates.
+ */
+export async function createCompletedTestRun(options: {
+  composeVersionId: string;
+  userId: string;
+  createdAt: Date;
+  startedAt: Date;
+  completedAt: Date;
+}): Promise<string> {
+  const [row] = await globalThis.services.db
+    .insert(agentRuns)
+    .values({
+      userId: options.userId,
+      agentComposeVersionId: options.composeVersionId,
+      status: "completed",
+      prompt: "test",
+      createdAt: options.createdAt,
+      startedAt: options.startedAt,
+      completedAt: options.completedAt,
+    })
+    .returning({ id: agentRuns.id });
+  return row!.id;
+}
+
+/**
+ * Look up a usage_daily record for verification in tests.
+ */
+export async function findUsageDaily(
+  userId: string,
+  date: string,
+): Promise<{ runCount: number; runTimeMs: number } | undefined> {
+  const [row] = await globalThis.services.db
+    .select({
+      runCount: usageDaily.runCount,
+      runTimeMs: usageDaily.runTimeMs,
+    })
+    .from(usageDaily)
+    .where(and(eq(usageDaily.userId, userId), eq(usageDaily.date, date)));
   return row;
 }

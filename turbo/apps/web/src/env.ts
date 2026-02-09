@@ -40,6 +40,8 @@ function initEnv() {
       // GitHub OAuth (for connector)
       GH_OAUTH_CLIENT_ID: z.string().min(1).optional(),
       GH_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+      // Platform UI URL (for settings page links in error messages)
+      PLATFORM_URL: z.string().url().optional(),
       // Sentry
       SENTRY_DSN: z.string().url().optional(),
       SENTRY_AUTH_TOKEN: z.string().min(1).optional(),
@@ -77,6 +79,7 @@ function initEnv() {
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
       GH_OAUTH_CLIENT_ID: process.env.GH_OAUTH_CLIENT_ID,
       GH_OAUTH_CLIENT_SECRET: process.env.GH_OAUTH_CLIENT_SECRET,
+      PLATFORM_URL: process.env.PLATFORM_URL,
       SENTRY_DSN: process.env.SENTRY_DSN,
       SENTRY_AUTH_TOKEN: process.env.SENTRY_AUTH_TOKEN,
       SENTRY_ORG: process.env.SENTRY_ORG,

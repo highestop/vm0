@@ -43,22 +43,29 @@ function SidebarContent({ collapsed }: { collapsed: boolean }) {
         <div
           className={`flex items-center h-8 ${collapsed ? "justify-center" : "gap-2.5 p-1.5"}`}
         >
-          <div className="inline-grid grid-cols-[max-content] grid-rows-[max-content] items-start justify-items-start leading-[0] shrink-0">
-            <img
-              src={theme === "dark" ? "/logo_dark.svg" : "/logo_light.svg"}
-              alt="VM0"
-              className="col-1 row-1 block max-w-none"
-              style={
-                collapsed
-                  ? { width: "32px", height: "32px" }
-                  : { width: "81px", height: "24px" }
-              }
-            />
-          </div>
-          {!collapsed && (
-            <p className="text-xl font-normal leading-7 text-foreground shrink-0">
-              Platform
-            </p>
+          {collapsed ? (
+            <div className="inline-grid grid-cols-[max-content] grid-rows-[max-content] items-start justify-items-start leading-[0] shrink-0">
+              <img
+                src="/icon.svg"
+                alt="VM0"
+                className="col-1 row-1 block max-w-none"
+                style={{ width: "24px", height: "24px" }}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="inline-grid grid-cols-[max-content] grid-rows-[max-content] items-start justify-items-start leading-[0] shrink-0">
+                <img
+                  src={theme === "dark" ? "/logo_dark.svg" : "/logo_light.svg"}
+                  alt="VM0"
+                  className="col-1 row-1 block max-w-none"
+                  style={{ width: "81px", height: "24px" }}
+                />
+              </div>
+              <p className="text-xl font-normal leading-7 text-foreground shrink-0">
+                Platform
+              </p>
+            </>
           )}
         </div>
       </div>

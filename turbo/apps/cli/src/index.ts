@@ -21,6 +21,7 @@ import { modelProviderCommand } from "./commands/model-provider";
 import { connectorCommand } from "./commands/connector";
 import { onboardCommand } from "./commands/onboard";
 import { setupClaudeCommand } from "./commands/setup-claude";
+import { dashboardCommand } from "./commands/dashboard";
 import { devToolCommand } from "./commands/dev-tool";
 
 const program = new Command();
@@ -52,6 +53,7 @@ program.addCommand(modelProviderCommand);
 program.addCommand(connectorCommand);
 program.addCommand(onboardCommand);
 program.addCommand(setupClaudeCommand);
+program.addCommand(dashboardCommand);
 program.addCommand(devToolCommand, { hidden: true });
 
 export { program };

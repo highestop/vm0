@@ -651,6 +651,8 @@ export interface BuildContextParams {
   debugNoMockClaude?: boolean;
   // Model provider for automatic credential injection
   modelProvider?: string;
+  // Environment validation flag - when true, validates secrets/vars before running
+  checkEnv?: boolean;
   // API start time for E2E timing metrics
   apiStartTime?: number;
 }
@@ -717,6 +719,7 @@ async function resolveCredentialsAndEnvironment(
   cliSecrets: Record<string, string> | undefined,
   modelProvider: string | undefined,
   runId: string,
+  checkEnv: boolean | undefined,
 ): Promise<{
   secrets: Record<string, string> | undefined;
   credentials: Record<string, string> | undefined;
@@ -777,6 +780,7 @@ async function resolveCredentialsAndEnvironment(
     credentials,
     userId,
     runId,
+    checkEnv,
   );
 
   // Auto-inject model provider env vars into environment
@@ -903,6 +907,7 @@ export async function buildExecutionContext(
     params.secrets,
     params.modelProvider,
     params.runId,
+    params.checkEnv,
   );
   secrets = resolvedSecrets;
 

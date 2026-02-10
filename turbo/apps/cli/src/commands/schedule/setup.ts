@@ -699,10 +699,10 @@ export const setupCommand = new Command()
         artifactName: options.artifactName,
       });
 
-      // 9. Display deployment result
+      // 8. Display deployment result
       displayDeployResult(agentName, deployResult);
 
-      // 10. Handle schedule enabling
+      // 9. Handle schedule enabling
       // Prompt if: new schedule OR updating a disabled schedule
       const shouldPromptEnable =
         deployResult.created ||

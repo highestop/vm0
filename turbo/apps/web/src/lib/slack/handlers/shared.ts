@@ -8,6 +8,9 @@ import {
   getSlackRedirectBaseUrl,
 } from "../index";
 import { slackThreadSessions } from "../../../db/schema/slack-thread-session";
+import { agentSessions } from "../../../db/schema/agent-session";
+import { agentComposes } from "../../../db/schema/agent-compose";
+import { slackBindings } from "../../../db/schema/slack-binding";
 import { storages, storageVersions } from "../../../db/schema/storage";
 import { getPlatformUrl } from "../../url";
 import {
@@ -120,6 +123,7 @@ export async function lookupThreadSession(
         eq(slackThreadSessions.slackThreadTs, threadTs),
       ]
     : [
+        isNull(slackThreadSessions.slackBindingId),
         eq(slackThreadSessions.slackChannelId, channelId),
         eq(slackThreadSessions.slackThreadTs, threadTs),
       ];
@@ -141,9 +145,10 @@ export async function lookupThreadSession(
 
 /**
  * Create or update a thread session mapping after agent execution.
+ * bindingId is optional — notification-created thread sessions have no binding.
  */
 export async function saveThreadSession(opts: {
-  bindingId: string;
+  bindingId: string | undefined;
   channelId: string;
   threadTs: string;
   existingSessionId: string | undefined;
@@ -166,7 +171,7 @@ export async function saveThreadSession(opts: {
     await globalThis.services.db
       .insert(slackThreadSessions)
       .values({
-        slackBindingId: bindingId,
+        slackBindingId: bindingId ?? null,
         slackChannelId: channelId,
         slackThreadTs: threadTs,
         agentSessionId: newSessionId,
@@ -178,6 +183,10 @@ export async function saveThreadSession(opts: {
     (runStatus === "completed" || runStatus === "timeout")
   ) {
     // Existing thread, successful run — update lastProcessedMessageTs
+    const bindingCondition = bindingId
+      ? eq(slackThreadSessions.slackBindingId, bindingId)
+      : isNull(slackThreadSessions.slackBindingId);
+
     await globalThis.services.db
       .update(slackThreadSessions)
       .set({
@@ -186,13 +195,127 @@ export async function saveThreadSession(opts: {
       })
       .where(
         and(
-          eq(slackThreadSessions.slackBindingId, bindingId),
+          bindingCondition,
           eq(slackThreadSessions.slackChannelId, channelId),
           eq(slackThreadSessions.slackThreadTs, threadTs),
         ),
       );
   }
   // Failed runs — do not update lastProcessedMessageTs (allows retry with same context)
+}
+
+/**
+ * Resolve session context from an agent session ID.
+ * Returns the composeId and agentName for a session found via thread lookup.
+ */
+export async function resolveSessionContext(agentSessionId: string): Promise<{
+  composeId: string;
+  agentName: string;
+} | null> {
+  const [result] = await globalThis.services.db
+    .select({
+      composeId: agentComposes.id,
+      agentName: agentComposes.name,
+    })
+    .from(agentSessions)
+    .innerJoin(
+      agentComposes,
+      eq(agentSessions.agentComposeId, agentComposes.id),
+    )
+    .where(eq(agentSessions.id, agentSessionId))
+    .limit(1);
+
+  return result ?? null;
+}
+
+export interface RunContext {
+  composeId: string;
+  bindingId: string | undefined;
+  agentName: string;
+  existingSessionId: string | undefined;
+  lastProcessedMessageTs: string | undefined;
+}
+
+/**
+ * Resolve the agent to run for a Slack message.
+ *
+ * Order:
+ *   1. If in a thread, look up an existing thread session (notification threads have NULL bindingId)
+ *   2. Fall back to the user's active binding
+ *   3. If binding found and in a thread, look up thread session with that binding for dedup
+ *
+ * Returns null when no binding is found (caller should prompt the user).
+ */
+export async function resolveRunContext(
+  channelId: string,
+  threadTs: string | undefined,
+  userLinkId: string,
+): Promise<RunContext | null> {
+  let composeId: string | undefined;
+  let bindingId: string | undefined;
+  let agentName: string | undefined;
+  let existingSessionId: string | undefined;
+  let lastProcessedMessageTs: string | undefined;
+
+  // 1. Check thread session first (notification DM threads + existing conversations)
+  if (threadTs) {
+    const session = await lookupThreadSession(channelId, threadTs);
+    existingSessionId = session.existingSessionId;
+    lastProcessedMessageTs = session.lastProcessedMessageTs;
+
+    if (existingSessionId) {
+      const sessionCtx = await resolveSessionContext(existingSessionId);
+      if (sessionCtx) {
+        composeId = sessionCtx.composeId;
+        agentName = sessionCtx.agentName;
+      }
+    }
+  }
+
+  // 2. Fall back to binding lookup
+  if (!composeId) {
+    const [binding] = await globalThis.services.db
+      .select({
+        id: slackBindings.id,
+        agentName: slackBindings.agentName,
+        composeId: slackBindings.composeId,
+      })
+      .from(slackBindings)
+      .where(
+        and(
+          eq(slackBindings.slackUserLinkId, userLinkId),
+          eq(slackBindings.enabled, true),
+        ),
+      )
+      .limit(1);
+
+    if (!binding) return null;
+
+    composeId = binding.composeId;
+    bindingId = binding.id;
+    agentName = binding.agentName;
+
+    // 3. Look up thread session with binding for deduplication
+    if (threadTs && !existingSessionId) {
+      const session = await lookupThreadSession(
+        channelId,
+        threadTs,
+        binding.id,
+      );
+      existingSessionId = session.existingSessionId;
+      lastProcessedMessageTs = session.lastProcessedMessageTs;
+    }
+  }
+
+  if (!agentName) return null;
+
+  return {
+    composeId,
+    bindingId,
+    agentName,
+    existingSessionId,
+    lastProcessedMessageTs,
+  };
 }
 
 /**

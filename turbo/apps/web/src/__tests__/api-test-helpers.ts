@@ -18,6 +18,7 @@ import { composeJobs } from "../db/schema/compose-job";
 import { storages, storageVersions } from "../db/schema/storage";
 import { usageDaily } from "../db/schema/usage-daily";
 import { slackComposeRequests } from "../db/schema/slack-compose-request";
+import { slackThreadSessions } from "../db/schema/slack-thread-session";
 import { and, eq } from "drizzle-orm";
 
 // Route handlers - imported here so callers don't need to pass them
@@ -1509,4 +1510,59 @@ export async function findTestSlackComposeRequest(composeJobId: string) {
     .where(eq(slackComposeRequests.composeJobId, composeJobId))
     .limit(1);
   return row;
+}
+
+/**
+ * Link an existing run to a schedule by setting its scheduleId.
+ */
+export async function linkRunToSchedule(
+  runId: string,
+  scheduleId: string,
+): Promise<void> {
+  await globalThis.services.db
+    .update(agentRuns)
+    .set({ scheduleId })
+    .where(eq(agentRuns.id, runId));
+}
+
+/**
+ * Create a thread session for testing (e.g., notification-created sessions with null bindingId).
+ */
+export async function createTestThreadSession(params: {
+  bindingId: string | null;
+  channelId: string;
+  threadTs: string;
+  agentSessionId: string;
+  lastProcessedMessageTs?: string;
+}): Promise<{ id: string }> {
+  const [row] = await globalThis.services.db
+    .insert(slackThreadSessions)
+    .values({
+      slackBindingId: params.bindingId,
+      slackChannelId: params.channelId,
+      slackThreadTs: params.threadTs,
+      agentSessionId: params.agentSessionId,
+      lastProcessedMessageTs: params.lastProcessedMessageTs ?? params.threadTs,
+    })
+    .returning({ id: slackThreadSessions.id });
+  return row!;
+}
+
+export async function findTestThreadSession(channelId: string): Promise<{
+  id: string;
+  slackChannelId: string;
+  slackBindingId: string | null;
+  agentSessionId: string | null;
+} | null> {
+  const [row] = await globalThis.services.db
+    .select({
+      id: slackThreadSessions.id,
+      slackChannelId: slackThreadSessions.slackChannelId,
+      slackBindingId: slackThreadSessions.slackBindingId,
+      agentSessionId: slackThreadSessions.agentSessionId,
+    })
+    .from(slackThreadSessions)
+    .where(eq(slackThreadSessions.slackChannelId, channelId))
+    .limit(1);
+  return row ?? null;
 }

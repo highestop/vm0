@@ -1,7 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { slackInstallations } from "../../../db/schema/slack-installation";
 import { slackUserLinks } from "../../../db/schema/slack-user-link";
-import { slackBindings } from "../../../db/schema/slack-binding";
 import { decryptCredentialValue } from "../../crypto/secrets-encryption";
 import { env } from "../../../env";
 import {
@@ -15,8 +14,8 @@ import { runAgentForSlack } from "./run-agent";
 import {
   removeThinkingReaction,
   fetchConversationContexts,
-  lookupThreadSession,
   saveThreadSession,
+  resolveRunContext,
   buildLoginUrl,
   buildLogsUrl,
 } from "./shared";
@@ -40,15 +39,13 @@ interface MentionContext {
  * 1. Get workspace installation and decrypt bot token
  * 2. Check if user is linked
  * 3. If not linked, post link message
- * 4. Get user's binding (single binding per user)
- * 5. If no binding, prompt to add agent
- * 6. Add thinking reaction
- * 7. Look up existing thread session
- * 8. Fetch conversation context
- * 9. Execute agent
- * 10. Create/update thread session mapping
- * 11. Post response message
- * 12. Remove thinking reaction
+ * 4. Resolve which agent to run (thread session first, then binding fallback)
+ * 5. Add thinking reaction
+ * 6. Fetch conversation context
+ * 7. Execute agent
+ * 8. Create/update thread session mapping
+ * 9. Post response message
+ * 10. Remove thinking reaction
  */
 export async function handleAppMention(context: MentionContext): Promise<void> {
   const { SECRETS_ENCRYPTION_KEY } = env();
@@ -107,25 +104,14 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
       return;
     }
 
-    // 4. Get user's binding (single binding per user)
-    const [binding] = await globalThis.services.db
-      .select({
-        id: slackBindings.id,
-        agentName: slackBindings.agentName,
-        composeId: slackBindings.composeId,
-        enabled: slackBindings.enabled,
-      })
-      .from(slackBindings)
-      .where(
-        and(
-          eq(slackBindings.slackUserLinkId, userLink.id),
-          eq(slackBindings.enabled, true),
-        ),
-      )
-      .limit(1);
+    // 4. Resolve which agent to run (thread session first, then binding fallback)
+    const runCtx = await resolveRunContext(
+      context.channelId,
+      threadTs,
+      userLink.id,
+    );
 
-    if (!binding) {
-      // 5. No binding - prompt to link agent
+    if (!runCtx) {
       await postMessage(
         client,
         context.channelId,
@@ -135,7 +121,15 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
       return;
     }
 
-    // 6. Add thinking reaction (emoji only, no message)
+    const {
+      composeId,
+      bindingId,
+      agentName,
+      existingSessionId,
+      lastProcessedMessageTs,
+    } = runCtx;
+
+    // 5. Add thinking reaction (emoji only, no message)
     const reactionAdded = await client.reactions
       .add({
         channel: context.channelId,
@@ -151,24 +145,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
       botUserId,
     );
 
-    // 7. Look up existing thread session for deduplication
-    let existingSessionId: string | undefined;
-    let lastProcessedMessageTs: string | undefined;
-    if (threadTs) {
-      const session = await lookupThreadSession(
-        context.channelId,
-        threadTs,
-        binding.id,
-      );
-      existingSessionId = session.existingSessionId;
-      lastProcessedMessageTs = session.lastProcessedMessageTs;
-      log.debug("Thread session lookup", {
-        existingSessionId,
-        lastProcessedMessageTs,
-      });
-    }
-
-    // 8. Fetch context: execution gets deduplicated with images
+    // 6. Fetch context: execution gets deduplicated with images
     const { executionContext } = await fetchConversationContexts(
       client,
       context.channelId,
@@ -180,7 +157,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
     );
 
     try {
-      // 9. Execute agent with deduplicated context
+      // 7. Execute agent with deduplicated context
       log.debug("Calling runAgentForSlack", { existingSessionId });
       const {
         status: runStatus,
@@ -188,17 +165,18 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
         sessionId: newSessionId,
         runId,
       } = await runAgentForSlack({
-        binding,
+        composeId,
+        bindingId,
         sessionId: existingSessionId,
         prompt: messageContent,
         threadContext: executionContext,
         userId: userLink.vm0UserId,
       });
 
-      // 10. Create or update thread session mapping
+      // 8. Create or update thread session mapping
       if (threadTs) {
         await saveThreadSession({
-          bindingId: binding.id,
+          bindingId,
           channelId: context.channelId,
           threadTs,
           existingSessionId,
@@ -208,7 +186,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
         });
       }
 
-      // 11. Post response message with agent name and logs link
+      // 9. Post response message with agent name and logs link
       const logsUrl = runId ? buildLogsUrl(runId) : undefined;
       const responseText =
         runStatus === "timeout"
@@ -216,11 +194,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
           : agentResponse;
       await postMessage(client, context.channelId, responseText, {
         threadTs,
-        blocks: buildAgentResponseMessage(
-          responseText,
-          binding.agentName,
-          logsUrl,
-        ),
+        blocks: buildAgentResponseMessage(responseText, agentName, logsUrl),
       });
     } catch (innerError) {
       // If postMessage or session creation fails, still try to notify the user
@@ -236,7 +210,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
         // If even the error message fails, we can't do anything more
       });
     } finally {
-      // 12. Remove thinking reaction
+      // 10. Remove thinking reaction
       if (reactionAdded) {
         await removeThinkingReaction(
           client,

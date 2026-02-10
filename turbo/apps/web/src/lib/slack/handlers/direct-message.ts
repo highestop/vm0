@@ -1,7 +1,6 @@
 import { eq, and } from "drizzle-orm";
 import { slackInstallations } from "../../../db/schema/slack-installation";
 import { slackUserLinks } from "../../../db/schema/slack-user-link";
-import { slackBindings } from "../../../db/schema/slack-binding";
 import { decryptCredentialValue } from "../../crypto/secrets-encryption";
 import { env } from "../../../env";
 import {
@@ -13,9 +12,8 @@ import {
 import { runAgentForSlack } from "./run-agent";
 import {
   removeThinkingReaction,
-  fetchConversationContexts,
-  lookupThreadSession,
   saveThreadSession,
+  resolveRunContext,
   buildLoginUrl,
   buildLogsUrl,
 } from "./shared";
@@ -65,11 +63,8 @@ export async function handleDirectMessage(
       SECRETS_ENCRYPTION_KEY,
     );
     const client = createSlackClient(botToken);
-    const botUserId = installation.botUserId;
-
-    // In DMs, only use thread_ts when replying within an existing thread.
-    // Top-level DM messages should get flat chat replies (no thread).
-    const threadTs = context.threadTs;
+    // Always reply in a thread so sessions persist across messages.
+    const threadTs = context.threadTs ?? context.messageTs;
 
     // 2. Check if user is linked
     const [userLink] = await globalThis.services.db
@@ -99,25 +94,14 @@ export async function handleDirectMessage(
       return;
     }
 
-    // 4. Get user's binding (single binding per user)
-    const [binding] = await globalThis.services.db
-      .select({
-        id: slackBindings.id,
-        agentName: slackBindings.agentName,
-        composeId: slackBindings.composeId,
-        enabled: slackBindings.enabled,
-      })
-      .from(slackBindings)
-      .where(
-        and(
-          eq(slackBindings.slackUserLinkId, userLink.id),
-          eq(slackBindings.enabled, true),
-        ),
-      )
-      .limit(1);
+    // 4. Resolve which agent to run (thread session first, then binding fallback)
+    const runCtx = await resolveRunContext(
+      context.channelId,
+      threadTs,
+      userLink.id,
+    );
 
-    if (!binding) {
-      // 5. No binding - prompt to link agent
+    if (!runCtx) {
       await postMessage(
         client,
         context.channelId,
@@ -127,7 +111,9 @@ export async function handleDirectMessage(
       return;
     }
 
-    // 6. Add thinking reaction
+    const { composeId, bindingId, agentName, existingSessionId } = runCtx;
+
+    // 5. Add thinking reaction
     const reactionAdded = await client.reactions
       .add({
         channel: context.channelId,
@@ -140,53 +126,26 @@ export async function handleDirectMessage(
     // Use message text directly (no mention prefix to strip in DMs)
     const messageContent = context.messageText;
 
-    // 7. Look up existing thread session for deduplication
-    let existingSessionId: string | undefined;
-    let lastProcessedMessageTs: string | undefined;
-    if (threadTs) {
-      const session = await lookupThreadSession(
-        context.channelId,
-        threadTs,
-        binding.id,
-      );
-      existingSessionId = session.existingSessionId;
-      lastProcessedMessageTs = session.lastProcessedMessageTs;
-      log.debug("Thread session lookup", {
-        existingSessionId,
-        lastProcessedMessageTs,
-      });
-    }
-
-    // 8. Fetch context: execution gets deduplicated with images
-    const { executionContext } = await fetchConversationContexts(
-      client,
-      context.channelId,
-      context.threadTs,
-      botUserId,
-      botToken,
-      lastProcessedMessageTs,
-      context.messageTs,
-    );
-
     try {
-      // 9. Execute agent with deduplicated context
+      // 6. Execute agent
       const {
         status: runStatus,
         response: agentResponse,
         sessionId: newSessionId,
         runId,
       } = await runAgentForSlack({
-        binding,
+        composeId,
+        bindingId,
         sessionId: existingSessionId,
         prompt: messageContent,
-        threadContext: executionContext,
+        threadContext: "",
         userId: userLink.vm0UserId,
       });
 
-      // 10. Create or update thread session mapping
+      // 7. Create or update thread session mapping
       if (threadTs) {
         await saveThreadSession({
-          bindingId: binding.id,
+          bindingId,
           channelId: context.channelId,
           threadTs,
           existingSessionId,
@@ -196,7 +155,7 @@ export async function handleDirectMessage(
         });
       }
 
-      // 11. Post response message
+      // 8. Post response message
       const logsUrl = runId ? buildLogsUrl(runId) : undefined;
       const responseText =
         runStatus === "timeout"
@@ -204,11 +163,7 @@ export async function handleDirectMessage(
           : agentResponse;
       await postMessage(client, context.channelId, responseText, {
         threadTs,
-        blocks: buildAgentResponseMessage(
-          responseText,
-          binding.agentName,
-          logsUrl,
-        ),
+        blocks: buildAgentResponseMessage(responseText, agentName, logsUrl),
       });
     } catch (innerError) {
       log.error("Error posting response or creating session", {
@@ -221,7 +176,7 @@ export async function handleDirectMessage(
         { threadTs },
       ).catch((e) => log.warn("Failed to post error message", { error: e }));
     } finally {
-      // 12. Remove thinking reaction
+      // 9. Remove thinking reaction
       if (reactionAdded) {
         await removeThinkingReaction(
           client,

@@ -1,4 +1,5 @@
 import { eq, and, count, gt, or } from "drizzle-orm";
+import { isSelfHosted } from "../../env";
 import { checkpoints } from "../../db/schema/checkpoint";
 import { agentRuns } from "../../db/schema/agent-run";
 import {
@@ -14,6 +15,7 @@ import { getAgentSessionWithConversation } from "../agent-session";
 import { prepareForExecution } from "./context/execution-preparer";
 import { executeE2bRun } from "./executors/e2b-executor";
 import { executeRunnerJob } from "./executors/runner-executor";
+import { executeDockerRun } from "./executors/docker-executor";
 import type { ExecutorResult, PreparedContext } from "./executors/types";
 import {
   buildExecutionContext as buildContext,
@@ -42,22 +44,18 @@ export async function checkRunConcurrencyLimit(
   limit?: number,
 ): Promise<void> {
   // Use provided limit, or env var, or default to 1
-  // Note: 0 means no limit (for testing), so we need explicit undefined check
-  const envLimit = process.env.CONCURRENT_RUN_LIMIT;
+  // Note: 0 means no limit, so we need explicit undefined check
+  const rawEnvLimit = process.env.CONCURRENT_RUN_LIMIT;
+  const envLimit =
+    rawEnvLimit !== undefined && rawEnvLimit !== ""
+      ? parseInt(rawEnvLimit, 10)
+      : undefined;
   let effectiveLimit = 1; // Default
 
   if (limit !== undefined) {
     effectiveLimit = limit;
-  } else if (envLimit !== undefined) {
-    const parsed = Number(envLimit);
-    // Only use env var if it's a valid non-negative number
-    if (!Number.isNaN(parsed) && parsed >= 0) {
-      effectiveLimit = parsed;
-    } else {
-      log.warn(
-        `Invalid CONCURRENT_RUN_LIMIT value "${envLimit}", using default of 1`,
-      );
-    }
+  } else if (envLimit !== undefined && !isNaN(envLimit)) {
+    effectiveLimit = envLimit;
   }
 
   // Skip check if limit is 0 (no limit)
@@ -246,6 +244,8 @@ export async function prepareAndDispatchRun(
 /**
  * Dispatch prepared context to appropriate executor
  *
+ * Routing priority: Runner Group > E2B > Docker
+ *
  * @param context PreparedContext ready for execution
  * @returns ExecutorResult with status and optional sandboxId
  */
@@ -255,6 +255,9 @@ async function dispatchRun(context: PreparedContext): Promise<ExecutorResult> {
       `Dispatching run ${context.runId} to runner group: ${context.runnerGroup}`,
     );
     return await executeRunnerJob(context);
+  } else if (isSelfHosted) {
+    log.debug(`Dispatching run ${context.runId} to Docker executor`);
+    return await executeDockerRun(context);
   } else {
     log.debug(`Dispatching run ${context.runId} to E2B executor`);
     return await executeE2bRun(context);

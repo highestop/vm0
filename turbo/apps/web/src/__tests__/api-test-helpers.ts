@@ -19,6 +19,7 @@ import { storages, storageVersions } from "../db/schema/storage";
 import { usageDaily } from "../db/schema/usage-daily";
 import { slackComposeRequests } from "../db/schema/slack-compose-request";
 import { slackThreadSessions } from "../db/schema/slack-thread-session";
+import { emailThreadSessions } from "../db/schema/email-thread-session";
 import { agentRunCallbacks } from "../db/schema/agent-run-callback";
 import { and, eq } from "drizzle-orm";
 import { generateCallbackSecret } from "../lib/callback/hmac";
@@ -1551,6 +1552,58 @@ export async function findTestThreadSession(channelId: string): Promise<{
   return row ?? null;
 }
 
+// ============================================================================
+// Email Thread Session Test Helpers
+// ============================================================================
+
+/**
+ * Create an email thread session directly in the database for test setup.
+ */
+export async function createTestEmailThreadSession(params: {
+  userId: string;
+  composeId: string;
+  agentSessionId: string;
+  replyToToken: string;
+  lastEmailMessageId?: string | null;
+}): Promise<{ id: string }> {
+  const [row] = await globalThis.services.db
+    .insert(emailThreadSessions)
+    .values({
+      userId: params.userId,
+      composeId: params.composeId,
+      agentSessionId: params.agentSessionId,
+      replyToToken: params.replyToToken,
+      lastEmailMessageId: params.lastEmailMessageId ?? null,
+    })
+    .returning({ id: emailThreadSessions.id });
+  return row!;
+}
+
+/**
+ * Find an email thread session by its reply-to token.
+ */
+export async function findTestEmailThreadSession(replyToToken: string) {
+  const [row] = await globalThis.services.db
+    .select()
+    .from(emailThreadSessions)
+    .where(eq(emailThreadSessions.replyToToken, replyToToken))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Find agent runs matching a given userId and prompt.
+ */
+export async function findTestRunsByUserAndPrompt(
+  userId: string,
+  prompt: string,
+) {
+  return globalThis.services.db
+    .select()
+    .from(agentRuns)
+    .where(and(eq(agentRuns.userId, userId), eq(agentRuns.prompt, prompt)));
+}
+
 /**
  * Create a test callback record for agent run completion
  * Returns the callback ID and the plaintext secret for signing test requests
@@ -1578,6 +1631,16 @@ export async function createTestCallback(params: {
     .returning({ id: agentRunCallbacks.id });
 
   return { callbackId: callback!.id, secret };
+}
+
+/**
+ * Find all callback records for a given run ID.
+ */
+export async function findTestCallbacksByRunId(runId: string) {
+  return globalThis.services.db
+    .select()
+    .from(agentRunCallbacks)
+    .where(eq(agentRunCallbacks.runId, runId));
 }
 
 /**

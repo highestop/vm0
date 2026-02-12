@@ -226,6 +226,7 @@ export const submitSecretDialog$ = command(
 
       signal.throwIfAborted();
       set(internalReloadSecrets$, (x) => x + 1);
+
       set(internalDialogState$, {
         open: false,
         mode: "add",
@@ -279,6 +280,7 @@ export const confirmDeleteSecret$ = command(
 
       signal.throwIfAborted();
       set(internalReloadSecrets$, (x) => x + 1);
+
       set(internalDeleteDialogState$, { open: false, secretName: null });
     })();
 

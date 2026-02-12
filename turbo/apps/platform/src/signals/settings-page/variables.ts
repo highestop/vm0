@@ -228,6 +228,7 @@ export const submitVariableDialog$ = command(
 
       signal.throwIfAborted();
       set(internalReloadVariables$, (x) => x + 1);
+
       set(internalDialogState$, {
         open: false,
         mode: "add",
@@ -281,6 +282,7 @@ export const confirmDeleteVariable$ = command(
 
       signal.throwIfAborted();
       set(internalReloadVariables$, (x) => x + 1);
+
       set(internalDeleteDialogState$, { open: false, variableName: null });
     })();
 

@@ -27,18 +27,7 @@ export function isBlogEnabled(): boolean {
 }
 
 function initEnv() {
-  // Internal flags for conditional schema validation (must read process.env
-  // directly because they configure the schema that env() itself validates).
-  const slackEnabled = process.env.SLACK_INTEGRATION_ENABLED === "true";
-
-  /**
-   * Make a field required only when a condition is true, otherwise optional.
-   */
-  function requiredWhen(condition: boolean, schema = z.string().min(1)) {
-    return condition ? schema : schema.optional();
-  }
-
-  return createEnv({
+  const env = createEnv({
     server: {
       DATABASE_URL: z.string().min(1),
       NODE_ENV: z
@@ -52,6 +41,11 @@ function initEnv() {
         .int()
         .positive()
         .default(10000),
+      // Database driver selection
+      // Defaults to 'neon' (optimized for serverless/Vercel)
+      // Set to 'pg' for local development with standard Postgres
+      DB_DRIVER: z.enum(["pg", "neon"]).default("neon"),
+      CLERK_ENABLED: z.enum(["true", "false"]).optional(),
       CLERK_SECRET_KEY: z.string().min(1).optional(),
       E2B_API_KEY: z.string().min(1).optional(),
       VM0_API_URL: z.string().url().optional(),
@@ -73,10 +67,10 @@ function initEnv() {
       AXIOM_TOKEN_TELEMETRY: z.string().min(1).optional(), // Scoped token for all other datasets
       AXIOM_DATASET_SUFFIX: z.enum(["dev", "prod"]).optional(), // Explicit control for Axiom dataset suffix
       SLACK_INTEGRATION_ENABLED: z.enum(["true", "false"]).optional(),
-      SLACK_CLIENT_ID: requiredWhen(slackEnabled),
-      SLACK_CLIENT_SECRET: requiredWhen(slackEnabled),
-      SLACK_SIGNING_SECRET: requiredWhen(slackEnabled),
-      SLACK_REDIRECT_BASE_URL: requiredWhen(slackEnabled, z.string().url()), // Override base URL for OAuth redirects (e.g., tunnel URL)
+      SLACK_CLIENT_ID: z.string().min(1).optional(),
+      SLACK_CLIENT_SECRET: z.string().min(1).optional(),
+      SLACK_SIGNING_SECRET: z.string().min(1).optional(),
+      SLACK_REDIRECT_BASE_URL: z.string().url().optional(), // Override base URL for OAuth redirects (e.g., tunnel URL)
       SLACK_DEFAULT_AGENT: z.string().min(1).optional(), // Default agent for new installs (format: "scope/name")
       // LLM API
       OPENROUTER_API_KEY: z.string().min(1).optional(), // OpenRouter API key for logged-in users
@@ -118,6 +112,7 @@ function initEnv() {
       VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
     },
     client: {
+      NEXT_PUBLIC_CLERK_ENABLED: z.enum(["true", "false"]).optional(),
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1).optional(),
       NEXT_PUBLIC_SENTRY_DSN: z.string().url().optional(),
       // Blog/content config
@@ -133,6 +128,8 @@ function initEnv() {
       DB_POOL_MAX: process.env.DB_POOL_MAX,
       DB_POOL_IDLE_TIMEOUT_MS: process.env.DB_POOL_IDLE_TIMEOUT_MS,
       DB_POOL_CONNECT_TIMEOUT_MS: process.env.DB_POOL_CONNECT_TIMEOUT_MS,
+      DB_DRIVER: process.env.DB_DRIVER,
+      CLERK_ENABLED: process.env.CLERK_ENABLED,
       CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
 
       E2B_API_KEY: process.env.E2B_API_KEY,
@@ -189,6 +186,7 @@ function initEnv() {
       VERCEL_AUTOMATION_BYPASS_SECRET:
         process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
 
+      NEXT_PUBLIC_CLERK_ENABLED: process.env.NEXT_PUBLIC_CLERK_ENABLED,
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
         process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
       NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -201,6 +199,63 @@ function initEnv() {
     skipValidation: process.env.SKIP_ENV_VALIDATION === "true",
     emptyStringAsUndefined: true,
   });
+
+  // Post-validation conditional checks
+  // These validate relationships between environment variables after schema parsing
+
+  // Clerk integration validation
+  const clerkEnabledServer = env.CLERK_ENABLED === "true";
+  const clerkEnabledClient = env.NEXT_PUBLIC_CLERK_ENABLED === "true";
+
+  // Consistency check: Server and client Clerk flags should match
+  if (clerkEnabledServer !== clerkEnabledClient) {
+    throw new Error(
+      "CLERK_ENABLED and NEXT_PUBLIC_CLERK_ENABLED must have the same value. " +
+        `Currently: CLERK_ENABLED=${env.CLERK_ENABLED}, NEXT_PUBLIC_CLERK_ENABLED=${env.NEXT_PUBLIC_CLERK_ENABLED}`,
+    );
+  }
+
+  if (clerkEnabledServer) {
+    if (!env.CLERK_SECRET_KEY) {
+      throw new Error(
+        "CLERK_SECRET_KEY is required when CLERK_ENABLED=true. " +
+          "Set CLERK_SECRET_KEY or remove CLERK_ENABLED to use local auth.",
+      );
+    }
+    if (!env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
+      throw new Error(
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is required when CLERK_ENABLED=true. " +
+          "Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY or remove CLERK_ENABLED to use local auth.",
+      );
+    }
+  }
+
+  // Slack integration validation
+  const slackEnabled = env.SLACK_INTEGRATION_ENABLED === "true";
+  if (slackEnabled) {
+    if (!env.SLACK_CLIENT_ID) {
+      throw new Error(
+        "SLACK_CLIENT_ID is required when SLACK_INTEGRATION_ENABLED=true",
+      );
+    }
+    if (!env.SLACK_CLIENT_SECRET) {
+      throw new Error(
+        "SLACK_CLIENT_SECRET is required when SLACK_INTEGRATION_ENABLED=true",
+      );
+    }
+    if (!env.SLACK_SIGNING_SECRET) {
+      throw new Error(
+        "SLACK_SIGNING_SECRET is required when SLACK_INTEGRATION_ENABLED=true",
+      );
+    }
+    if (!env.SLACK_REDIRECT_BASE_URL) {
+      throw new Error(
+        "SLACK_REDIRECT_BASE_URL is required when SLACK_INTEGRATION_ENABLED=true",
+      );
+    }
+  }
+
+  return env;
 }
 
 /**

@@ -33,7 +33,8 @@ export function initServices(): void {
     return;
   }
 
-  const isVercel = !!env().VERCEL;
+  const dbDriver = env().DB_DRIVER;
+  const useNeon = dbDriver === "neon";
 
   _services = {
     get env() {
@@ -41,9 +42,10 @@ export function initServices(): void {
     },
     get pool() {
       if (!_pool) {
-        if (isVercel) {
-          // Use Neon serverless driver for Vercel
-          // This driver is optimized for Neon's connection pooler and serverless environments
+        if (useNeon) {
+          // Use Neon serverless driver (default)
+          // Optimized for Neon's connection pooler and serverless environments
+          // Automatically used unless DB_DRIVER=pg is explicitly set
           // See: https://vercel.com/guides/connection-pooling-with-functions
           _pool = new NeonPool({
             connectionString: this.env.DATABASE_URL,
@@ -52,7 +54,8 @@ export function initServices(): void {
             connectionTimeoutMillis: this.env.DB_POOL_CONNECT_TIMEOUT_MS,
           });
         } else {
-          // Use regular pg driver for local development
+          // Use standard PostgreSQL driver
+          // Set DB_DRIVER=pg for local development or self-hosted deployments
           _pool = new PgPool({
             connectionString: this.env.DATABASE_URL,
             max: this.env.DB_POOL_MAX,
@@ -65,15 +68,15 @@ export function initServices(): void {
     },
     get db() {
       if (!_db) {
-        if (isVercel) {
-          // Use Neon serverless driver with drizzle for Vercel
+        if (useNeon) {
+          // Use Neon serverless driver with drizzle
           // This supports interactive transactions (required for storage commit)
           _db = drizzleNeonServerless({
             client: this.pool as NeonPool,
             schema,
           });
         } else {
-          // Use regular pg driver with drizzle for local development
+          // Use regular pg driver with drizzle (default)
           _db = drizzleNodePg(this.pool as PgPool, { schema });
         }
       }

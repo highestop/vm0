@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { reloadEnv } from "../../../env";
 import {
@@ -84,9 +84,14 @@ describe("AuthProvider", () => {
 
   describe("getAuthProvider (self-hosted mode)", () => {
     beforeEach(() => {
-      vi.stubEnv("SELF_HOSTED", "true");
+      // Simulate self-hosted: no Clerk key configured
+      vi.stubEnv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "");
       reloadEnv();
       resetAuthProvider();
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
     });
 
     it("should return the default user ID", async () => {

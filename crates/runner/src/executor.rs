@@ -7,6 +7,10 @@ use uuid::Uuid;
 
 /// Maximum wall-clock time for a single job (2 hours).
 const JOB_TIMEOUT: Duration = Duration::from_secs(7200);
+/// Exit code when a process is killed by SIGKILL (128 + 9).
+const EXIT_SIGKILL: i32 = 137;
+/// Raw SIGKILL signal number.
+const EXIT_SIGNAL_KILL: i32 = 9;
 /// Default timeout for guest commands (5 minutes).
 const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -250,21 +254,51 @@ async fn run_in_sandbox(
     telemetry.record("agent_execute", t.elapsed(), success, err.as_deref());
     let exit = result?;
 
-    let stderr = String::from_utf8_lossy(&exit.stderr).to_string();
-
     info!(
         run_id = %context.run_id,
         exit_code = exit.exit_code,
         "agent exited"
     );
 
+    // Check for OOM kill when process was terminated by SIGKILL
+    if exit.exit_code == EXIT_SIGKILL || exit.exit_code == EXIT_SIGNAL_KILL {
+        let dmesg_req = ExecRequest {
+            cmd: "dmesg | tail -20 2>/dev/null",
+            timeout: Duration::from_secs(5),
+            env: &[],
+            sudo: true,
+        };
+        match sandbox.exec(&dmesg_req).await {
+            Ok(dmesg) if dmesg_indicates_oom(&String::from_utf8_lossy(&dmesg.stdout)) => {
+                warn!(run_id = %context.run_id, "OOM kill detected via dmesg");
+                // Return exit code 1 with descriptive message instead of raw 137,
+                // so callers see a clear error rather than an opaque signal code.
+                return Ok((1, Some("Agent process killed by OOM killer".into())));
+            }
+            Err(e) => {
+                warn!(run_id = %context.run_id, error = %e, "failed to exec dmesg for OOM check");
+            }
+            _ => {}
+        }
+    }
+
     let error_msg = if exit.exit_code != 0 {
+        let stderr = String::from_utf8_lossy(&exit.stderr).to_string();
         Some(stderr).filter(|s| !s.is_empty())
     } else {
         None
     };
 
     Ok((exit.exit_code, error_msg))
+}
+
+/// Returns true if dmesg output indicates an OOM kill.
+fn dmesg_indicates_oom(stdout: &str) -> bool {
+    let lower = stdout.to_lowercase();
+    lower.contains("out of memory")
+        || lower.contains("oom-kill")
+        || lower.contains("oom_reaper")
+        || lower.contains("killed process")
 }
 
 /// Sync guest clock to host time after snapshot restore.
@@ -767,5 +801,33 @@ mod tests {
         });
         let env = build_env_json(&ctx, "http://localhost");
         assert!(!env.contains_key("NODE_EXTRA_CA_CERTS"));
+    }
+
+    #[test]
+    fn dmesg_oom_positive() {
+        assert!(dmesg_indicates_oom(
+            "[  12.345] Out of memory: Killed process 1234 (claude)"
+        ));
+        assert!(dmesg_indicates_oom("oom-kill:constraint=CONSTRAINT_MEMCG"));
+        assert!(dmesg_indicates_oom("oom_reaper: reaped process 42"));
+        assert!(dmesg_indicates_oom("Killed process 42 (node)"));
+    }
+
+    #[test]
+    fn dmesg_oom_negative() {
+        assert!(!dmesg_indicates_oom(""));
+        assert!(!dmesg_indicates_oom("normal kernel log output"));
+        assert!(!dmesg_indicates_oom("[  1.000] eth0: link up"));
+        // "killed" alone should not match — requires "killed process"
+        assert!(!dmesg_indicates_oom("task killed by signal 15"));
+        // substring "oom" in unrelated words should not match
+        assert!(!dmesg_indicates_oom("the room is full"));
+    }
+
+    #[test]
+    fn dmesg_oom_case_insensitive() {
+        assert!(dmesg_indicates_oom("Out Of Memory: killed process 99"));
+        assert!(dmesg_indicates_oom("Killed process 99 (agent)"));
+        assert!(dmesg_indicates_oom("OOM-kill: constraint=MEMCG"));
     }
 }

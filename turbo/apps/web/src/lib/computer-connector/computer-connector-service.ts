@@ -28,6 +28,7 @@ const log = logger("service:computer-connector");
 const COMPUTER_SECRETS = [
   "COMPUTER_CONNECTOR_BRIDGE_TOKEN",
   "COMPUTER_CONNECTOR_DOMAIN_ID",
+  "COMPUTER_CONNECTOR_DOMAIN",
 ] as const;
 
 /**
@@ -198,6 +199,7 @@ export async function createComputerConnector(
   await Promise.all([
     upsertSecret(scope.id, "COMPUTER_CONNECTOR_BRIDGE_TOKEN", bridgeToken),
     upsertSecret(scope.id, "COMPUTER_CONNECTOR_DOMAIN_ID", reservedDomain.id),
+    upsertSecret(scope.id, "COMPUTER_CONNECTOR_DOMAIN", domain),
   ]);
 
   log.debug("Computer connector created", {

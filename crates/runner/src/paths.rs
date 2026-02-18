@@ -65,6 +65,11 @@ impl HomePaths {
         })
     }
 
+    #[cfg(test)]
+    pub fn with_root(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
     }
@@ -209,6 +214,11 @@ impl LogPaths {
     pub fn network_log(&self, run_id: uuid::Uuid) -> PathBuf {
         self.dir.join(format!("network-{run_id}.jsonl"))
     }
+
+    /// Whether `name` matches the `network-{run_id}.jsonl` pattern.
+    pub fn is_network_log(name: &str) -> bool {
+        name.starts_with("network-") && name.ends_with(".jsonl")
+    }
 }
 
 #[cfg(test)]
@@ -216,9 +226,7 @@ mod tests {
     use super::*;
 
     fn home(root: &Path) -> HomePaths {
-        HomePaths {
-            root: root.to_path_buf(),
-        }
+        HomePaths::with_root(root.to_path_buf())
     }
 
     #[test]

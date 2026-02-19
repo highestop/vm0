@@ -1,4 +1,3 @@
-mod api;
 mod cmd;
 mod config;
 mod deps;
@@ -9,7 +8,9 @@ mod lock;
 mod network_logs;
 mod paths;
 mod process;
+mod provider;
 mod proxy;
+mod retry;
 mod status;
 mod telemetry;
 mod types;

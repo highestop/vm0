@@ -572,4 +572,180 @@ describe("POST /api/webhooks/email/inbound", () => {
       expect(runs).toHaveLength(0);
     });
   });
+
+  describe("Email Trigger (agent@domain, auto-detect scope)", () => {
+    it("should dispatch agent run for agent-only email (auto-detect scope)", async () => {
+      const user = await context.setupUser({ prefix: "auto-scope" });
+      const agentName = uniqueId("auto-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      // Send to agentname@domain (no scope, no plus sign)
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "auto-scope-email",
+          to: [`${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "Auto Scope Test",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      // Verify: agent run was created
+      const runs = await findTestRunsByUserAndPrompt(
+        user.userId,
+        "Auto Scope Test\n\nHello from email",
+      );
+      expect(runs).toHaveLength(1);
+
+      // Verify: trigger callback was registered
+      const callbacks = await findTestCallbacksByRunId(runs[0]!.id);
+      const triggerCallback = callbacks.find((c) =>
+        c.url.includes("/callbacks/email/trigger"),
+      );
+      expect(triggerCallback).toBeDefined();
+      expect(triggerCallback!.payload).toMatchObject({
+        senderEmail,
+        userId: user.userId,
+        inboundEmailId: "auto-scope-email",
+      });
+    });
+
+    it("should ignore agent-only email from unregistered sender", async () => {
+      mockResend.emails.receiving.get.mockClear();
+      mockClerk({ userId: "some-user-id", email: "registered@example.com" });
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "unreg-auto-email",
+          to: ["someagent@vm7.bot"],
+          from: "unregistered@example.com",
+          subject: "Test",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      expect(mockResend.emails.receiving.get).not.toHaveBeenCalled();
+    });
+
+    it("should ignore agent-only email when sender has no scope", async () => {
+      mockResend.emails.receiving.get.mockClear();
+
+      // Mock Clerk to return a userId that has no scope in the database
+      const senderEmail = "noscopeuser@example.com";
+      mockClerk({ userId: "no-scope-user-id", email: senderEmail });
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "no-scope-email",
+          to: ["someagent@vm7.bot"],
+          from: senderEmail,
+          subject: "Test",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      // No email fetch should have happened (early return after scope lookup failed)
+      expect(mockResend.emails.receiving.get).not.toHaveBeenCalled();
+    });
+
+    it("should ignore agent-only email for non-existent agent", async () => {
+      mockResend.emails.receiving.get.mockClear();
+
+      const user = await context.setupUser({ prefix: "no-agent" });
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      // Send to an agent that doesn't exist in the sender's scope
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "no-agent-auto-email",
+          to: ["nonexistent@vm7.bot"],
+          from: senderEmail,
+          subject: "Test",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      expect(mockResend.emails.receiving.get).not.toHaveBeenCalled();
+    });
+
+    it("should reject agent-only email when DMARC fails", async () => {
+      const user = await context.setupUser({ prefix: "auto-dmarc" });
+      const agentName = uniqueId("auto-dmarc-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "spoofed@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      // Override Resend mock to return dmarc=fail
+      mockResend.emails.receiving.get.mockResolvedValueOnce({
+        data: {
+          from: senderEmail,
+          to: [`${agentName}@vm7.bot`],
+          subject: "Spoofed auto-scope",
+          text: "I am pretending to be someone else",
+          html: "<p>I am pretending to be someone else</p>",
+          headers: {
+            "authentication-results":
+              "mx.resend.com; dkim=fail; spf=fail; dmarc=fail",
+          },
+        },
+      } as never);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "auto-dmarc-fail-email",
+          to: [`${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "Spoofed auto-scope",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      // No run should have been created
+      const runs = await findTestRunsByUserAndPrompt(
+        user.userId,
+        "Spoofed auto-scope\n\nI am pretending to be someone else",
+      );
+      expect(runs).toHaveLength(0);
+    });
+  });
 });

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { screen, fireEvent } from "@testing-library/react";
 import { server } from "../../../mocks/server.ts";
 import { http, HttpResponse } from "msw";
-import { FeatureSwitchKey } from "@vm0/core";
 
 const context = testContext();
 
@@ -74,7 +73,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -104,7 +102,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -142,7 +139,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -173,7 +169,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -232,7 +227,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -275,7 +269,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -305,7 +298,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -346,7 +338,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -391,7 +382,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {
@@ -443,7 +433,6 @@ describe("config dialog", () => {
     await setupPage({
       context,
       path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.AgentDetailPage]: true },
     });
 
     await vi.waitFor(() => {

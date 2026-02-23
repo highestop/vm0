@@ -26,6 +26,9 @@ interface CallbackPayload {
   userId: string;
   inboundEmailId: string;
   replyToken: string;
+  inboundMessageId?: string;
+  subject?: string;
+  triggerLocalPart?: string;
 }
 
 interface CallbackBody {
@@ -65,6 +68,39 @@ function extractAgentSessionId(result: unknown): string | undefined {
     return result.agentSessionId;
   }
   return undefined;
+}
+
+function formatOutput(
+  status: string,
+  rawOutput: string | null | undefined,
+  error: string | undefined,
+): string {
+  if (status !== "completed") {
+    return error ?? "The agent run failed.";
+  }
+  if (!rawOutput) {
+    return "Task completed successfully.";
+  }
+  return rawOutput.length > 2000 ? `${rawOutput.slice(0, 2000)}…` : rawOutput;
+}
+
+function buildThreadingHeaders(
+  inboundMessageId: string | undefined,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (inboundMessageId) {
+    headers["In-Reply-To"] = inboundMessageId;
+    headers["References"] = inboundMessageId;
+  }
+  return headers;
+}
+
+function buildSubject(
+  inboundSubject: string | undefined,
+  composeName: string,
+): string {
+  const cleanSubject = inboundSubject?.replace(/^Re:\s*/i, "") ?? composeName;
+  return `Re: ${cleanSubject}`;
 }
 
 /**
@@ -159,15 +195,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // Get run output and session ID
   const logsUrl = buildLogsUrl(runId);
   const rawOutput = status === "completed" ? await getRunOutput(runId) : null;
-
-  const output =
-    status === "completed"
-      ? rawOutput
-        ? rawOutput.length > 2000
-          ? `${rawOutput.slice(0, 2000)}…`
-          : rawOutput
-        : "Task completed successfully."
-      : (error ?? "The agent run failed.");
+  const output = formatOutput(status, rawOutput, error);
 
   const [run] = await globalThis.services.db
     .select({ result: agentRuns.result })
@@ -182,17 +210,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ? buildReplyToAddress(replyToken)
     : undefined;
 
+  const headers = buildThreadingHeaders(payload.inboundMessageId);
+
   // Send response email
   const { messageId } = await sendEmail({
-    from: buildFromAddress(compose.name),
+    from: buildFromAddress(payload.triggerLocalPart ?? compose.name),
     to: senderEmail,
-    subject: `Re: ${compose.name}`,
+    subject: buildSubject(payload.subject, compose.name),
     react: AgentReplyEmail({
       agentName: compose.name,
       output,
       logsUrl,
     }),
     replyTo: replyToAddress,
+    headers,
   });
 
   // Save email thread session for reply continuity

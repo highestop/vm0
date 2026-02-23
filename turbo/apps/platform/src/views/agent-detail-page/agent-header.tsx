@@ -20,6 +20,7 @@ import { navigateInReact$ } from "../../signals/route.ts";
 import { openConfigDialog$ } from "../../signals/agent-detail/config-dialog.ts";
 import { openRunDialog$ } from "../../signals/agent-detail/run-dialog.ts";
 import { runButtonState$ } from "../../signals/agent-detail/inline-run.ts";
+import { agentName$ } from "../../signals/agent-detail/agent-detail.ts";
 import {
   agentSchedule$,
   agentScheduleSummary$,
@@ -42,6 +43,7 @@ export function AgentHeader({ detail, isOwner }: AgentHeaderProps) {
   const schedule = useGet(agentSchedule$);
   const scheduleSummary = useGet(agentScheduleSummary$);
   const openSchedule = useSet(openScheduleDialog$);
+  const agentName = useGet(agentName$);
 
   // Extract description from the first agent definition
   const agentKeys = detail.content?.agents
@@ -156,8 +158,9 @@ export function AgentHeader({ detail, isOwner }: AgentHeaderProps) {
                 size="icon"
                 className="h-9 w-9"
                 onClick={() =>
+                  agentName &&
                   navigate("/agents/:name/connections", {
-                    pathParams: { name: detail.name },
+                    pathParams: { name: agentName },
                   })
                 }
               >
@@ -174,8 +177,9 @@ export function AgentHeader({ detail, isOwner }: AgentHeaderProps) {
                 size="icon"
                 className="h-9 w-9"
                 onClick={() =>
+                  agentName &&
                   navigate("/agents/:name/logs", {
-                    pathParams: { name: detail.name },
+                    pathParams: { name: agentName },
                   })
                 }
               >

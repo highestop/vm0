@@ -98,3 +98,41 @@ export async function getReceivedEmail(emailId: string): Promise<{
     headers: data.headers,
   };
 }
+
+export interface ReceivedEmailAttachment {
+  id: string;
+  filename: string;
+  size: number;
+  content_type: string;
+  content_disposition: string;
+  download_url: string;
+}
+
+/**
+ * List attachments for a received email with download URLs.
+ * Download URLs expire after 1 hour.
+ */
+export async function getReceivedEmailAttachments(
+  emailId: string,
+): Promise<ReceivedEmailAttachment[]> {
+  const resend = getResendClient();
+
+  const { data, error } = await resend.emails.receiving.attachments.list({
+    emailId,
+  });
+
+  if (error || !data) {
+    throw new Error(
+      `Failed to list email attachments: ${error?.message ?? "unknown"}`,
+    );
+  }
+
+  return data.data.map((a) => ({
+    id: a.id,
+    filename: a.filename ?? `attachment-${a.id}`,
+    size: a.size,
+    content_type: a.content_type,
+    content_disposition: a.content_disposition,
+    download_url: a.download_url,
+  }));
+}

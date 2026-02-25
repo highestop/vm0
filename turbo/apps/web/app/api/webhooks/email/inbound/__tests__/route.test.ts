@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { HttpResponse } from "msw";
 import { Resend } from "resend";
 import { POST } from "../route";
 import {
@@ -8,6 +9,7 @@ import {
   createTestSessionWithConversation,
   createTestEmailThreadSession,
   findTestRunsByUserAndPrompt,
+  findTestRunsByUserAndPromptContaining,
   findTestCallbacksByRunId,
 } from "../../../../../../src/__tests__/api-test-helpers";
 import {
@@ -15,10 +17,48 @@ import {
   uniqueId,
 } from "../../../../../../src/__tests__/test-helpers";
 import { mockClerk } from "../../../../../../src/__tests__/clerk-mock";
+import { server } from "../../../../../../src/mocks/server";
+import { http } from "../../../../../../src/__tests__/msw";
 import { generateReplyToken } from "../../../../../../src/lib/email/handlers/shared";
 
 const context = testContext();
 const mockResend = vi.mocked(new Resend(""), true);
+
+/** Mock factory: override receiving.get response for a single test */
+function mockReceivedEmailGet(data: {
+  from: string;
+  to: string[];
+  subject: string;
+  text: string;
+  html: string;
+  headers: Record<string, string>;
+  attachments?: Array<{
+    id: string;
+    filename: string;
+    size: number;
+    content_type: string;
+    content_disposition: string;
+  }>;
+}) {
+  // Resend SDK types are not exported; cast once here instead of in every test
+  mockResend.emails.receiving.get.mockResolvedValueOnce({ data } as never);
+}
+
+/** Mock factory: override receiving.attachments.list response for a single test */
+function mockReceivedEmailAttachmentsList(
+  attachments: Array<{
+    id: string;
+    filename: string;
+    size: number;
+    content_type: string;
+    content_disposition: string;
+    download_url: string;
+  }>,
+) {
+  mockResend.emails.receiving.attachments.list.mockResolvedValueOnce({
+    data: { object: "list", has_more: false, data: attachments },
+  } as never);
+}
 
 /** Build a valid Svix-signed webhook request */
 function createWebhookRequest(body: string, headers?: Record<string, string>) {
@@ -196,15 +236,14 @@ describe("POST /api/webhooks/email/inbound", () => {
     mockClerk({ userId: null });
 
     // Mock Resend to return empty text (e.g., email with only quoted content)
-    mockResend.emails.receiving.get.mockResolvedValueOnce({
-      data: {
-        from: "user@example.com",
-        to: [`reply+${replyToken}@vm7.bot`],
-        subject: "Re: test",
-        text: "   ",
-        html: "<p></p>",
-      },
-    } as never);
+    mockReceivedEmailGet({
+      from: "user@example.com",
+      to: [`reply+${replyToken}@vm7.bot`],
+      subject: "Re: test",
+      text: "   ",
+      html: "<p></p>",
+      headers: {},
+    });
 
     const payload = JSON.stringify({
       type: "email.received",
@@ -394,19 +433,17 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock to return dmarc=fail
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${scopeSlug}+${agentName}@vm7.bot`],
-          subject: "Spoofed email",
-          text: "I am pretending to be someone else",
-          html: "<p>I am pretending to be someone else</p>",
-          headers: {
-            "authentication-results":
-              "mx.resend.com; dkim=fail header.d=example.com; spf=fail smtp.mailfrom=attacker.com; dmarc=fail header.from=example.com",
-          },
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "Spoofed email",
+        text: "I am pretending to be someone else",
+        html: "<p>I am pretending to be someone else</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=fail header.d=example.com; spf=fail smtp.mailfrom=attacker.com; dmarc=fail header.from=example.com",
         },
-      } as never);
+      });
 
       const payload = JSON.stringify({
         type: "email.received",
@@ -444,19 +481,17 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock: dmarc=none but dkim=pass — still rejected
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${scopeSlug}+${agentName}@vm7.bot`],
-          subject: "DKIM Only",
-          text: "My domain has no DMARC but DKIM is valid",
-          html: "<p>My domain has no DMARC but DKIM is valid</p>",
-          headers: {
-            "authentication-results":
-              "mx.resend.com; dkim=pass header.d=nodmarc.com; spf=fail smtp.mailfrom=nodmarc.com; dmarc=none header.from=nodmarc.com",
-          },
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "DKIM Only",
+        text: "My domain has no DMARC but DKIM is valid",
+        html: "<p>My domain has no DMARC but DKIM is valid</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=nodmarc.com; spf=fail smtp.mailfrom=nodmarc.com; dmarc=none header.from=nodmarc.com",
         },
-      } as never);
+      });
 
       const payload = JSON.stringify({
         type: "email.received",
@@ -494,16 +529,14 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock: no authentication-results header
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${scopeSlug}+${agentName}@vm7.bot`],
-          subject: "No Auth Headers",
-          text: "Email without authentication results",
-          html: "<p>Email without authentication results</p>",
-          headers: {},
-        },
-      } as never);
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "No Auth Headers",
+        text: "Email without authentication results",
+        html: "<p>Email without authentication results</p>",
+        headers: {},
+      });
 
       const payload = JSON.stringify({
         type: "email.received",
@@ -541,19 +574,17 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock: all authentication methods fail
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${scopeSlug}+${agentName}@vm7.bot`],
-          subject: "All Fail",
-          text: "Everything failed",
-          html: "<p>Everything failed</p>",
-          headers: {
-            "authentication-results":
-              "mx.resend.com; dkim=fail; spf=fail; dmarc=fail",
-          },
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "All Fail",
+        text: "Everything failed",
+        html: "<p>Everything failed</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=fail; spf=fail; dmarc=fail",
         },
-      } as never);
+      });
 
       const payload = JSON.stringify({
         type: "email.received",
@@ -591,19 +622,17 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock to return HTML-only content (empty text)
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${scopeSlug}+${agentName}@vm7.bot`],
-          subject: "Newsletter",
-          text: "",
-          html: "<p>Rich content from newsletter</p>",
-          headers: {
-            "authentication-results":
-              "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
-          },
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "Newsletter",
+        text: "",
+        html: "<p>Rich content from newsletter</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
         },
-      } as never);
+      });
 
       const payload = JSON.stringify({
         type: "email.received",
@@ -651,19 +680,17 @@ describe("POST /api/webhooks/email/inbound", () => {
     mockClerk({ userId: null });
 
     // Override Resend mock to return HTML-only content
-    mockResend.emails.receiving.get.mockResolvedValueOnce({
-      data: {
-        from: "user@example.com",
-        to: [`reply+${replyToken}@vm7.bot`],
-        subject: "Re: test",
-        text: "",
-        html: "<p>This is my HTML reply</p>",
-        headers: {
-          "authentication-results":
-            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
-        },
+    mockReceivedEmailGet({
+      from: "user@example.com",
+      to: [`reply+${replyToken}@vm7.bot`],
+      subject: "Re: test",
+      text: "",
+      html: "<p>This is my HTML reply</p>",
+      headers: {
+        "authentication-results":
+          "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
       },
-    } as never);
+    });
 
     const payload = JSON.stringify({
       type: "email.received",
@@ -688,6 +715,436 @@ describe("POST /api/webhooks/email/inbound", () => {
       "This is my HTML reply",
     );
     expect(runs).toHaveLength(1);
+  });
+
+  describe("Email Trigger with Attachments", () => {
+    it("should include attachment URLs in prompt when email has attachments", async () => {
+      const user = await context.setupUser({ prefix: "att-trigger" });
+      const suffix = user.userId.slice("att-trigger-".length);
+      const scopeSlug = `scope-${suffix}`;
+      const agentName = uniqueId("att-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      // Mock Resend to return email with attachment metadata
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "With Attachment",
+        text: "Please review the attached file",
+        html: "<p>Please review the attached file</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
+          "message-id": "<att-msg-id@example.com>",
+        },
+        attachments: [
+          {
+            id: "att-1",
+            filename: "invoice.pdf",
+            size: 5000,
+            content_type: "application/pdf",
+            content_disposition: "attachment",
+          },
+        ],
+      });
+
+      // Mock attachment list API
+      mockReceivedEmailAttachmentsList([
+        {
+          id: "att-1",
+          filename: "invoice.pdf",
+          size: 5000,
+          content_type: "application/pdf",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-trigger-1",
+        },
+      ]);
+
+      // Mock attachment download via MSW
+      const pdfBuffer = Buffer.from("fake-pdf-content");
+      const downloadHandler = http.get(
+        "https://download.resend.com/att-trigger-1",
+        () => {
+          return new HttpResponse(pdfBuffer, {
+            headers: { "content-type": "application/pdf" },
+          });
+        },
+      );
+      server.use(downloadHandler.handler);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "trigger-att-email",
+          to: [`${scopeSlug}+${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "With Attachment",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      // Verify: agent run was created with body + attachment info in prompt
+      const matchingRuns = await findTestRunsByUserAndPromptContaining(
+        user.userId,
+        "With Attachment",
+      );
+      expect(matchingRuns).toHaveLength(1);
+      expect(matchingRuns[0]!.prompt).toContain(
+        "Please review the attached file",
+      );
+      expect(matchingRuns[0]!.prompt).toContain("[attachment]: invoice.pdf");
+      expect(matchingRuns[0]!.prompt).toContain("https://mock-presigned-url");
+
+      // Verify: S3 upload was called for the attachment
+      expect(context.mocks.s3.uploadS3Buffer).toHaveBeenCalledWith(
+        "test-bucket",
+        "email-attachments/trigger-att-email/att-1-invoice.pdf",
+        expect.any(Buffer),
+        "application/pdf",
+      );
+    });
+
+    it("should skip oversized attachment with 'exceeds size limit' message", async () => {
+      const user = await context.setupUser({ prefix: "att-oversize" });
+      const suffix = user.userId.slice("att-oversize-".length);
+      const scopeSlug = `scope-${suffix}`;
+      const agentName = uniqueId("oversize-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "Big File",
+        text: "See attached",
+        html: "<p>See attached</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
+        },
+      });
+
+      // Return an attachment that exceeds 10MB size limit
+      mockReceivedEmailAttachmentsList([
+        {
+          id: "att-big",
+          filename: "huge.zip",
+          size: 15 * 1024 * 1024,
+          content_type: "application/zip",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-big",
+        },
+      ]);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "oversize-email",
+          to: [`${scopeSlug}+${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "Big File",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      const runs = await findTestRunsByUserAndPromptContaining(
+        user.userId,
+        "Big File",
+      );
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.prompt).toContain("huge.zip");
+      expect(runs[0]!.prompt).toContain("skipped: exceeds size limit");
+      expect(context.mocks.s3.uploadS3Buffer).not.toHaveBeenCalled();
+    });
+
+    it("should skip attachment with 'download failed' when download returns error", async () => {
+      const user = await context.setupUser({ prefix: "att-dl-fail" });
+      const suffix = user.userId.slice("att-dl-fail-".length);
+      const scopeSlug = `scope-${suffix}`;
+      const agentName = uniqueId("dlfail-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "Broken Attachment",
+        text: "File attached",
+        html: "<p>File attached</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
+        },
+      });
+
+      mockReceivedEmailAttachmentsList([
+        {
+          id: "att-broken",
+          filename: "broken.pdf",
+          size: 5000,
+          content_type: "application/pdf",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-broken",
+        },
+      ]);
+
+      // Return 500 for the download
+      const downloadHandler = http.get(
+        "https://download.resend.com/att-broken",
+        () => {
+          return new HttpResponse(null, { status: 500 });
+        },
+      );
+      server.use(downloadHandler.handler);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "dl-fail-email",
+          to: [`${scopeSlug}+${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "Broken Attachment",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      const runs = await findTestRunsByUserAndPromptContaining(
+        user.userId,
+        "Broken Attachment",
+      );
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.prompt).toContain("broken.pdf");
+      expect(runs[0]!.prompt).toContain("skipped: download failed");
+      expect(context.mocks.s3.uploadS3Buffer).not.toHaveBeenCalled();
+    });
+
+    it("should handle multiple attachments with mixed results", async () => {
+      const user = await context.setupUser({ prefix: "att-mixed" });
+      const suffix = user.userId.slice("att-mixed-".length);
+      const scopeSlug = `scope-${suffix}`;
+      const agentName = uniqueId("mixed-agent");
+      await createTestCompose(agentName);
+
+      const senderEmail = "sender@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
+
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${scopeSlug}+${agentName}@vm7.bot`],
+        subject: "Multiple Files",
+        text: "Several attachments",
+        html: "<p>Several attachments</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
+        },
+      });
+
+      // Three attachments: one good, one oversized, one download fails
+      mockReceivedEmailAttachmentsList([
+        {
+          id: "att-good",
+          filename: "report.pdf",
+          size: 5000,
+          content_type: "application/pdf",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-good",
+        },
+        {
+          id: "att-huge",
+          filename: "video.mp4",
+          size: 15 * 1024 * 1024,
+          content_type: "video/mp4",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-huge",
+        },
+        {
+          id: "att-err",
+          filename: "missing.docx",
+          size: 3000,
+          content_type:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-err",
+        },
+      ]);
+
+      // Good attachment downloads successfully
+      const goodHandler = http.get(
+        "https://download.resend.com/att-good",
+        () => {
+          return new HttpResponse(Buffer.from("pdf-content"), {
+            headers: { "content-type": "application/pdf" },
+          });
+        },
+      );
+      // Failed attachment returns 404
+      const errHandler = http.get("https://download.resend.com/att-err", () => {
+        return new HttpResponse(null, { status: 404 });
+      });
+      server.use(goodHandler.handler, errHandler.handler);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "mixed-att-email",
+          to: [`${scopeSlug}+${agentName}@vm7.bot`],
+          from: senderEmail,
+          subject: "Multiple Files",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      const runs = await findTestRunsByUserAndPromptContaining(
+        user.userId,
+        "Multiple Files",
+      );
+      expect(runs).toHaveLength(1);
+      const prompt = runs[0]!.prompt;
+
+      // Good attachment: uploaded and URL in prompt
+      expect(prompt).toContain("[attachment]: report.pdf");
+      expect(prompt).toContain("https://mock-presigned-url");
+
+      // Oversized attachment: skipped with reason
+      expect(prompt).toContain("video.mp4");
+      expect(prompt).toContain("skipped: exceeds size limit");
+
+      // Failed download: skipped with reason
+      expect(prompt).toContain("missing.docx");
+      expect(prompt).toContain("skipped: download failed");
+
+      // Only one upload (the good attachment)
+      expect(context.mocks.s3.uploadS3Buffer).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Email Reply with Attachments", () => {
+    it("should include attachment URLs in prompt when reply has attachments", async () => {
+      const user = await context.setupUser({ prefix: "att-reply" });
+      const { composeId } = await createTestCompose(
+        uniqueId("att-reply-agent"),
+      );
+      const agentSession = await createTestSessionWithConversation(
+        user.userId,
+        composeId,
+      );
+      const replyToken = generateReplyToken(agentSession.id);
+
+      await createTestEmailThreadSession({
+        userId: user.userId,
+        composeId,
+        agentSessionId: agentSession.id,
+        replyToToken: replyToken,
+      });
+
+      mockClerk({ userId: null });
+
+      // Mock Resend to return reply email
+      mockReceivedEmailGet({
+        from: "user@example.com",
+        to: [`reply+${replyToken}@vm7.bot`],
+        subject: "Re: test",
+        text: "Here is the file you requested",
+        html: "<p>Here is the file you requested</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com",
+        },
+        attachments: [
+          {
+            id: "att-r1",
+            filename: "data.csv",
+            size: 200,
+            content_type: "text/csv",
+            content_disposition: "attachment",
+          },
+        ],
+      });
+
+      // Mock attachment list API
+      mockReceivedEmailAttachmentsList([
+        {
+          id: "att-r1",
+          filename: "data.csv",
+          size: 200,
+          content_type: "text/csv",
+          content_disposition: "attachment",
+          download_url: "https://download.resend.com/att-reply-1",
+        },
+      ]);
+
+      // Mock attachment download via MSW
+      const csvBuffer = Buffer.from("col1,col2\nval1,val2");
+      const downloadHandler = http.get(
+        "https://download.resend.com/att-reply-1",
+        () => {
+          return new HttpResponse(csvBuffer, {
+            headers: { "content-type": "text/csv" },
+          });
+        },
+      );
+      server.use(downloadHandler.handler);
+
+      const payload = JSON.stringify({
+        type: "email.received",
+        data: {
+          email_id: "reply-att-email",
+          to: [`reply+${replyToken}@vm7.bot`],
+          from: "user@example.com",
+          subject: "Re: test",
+          created_at: new Date().toISOString(),
+        },
+      });
+
+      const request = createWebhookRequest(payload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      await context.mocks.flushAfter();
+
+      // Verify: agent run was created with body + attachment info in prompt
+      const matchingReplyRuns = await findTestRunsByUserAndPromptContaining(
+        user.userId,
+        "Here is the file you requested",
+      );
+      expect(matchingReplyRuns).toHaveLength(1);
+      expect(matchingReplyRuns[0]!.prompt).toContain("[attachment]: data.csv");
+      expect(matchingReplyRuns[0]!.prompt).toContain(
+        "https://mock-presigned-url",
+      );
+    });
   });
 
   describe("Email Trigger (agent@domain, auto-detect scope)", () => {
@@ -829,19 +1286,17 @@ describe("POST /api/webhooks/email/inbound", () => {
       mockClerk({ userId: user.userId, email: senderEmail });
 
       // Override Resend mock to return dmarc=fail
-      mockResend.emails.receiving.get.mockResolvedValueOnce({
-        data: {
-          from: senderEmail,
-          to: [`${agentName}@vm7.bot`],
-          subject: "Spoofed auto-scope",
-          text: "I am pretending to be someone else",
-          html: "<p>I am pretending to be someone else</p>",
-          headers: {
-            "authentication-results":
-              "mx.resend.com; dkim=fail; spf=fail; dmarc=fail",
-          },
+      mockReceivedEmailGet({
+        from: senderEmail,
+        to: [`${agentName}@vm7.bot`],
+        subject: "Spoofed auto-scope",
+        text: "I am pretending to be someone else",
+        html: "<p>I am pretending to be someone else</p>",
+        headers: {
+          "authentication-results":
+            "mx.resend.com; dkim=fail; spf=fail; dmarc=fail",
         },
-      } as never);
+      });
 
       const payload = JSON.stringify({
         type: "email.received",

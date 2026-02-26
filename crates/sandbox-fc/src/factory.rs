@@ -13,8 +13,13 @@ use crate::sandbox::FirecrackerSandbox;
 
 /// Shell command executed during snapshot creation to pre-warm guest caches.
 /// Changing this invalidates all cached snapshots (included in [`config_hash`]).
-pub const PREWARM_SCRIPT: &str =
-    "su - user -c 'claude --help >/dev/null 2>&1; codex --help >/dev/null 2>&1; true'";
+///
+/// **Note:** Do NOT wrap this in `su - user -c '...'` — the vsock-guest exec
+/// handler already wraps commands with `su - user -c` in release builds.
+/// Double-wrapping creates nested sessions where inner processes escape the
+/// process group, surviving SIGKILL on timeout as orphans frozen into the
+/// snapshot.
+pub const PREWARM_SCRIPT: &str = "claude --help >/dev/null 2>&1 && codex --help >/dev/null 2>&1";
 
 /// SHA-256 fingerprint of all sandbox-fc internal configuration that affects
 /// snapshot output (boot args, guest network, pre-warm script, etc.).

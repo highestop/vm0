@@ -13,6 +13,10 @@ import {
   fetchGitHubUserInfo,
 } from "../../../../../src/lib/connector/providers/github";
 import { exchangeNotionCode } from "../../../../../src/lib/connector/providers/notion";
+import {
+  exchangeSlackCode,
+  fetchSlackUserInfo,
+} from "../../../../../src/lib/connector/providers/slack";
 
 const log = logger("api:connectors:callback");
 
@@ -60,7 +64,7 @@ interface OAuthTokenResult {
 }
 
 async function exchangeTokenForConnector(
-  connectorType: "github" | "notion",
+  connectorType: "github" | "notion" | "slack",
   code: string,
   redirectUri: string,
 ): Promise<OAuthTokenResult> {
@@ -90,26 +94,53 @@ async function exchangeTokenForConnector(
     };
   }
 
-  // notion
-  const clientId = currentEnv.NOTION_OAUTH_CLIENT_ID;
-  const clientSecret = currentEnv.NOTION_OAUTH_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error("Notion OAuth not configured");
+  if (connectorType === "notion") {
+    const clientId = currentEnv.NOTION_OAUTH_CLIENT_ID;
+    const clientSecret = currentEnv.NOTION_OAUTH_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      throw new Error("Notion OAuth not configured");
+    }
+    const notionResult = await exchangeNotionCode(
+      clientId,
+      clientSecret,
+      code,
+      redirectUri,
+    );
+    return {
+      accessToken: notionResult.accessToken,
+      userInfo: {
+        id: notionResult.userInfo.id,
+        username: notionResult.userInfo.username,
+        email: notionResult.userInfo.email,
+      },
+      oauthScopes: notionResult.scopes,
+    };
   }
-  const notionResult = await exchangeNotionCode(
+
+  // slack
+  const clientId = currentEnv.SLACK_CLIENT_ID;
+  const clientSecret = currentEnv.SLACK_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error("Slack OAuth not configured");
+  }
+  const slackResult = await exchangeSlackCode(
     clientId,
     clientSecret,
     code,
     redirectUri,
   );
+  const slackUser = await fetchSlackUserInfo(
+    slackResult.userId,
+    slackResult.accessToken,
+  );
   return {
-    accessToken: notionResult.accessToken,
+    accessToken: slackResult.accessToken,
     userInfo: {
-      id: notionResult.userInfo.id,
-      username: notionResult.userInfo.username,
-      email: notionResult.userInfo.email,
+      id: slackUser.id,
+      username: slackUser.username,
+      email: slackUser.email,
     },
-    oauthScopes: notionResult.scopes,
+    oauthScopes: slackResult.scopes,
   };
 }
 

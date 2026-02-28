@@ -12,6 +12,7 @@ import { logger } from "../logger";
 import { getUserScopeByClerkId } from "../scope/scope-service";
 import { getGitHubSecretName } from "./providers/github";
 import { getNotionSecretName } from "./providers/notion";
+import { getSlackSecretName } from "./providers/slack";
 
 const log = logger("service:connector");
 
@@ -37,6 +38,8 @@ function getSecretNameForConnector(type: ConnectorType): string {
       return getNotionSecretName();
     case "computer":
       return "COMPUTER_CONNECTOR_AUTHTOKEN";
+    case "slack":
+      return getSlackSecretName();
   }
 }
 

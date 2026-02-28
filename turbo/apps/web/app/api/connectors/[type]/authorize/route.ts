@@ -6,6 +6,7 @@ import { getUserIdFromRequest } from "../../../../../src/lib/auth/get-user-id";
 import { getOrigin } from "../../../../../src/lib/request/get-origin";
 import { buildGitHubAuthorizationUrl } from "../../../../../src/lib/connector/providers/github";
 import { buildNotionAuthorizationUrl } from "../../../../../src/lib/connector/providers/notion";
+import { buildSlackAuthorizationUrl } from "../../../../../src/lib/connector/providers/slack";
 
 /**
  * Connector OAuth Authorize Endpoint
@@ -123,6 +124,17 @@ export async function GET(
         );
       }
       authUrl = buildNotionAuthorizationUrl(clientId, redirectUri, state);
+      break;
+    }
+    case "slack": {
+      const clientId = currentEnv.SLACK_CLIENT_ID;
+      if (!clientId) {
+        return NextResponse.json(
+          { error: "Slack OAuth not configured" },
+          { status: 500 },
+        );
+      }
+      authUrl = buildSlackAuthorizationUrl(clientId, redirectUri, state);
       break;
     }
   }

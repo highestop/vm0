@@ -38,6 +38,7 @@ describe("connectors tab", () => {
 
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("Notion")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
 
     const connectButtons = screen.getAllByText("Connect");
     expect(connectButtons.length).toBeGreaterThanOrEqual(2);

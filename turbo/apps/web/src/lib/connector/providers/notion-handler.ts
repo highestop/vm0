@@ -16,6 +16,8 @@ export const notionHandler: ProviderHandler = {
     );
     return {
       accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresIn: result.expiresIn,
       scopes: result.scopes,
       userInfo: result.userInfo,
     };
@@ -23,4 +25,5 @@ export const notionHandler: ProviderHandler = {
   getClientId: (e) => e.NOTION_OAUTH_CLIENT_ID,
   getClientSecret: (e) => e.NOTION_OAUTH_CLIENT_SECRET,
   getSecretName: getNotionSecretName,
+  getRefreshSecretName: () => "NOTION_REFRESH_TOKEN",
 };

@@ -134,6 +134,9 @@ async fn execute_inner(
     // Run job inside sandbox, then destroy regardless of outcome
     let result = run_in_sandbox(sandbox.as_ref(), context, config, telemetry).await;
 
+    // Copy guest logs to host log directory (best-effort).
+    copy_guest_logs(sandbox.as_ref(), context, &config.log_paths).await;
+
     // Unregister VM from proxy + upload network logs before cleanup timer.
     // Unregister first ensures the addon writes no more log entries.
     if firewall_enabled {
@@ -300,6 +303,48 @@ fn dmesg_indicates_oom(stdout: &str) -> bool {
         || lower.contains("oom-kill")
         || lower.contains("oom_reaper")
         || lower.contains("killed process")
+}
+
+/// Copy guest log files to the host log directory.
+///
+/// Best-effort: failures are logged but do not affect job outcome.
+async fn copy_guest_logs(sandbox: &dyn Sandbox, context: &ExecutionContext, log_paths: &LogPaths) {
+    let run_id = context.run_id;
+    let files = [
+        (
+            format!("/tmp/vm0-system-{run_id}.log"),
+            log_paths.system_log(run_id),
+        ),
+        (
+            format!("/tmp/vm0-metrics-{run_id}.jsonl"),
+            log_paths.metrics_log(run_id),
+        ),
+    ];
+
+    for (guest_path, host_path) in &files {
+        let cat_cmd = format!("cat {guest_path}");
+        let result = sandbox
+            .exec(&ExecRequest {
+                cmd: &cat_cmd,
+                timeout: DEFAULT_EXEC_TIMEOUT,
+                env: &[],
+                sudo: false,
+            })
+            .await;
+
+        let output = match result {
+            Ok(r) if r.exit_code == 0 => r.stdout,
+            Ok(_) => continue,
+            Err(e) => {
+                warn!(run_id = %run_id, error = %e, path = %guest_path, "failed to read guest log");
+                continue;
+            }
+        };
+
+        if let Err(e) = tokio::fs::write(host_path, &output).await {
+            warn!(run_id = %run_id, error = %e, path = %host_path.display(), "failed to write guest log to host");
+        }
+    }
 }
 
 /// Sync guest clock to host time after snapshot restore.

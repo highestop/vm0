@@ -4,9 +4,22 @@ import { scopes } from "../../db/schema/scope";
 import { badRequest, notFound, forbidden } from "../errors";
 import { logger } from "../logger";
 import type { ScopeType } from "../../db/schema/scope";
-import { isSystemScope } from "@vm0/core";
+import { isSystemScope, SYSTEM_SCOPE_SLUG } from "@vm0/core";
+import { env } from "../../env";
 
 const log = logger("service:scope");
+
+/**
+ * Check if an email is a VM0 admin user.
+ * Admin users are defined by the VM0_ADMIN_USERS environment variable
+ * (comma-separated email list).
+ */
+export function isVm0Admin(email: string): boolean {
+  const adminUsers = env().VM0_ADMIN_USERS;
+  if (!adminUsers) return false;
+  const adminList = adminUsers.split(",").map((e) => e.trim().toLowerCase());
+  return adminList.includes(email.toLowerCase());
+}
 
 /**
  * Reserved scope slugs that cannot be used by users
@@ -48,7 +61,7 @@ function validateScopeSlug(slug: string): void {
     );
   }
 
-  if (RESERVED_SLUGS.includes(slug) || slug.startsWith("vm0")) {
+  if (RESERVED_SLUGS.includes(slug) || slug.startsWith(SYSTEM_SCOPE_SLUG)) {
     throw badRequest(`Scope slug "${slug}" is reserved`);
   }
 }

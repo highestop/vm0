@@ -1,5 +1,6 @@
 import { type ConnectorType } from "@vm0/core";
 import { type OAuthTokenResult, type ProviderHandler } from "./provider-types";
+import { dropboxHandler } from "./providers/dropbox-handler";
 import { githubHandler } from "./providers/github-handler";
 import { gmailHandler } from "./providers/gmail-handler";
 import { linearHandler } from "./providers/linear-handler";
@@ -17,4 +18,5 @@ export const PROVIDER_HANDLERS: Record<
   linear: linearHandler,
   notion: notionHandler,
   slack: slackHandler,
+  dropbox: dropboxHandler,
 };

@@ -88,6 +88,9 @@ function initEnv() {
       // Linear OAuth (for connector)
       LINEAR_OAUTH_CLIENT_ID: z.string().min(1).optional(),
       LINEAR_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+      // Figma OAuth (for connector)
+      FIGMA_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+      FIGMA_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
       // ngrok (for computer connector)
       NGROK_API_KEY: z.string().min(1).optional(),
       NGROK_COMPUTER_CONNECTOR_DOMAIN: z.string().min(1).optional(),
@@ -173,6 +176,8 @@ function initEnv() {
       DROPBOX_OAUTH_CLIENT_SECRET: process.env.DROPBOX_OAUTH_CLIENT_SECRET,
       LINEAR_OAUTH_CLIENT_ID: process.env.LINEAR_OAUTH_CLIENT_ID,
       LINEAR_OAUTH_CLIENT_SECRET: process.env.LINEAR_OAUTH_CLIENT_SECRET,
+      FIGMA_OAUTH_CLIENT_ID: process.env.FIGMA_OAUTH_CLIENT_ID,
+      FIGMA_OAUTH_CLIENT_SECRET: process.env.FIGMA_OAUTH_CLIENT_SECRET,
       NGROK_API_KEY: process.env.NGROK_API_KEY,
       NGROK_COMPUTER_CONNECTOR_DOMAIN:
         process.env.NGROK_COMPUTER_CONNECTOR_DOMAIN,

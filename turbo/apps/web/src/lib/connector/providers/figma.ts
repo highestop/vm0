@@ -1,44 +1,41 @@
 import { getConnectorOAuthConfig } from "@vm0/core";
 import { z } from "zod";
 
-const DROPBOX_CURRENT_ACCOUNT_URL =
-  "https://api.dropboxapi.com/2/users/get_current_account";
+const FIGMA_ME_URL = "https://api.figma.com/v1/me";
 
-interface DropboxUserInfo {
+interface FigmaUserInfo {
   id: string;
-  username: string | null;
   email: string | null;
+  name: string | null;
 }
 
-interface DropboxTokenResult {
+interface FigmaTokenResult {
   accessToken: string;
   refreshToken: string | null;
   expiresIn?: number;
   scopes: string[];
-  userInfo: DropboxUserInfo;
+  userInfo: FigmaUserInfo;
 }
 
 /**
- * Build Dropbox OAuth authorization URL.
- * Requests offline access to obtain a refresh token.
+ * Build Figma OAuth authorization URL.
  */
-export function buildDropboxAuthorizationUrl(
+export function buildFigmaAuthorizationUrl(
   clientId: string,
   redirectUri: string,
   state: string,
 ): string {
-  const oauthConfig = getConnectorOAuthConfig("dropbox");
+  const oauthConfig = getConnectorOAuthConfig("figma");
   if (!oauthConfig) {
-    throw new Error("Dropbox OAuth config not found");
+    throw new Error("Figma OAuth config not found");
   }
 
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: oauthConfig.scopes.join(" "),
+    scope: oauthConfig.scopes.join(","),
     state,
-    token_access_type: "offline",
   });
 
   return `${oauthConfig.authorizationUrl}?${params.toString()}`;
@@ -46,26 +43,30 @@ export function buildDropboxAuthorizationUrl(
 
 /**
  * Exchange authorization code for access token and user info.
+ * Figma uses HTTP Basic Auth for token exchange.
  */
-export async function exchangeDropboxCode(
+export async function exchangeFigmaCode(
   clientId: string,
   clientSecret: string,
   code: string,
   redirectUri: string,
-): Promise<DropboxTokenResult> {
-  const oauthConfig = getConnectorOAuthConfig("dropbox");
+): Promise<FigmaTokenResult> {
+  const oauthConfig = getConnectorOAuthConfig("figma");
   if (!oauthConfig) {
-    throw new Error("Dropbox OAuth config not found");
+    throw new Error("Figma OAuth config not found");
   }
+
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
+    "base64",
+  );
 
   const response = await fetch(oauthConfig.tokenUrl, {
     method: "POST",
     headers: {
+      Authorization: `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
       code,
       redirect_uri: redirectUri,
       grant_type: "authorization_code",
@@ -73,7 +74,7 @@ export async function exchangeDropboxCode(
   });
 
   if (!response.ok) {
-    throw new Error(`Dropbox token exchange failed: ${response.status}`);
+    throw new Error(`Figma token exchange failed: ${response.status}`);
   }
 
   const data = z
@@ -81,7 +82,6 @@ export async function exchangeDropboxCode(
       access_token: z.string().optional(),
       refresh_token: z.string().nullable().optional(),
       expires_in: z.number().optional(),
-      scope: z.string().optional(),
       error: z.string().optional(),
       error_description: z.string().optional(),
     })
@@ -92,58 +92,52 @@ export async function exchangeDropboxCode(
   }
 
   if (!data.access_token) {
-    throw new Error("No access token in Dropbox response");
+    throw new Error("No access token in Figma response");
   }
 
-  const userInfo = await fetchDropboxUserInfo(data.access_token);
+  const userInfo = await fetchFigmaUserInfo(data.access_token);
 
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? null,
     expiresIn: data.expires_in,
-    scopes: data.scope ? data.scope.split(" ") : [],
+    scopes: ["files:read"],
     userInfo,
   };
 }
 
 /**
- * Fetch Dropbox user info using the get_current_account endpoint.
+ * Fetch Figma user info using the Figma API /me endpoint.
  */
-async function fetchDropboxUserInfo(
-  accessToken: string,
-): Promise<DropboxUserInfo> {
-  const response = await fetch(DROPBOX_CURRENT_ACCOUNT_URL, {
-    method: "POST",
+async function fetchFigmaUserInfo(accessToken: string): Promise<FigmaUserInfo> {
+  const response = await fetch(FIGMA_ME_URL, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
 
   if (!response.ok) {
-    throw new Error(`Dropbox user info fetch failed: ${response.status}`);
+    throw new Error(`Figma user info fetch failed: ${response.status}`);
   }
 
   const data = z
     .object({
-      account_id: z.string().optional(),
-      name: z
-        .object({ display_name: z.string().nullable().optional() })
-        .nullable()
-        .optional(),
+      id: z.string(),
       email: z.string().nullable().optional(),
+      handle: z.string().nullable().optional(),
     })
     .parse(await response.json());
 
   return {
-    id: data.account_id ?? "",
-    username: data.name?.display_name ?? null,
+    id: data.id,
     email: data.email ?? null,
+    name: data.handle ?? null,
   };
 }
 
 /**
- * Get the primary secret name for Dropbox connector (the access token).
+ * Get the primary secret name for Figma connector (the access token).
  */
-export function getDropboxSecretName(): string {
-  return "DROPBOX_ACCESS_TOKEN";
+export function getFigmaSecretName(): string {
+  return "FIGMA_ACCESS_TOKEN";
 }

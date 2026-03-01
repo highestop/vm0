@@ -54,6 +54,10 @@ DROPBOX_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/DROPBOX_OAUTH_CLIENT_
 LINEAR_OAUTH_CLIENT_ID=op://Development/vm0-env-local/LINEAR_OAUTH_CLIENT_ID
 LINEAR_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/LINEAR_OAUTH_CLIENT_SECRET
 
+# Optional: Figma OAuth Connector
+FIGMA_OAUTH_CLIENT_ID=op://Development/vm0-env-local/FIGMA_OAUTH_CLIENT_ID
+FIGMA_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/FIGMA_OAUTH_CLIENT_SECRET
+
 # Optional: ngrok (Computer Connector)
 NGROK_API_KEY=op://Development/vm0-env-local/NGROK_API_KEY
 NGROK_COMPUTER_CONNECTOR_DOMAIN=computer.vm7.io

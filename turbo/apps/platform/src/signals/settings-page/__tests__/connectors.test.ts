@@ -105,6 +105,22 @@ describe("allConnectorTypes$", () => {
 
     expect(dropboxConnector).toBeUndefined();
   });
+
+  it("should hide figma connector when feature flag is disabled", async () => {
+    const { store } = context;
+
+    await setupPage({
+      context,
+      path: "/",
+      withoutRender: true,
+      featureSwitches: { figmaConnector: false },
+    });
+
+    const types = await store.get(allConnectorTypes$);
+    const figmaConnector = types.find((t) => t.type === "figma");
+
+    expect(figmaConnector).toBeUndefined();
+  });
 });
 
 describe("disconnect dialog", () => {

@@ -6,7 +6,10 @@ import type {
 } from "../../../types/agent-compose";
 import type { ExecutionContext } from "../types";
 import type { PreparedContext } from "../executors/types";
-import { prepareStorageManifest } from "../../storage/storage-service";
+import {
+  prepareStorageManifest,
+  ensureArtifactExists,
+} from "../../storage/storage-service";
 import type { StorageManifest } from "../../storage/types";
 import { badRequest } from "../../errors";
 import { logger } from "../../logger";
@@ -186,7 +189,8 @@ export async function prepareForExecution(
   );
 
   // Resolve runner's scope for artifact access
-  const runnerScope = await getUserScopeByClerkId(context.userId || "");
+  const userId = context.userId || "";
+  const runnerScope = await getUserScopeByClerkId(userId);
   if (!runnerScope) {
     throw badRequest("Runner scope not found");
   }
@@ -208,6 +212,16 @@ export async function prepareForExecution(
 
   if (!composeInfo) {
     throw badRequest("Agent compose not found");
+  }
+
+  // Auto-create artifact if it doesn't exist yet
+  if (context.artifactName) {
+    await ensureArtifactExists(
+      runnerScope.id,
+      userId,
+      context.artifactName,
+      runnerScope.slug,
+    );
   }
 
   // Prepare storage manifest with dual scopes

@@ -4,6 +4,7 @@ import { initServices } from "../../../src/lib/init-services";
 import { getUserId } from "../../../src/lib/auth/get-user-id";
 import { createOrganization } from "../../../src/lib/org/org-service";
 import { isBadRequest } from "../../../src/lib/errors";
+import { isClerkAPIResponseError } from "@clerk/nextjs/errors";
 import { logger } from "../../../src/lib/logger";
 
 const log = logger("api:org");
@@ -52,7 +53,15 @@ const router = tsr.router(orgContract, {
       }
       const message =
         error instanceof Error ? error.message : "Internal server error";
-      log.error("Failed to create organization", { error: message });
+      if (isClerkAPIResponseError(error)) {
+        log.error("Failed to create organization (Clerk API)", {
+          status: error.status,
+          errors: error.errors,
+          clerkTraceId: error.clerkTraceId,
+        });
+      } else {
+        log.error("Failed to create organization", { error: message });
+      }
       return {
         status: 500 as const,
         body: {

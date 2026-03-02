@@ -1,8 +1,8 @@
 /**
  * Feature switch system
  *
- * Provides centralized feature flag management with support for
- * future user-identity based overrides.
+ * Provides centralized feature flag management with user-identity based overrides.
+ * User IDs are stored as SHA-1 hashes to avoid exposing plain-text identifiers in source code.
  */
 
 import { FeatureSwitchKey } from "./feature-switch-key";
@@ -10,6 +10,14 @@ import { FeatureSwitchKey } from "./feature-switch-key";
 export interface FeatureSwitch {
   readonly maintainer: string;
   readonly enabled: boolean;
+  readonly enabledUserHashes?: readonly string[];
+}
+
+async function sha1(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-1", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -91,13 +99,22 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
 };
 
 /**
- * Check if a feature is enabled
+ * Check if a feature is enabled for the given user.
  *
- * Returns a Promise to support future user-identity based overrides.
+ * When `userId` is provided and the switch has `enabledUserHashes`,
+ * the userId is SHA-1 hashed and compared against the stored hashes.
  */
 export async function isFeatureEnabled(
   key: FeatureSwitchKey,
+  userId?: string,
 ): Promise<boolean> {
   const featureSwitch = FEATURE_SWITCHES[key];
-  return Promise.resolve(featureSwitch.enabled);
+  if (featureSwitch.enabled) {
+    return true;
+  }
+  if (userId && featureSwitch.enabledUserHashes?.length) {
+    const hash = await sha1(userId);
+    return featureSwitch.enabledUserHashes.includes(hash);
+  }
+  return false;
 }

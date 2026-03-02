@@ -186,6 +186,22 @@ describe("allConnectorTypes$", () => {
     expect(googleDriveConnector).toBeUndefined();
   });
 
+  it("should hide mercury connector when feature flag is disabled", async () => {
+    const { store } = context;
+
+    await setupPage({
+      context,
+      path: "/",
+      withoutRender: true,
+      featureSwitches: { mercuryConnector: false },
+    });
+
+    const types = await store.get(allConnectorTypes$);
+    const mercuryConnector = types.find((t) => t.type === "mercury");
+
+    expect(mercuryConnector).toBeUndefined();
+  });
+
   it("should hide strava connector when feature flag is disabled", async () => {
     const { store } = context;
 

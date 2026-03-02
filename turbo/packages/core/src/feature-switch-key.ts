@@ -19,6 +19,7 @@ export enum FeatureSwitchKey {
   GoogleSheetsConnector = "googleSheetsConnector",
   GoogleDocsConnector = "googleDocsConnector",
   GoogleDriveConnector = "googleDriveConnector",
+  MercuryConnector = "mercuryConnector",
   StravaConnector = "stravaConnector",
   GarminConnectConnector = "garminConnectConnector",
 }

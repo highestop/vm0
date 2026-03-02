@@ -40,6 +40,8 @@ const GARMIN_TOKEN_URL =
 const GARMIN_USER_ID_URL = "https://apis.garmin.com/wellness-api/rest/user/id";
 const DEEL_TOKEN_URL = "https://app.deel.com/oauth/token";
 const DEEL_LEGAL_ENTITIES_URL = "https://api.deel.com/rest/v2/legal-entities";
+const MERCURY_TOKEN_URL = "https://oauth2.mercury.com/oauth2/token";
+const MERCURY_ACCOUNTS_URL = "https://api.mercury.com/api/v1/accounts";
 
 /**
  * Create MSW handlers for GitHub OAuth API
@@ -552,6 +554,57 @@ function createDocuSignOAuthMock(options: {
 }
 
 /**
+ * Create MSW handlers for Mercury OAuth API
+ */
+function createMercuryOAuthMock(options: {
+  accessToken?: string;
+  refreshToken?: string | null;
+  expiresIn?: number;
+  tokenError?: string;
+  accountId?: string;
+  accountName?: string | null;
+  userError?: boolean;
+}) {
+  return handlers({
+    tokenExchange: http.post(MERCURY_TOKEN_URL, () => {
+      if (options.tokenError) {
+        return HttpResponse.json({
+          error: "invalid_grant",
+          error_description: options.tokenError,
+        });
+      }
+      return HttpResponse.json({
+        access_token: options.accessToken ?? "mercury-test-access-token",
+        refresh_token:
+          options.refreshToken !== undefined
+            ? options.refreshToken
+            : "mercury-test-refresh-token",
+        ...(options.expiresIn != null ? { expires_in: options.expiresIn } : {}),
+        token_type: "Bearer",
+        scope: "offline_access",
+      });
+    }),
+    userInfo: http.get(MERCURY_ACCOUNTS_URL, () => {
+      if (options.userError) {
+        return HttpResponse.json({ error: "invalid_token" }, { status: 401 });
+      }
+      return HttpResponse.json({
+        accounts: [
+          {
+            id: options.accountId ?? "mercury-account-123",
+            name:
+              options.accountName !== undefined
+                ? options.accountName
+                : "My Business Account",
+            legalBusinessName: "My Business LLC",
+          },
+        ],
+      });
+    }),
+  });
+}
+
+/**
  * Create a test request with OAuth callback parameters and cookies
  */
 function createCallbackRequest(options: {
@@ -612,6 +665,8 @@ describe("GET /api/connectors/:type/callback - OAuth Callback", () => {
     );
     vi.stubEnv("DEEL_OAUTH_CLIENT_ID", "deel-test-client-id");
     vi.stubEnv("DEEL_OAUTH_CLIENT_SECRET", "deel-test-client-secret");
+    vi.stubEnv("MERCURY_OAUTH_CLIENT_ID", "mercury-test-client-id");
+    vi.stubEnv("MERCURY_OAUTH_CLIENT_SECRET", "mercury-test-client-secret");
     reloadEnv();
   });
 
@@ -2650,6 +2705,160 @@ describe("GET /api/connectors/:type/callback - OAuth Callback", () => {
       });
       const response = await GET(request, {
         params: Promise.resolve({ type: "deel" }),
+      });
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get("location");
+      expect(location).toContain("/connector/error");
+    });
+  });
+
+  describe("Mercury OAuth Flow", () => {
+    it("should store Mercury connector and redirect to success page", async () => {
+      await context.setupUser();
+
+      const { handlers: mswHandlers } = createMercuryOAuthMock({
+        accessToken: "mercury-access-token",
+        refreshToken: "mercury-refresh-token",
+        accountId: "mercury-account-456",
+        accountName: "My Business Account",
+      });
+      server.use(...mswHandlers);
+
+      const request = createCallbackRequest({
+        code: "valid-code",
+        state: "test-state",
+        savedState: "test-state",
+        connectorType: "mercury",
+      });
+      const response = await GET(request, {
+        params: Promise.resolve({ type: "mercury" }),
+      });
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get("location");
+      expect(location).toContain("/connector/success");
+      expect(location).toContain("type=mercury");
+      expect(location).toContain("username=My+Business+Account");
+
+      // Verify connector was stored via API
+      const getRequest = createTestRequest(
+        "http://localhost:3000/api/connectors/mercury",
+      );
+      const getResponse = await getConnector(getRequest);
+      const connector = await getResponse.json();
+
+      expect(getResponse.status).toBe(200);
+      expect(connector.type).toBe("mercury");
+      expect(connector.externalUsername).toBe("My Business Account");
+      expect(connector.externalId).toBe("mercury-account-456");
+    });
+
+    it("should redirect with error when Mercury token exchange fails", async () => {
+      await context.setupUser();
+
+      const { handlers: mswHandlers } = createMercuryOAuthMock({
+        tokenError: "Invalid authorization code",
+      });
+      server.use(...mswHandlers);
+
+      const request = createCallbackRequest({
+        code: "invalid-code",
+        state: "test-state",
+        savedState: "test-state",
+        connectorType: "mercury",
+      });
+      const response = await GET(request, {
+        params: Promise.resolve({ type: "mercury" }),
+      });
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get("location");
+      expect(location).toContain("/connector/error");
+    });
+
+    it("should store refresh token as a secret when Mercury returns one", async () => {
+      const user = await context.setupUser();
+
+      const { handlers: mswHandlers } = createMercuryOAuthMock({
+        accessToken: "mercury-access-token",
+        refreshToken: "mercury-refresh-token-stored",
+        accountId: "mercury-account-456",
+        accountName: "My Business Account",
+      });
+      server.use(...mswHandlers);
+
+      const request = createCallbackRequest({
+        code: "valid-code",
+        state: "test-state",
+        savedState: "test-state",
+        connectorType: "mercury",
+      });
+      const response = await GET(request, {
+        params: Promise.resolve({ type: "mercury" }),
+      });
+
+      expect(response.status).toBe(307);
+
+      // Verify refresh token was stored as a secret
+      const refreshToken = await findTestConnectorSecret(
+        user.scopeId,
+        "MERCURY_REFRESH_TOKEN",
+      );
+      expect(refreshToken).toBe("mercury-refresh-token-stored");
+    });
+
+    it("should set tokenExpiresAt when Mercury returns expires_in", async () => {
+      const user = await context.setupUser();
+      const frozenNow = 1700000000000;
+      vi.spyOn(Date, "now").mockReturnValue(frozenNow);
+
+      const expiresIn = 3600;
+      const { handlers: mswHandlers } = createMercuryOAuthMock({
+        accessToken: "mercury-access-token",
+        refreshToken: "mercury-refresh-token",
+        expiresIn,
+        accountId: "mercury-account-exp",
+        accountName: "Expiring Account",
+      });
+      server.use(...mswHandlers);
+
+      const request = createCallbackRequest({
+        code: "valid-code",
+        state: "test-state",
+        savedState: "test-state",
+        connectorType: "mercury",
+      });
+      const response = await GET(request, {
+        params: Promise.resolve({ type: "mercury" }),
+      });
+
+      expect(response.status).toBe(307);
+
+      const tokenExpiresAt = await findTestConnectorTokenExpiresAt(
+        user.scopeId,
+        "mercury",
+      );
+      const expectedExpiry = new Date(frozenNow + expiresIn * 1000);
+      expect(tokenExpiresAt?.getTime()).toBe(expectedExpiry.getTime());
+    });
+
+    it("should redirect with error when Mercury user info fetch fails", async () => {
+      await context.setupUser();
+
+      const { handlers: mswHandlers } = createMercuryOAuthMock({
+        userError: true,
+      });
+      server.use(...mswHandlers);
+
+      const request = createCallbackRequest({
+        code: "test-code",
+        state: "test-state",
+        savedState: "test-state",
+        connectorType: "mercury",
+      });
+      const response = await GET(request, {
+        params: Promise.resolve({ type: "mercury" }),
       });
 
       expect(response.status).toBe(307);

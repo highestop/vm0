@@ -66,6 +66,10 @@ LINEAR_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/LINEAR_OAUTH_CLIENT_SE
 FIGMA_OAUTH_CLIENT_ID=op://Development/vm0-env-local/FIGMA_OAUTH_CLIENT_ID
 FIGMA_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/FIGMA_OAUTH_CLIENT_SECRET
 
+# Optional: Mercury OAuth Connector
+MERCURY_OAUTH_CLIENT_ID=op://Development/vm0-env-local/MERCURY_OAUTH_CLIENT_ID
+MERCURY_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/MERCURY_OAUTH_CLIENT_SECRET
+
 # Optional: Strava OAuth Connector
 STRAVA_OAUTH_CLIENT_ID=op://Development/vm0-env-local/STRAVA_OAUTH_CLIENT_ID
 STRAVA_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/STRAVA_OAUTH_CLIENT_SECRET

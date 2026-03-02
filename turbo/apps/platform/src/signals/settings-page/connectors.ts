@@ -63,6 +63,13 @@ export const allConnectorTypes$ = computed(async (get) => {
       if (flag && !features?.[flag]) {
         return false;
       }
+      // Filter mercury connector based on feature flag
+      if (
+        type === "mercury" &&
+        !features?.[FeatureSwitchKey.MercuryConnector]
+      ) {
+        return false;
+      }
       return true;
     })
     .map((type) => {

@@ -9,6 +9,7 @@ import {
   SUPPORTED_FRAMEWORKS,
   isSupportedFramework,
   mergeSkillEnvironment,
+  resolveSkillRef,
 } from "@vm0/core";
 import {
   resolveFrameworkImage,
@@ -43,6 +44,8 @@ async function resolveSkillEnvVars(
   if (!agent?.skills || agent.skills.length === 0) {
     return;
   }
+  // Normalize bare skill names to full GitHub URLs
+  agent.skills = agent.skills.map(resolveSkillRef);
   const environment = agent.environment ?? {};
   await mergeSkillEnvironment(agent.skills, environment);
   if (Object.keys(environment).length > 0) {

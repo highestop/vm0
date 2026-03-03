@@ -44,8 +44,10 @@ export interface ScheduleResponse {
   composeName: string;
   scopeSlug: string;
   name: string;
+  triggerType: "cron" | "once" | "loop";
   cronExpression: string | null;
   atTime: string | null;
+  intervalSeconds: number | null;
   timezone: string;
   prompt: string;
   vars: Record<string, string> | null;
@@ -57,6 +59,7 @@ export interface ScheduleResponse {
   nextRunAt: string | null;
   lastRunAt: string | null;
   retryStartedAt: string | null;
+  consecutiveFailures: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +84,7 @@ interface DeployScheduleRequest {
   composeId: string;
   cronExpression?: string;
   atTime?: string;
+  intervalSeconds?: number;
   timezone: string;
   prompt: string;
   // vars and secrets removed - now managed via platform tables
@@ -187,8 +191,10 @@ function toResponse(
     composeName,
     scopeSlug,
     name: schedule.name,
+    triggerType: schedule.triggerType as "cron" | "once" | "loop",
     cronExpression: schedule.cronExpression,
     atTime: schedule.atTime?.toISOString() ?? null,
+    intervalSeconds: schedule.intervalSeconds,
     timezone: schedule.timezone,
     prompt: schedule.prompt,
     vars: schedule.vars,
@@ -200,6 +206,7 @@ function toResponse(
     nextRunAt: schedule.nextRunAt?.toISOString() ?? null,
     lastRunAt: schedule.lastRunAt?.toISOString() ?? null,
     retryStartedAt: schedule.retryStartedAt?.toISOString() ?? null,
+    consecutiveFailures: schedule.consecutiveFailures,
     createdAt: schedule.createdAt.toISOString(),
     updatedAt: schedule.updatedAt.toISOString(),
   };
@@ -311,6 +318,26 @@ async function validateRequiredConfig(
 }
 
 /**
+ * Resolve trigger type and initial next-run time from request fields.
+ */
+function resolveTrigger(request: DeployScheduleRequest): {
+  triggerType: "cron" | "once" | "loop";
+  nextRunAt: Date | null;
+} {
+  if (request.cronExpression) {
+    return {
+      triggerType: "cron",
+      nextRunAt: calculateNextRun(request.cronExpression, request.timezone),
+    };
+  }
+  if (request.atTime) {
+    return { triggerType: "once", nextRunAt: new Date(request.atTime) };
+  }
+  // Loop schedules get nextRunAt set on enable, not deploy
+  return { triggerType: "loop", nextRunAt: null };
+}
+
+/**
  * Deploy (create or update) a schedule
  * Idempotent: creates if doesn't exist, updates if exists
  */
@@ -368,31 +395,21 @@ export async function deploySchedule(
   }
 
   // Validate required secrets/vars against platform tables
-  // Secrets and vars are now managed via platform (vm0 secret set / vm0 var set),
-  // not passed via schedule creation
   await validateRequiredConfig(compose, userId);
 
-  // Note: vars and encryptedSecrets are no longer stored in schedule table
-  // They are now managed via platform tables (secrets, variables)
-  // We set them to null for new schedules to maintain schema compatibility
+  const { triggerType, nextRunAt } = resolveTrigger(request);
 
-  // Calculate next run time
-  let nextRunAt: Date | null = null;
-  if (request.cronExpression) {
-    nextRunAt = calculateNextRun(request.cronExpression, request.timezone);
-  } else if (request.atTime) {
-    nextRunAt = new Date(request.atTime);
-  }
-
-  const now = new Date(Date.now());
+  const now = new Date();
 
   if (existing) {
     // Update existing schedule
     const [updated] = await globalThis.services.db
       .update(agentSchedules)
       .set({
+        triggerType,
         cronExpression: request.cronExpression ?? null,
         atTime: request.atTime ? new Date(request.atTime) : null,
+        intervalSeconds: request.intervalSeconds ?? null,
         timezone: request.timezone,
         prompt: request.prompt,
         vars: null, // Vars now come from platform tables
@@ -401,6 +418,7 @@ export async function deploySchedule(
         artifactVersion: request.artifactVersion ?? null,
         volumeVersions: request.volumeVersions ?? null,
         nextRunAt,
+        consecutiveFailures: 0,
         updatedAt: now,
       })
       .where(eq(agentSchedules.id, existing.id))
@@ -423,8 +441,10 @@ export async function deploySchedule(
       .values({
         composeId: request.composeId,
         name: request.name,
+        triggerType,
         cronExpression: request.cronExpression ?? null,
         atTime: request.atTime ? new Date(request.atTime) : null,
+        intervalSeconds: request.intervalSeconds ?? null,
         timezone: request.timezone,
         prompt: request.prompt,
         vars: null, // Vars now come from platform tables
@@ -434,6 +454,7 @@ export async function deploySchedule(
         volumeVersions: request.volumeVersions ?? null,
         enabled: false,
         nextRunAt,
+        consecutiveFailures: 0,
         createdAt: now,
         updatedAt: now,
       })
@@ -651,11 +672,14 @@ export async function enableSchedule(
 
   // Recalculate next run time
   let nextRunAt: Date | null = null;
-  if (schedule.cronExpression) {
+  if (schedule.triggerType === "loop") {
+    // Loop schedules: trigger immediately on enable
+    nextRunAt = new Date();
+  } else if (schedule.cronExpression) {
     nextRunAt = calculateNextRun(schedule.cronExpression, schedule.timezone);
   } else if (schedule.atTime) {
     // For one-time schedules, check if atTime is in the future
-    if (schedule.atTime > new Date(Date.now())) {
+    if (schedule.atTime > new Date()) {
       nextRunAt = schedule.atTime;
     } else {
       // Refuse to enable past one-time schedules
@@ -671,7 +695,8 @@ export async function enableSchedule(
       enabled: true,
       nextRunAt,
       retryStartedAt: null, // Clear any stale retry state
-      updatedAt: new Date(Date.now()),
+      consecutiveFailures: 0, // Reset failure counter on enable
+      updatedAt: new Date(),
     })
     .where(eq(agentSchedules.id, schedule.id))
     .returning();
@@ -705,7 +730,7 @@ export async function disableSchedule(
     .set({
       enabled: false,
       retryStartedAt: null, // Clear retry state
-      updatedAt: new Date(Date.now()),
+      updatedAt: new Date(),
     })
     .where(
       and(
@@ -732,7 +757,7 @@ export async function executeDueSchedules(): Promise<{
   executed: number;
   skipped: number;
 }> {
-  const now = new Date(Date.now());
+  const now = new Date();
   log.debug(`Checking for due schedules at ${now.toISOString()}`);
 
   // Find enabled schedules where nextRunAt <= now
@@ -782,15 +807,29 @@ export async function executeDueSchedules(): Promise<{
 }
 
 /**
- * Advance schedule to next occurrence (cron) or disable (one-time).
+ * Advance schedule to next occurrence (cron), disable (one-time), or wait for callback (loop).
  * Shared by retry-window-expired, failure, and success paths.
+ *
+ * Loop schedules do NOT set nextRunAt here — their next run is scheduled
+ * by the completion callback, which provides completion-based timing.
  */
 async function advanceScheduleState(
   schedule: typeof agentSchedules.$inferSelect,
   lastRunId?: string,
 ): Promise<void> {
-  const now = new Date(Date.now());
-  if (schedule.cronExpression) {
+  const now = new Date();
+  if (schedule.triggerType === "loop") {
+    // Loop: don't advance nextRunAt here — the loop callback handles it on completion
+    await globalThis.services.db
+      .update(agentSchedules)
+      .set({
+        ...(lastRunId !== undefined && { lastRunId }),
+        lastRunAt: now,
+        retryStartedAt: null,
+        nextRunAt: null, // Will be set by loop callback on run completion
+      })
+      .where(eq(agentSchedules.id, schedule.id));
+  } else if (schedule.cronExpression) {
     const nextRunAt = calculateNextRun(
       schedule.cronExpression,
       schedule.timezone,
@@ -805,6 +844,7 @@ async function advanceScheduleState(
       })
       .where(eq(agentSchedules.id, schedule.id));
   } else {
+    // One-time: disable after execution
     await globalThis.services.db
       .update(agentSchedules)
       .set({
@@ -827,7 +867,7 @@ async function handleConcurrencyFailure(
   compose: { userId: string; headVersionId: string },
   error: ConcurrentRunLimitError,
 ): Promise<boolean> {
-  const now = new Date(Date.now());
+  const now = new Date();
 
   // Create failed run record
   const [failedRun] = await globalThis.services.db
@@ -950,6 +990,18 @@ async function executeSchedule(
     });
   }
 
+  // Loop schedule advancement callback (triggers next iteration on completion)
+  if (schedule.triggerType === "loop") {
+    callbacks.push({
+      url: `${getApiUrl()}/api/internal/callbacks/schedule/loop`,
+      secret: generateCallbackSecret(),
+      payload: {
+        scheduleId: schedule.id,
+        intervalSeconds: schedule.intervalSeconds,
+      },
+    });
+  }
+
   // Delegate run creation, validation, and dispatch to createRun()
   let runId: string;
   try {
@@ -982,28 +1034,17 @@ async function executeSchedule(
       // Retry window expired — fall through to advance schedule to next occurrence
     }
 
-    // Any failure (concurrency-expired or other): update schedule state (disable one-time, advance cron)
+    // Any failure (concurrency-expired or other): update schedule state
     await advanceScheduleState(schedule);
-    log.debug(
-      schedule.cronExpression
-        ? `Cron schedule ${schedule.name} failed`
-        : `One-time schedule ${schedule.name} failed and disabled`,
-    );
+    log.debug(`Schedule ${schedule.name} (${schedule.triggerType}) failed`);
 
     throw error; // Re-throw so executeDueSchedules counts it as skipped
   }
 
-  // Update lastRunId after successful creation
-  await globalThis.services.db
-    .update(agentSchedules)
-    .set({ lastRunId: runId })
-    .where(eq(agentSchedules.id, schedule.id));
-
-  // Advance schedule to next occurrence (cron) or disable (one-time)
-  await advanceScheduleState(schedule);
-  log.debug(
-    schedule.cronExpression
-      ? `Schedule ${schedule.name} executed`
-      : `One-time schedule ${schedule.name} executed and disabled`,
-  );
+  // Advance schedule state (also persists lastRunId):
+  // - cron: calculate next cron time
+  // - once: disable
+  // - loop: clear nextRunAt (callback will set it on completion)
+  await advanceScheduleState(schedule, runId);
+  log.debug(`Schedule ${schedule.name} (${schedule.triggerType}) executed`);
 }

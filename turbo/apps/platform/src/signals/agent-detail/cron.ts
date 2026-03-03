@@ -6,7 +6,10 @@ export type ScheduleTimeOption =
   | "every-weekday"
   | "every-day"
   | "every-week"
-  | "every-month";
+  | "every-month"
+  | "loop";
+
+export type CronTimeOption = Exclude<ScheduleTimeOption, "loop">;
 
 /** Discriminated union for schedule creation/update request body. */
 export type ScheduleBody = {
@@ -14,7 +17,11 @@ export type ScheduleBody = {
   name: string;
   timezone: string;
   prompt: string;
-} & ({ cronExpression: string } | { atTime: string });
+} & (
+  | { cronExpression: string }
+  | { atTime: string }
+  | { intervalSeconds: number }
+);
 
 // ---------------------------------------------------------------------------
 // One-time schedule helpers
@@ -64,7 +71,7 @@ export function getTodayDateLocal(): string {
 }
 
 export function buildCronExpression(opts: {
-  timeOption: ScheduleTimeOption;
+  timeOption: CronTimeOption;
   hour: string;
   minute?: string;
   dayOfWeek?: string;

@@ -11,7 +11,7 @@ import {
 } from "./inline-run.ts";
 import { fetchAgentSchedule$ } from "./schedule.ts";
 import {
-  type ScheduleTimeOption,
+  type CronTimeOption,
   type ScheduleBody,
   buildCronExpression,
   buildAtTime,
@@ -40,7 +40,7 @@ export const setRunDialogPrompt$ = command(({ set }, value: string) => {
   set(internalPrompt$, value);
 });
 
-type TimeOption = "now" | "once" | ScheduleTimeOption;
+type TimeOption = "now" | "once" | CronTimeOption;
 
 const internalTimeOption$ = state<TimeOption>("now");
 export const runDialogTimeOption$ = computed((get) => get(internalTimeOption$));

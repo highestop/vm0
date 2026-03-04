@@ -1,6 +1,6 @@
 {
-  "id": "bd07d8c9-5c75-41f6-89bc-da05f5259941",
-  "prevId": "0fc9100e-0e59-4b38-95a5-5faccf42017f",
+  "id": "a93d330a-c37a-431a-97ab-1207e93e7f2a",
+  "prevId": "bd07d8c9-5c75-41f6-89bc-da05f5259941",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2051,13 +2051,32 @@
           "name": "installation_id",
           "type": "varchar(255)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "encrypted_access_token": {
           "name": "encrypted_access_token",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
         },
         "default_compose_id": {
           "name": "default_compose_id",
@@ -2116,13 +2135,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "github_installations_installation_id_unique": {
-          "name": "github_installations_installation_id_unique",
-          "nullsNotDistinct": false,
-          "columns": ["installation_id"]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

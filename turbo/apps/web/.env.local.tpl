@@ -86,6 +86,10 @@ REDDIT_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/REDDIT_OAUTH_CLIENT_SE
 X_OAUTH_CLIENT_ID=op://Development/vm0-env-local/X_OAUTH_CLIENT_ID
 X_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/X_OAUTH_CLIENT_SECRET
 
+# Optional: Vercel OAuth Connector
+VERCEL_OAUTH_CLIENT_ID=op://Development/vm0-env-local/VERCEL_OAUTH_CLIENT_ID
+VERCEL_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/VERCEL_OAUTH_CLIENT_SECRET
+
 # Optional: Sentry OAuth Connector
 SENTRY_OAUTH_CLIENT_ID=op://Development/vm0-env-local/SENTRY_OAUTH_CLIENT_ID
 SENTRY_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/SENTRY_OAUTH_CLIENT_SECRET

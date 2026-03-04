@@ -1669,7 +1669,6 @@ export async function findTestStorageByName(
     .limit(1);
   return result;
 }
-
 export async function findTestSlackComposeRequest(composeJobId: string) {
   const [row] = await globalThis.services.db
     .select()

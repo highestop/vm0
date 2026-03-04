@@ -470,19 +470,26 @@ async function createTestComposeVersion(
 
 /**
  * Create a run record directly in the database.
- * Internal helper for createTestSessionWithConversation.
+ * Use this when you need a run without going through the API route
+ * (e.g., for webhook tests where Clerk auth is disabled).
  */
-async function createTestRunRecord(
+export async function createTestRunDirect(
   userId: string,
   versionId: string,
+  options?: {
+    status?: string;
+    prompt?: string;
+    continuedFromSessionId?: string;
+  },
 ): Promise<{ id: string }> {
   const [run] = await globalThis.services.db
     .insert(agentRuns)
     .values({
       userId,
       agentComposeVersionId: versionId,
-      status: "completed",
-      prompt: "test prompt",
+      status: options?.status ?? "running",
+      prompt: options?.prompt ?? "test prompt",
+      continuedFromSessionId: options?.continuedFromSessionId,
     })
     .returning({ id: agentRuns.id });
   return run!;
@@ -517,7 +524,9 @@ export async function createTestSessionWithConversation(
   // Create compose version
   const versionId = await createTestComposeVersion(agentComposeId, userId);
   // Create run
-  const run = await createTestRunRecord(userId, versionId);
+  const run = await createTestRunDirect(userId, versionId, {
+    status: "completed",
+  });
   // Create conversation
   const conversation = await createTestConversation(run.id);
   // Create session with conversation

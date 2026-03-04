@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { eq, and, isNull, gte } from "drizzle-orm";
+import { z } from "zod";
 import { initServices } from "../../../../src/lib/init-services";
 import { env } from "../../../../src/env";
 import {
@@ -19,12 +20,25 @@ import {
   buildErrorMessage,
 } from "../../../../src/lib/slack";
 import type { AskUserQuestion } from "../../../../src/lib/slack";
-import {
-  runAgentForSlack,
-  askUserQuestionSchema,
-} from "../../../../src/lib/slack/handlers/run-agent";
+import { runAgentForSlack } from "../../../../src/lib/slack/handlers/run-agent";
 import type { SlackCallbackContext } from "../../../../src/lib/slack/handlers/run-agent";
 import { logger } from "../../../../src/lib/logger";
+
+const askUserQuestionSchema = z.array(
+  z.object({
+    question: z.string(),
+    header: z.string().optional(),
+    options: z
+      .array(
+        z.object({
+          label: z.string(),
+          description: z.string().optional(),
+        }),
+      )
+      .optional(),
+    multiSelect: z.boolean().optional(),
+  }),
+);
 
 const log = logger("slack:interactive");
 
@@ -300,23 +314,24 @@ function collectAnswersFromState(
 }
 
 /**
- * Build a human-readable answer prompt from questions and selected answers.
+ * Build a human-readable answer prompt from selected answers.
+ * The agent already has session context, so we only include what the user chose.
  */
 function buildAnswerPrompt(
   questions: AskUserQuestion[],
   answers: Map<number, string[]>,
 ): string {
-  const parts: string[] = [];
+  const items: string[] = [];
   for (let qIdx = 0; qIdx < questions.length; qIdx++) {
     const selected = answers.get(qIdx);
-    if (selected && selected.length > 0) {
-      parts.push(
-        `The user was asked: "${questions[qIdx]!.question}" and selected: "${selected.join(", ")}"`,
-      );
+    if (selected) {
+      for (const label of selected) {
+        items.push(`- ${label}`);
+      }
     }
   }
-  return parts.length > 0
-    ? parts.join("\n")
+  return items.length > 0
+    ? `User selected:\n${items.join("\n")}`
     : "The user submitted the form without making a selection.";
 }
 

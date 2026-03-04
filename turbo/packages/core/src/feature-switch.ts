@@ -140,6 +140,11 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     enabled: false,
     enabledUserHashes: STAFF_USER_HASHES,
   },
+  [FeatureSwitchKey.SentryConnector]: {
+    maintainer: "ethan@vm0.ai",
+    enabled: false,
+    enabledUserHashes: STAFF_USER_HASHES,
+  },
   [FeatureSwitchKey.GitHubIntegration]: {
     maintainer: "ethan@vm0.ai",
     enabled: false,
@@ -169,6 +174,7 @@ export const CONNECTOR_FEATURE_FLAGS: Partial<
   "garmin-connect": FeatureSwitchKey.GarminConnectConnector,
   x: FeatureSwitchKey.XConnector,
   reddit: FeatureSwitchKey.RedditConnector,
+  sentry: FeatureSwitchKey.SentryConnector,
 };
 
 /**

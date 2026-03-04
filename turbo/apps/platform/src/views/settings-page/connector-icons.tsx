@@ -22,6 +22,7 @@ import slackIcon from "./icons/slack.svg";
 import stravaIcon from "./icons/strava.svg";
 import vercelIcon from "./icons/vercel.svg";
 import xIcon from "./icons/x.svg";
+import xeroIcon from "./icons/xero.svg";
 
 const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   computer: computerIcon,
@@ -46,6 +47,7 @@ const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   strava: stravaIcon,
   vercel: vercelIcon,
   x: xIcon,
+  xero: xeroIcon,
 });
 
 export function ConnectorIcon({

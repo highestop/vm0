@@ -155,6 +155,11 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     enabled: false,
     enabledUserHashes: STAFF_USER_HASHES,
   },
+  [FeatureSwitchKey.XeroConnector]: {
+    maintainer: "ethan@vm0.ai",
+    enabled: false,
+    enabledUserHashes: STAFF_USER_HASHES,
+  },
   [FeatureSwitchKey.GitHubIntegration]: {
     maintainer: "ethan@vm0.ai",
     enabled: false,
@@ -187,6 +192,7 @@ export const CONNECTOR_FEATURE_FLAGS: Partial<
   reddit: FeatureSwitchKey.RedditConnector,
   vercel: FeatureSwitchKey.VercelConnector,
   sentry: FeatureSwitchKey.SentryConnector,
+  xero: FeatureSwitchKey.XeroConnector,
 };
 
 /**

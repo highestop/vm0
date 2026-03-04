@@ -21,6 +21,7 @@ import { usageDaily } from "../db/schema/usage-daily";
 import { slackComposeRequests } from "../db/schema/slack-compose-request";
 import { slackInstallations } from "../db/schema/slack-installation";
 import { githubInstallations } from "../db/schema/github-installation";
+import { githubUserLinks } from "../db/schema/github-user-link";
 import { githubIssueSessions } from "../db/schema/github-issue-session";
 import { slackThreadSessions } from "../db/schema/slack-thread-session";
 import { emailThreadSessions } from "../db/schema/email-thread-session";
@@ -2086,7 +2087,6 @@ export async function findTestScheduleById(scheduleId: string) {
  * GitHub OAuth callback route, which requires real GitHub API interaction.
  */
 export async function insertTestGitHubInstallation(
-  userId: string,
   composeId: string,
   installationId?: string,
 ) {
@@ -2099,7 +2099,6 @@ export async function insertTestGitHubInstallation(
   const [row] = await globalThis.services.db
     .insert(githubInstallations)
     .values({
-      userId,
       installationId: id,
       encryptedAccessToken: encryptedToken,
       defaultComposeId: composeId,
@@ -2117,7 +2116,6 @@ export async function insertTestGitHubInstallation(
  * OAuth redirect flow.
  */
 export async function insertTestPendingGitHubInstallation(
-  userId: string,
   composeId: string,
   targetId: string,
   targetType: string = "Organization",
@@ -2125,7 +2123,6 @@ export async function insertTestPendingGitHubInstallation(
   const [row] = await globalThis.services.db
     .insert(githubInstallations)
     .values({
-      userId,
       installationId: null,
       encryptedAccessToken: null,
       status: "pending",
@@ -2167,16 +2164,67 @@ export async function findTestGitHubInstallationById(id: string) {
 }
 
 /**
- * Find GitHub installations by user ID.
+ * Create a GitHub installation with a user link and admin role.
+ *
+ * Combines insertTestGitHubInstallation + insertTestGitHubUserLink
+ * and sets adminGithubUserId so the linked user is the admin.
+ */
+export async function insertTestGitHubInstallationWithAdmin(
+  composeId: string,
+  vm0UserId: string,
+) {
+  const githubUserId = uniqueId("gh-uid");
+  const installation = await insertTestGitHubInstallation(composeId);
+
+  // Set admin to the github user
+  await globalThis.services.db
+    .update(githubInstallations)
+    .set({ adminGithubUserId: githubUserId })
+    .where(eq(githubInstallations.id, installation.id));
+
+  // Create user link inline (maps GitHub user to VM0 user for this installation)
+  await globalThis.services.db
+    .insert(githubUserLinks)
+    .values({
+      githubUserId,
+      installationId: installation.id,
+      vm0UserId,
+    })
+    .onConflictDoNothing();
+
+  return { installation, githubUserId };
+}
+
+/**
+ * Insert a GitHub user link record directly in the database.
+ *
+ * Direct DB insert is required because user links are created by the
+ * GitHub OAuth callback which requires real GitHub API interaction.
+ * This helper creates a link between a GitHub user and a VM0 user
+ * for a given installation, used to test non-admin authorization paths.
+ */
+export async function insertTestGitHubUserLink(
+  githubUserId: string,
+  installationId: string,
+  vm0UserId: string,
+) {
+  await globalThis.services.db
+    .insert(githubUserLinks)
+    .values({ githubUserId, installationId, vm0UserId })
+    .onConflictDoNothing();
+}
+
+/**
+ * Find GitHub installations by target ID.
  *
  * Direct DB read is required because pending installations have no
  * installation_id to query by, and the GET endpoint requires auth context.
  */
-export async function findTestGitHubInstallationsByUserId(userId: string) {
+export async function findTestGitHubInstallationsByTargetId(targetId: string) {
   return globalThis.services.db
     .select()
     .from(githubInstallations)
-    .where(eq(githubInstallations.userId, userId));
+    .where(eq(githubInstallations.targetId, targetId));
 }
 
 /**

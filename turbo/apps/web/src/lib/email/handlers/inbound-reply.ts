@@ -6,6 +6,8 @@ import { extractEmailBody } from "../content-extract";
 import {
   verifyReplyToken,
   lookupEmailThreadSession,
+  computeReplyRecipients,
+  getFromDomain,
   type HandlerResult,
 } from "./shared";
 import { createRun } from "../../run";
@@ -81,7 +83,16 @@ export async function handleInboundEmailReply(
   // 4. Fetch full email body from Resend
   const email = await getReceivedEmail(emailId);
 
-  // 5. Extract inbound Message-ID and References for threading (case-insensitive lookup)
+  // 5. Compute reply recipients based on bot position in To/CC
+  const replyRecipients = computeReplyRecipients({
+    from: event.data.from,
+    to: email.to,
+    cc: email.cc,
+    replyTo: email.replyTo,
+    botDomain: getFromDomain(),
+  });
+
+  // 6. Extract inbound Message-ID and References for threading (case-insensitive lookup)
   const headers = email.headers ?? {};
   const messageIdKey = Object.keys(headers).find(
     (k) => k.toLowerCase() === "message-id",
@@ -92,7 +103,7 @@ export async function handleInboundEmailReply(
   );
   const inboundReferences = referencesKey ? headers[referencesKey] : undefined;
 
-  // 6. Extract email body (prefer HTML, fallback to text, strip quotes)
+  // 7. Extract email body (prefer HTML, fallback to text, strip quotes)
   let replyContent = extractEmailBody(email.html, email.text);
   if (!replyContent.trim()) {
     log.debug("Empty reply content after stripping", { emailId });
@@ -102,13 +113,13 @@ export async function handleInboundEmailReply(
     };
   }
 
-  // 6b. Process attachments and append to reply content
+  // 7b. Process attachments and append to reply content
   const attachmentText = await processEmailAttachments(emailId);
   if (attachmentText) {
     replyContent = `${replyContent}\n\n${attachmentText}`;
   }
 
-  // 7. Get compose to find agent name and version
+  // 8. Get compose to find agent name and version
   const [compose] = await globalThis.services.db
     .select({
       name: agentComposes.name,
@@ -128,7 +139,7 @@ export async function handleInboundEmailReply(
     };
   }
 
-  // 8. Build callbacks for email reply notification
+  // 9. Build callbacks for email reply notification
   const callbacks = [
     {
       url: `${getApiUrl()}/api/internal/callbacks/email/reply`,
@@ -138,11 +149,13 @@ export async function handleInboundEmailReply(
         inboundEmailId: emailId,
         inboundMessageId,
         inboundReferences,
+        replyRecipientTo: replyRecipients.to,
+        replyRecipientCc: replyRecipients.cc,
       },
     },
   ];
 
-  // 9. Create and dispatch run via unified pipeline
+  // 10. Create and dispatch run via unified pipeline
   const result = await createRun({
     userId: session.userId,
     agentComposeVersionId: compose.headVersionId ?? "",

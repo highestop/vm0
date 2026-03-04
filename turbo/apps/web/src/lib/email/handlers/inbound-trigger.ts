@@ -7,6 +7,8 @@ import {
   parseAgentOnlyAddress,
   resolveAgentByAddress,
   generateReplyToken,
+  computeReplyRecipients,
+  getFromDomain,
   type HandlerResult,
 } from "./shared";
 import { createRun } from "../../run";
@@ -181,7 +183,16 @@ export async function handleInboundEmailTrigger(
   // 5. Fetch full email
   const email = await getReceivedEmail(emailId);
 
-  // 6. Extract inbound Message-ID for threading (case-insensitive lookup)
+  // 6. Compute reply recipients based on bot position in To/CC
+  const replyRecipients = computeReplyRecipients({
+    from: senderEmail,
+    to: email.to,
+    cc: email.cc,
+    replyTo: email.replyTo,
+    botDomain: getFromDomain(),
+  });
+
+  // 7. Extract inbound Message-ID for threading (case-insensitive lookup)
   const headers = email.headers ?? {};
   const messageIdKey = Object.keys(headers).find(
     (k) => k.toLowerCase() === "message-id",
@@ -192,7 +203,7 @@ export async function handleInboundEmailTrigger(
   );
   const inboundReferences = referencesKey ? headers[referencesKey] : undefined;
 
-  // 7. Verify sender authenticity via DMARC
+  // 8. Verify sender authenticity via DMARC
   const verification = verifySenderAuthenticity(email.headers);
   if (!verification.verified) {
     log.warn("Sender authentication failed, ignoring email", {
@@ -207,7 +218,7 @@ export async function handleInboundEmailTrigger(
     };
   }
 
-  // 8. Build prompt from email content
+  // 9. Build prompt from email content
   const bodyContent = extractEmailBody(email.html, email.text);
 
   // Combine subject + body as prompt
@@ -223,17 +234,17 @@ export async function handleInboundEmailTrigger(
     };
   }
 
-  // 8b. Process attachments and append to prompt
+  // 9b. Process attachments and append to prompt
   const attachmentText = await processEmailAttachments(emailId);
   if (attachmentText) {
     prompt = `${prompt}\n\n${attachmentText}`;
   }
 
-  // 9. Generate reply token for conversation continuity
+  // 10. Generate reply token for conversation continuity
   const sessionPlaceholderId = crypto.randomUUID();
   const replyToken = generateReplyToken(sessionPlaceholderId);
 
-  // 10. Build callback
+  // 11. Build callback
   const callbacks = [
     {
       url: `${getApiUrl()}/api/internal/callbacks/email/trigger`,
@@ -248,11 +259,13 @@ export async function handleInboundEmailTrigger(
         inboundReferences,
         subject,
         triggerLocalPart,
+        replyRecipientTo: replyRecipients.to,
+        replyRecipientCc: replyRecipients.cc,
       },
     },
   ];
 
-  // 11. Create and dispatch run
+  // 12. Create and dispatch run
   const result = await createRun({
     userId,
     agentComposeVersionId: compose.headVersionId,

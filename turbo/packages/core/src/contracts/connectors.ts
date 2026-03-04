@@ -747,6 +747,39 @@ export const CONNECTOR_TYPES = {
       ],
     } as ConnectorOAuthConfig,
   },
+  "intervals-icu": {
+    label: "Intervals.icu",
+    helpText:
+      "Connect your Intervals.icu account to access training, activity, wellness, and calendar data",
+    authMethods: {
+      oauth: {
+        label: "OAuth (Recommended)",
+        helpText: "Sign in with Intervals.icu to grant access.",
+        secrets: {
+          INTERVALS_ICU_ACCESS_TOKEN: {
+            label: "Access Token",
+            required: true,
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "oauth",
+    environmentMapping: {
+      INTERVALS_ICU_TOKEN: "$secrets.INTERVALS_ICU_ACCESS_TOKEN",
+    } as Record<string, string>,
+    oauth: {
+      authorizationUrl: "https://intervals.icu/oauth/authorize",
+      tokenUrl: "https://intervals.icu/api/oauth/token",
+      scopes: [
+        "ACTIVITY:READ",
+        "ACTIVITY:WRITE",
+        "WELLNESS:READ",
+        "WELLNESS:WRITE",
+        "CALENDAR:READ",
+        "CALENDAR:WRITE",
+      ],
+    } as ConnectorOAuthConfig,
+  },
   xero: {
     label: "Xero",
     helpText:
@@ -812,6 +845,7 @@ export const connectorTypeSchema = z.enum([
   "x",
   "vercel",
   "sentry",
+  "intervals-icu",
   "xero",
 ]);
 

@@ -125,6 +125,9 @@ function initEnv() {
       // Sentry OAuth (for connector)
       SENTRY_OAUTH_CLIENT_ID: z.string().min(1).optional(),
       SENTRY_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+      // Intervals.icu OAuth (for connector)
+      INTERVALS_ICU_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+      INTERVALS_ICU_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
       // Xero OAuth (for connector)
       XERO_OAUTH_CLIENT_ID: z.string().min(1).optional(),
       XERO_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
@@ -246,6 +249,9 @@ function initEnv() {
       VERCEL_OAUTH_CLIENT_SECRET: process.env.VERCEL_OAUTH_CLIENT_SECRET,
       SENTRY_OAUTH_CLIENT_ID: process.env.SENTRY_OAUTH_CLIENT_ID,
       SENTRY_OAUTH_CLIENT_SECRET: process.env.SENTRY_OAUTH_CLIENT_SECRET,
+      INTERVALS_ICU_OAUTH_CLIENT_ID: process.env.INTERVALS_ICU_OAUTH_CLIENT_ID,
+      INTERVALS_ICU_OAUTH_CLIENT_SECRET:
+        process.env.INTERVALS_ICU_OAUTH_CLIENT_SECRET,
       XERO_OAUTH_CLIENT_ID: process.env.XERO_OAUTH_CLIENT_ID,
       XERO_OAUTH_CLIENT_SECRET: process.env.XERO_OAUTH_CLIENT_SECRET,
       GITHUB_APP_ID: process.env.GITHUB_APP_ID,

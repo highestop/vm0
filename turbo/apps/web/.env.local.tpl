@@ -98,6 +98,10 @@ VERCEL_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/VERCEL_OAUTH_CLIENT_SE
 SENTRY_OAUTH_CLIENT_ID=op://Development/vm0-env-local/SENTRY_OAUTH_CLIENT_ID
 SENTRY_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/SENTRY_OAUTH_CLIENT_SECRET
 
+# Optional: Intervals.icu OAuth Connector
+INTERVALS_ICU_OAUTH_CLIENT_ID=op://Development/vm0-env-local/INTERVALS_ICU_OAUTH_CLIENT_ID
+INTERVALS_ICU_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/INTERVALS_ICU_OAUTH_CLIENT_SECRET
+
 # Optional: Xero OAuth Connector
 XERO_OAUTH_CLIENT_ID=op://Development/vm0-env-local/XERO_OAUTH_CLIENT_ID
 XERO_OAUTH_CLIENT_SECRET=op://Development/vm0-env-local/XERO_OAUTH_CLIENT_SECRET

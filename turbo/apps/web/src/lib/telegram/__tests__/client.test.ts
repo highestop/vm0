@@ -5,6 +5,7 @@ import {
   createTelegramClient,
   sendMessage,
   sendChatAction,
+  deleteMessage,
   getMe,
   setWebhook,
   deleteWebhook,
@@ -238,6 +239,28 @@ describe("sendChatAction", () => {
     expect(capturedBody).toEqual({
       chat_id: 42,
       action: "typing",
+    });
+  });
+});
+
+describe("deleteMessage", () => {
+  it("should delete a message", async () => {
+    let capturedBody: unknown;
+    const handler = http.post(
+      `https://api.telegram.org/bot${TEST_TOKEN}/deleteMessage`,
+      async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ ok: true, result: true });
+      },
+    );
+    server.use(handler.handler);
+
+    const client = createTelegramClient(TEST_TOKEN);
+    await deleteMessage(client, 42, 99);
+
+    expect(capturedBody).toEqual({
+      chat_id: 42,
+      message_id: 99,
     });
   });
 });

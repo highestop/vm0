@@ -149,6 +149,20 @@ export async function deleteWebhook(token: string): Promise<void> {
 }
 
 /**
+ * Delete a message
+ */
+export async function deleteMessage(
+  client: TelegramClient,
+  chatId: string | number,
+  messageId: number,
+): Promise<void> {
+  await callTelegramApi<boolean>(client.token, "deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId,
+  });
+}
+
+/**
  * Register bot commands
  */
 export async function setMyCommands(

@@ -240,11 +240,11 @@ export async function GET(request: Request) {
  * Looks up the user's GitHub connector to find their GitHub user ID.
  * If no connector exists, the link is skipped (user can link later).
  */
-async function linkVm0User(
+export async function linkVm0User(
   db: typeof globalThis.services.db,
   installRecordId: string,
   vm0UserId: string,
-): Promise<void> {
+): Promise<string | null> {
   // Find user's GitHub OAuth connector to get their GitHub user ID
   const [connector] = await db
     .select({ externalId: connectors.externalId })
@@ -255,7 +255,7 @@ async function linkVm0User(
 
   if (!connector?.externalId) {
     // No GitHub connector — user needs to link via /github/connect later
-    return;
+    return null;
   }
 
   // Create user link (ignore conflict if already linked)
@@ -267,4 +267,6 @@ async function linkVm0User(
       vm0UserId,
     })
     .onConflictDoNothing();
+
+  return connector.externalId;
 }

@@ -41,14 +41,42 @@ export async function GET(request: Request) {
     .orderBy(desc(telegramUserLinks.createdAt))
     .limit(1);
 
-  if (!userLink) {
-    return NextResponse.json({ linked: false });
+  if (userLink) {
+    return NextResponse.json({
+      linked: true,
+      telegramUserId: userLink.telegramUserId,
+    });
   }
 
-  return NextResponse.json({
-    linked: true,
-    telegramUserId: userLink.telegramUserId,
-  });
+  // If not linked, check if a specific bot was requested via ?botId= param.
+  // This returns the installation ID and botUsername so the frontend can show
+  // a re-link UI. Actual linking is gated by an HMAC-signed deep link token
+  // that must be activated via Telegram interaction (see /start handler).
+  const url = new URL(request.url);
+  const botId = url.searchParams.get("botId");
+
+  if (botId) {
+    const [installation] = await globalThis.services.db
+      .select({
+        id: telegramInstallations.id,
+        botUsername: telegramInstallations.botUsername,
+      })
+      .from(telegramInstallations)
+      .where(eq(telegramInstallations.telegramBotId, botId))
+      .limit(1);
+
+    if (installation) {
+      return NextResponse.json({
+        linked: false,
+        installation: {
+          id: installation.id,
+          botUsername: installation.botUsername,
+        },
+      });
+    }
+  }
+
+  return NextResponse.json({ linked: false });
 }
 
 /**

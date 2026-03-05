@@ -9,16 +9,15 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { http, HttpResponse } from "msw";
-import { server } from "../../../../mocks/server";
+import { server } from "../../../mocks/server";
 import { leaveCommand } from "../leave";
 import chalk from "chalk";
 
-vi.mock("../../../../lib/api/config", async (importOriginal) => {
+vi.mock("../../../lib/api/config", async (importOriginal) => {
   const original =
-    await importOriginal<typeof import("../../../../lib/api/config")>();
+    await importOriginal<typeof import("../../../lib/api/config")>();
   return {
     ...original,
-    clearOrgToken: vi.fn().mockResolvedValue(undefined),
     loadConfig: vi.fn().mockResolvedValue({ activeScope: undefined }),
   };
 });

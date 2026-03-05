@@ -131,11 +131,11 @@ export async function GET(request: Request) {
   }
 
   // Resolve user scope and get existing secrets, vars, connectors
-  const { scope } = await resolveScope(userId, authHeader ?? undefined);
+  const { scope } = await resolveScope(userId);
   const [userSecrets, userVars, userConnectors] = await Promise.all([
-    listSecrets(scope.id),
-    listVariables(scope.id),
-    listConnectors(scope.id),
+    listSecrets(scope.id, userId),
+    listVariables(scope.id, userId),
+    listConnectors(scope.id, userId),
   ]);
 
   const connectorProvided = getConnectorProvidedSecretNames(
@@ -267,10 +267,7 @@ export async function PATCH(request: Request) {
     }
   } else {
     try {
-      ({ scope: targetScope } = await resolveScope(
-        userId,
-        authHeader ?? undefined,
-      ));
+      ({ scope: targetScope } = await resolveScope(userId));
     } catch (error) {
       if (isNotFound(error)) {
         return NextResponse.json(

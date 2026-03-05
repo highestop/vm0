@@ -14,17 +14,9 @@ import {
   resolveUserLink,
 } from "./shared";
 import { logger } from "../../logger";
+import type { TelegramHandlerUpdate } from "./types";
 
 const log = logger("telegram:dm");
-
-interface TelegramUpdate {
-  message: {
-    message_id: number;
-    chat: { id: number; type: string };
-    from?: { id: number; username?: string; is_bot?: boolean };
-    text?: string;
-  };
-}
 
 /**
  * Handle a direct message to the bot
@@ -34,7 +26,7 @@ interface TelegramUpdate {
  * - Use rootMessageId = "dm" sentinel for single ongoing DM session
  */
 export async function handleTelegramDirectMessage(
-  update: TelegramUpdate,
+  update: TelegramHandlerUpdate,
   installationId: string,
 ): Promise<void> {
   const { SECRETS_ENCRYPTION_KEY } = env();
@@ -115,12 +107,16 @@ export async function handleTelegramDirectMessage(
     }
   }
 
-  // 8. Fetch context
-  const { executionContext } = await fetchTelegramContext(
-    installationId,
-    chatId,
-    lastProcessedMessageId,
-  );
+  // 8. Fetch context (skip when continuing an existing session — it already has history)
+  let executionContext = "";
+  if (!existingSessionId) {
+    const ctx = await fetchTelegramContext(
+      installationId,
+      chatId,
+      lastProcessedMessageId,
+    );
+    executionContext = ctx.executionContext;
+  }
 
   // 9. Dispatch agent run
   const { status, response } = await runAgentForTelegram({

@@ -76,7 +76,14 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${platformUrl}/settings?tab=integrations`);
   }
 
-  const state = parseOAuthState(url.searchParams.get("state"));
+  let state: OAuthState;
+  try {
+    state = parseOAuthState(url.searchParams.get("state"));
+  } catch {
+    return NextResponse.redirect(
+      `${platformUrl}/settings?tab=integrations&error=${encodeURIComponent("Invalid OAuth state. Please try installing again from the Platform.")}`,
+    );
+  }
 
   // Verify HMAC signature when vm0UserId is present
   if (state.vm0UserId) {

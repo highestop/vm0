@@ -5,6 +5,7 @@ import { telegramMessages } from "../../../db/schema/telegram-message";
 import { agentComposes } from "../../../db/schema/agent-compose";
 import { scopes } from "../../../db/schema/scope";
 import { encryptCredentialValue } from "../../crypto/secrets-encryption";
+import { PENDING_TELEGRAM_USER_ID } from "../handlers/shared";
 import { uniqueId } from "../../../__tests__/test-helpers";
 
 /**
@@ -78,6 +79,58 @@ export async function insertTelegramMessage(
     isBot: options.isBot ?? false,
     createdAt: options.createdAt ?? new Date(),
   });
+}
+
+interface PendingLinkInstallationResult {
+  installationId: string;
+  userLinkId: string;
+  vm0UserId: string;
+}
+
+/**
+ * Create a Telegram installation with a properly encrypted bot token
+ * and a pending user link (telegramUserId='pending').
+ * Use this for testing the auto-complete pending link flow.
+ */
+export async function createTelegramPendingLinkInstallation(
+  composeId: string,
+  vm0UserId: string,
+  botToken: string,
+): Promise<PendingLinkInstallationResult> {
+  initServices();
+
+  const { SECRETS_ENCRYPTION_KEY } = globalThis.services.env;
+  const encryptedBotToken = encryptCredentialValue(
+    botToken,
+    SECRETS_ENCRYPTION_KEY,
+  );
+
+  const [installation] = await globalThis.services.db
+    .insert(telegramInstallations)
+    .values({
+      telegramBotId: uniqueId("bot"),
+      botUsername: "test_bot",
+      encryptedBotToken,
+      webhookSecret: "webhook-secret",
+      defaultComposeId: composeId,
+      adminUserId: vm0UserId,
+    })
+    .returning();
+
+  const [userLink] = await globalThis.services.db
+    .insert(telegramUserLinks)
+    .values({
+      telegramUserId: PENDING_TELEGRAM_USER_ID,
+      installationId: installation!.id,
+      vm0UserId,
+    })
+    .returning();
+
+  return {
+    installationId: installation!.id,
+    userLinkId: userLink!.id,
+    vm0UserId,
+  };
 }
 
 interface CallbackInstallationResult {

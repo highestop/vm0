@@ -1,6 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { telegramThreadSessions } from "../../../db/schema/telegram-thread-session";
 import { telegramMessages } from "../../../db/schema/telegram-message";
+import { telegramUserLinks } from "../../../db/schema/telegram-user-link";
 import { agentComposes } from "../../../db/schema/agent-compose";
 import { getPlatformUrl } from "../../url";
 import {
@@ -13,6 +14,13 @@ import { ensureArtifactExists } from "../../storage/storage-service";
 import { logger } from "../../logger";
 
 const log = logger("telegram:shared");
+
+/**
+ * Sentinel value for a pending user link that hasn't been claimed yet.
+ * Set as telegramUserId at registration time, replaced with the real
+ * Telegram user ID when the admin sends their first message.
+ */
+export const PENDING_TELEGRAM_USER_ID = "pending";
 
 interface ThreadSessionLookup {
   existingSessionId: string | undefined;
@@ -131,17 +139,70 @@ export async function storeTelegramMessage(
 }
 
 /**
- * Build the deep link URL for account linking
- */
-export function buildLoginUrl(botUsername: string, linkToken: string): string {
-  return `https://t.me/${botUsername}?start=${linkToken}`;
-}
-
-/**
  * Build the logs URL for a run
  */
 export function buildLogsUrl(runId: string): string {
   return `${getPlatformUrl()}/logs/${runId}`;
+}
+
+/**
+ * Look up a user link by telegramUserId and installationId.
+ * If no direct match, try to auto-complete a pending link.
+ * Returns the user link row or null.
+ */
+export async function resolveUserLink(
+  installationId: string,
+  telegramUserId: string,
+): Promise<typeof telegramUserLinks.$inferSelect | null> {
+  const [userLink] = await globalThis.services.db
+    .select()
+    .from(telegramUserLinks)
+    .where(
+      and(
+        eq(telegramUserLinks.telegramUserId, telegramUserId),
+        eq(telegramUserLinks.installationId, installationId),
+      ),
+    )
+    .limit(1);
+
+  if (userLink) {
+    return userLink;
+  }
+
+  const completed = await completePendingLink(installationId, telegramUserId);
+  if (completed) {
+    log.info("Auto-completed pending link", {
+      installationId,
+      telegramUserId,
+    });
+    return completed;
+  }
+
+  return null;
+}
+
+/**
+ * Complete a pending user link by replacing the placeholder telegramUserId
+ * with the real one. Returns the updated row or null if no pending link exists.
+ */
+async function completePendingLink(
+  installationId: string,
+  realTelegramUserId: string,
+): Promise<typeof telegramUserLinks.$inferSelect | null> {
+  const [updated] = await globalThis.services.db
+    .update(telegramUserLinks)
+    .set({
+      telegramUserId: realTelegramUserId,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(telegramUserLinks.installationId, installationId),
+        eq(telegramUserLinks.telegramUserId, PENDING_TELEGRAM_USER_ID),
+      ),
+    )
+    .returning();
+  return updated ?? null;
 }
 
 /**

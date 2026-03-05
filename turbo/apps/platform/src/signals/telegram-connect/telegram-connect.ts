@@ -12,7 +12,11 @@ interface TelegramConnectState {
 }
 
 type RegisterTelegramBotResult =
-  | { success: true; installationId: string; botUsername: string }
+  | {
+      success: true;
+      installationId: string;
+      botUsername: string;
+    }
   | { success: false };
 
 const telegramConnectState$ = state<TelegramConnectState>({

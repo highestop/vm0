@@ -5,7 +5,6 @@ import { initServices } from "../../../../src/lib/init-services";
 import { env } from "../../../../src/env";
 import { getUserId } from "../../../../src/lib/auth/get-user-id";
 import { telegramInstallations } from "../../../../src/db/schema/telegram-installation";
-import { telegramUserLinks } from "../../../../src/db/schema/telegram-user-link";
 import { agentComposes } from "../../../../src/db/schema/agent-compose";
 import {
   getMe,
@@ -15,6 +14,11 @@ import {
 import { encryptCredentialValue } from "../../../../src/lib/crypto/secrets-encryption";
 import { generateCallbackSecret } from "../../../../src/lib/callback/hmac";
 import { resolveDefaultAgentComposeId } from "../../../../src/lib/agent-compose/resolve-default";
+import { telegramUserLinks } from "../../../../src/db/schema/telegram-user-link";
+import {
+  ensureScopeAndArtifact,
+  PENDING_TELEGRAM_USER_ID,
+} from "../../../../src/lib/telegram/handlers/shared";
 import { logger } from "../../../../src/lib/logger";
 
 const registerBodySchema = z.object({
@@ -195,15 +199,13 @@ export async function POST(request: Request) {
     log.warn("Failed to register bot commands", { error });
   });
 
-  // 8. Auto-create user link for the registering admin
-  await globalThis.services.db
-    .insert(telegramUserLinks)
-    .values({
-      telegramUserId: telegramBotId,
-      installationId: installation.id,
-      vm0UserId: userId,
-    })
-    .onConflictDoNothing();
+  // 8. Create pending user link so the admin is auto-linked on first message
+  await globalThis.services.db.insert(telegramUserLinks).values({
+    telegramUserId: PENDING_TELEGRAM_USER_ID,
+    installationId: installation.id,
+    vm0UserId: userId,
+  });
+  await ensureScopeAndArtifact(userId);
 
   return NextResponse.json(
     {

@@ -9,9 +9,7 @@ export function TelegramConnectSuccessPage() {
   const params = useGet(searchParams$);
 
   const botUsername = params.get("bot");
-  const telegramLink = botUsername
-    ? `tg://resolve?domain=${botUsername}`
-    : null;
+  const telegramLink = botUsername ? `https://t.me/${botUsername}` : null;
 
   const backgroundGradient =
     theme === "dark"

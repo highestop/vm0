@@ -1,4 +1,4 @@
-import { eq, and, count, gt, or } from "drizzle-orm";
+import { eq, and, count, gt, or, sql } from "drizzle-orm";
 import { env } from "../../env";
 import { checkpoints } from "../../db/schema/checkpoint";
 import { agentRuns } from "../../db/schema/agent-run";
@@ -15,6 +15,7 @@ import {
   concurrentRunLimit,
 } from "../errors";
 import { logger } from "../logger";
+import type { Database } from "../../types/global";
 import type { ExecutionContext } from "./types";
 import type { AgentComposeSnapshot } from "../checkpoint/types";
 import type { AgentComposeYaml } from "../../types/agent-compose";
@@ -52,6 +53,7 @@ const PENDING_RUN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 async function checkRunConcurrencyLimit(
   userId: string,
   limit?: number,
+  db?: Database,
 ): Promise<void> {
   // Use provided limit, or env var, or default to 1
   // Note: 0 means no limit, so we need explicit undefined check
@@ -69,10 +71,12 @@ async function checkRunConcurrencyLimit(
     return;
   }
 
+  const queryDb = db ?? globalThis.services.db;
+
   // Count active runs: all "running" runs + "pending" runs within TTL
   const staleThreshold = new Date(Date.now() - PENDING_RUN_TTL_MS);
 
-  const [result] = await globalThis.services.db
+  const [result] = await queryDb
     .select({ count: count() })
     .from(agentRuns)
     .where(
@@ -489,16 +493,15 @@ async function markRunFailed(
  * All callers (API Route, Schedule, Slack) should use this.
  *
  * Pipeline:
- * 1. Check concurrent run limit
- * 2. Load compose version content + compose metadata
- * 3. Permission check (canAccessCompose)
- * 4. Validate template vars and image access
- * 5. Validate mutual exclusivity (checkpointId vs sessionId)
- * 6. INSERT agentRuns
- * 7. Register callbacks (if any)
- * 8. Generate sandbox token
- * 9. Build execution context
- * 10. Dispatch to executor
+ * 1. Load compose version content + compose metadata
+ * 2. Permission check (canAccessCompose)
+ * 3. Validate template vars and image access
+ * 4. Validate mutual exclusivity (checkpointId vs sessionId)
+ * 5. Acquire per-user advisory lock, check concurrent run limit, INSERT agentRuns (atomic transaction)
+ * 6. Register callbacks (if any)
+ * 7. Generate sandbox token
+ * 8. Build execution context
+ * 9. Dispatch to executor
  *
  * @throws ConcurrentRunLimitError - concurrent run limit reached
  * @throws ForbiddenError - user cannot access compose
@@ -512,17 +515,14 @@ export async function createRun(
   const apiStartTime = Date.now();
   const { userId, agentComposeVersionId, prompt } = params;
 
-  // Step 1: Check concurrent run limit
-  await checkRunConcurrencyLimit(userId);
-
-  // Steps 2-3: Load compose version/metadata and verify access
+  // Steps 1-2: Load compose version/metadata and verify access
   const { composeContent } = await loadAndAuthorizeCompose(
     userId,
     agentComposeVersionId,
     params.composeId,
   );
 
-  // Step 4: Validate template vars and image access (for new runs only)
+  // Step 3: Validate template vars and image access (for new runs only)
   if (!params.checkpointId && !params.sessionId) {
     await validateComposeRequirements(
       userId,
@@ -533,7 +533,7 @@ export async function createRun(
     );
   }
 
-  // Step 5: Validate mutual exclusivity
+  // Step 4: Validate mutual exclusivity
   if (params.checkpointId && params.sessionId) {
     throw badRequest(
       "Cannot specify both checkpointId and sessionId. Use checkpointId to resume from a checkpoint, or sessionId to continue a session.",
@@ -543,41 +543,54 @@ export async function createRun(
   // Resolve scope ID for the run record
   const scopeId = params.scopeId ?? (await getDefaultScope(userId)).scope.id;
 
-  // Step 6: INSERT agentRuns
-  const [run] = await globalThis.services.db
-    .insert(agentRuns)
-    .values({
-      userId,
-      scopeId,
-      agentComposeVersionId,
-      status: "pending",
-      prompt,
-      vars: params.vars ?? null,
-      secretNames: params.secrets ? Object.keys(params.secrets) : null,
-      resumedFromCheckpointId: params.resumedFromCheckpointId ?? null,
-      continuedFromSessionId: params.sessionId ?? null,
-      scheduleId: params.scheduleId ?? null,
-      lastHeartbeatAt: new Date(),
-    })
-    .returning();
+  // Step 5: Concurrency check + INSERT in a transaction with advisory lock
+  // to prevent TOCTOU race where two concurrent requests both pass the
+  // concurrency check before either inserts.
+  const run = await globalThis.services.db.transaction(async (tx) => {
+    // Acquire per-user advisory lock (released when transaction ends)
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
 
-  if (!run) {
-    throw new Error("Failed to create run record");
-  }
+    // Check concurrent run limit within the serialized transaction
+    await checkRunConcurrencyLimit(userId, undefined, tx);
+
+    // INSERT within the same transaction
+    const [newRun] = await tx
+      .insert(agentRuns)
+      .values({
+        userId,
+        scopeId,
+        agentComposeVersionId,
+        status: "pending",
+        prompt,
+        vars: params.vars ?? null,
+        secretNames: params.secrets ? Object.keys(params.secrets) : null,
+        resumedFromCheckpointId: params.resumedFromCheckpointId ?? null,
+        continuedFromSessionId: params.sessionId ?? null,
+        scheduleId: params.scheduleId ?? null,
+        lastHeartbeatAt: new Date(),
+      })
+      .returning();
+
+    if (!newRun) {
+      throw new Error("Failed to create run record");
+    }
+
+    return newRun;
+  });
 
   log.debug(`Created run ${run.id} for user ${userId}`);
 
   // From this point on, errors must mark the run as "failed"
   try {
-    // Step 7: Register callbacks (if any)
+    // Step 6: Register callbacks (if any)
     if (params.callbacks && params.callbacks.length > 0) {
       await registerCallbacks(run.id, params.callbacks);
     }
 
-    // Step 8: Generate sandbox token
+    // Step 7: Generate sandbox token
     const sandboxToken = await generateSandboxToken(userId, run.id);
 
-    // Step 9: Build execution context (pass pre-loaded compose to avoid double fetch)
+    // Step 8: Build execution context (pass pre-loaded compose to avoid double fetch)
     const context = await buildContext({
       checkpointId: params.checkpointId,
       sessionId: params.sessionId,
@@ -603,7 +616,7 @@ export async function createRun(
       scopeId,
     });
 
-    // Step 10: Dispatch to executor
+    // Step 9: Dispatch to executor
     const result = await prepareAndDispatchRun(context);
 
     log.debug(`Run ${run.id} dispatched with status: ${result.status}`);

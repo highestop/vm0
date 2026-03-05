@@ -8,6 +8,7 @@ pub(crate) const DEFAULT_VCPU: u32 = 2;
 pub(crate) const DEFAULT_MEMORY_MB: u32 = 2048;
 /// 0 means auto-detect from host CPU and memory at startup.
 pub(crate) const DEFAULT_MAX_CONCURRENT: usize = 0;
+pub(crate) const DEFAULT_CONCURRENCY_FACTOR: f64 = 1.0;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunnerConfig {
@@ -56,6 +57,9 @@ pub struct SandboxConfig {
     pub vcpu: u32,
     pub memory_mb: u32,
     pub max_concurrent: usize,
+    /// CPU overcommit factor for auto-detected concurrency (default: 1.0).
+    /// Only used when max_concurrent is 0 (auto mode).
+    pub concurrency_factor: f64,
 }
 
 impl Default for SandboxConfig {
@@ -64,6 +68,7 @@ impl Default for SandboxConfig {
             vcpu: DEFAULT_VCPU,
             memory_mb: DEFAULT_MEMORY_MB,
             max_concurrent: DEFAULT_MAX_CONCURRENT,
+            concurrency_factor: DEFAULT_CONCURRENCY_FACTOR,
         }
     }
 }
@@ -90,6 +95,11 @@ pub async fn load(path: &Path) -> RunnerResult<RunnerConfig> {
     if config.sandbox.vcpu == 0 || config.sandbox.memory_mb == 0 {
         return Err(RunnerError::Config(
             "sandbox.vcpu and sandbox.memory_mb must be non-zero".into(),
+        ));
+    }
+    if !config.sandbox.concurrency_factor.is_finite() || config.sandbox.concurrency_factor <= 0.0 {
+        return Err(RunnerError::Config(
+            "sandbox.concurrency_factor must be a positive finite number".into(),
         ));
     }
     Ok(config)
@@ -219,6 +229,7 @@ sandbox:
   vcpu: 4
   memory_mb: 4096
   max_concurrent: 8
+  concurrency_factor: 2.0
 server:
   url: https://api.example.com
   token: secret
@@ -239,6 +250,7 @@ server:
         assert_eq!(config.sandbox.vcpu, 4);
         assert_eq!(config.sandbox.memory_mb, 4096);
         assert_eq!(config.sandbox.max_concurrent, 8);
+        assert!((config.sandbox.concurrency_factor - 2.0).abs() < f64::EPSILON);
         let server = config.server.unwrap();
         assert_eq!(server.url, "https://api.example.com");
         assert_eq!(server.token, "secret");
@@ -279,6 +291,9 @@ firecracker:
         assert_eq!(config.sandbox.vcpu, DEFAULT_VCPU);
         assert_eq!(config.sandbox.memory_mb, DEFAULT_MEMORY_MB);
         assert_eq!(config.sandbox.max_concurrent, DEFAULT_MAX_CONCURRENT);
+        assert!(
+            (config.sandbox.concurrency_factor - DEFAULT_CONCURRENCY_FACTOR).abs() < f64::EPSILON
+        );
         assert!(config.server.is_none());
     }
 
@@ -389,6 +404,48 @@ sandbox:
     }
 
     #[tokio::test]
+    async fn load_rejects_invalid_concurrency_factor() {
+        let dir = tempfile::tempdir().unwrap();
+        let fc = dir.path().join("firecracker");
+        let kernel = dir.path().join("vmlinux");
+        let rootfs = dir.path().join("rootfs.squashfs");
+        for f in [&fc, &kernel, &rootfs] {
+            tokio::fs::write(f, b"").await.unwrap();
+        }
+
+        for bad_value in ["0.0", "-1.0", ".nan", ".inf", "-.inf"] {
+            let yaml = format!(
+                r#"
+name: test
+group: test/group
+base_dir: {base_dir}
+ca_dir: {ca_dir}
+firecracker:
+  binary: {fc}
+  kernel: {kernel}
+  rootfs: {rootfs}
+sandbox:
+  concurrency_factor: {bad_value}
+"#,
+                base_dir = dir.path().display(),
+                ca_dir = dir.path().display(),
+                fc = fc.display(),
+                kernel = kernel.display(),
+                rootfs = rootfs.display(),
+            );
+
+            let config_path = dir.path().join("runner.yaml");
+            tokio::fs::write(&config_path, &yaml).await.unwrap();
+
+            let err = load(&config_path).await.unwrap_err();
+            assert!(
+                err.to_string().contains("concurrency_factor"),
+                "expected concurrency_factor error for {bad_value}, got: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn load_with_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let fc = dir.path().join("firecracker");
@@ -470,6 +527,7 @@ firecracker:
                 vcpu: 4,
                 memory_mb: 4096,
                 max_concurrent: 8,
+                concurrency_factor: 2.0,
             },
             server: Some(ServerConfig {
                 url: "https://api.example.com".into(),

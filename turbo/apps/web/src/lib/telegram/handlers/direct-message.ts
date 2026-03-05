@@ -65,7 +65,7 @@ export async function handleTelegramDirectMessage(
   }
 
   // 3. Resolve workspace agent
-  let composeId = installation.defaultComposeId;
+  const composeId = installation.defaultComposeId;
   const defaultAgent = await getWorkspaceAgent(composeId);
   if (!defaultAgent) {
     await sendMessage(
@@ -75,7 +75,7 @@ export async function handleTelegramDirectMessage(
     );
     return;
   }
-  let agentName = defaultAgent.name;
+  const agentName = defaultAgent.name;
 
   // 4. Send thinking placeholder message
   const thinkingMessage = await sendThinkingMessage(client, chatId, agentName);
@@ -92,18 +92,21 @@ export async function handleTelegramDirectMessage(
     rootMessageId,
     userLink.id,
   );
-  const existingSessionId = session.existingSessionId;
+  let existingSessionId = session.existingSessionId;
   const lastProcessedMessageId = session.lastProcessedMessageId;
 
-  // 7b. If continuing session, use session's compose
+  // 7b. Validate session's agent matches current default — discard only on positive mismatch
   if (existingSessionId) {
     const sessionCompose = await resolveSessionCompose(
       existingSessionId,
       userLink.vm0UserId,
     );
-    if (sessionCompose) {
-      composeId = sessionCompose.composeId;
-      agentName = sessionCompose.agentName;
+    if (sessionCompose && sessionCompose.composeId !== composeId) {
+      log.debug("Agent changed, starting new session", {
+        sessionComposeId: sessionCompose.composeId,
+        currentComposeId: composeId,
+      });
+      existingSessionId = undefined;
     }
   }
 

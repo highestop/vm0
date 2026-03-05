@@ -99,8 +99,8 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
     return;
   }
 
-  // 4. Resolve workspace agent (may be overridden by session below)
-  let composeId = installation.defaultComposeId;
+  // 4. Resolve workspace agent
+  const composeId = installation.defaultComposeId;
   const defaultAgent = await getWorkspaceAgent(composeId);
   if (!defaultAgent) {
     await postMessage(
@@ -111,7 +111,7 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
     );
     return;
   }
-  let agentName = defaultAgent.name;
+  const agentName = defaultAgent.name;
 
   // 5. Show assistant thinking status
   await setThreadStatus(client, context.channelId, threadTs, "is thinking...");
@@ -136,16 +136,19 @@ export async function handleAppMention(context: MentionContext): Promise<void> {
     });
   }
 
-  // 6b. If continuing session, use session's compose instead of workspace default
+  // 6b. Validate session's agent matches current default — discard only on positive mismatch
   if (existingSessionId) {
     const sessionCompose = await resolveSessionCompose(
       existingSessionId,
       userLink.vm0UserId,
     );
-    if (sessionCompose) {
-      composeId = sessionCompose.composeId;
-      agentName = sessionCompose.agentName;
-      log.debug("Using session compose", { composeId, agentName });
+    if (sessionCompose && sessionCompose.composeId !== composeId) {
+      log.debug("Agent changed, starting new session", {
+        sessionComposeId: sessionCompose.composeId,
+        currentComposeId: composeId,
+      });
+      existingSessionId = undefined;
+      lastProcessedMessageTs = undefined;
     }
   }
 

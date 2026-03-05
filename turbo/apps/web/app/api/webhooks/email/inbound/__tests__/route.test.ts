@@ -80,7 +80,9 @@ function createWebhookRequest(body: string, headers?: Record<string, string>) {
 /** Extract the first emails.send call args (error reply email) */
 function getErrorReplyArgs() {
   const call = mockResend.emails.send.mock.calls[0];
-  return call?.[0] as { from: string; to: string; subject: string } | undefined;
+  return call?.[0] as
+    | { from: string; to: string; subject: string; react: unknown }
+    | undefined;
 }
 
 describe("POST /api/webhooks/email/inbound", () => {
@@ -152,8 +154,9 @@ describe("POST /api/webhooks/email/inbound", () => {
       replyToToken: replyToken,
     });
 
-    // Switch to webhook auth (no Clerk)
-    mockClerk({ userId: null });
+    // Mock Clerk to return the session owner when looking up by email
+    const senderEmail = "user@example.com";
+    mockClerk({ userId: user.userId, email: senderEmail });
 
     // Build inbound email webhook payload
     const payload = JSON.stringify({
@@ -161,7 +164,7 @@ describe("POST /api/webhooks/email/inbound", () => {
       data: {
         email_id: "inbound-email-123",
         to: [`reply+${replyToken}@vm7.bot`],
-        from: "user@example.com",
+        from: senderEmail,
         subject: "Re: test",
         created_at: new Date().toISOString(),
       },
@@ -251,9 +254,9 @@ describe("POST /api/webhooks/email/inbound", () => {
       replyToToken: replyToken,
     });
 
-    mockClerk({ userId: null });
-
+    // Mock Clerk to return the session owner when looking up by email
     const senderEmail = "user@example.com";
+    mockClerk({ userId: user.userId, email: senderEmail });
 
     // Mock Resend to return empty text (e.g., email with only quoted content)
     mockReceivedEmailGet({
@@ -262,7 +265,10 @@ describe("POST /api/webhooks/email/inbound", () => {
       subject: "Re: test",
       text: "   ",
       html: "<p></p>",
-      headers: {},
+      headers: {
+        "authentication-results":
+          "mx.resend.com; dkim=pass; spf=pass; dmarc=pass",
+      },
     });
 
     const payload = JSON.stringify({
@@ -327,6 +333,185 @@ describe("POST /api/webhooks/email/inbound", () => {
     // Error reply should have been sent
     expect(mockResend.emails.send).toHaveBeenCalledTimes(1);
     expect(getErrorReplyArgs()?.to).toBe(senderEmail);
+  });
+
+  it("should send error reply when reply sender is not a registered user", async () => {
+    mockResend.emails.receiving.get.mockClear();
+
+    // Given a user with a compose and email thread session
+    const user = await context.setupUser({ prefix: "reply-unreg" });
+    const { composeId } = await createTestCompose(
+      uniqueId("reply-unreg-agent"),
+    );
+    const agentSession = await createTestSessionWithConversation(
+      user.userId,
+      composeId,
+    );
+
+    const replyToken = generateReplyToken(agentSession.id);
+    await createTestEmailThreadSession({
+      userId: user.userId,
+      composeId,
+      agentSessionId: agentSession.id,
+      replyToToken: replyToken,
+    });
+
+    // Mock Clerk to return the session owner only for their email
+    mockClerk({ userId: user.userId, email: "owner@example.com" });
+
+    // Send reply from an unregistered email address
+    const unregisteredSender = "stranger@example.com";
+    const payload = JSON.stringify({
+      type: "email.received",
+      data: {
+        email_id: "unreg-reply-email",
+        to: [`reply+${replyToken}@vm7.bot`],
+        from: unregisteredSender,
+        subject: "Re: test",
+        created_at: new Date().toISOString(),
+      },
+    });
+
+    const request = createWebhookRequest(payload);
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    await context.mocks.flushAfter();
+
+    // No email should have been fetched (early return before Resend call)
+    expect(mockResend.emails.receiving.get).not.toHaveBeenCalled();
+
+    // Error reply should have been sent
+    expect(mockResend.emails.send).toHaveBeenCalledTimes(1);
+    const args = getErrorReplyArgs();
+    expect(args?.to).toBe(unregisteredSender);
+    expect(args?.subject).toBe("Re: test");
+    expect(JSON.stringify(args?.react)).toContain(
+      "not associated with a VM0 account",
+    );
+  });
+
+  it("should send error reply when reply sender is a different user than session owner", async () => {
+    mockResend.emails.receiving.get.mockClear();
+
+    // Given user A owns the session
+    const userA = await context.setupUser({ prefix: "reply-owner" });
+    const { composeId } = await createTestCompose(uniqueId("reply-diff-agent"));
+    const agentSession = await createTestSessionWithConversation(
+      userA.userId,
+      composeId,
+    );
+
+    const replyToken = generateReplyToken(agentSession.id);
+    await createTestEmailThreadSession({
+      userId: userA.userId,
+      composeId,
+      agentSessionId: agentSession.id,
+      replyToToken: replyToken,
+    });
+
+    // Mock Clerk to return a DIFFERENT user (user B) when looking up by email
+    const userBEmail = "user-b@example.com";
+    mockClerk({ userId: "different-user-id", email: userBEmail });
+
+    // User B replies to the thread (they were CC'd on the original email)
+    const payload = JSON.stringify({
+      type: "email.received",
+      data: {
+        email_id: "diff-user-reply-email",
+        to: [`reply+${replyToken}@vm7.bot`],
+        from: userBEmail,
+        subject: "Re: test",
+        created_at: new Date().toISOString(),
+      },
+    });
+
+    const request = createWebhookRequest(payload);
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    await context.mocks.flushAfter();
+
+    // No email should have been fetched (early return before Resend call)
+    expect(mockResend.emails.receiving.get).not.toHaveBeenCalled();
+
+    // Error reply should have been sent
+    expect(mockResend.emails.send).toHaveBeenCalledTimes(1);
+    const args = getErrorReplyArgs();
+    expect(args?.to).toBe(userBEmail);
+    expect(args?.subject).toBe("Re: test");
+    expect(JSON.stringify(args?.react)).toContain(
+      "Only the original sender can continue",
+    );
+  });
+
+  it("should send error reply when reply email fails DMARC verification", async () => {
+    // Given a user with a compose and email thread session
+    const user = await context.setupUser({ prefix: "reply-dmarc" });
+    const { composeId } = await createTestCompose(
+      uniqueId("reply-dmarc-agent"),
+    );
+    const agentSession = await createTestSessionWithConversation(
+      user.userId,
+      composeId,
+    );
+
+    const replyToken = generateReplyToken(agentSession.id);
+    await createTestEmailThreadSession({
+      userId: user.userId,
+      composeId,
+      agentSessionId: agentSession.id,
+      replyToToken: replyToken,
+    });
+
+    // Mock Clerk to return the session owner
+    const senderEmail = "owner@example.com";
+    mockClerk({ userId: user.userId, email: senderEmail });
+
+    // Override Resend mock to return dmarc=fail
+    mockReceivedEmailGet({
+      from: senderEmail,
+      to: [`reply+${replyToken}@vm7.bot`],
+      subject: "Re: test",
+      text: "Reply with failed DMARC",
+      html: "<p>Reply with failed DMARC</p>",
+      headers: {
+        "Message-ID": "<dmarc-fail-reply@example.com>",
+        "Authentication-Results":
+          "mx.google.com; dkim=pass; spf=pass; dmarc=fail",
+      },
+    });
+
+    const payload = JSON.stringify({
+      type: "email.received",
+      data: {
+        email_id: "dmarc-fail-reply-email",
+        to: [`reply+${replyToken}@vm7.bot`],
+        from: senderEmail,
+        subject: "Re: test",
+        created_at: new Date().toISOString(),
+      },
+    });
+
+    const request = createWebhookRequest(payload);
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    await context.mocks.flushAfter();
+
+    // No run should have been created
+    const runs = await findTestRunsByUserAndPrompt(
+      user.userId,
+      "Reply with failed DMARC",
+    );
+    expect(runs).toHaveLength(0);
+
+    // Error reply should have been sent
+    expect(mockResend.emails.send).toHaveBeenCalledTimes(1);
+    const args = getErrorReplyArgs();
+    expect(args?.to).toBe(senderEmail);
+    expect(args?.subject).toBe("Re: test");
+    expect(JSON.stringify(args?.react)).toContain("DMARC verification failed");
   });
 
   describe("Email Trigger (scope+agent@domain)", () => {
@@ -830,11 +1015,13 @@ describe("POST /api/webhooks/email/inbound", () => {
       replyToToken: replyToken,
     });
 
-    mockClerk({ userId: null });
+    // Mock Clerk to return the session owner when looking up by email
+    const senderEmail = "user@example.com";
+    mockClerk({ userId: user.userId, email: senderEmail });
 
     // Override Resend mock to return HTML-only content
     mockReceivedEmailGet({
-      from: "user@example.com",
+      from: senderEmail,
       to: [`reply+${replyToken}@vm7.bot`],
       subject: "Re: test",
       text: "",
@@ -850,7 +1037,7 @@ describe("POST /api/webhooks/email/inbound", () => {
       data: {
         email_id: "html-only-reply",
         to: [`reply+${replyToken}@vm7.bot`],
-        from: "user@example.com",
+        from: senderEmail,
         subject: "Re: test",
         created_at: new Date().toISOString(),
       },
@@ -1380,11 +1567,13 @@ describe("POST /api/webhooks/email/inbound", () => {
         replyToToken: replyToken,
       });
 
-      mockClerk({ userId: null });
+      // Mock Clerk to return the session owner when looking up by email
+      const senderEmail = "user@example.com";
+      mockClerk({ userId: user.userId, email: senderEmail });
 
       // Mock Resend to return reply email
       mockReceivedEmailGet({
-        from: "user@example.com",
+        from: senderEmail,
         to: [`reply+${replyToken}@vm7.bot`],
         subject: "Re: test",
         text: "Here is the file you requested",
@@ -1433,7 +1622,7 @@ describe("POST /api/webhooks/email/inbound", () => {
         data: {
           email_id: "reply-att-email",
           to: [`reply+${replyToken}@vm7.bot`],
-          from: "user@example.com",
+          from: senderEmail,
           subject: "Re: test",
           created_at: new Date().toISOString(),
         },

@@ -1,17 +1,14 @@
 import { useState } from "react";
 import {
   IconArrowLeft,
-  IconCircleCheck,
-  IconCircleOff,
   IconFileText,
   IconSettings,
   IconPlug,
-  IconClock,
-  IconGitBranch,
   IconSparkles,
   IconX,
   IconPlus,
   IconTool,
+  IconCalendar,
 } from "@tabler/icons-react";
 import {
   Button,
@@ -26,37 +23,20 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  cn,
 } from "@vm0/ui";
 import { CONNECTOR_TYPES, type ConnectorType } from "@vm0/core";
 import { ConnectorIcon } from "../settings-page/connector-icons";
-
-type JobStatus = "active" | "paused";
+import { ZeroScheduleCard, DUMMY_AGENT_SCHEDULE } from "./zero-schedule-card";
 
 export interface JobItem {
   id: string;
+  agentName: string;
   title: string;
   description: string;
   scope: "personal" | "team";
-  status: JobStatus;
 }
 
-const SCHEDULE_FREQUENCIES = [
-  "Now",
-  "Once",
-  "Every weekday",
-  "Every day",
-  "Every week",
-  "Every month",
-] as const;
-
-const SCHEDULE_TIMES = [
-  "12:00 am",
-  "6:00 am",
-  "9:00 am",
-  "10:00 am",
-  "12:00 pm",
-  "6:00 pm",
-] as const;
 const WORKFLOW_SKILLS_OPTIONS = [
   "Slack",
   "Notion",
@@ -88,14 +68,11 @@ interface ZeroJobDetailPageProps {
 }
 
 export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
-  const [activeTab, setActiveTab] = useState("instructions");
+  const [activeTab, setActiveTab] = useState("settings");
   const [settingsName, setSettingsName] = useState(job.title);
   const [settingsDescription, setSettingsDescription] = useState(
     job.description,
   );
-  const [scheduleFrequency, setScheduleFrequency] =
-    useState<string>("Every weekday");
-  const [scheduleTime, setScheduleTime] = useState<string>("9:00 am");
   const [skills, setSkills] = useState<string[]>([
     "Slack",
     "Data Analysis",
@@ -133,43 +110,29 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
             size="icon"
             className="h-8 w-8 shrink-0 -ml-2"
             onClick={onBack}
-            aria-label="Back to jobs"
+            aria-label="Back to agents"
           >
             <IconArrowLeft size={20} stroke={1.5} />
           </Button>
         </div>
         <div className="mx-auto max-w-[900px]">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-baseline gap-2 text-base">
+                <span className="text-muted-foreground">{job.agentName}</span>
+                <span className="text-muted-foreground/50">·</span>
+                <h1 className="font-semibold tracking-tight text-foreground">
                   {job.title}
                 </h1>
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-1.5 py-1 text-xs font-medium text-secondary-foreground">
-                  {job.status === "active" ? (
-                    <IconCircleCheck
-                      size={12}
-                      stroke={1.5}
-                      className="h-3 w-3 shrink-0 text-green-600 dark:text-green-400"
-                    />
-                  ) : (
-                    <IconCircleOff
-                      size={12}
-                      stroke={1.5}
-                      className="h-3 w-3 shrink-0 text-zinc-500 dark:text-zinc-400"
-                    />
-                  )}
-                  {job.status === "active" ? "Active" : "Paused"}
-                </span>
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground leading-relaxed max-w-[36rem]">
                 {job.description}
               </p>
             </div>
             <Button
               variant="outline"
               size="sm"
-              className="h-9 shrink-0 gap-2 rounded-lg px-4"
+              className="zero-btn-morandi h-9 shrink-0 gap-2 rounded-lg border px-4"
             >
               <IconSparkles size={14} stroke={1.5} />
               Just ask
@@ -181,14 +144,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
             onValueChange={setActiveTab}
             className="mt-4 w-full"
           >
-            <TabsList className="h-9 w-full sm:w-auto gap-1 bg-muted/60 px-1 py-1">
-              <TabsTrigger
-                value="instructions"
-                className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
-              >
-                <IconFileText size={14} stroke={1.5} />
-                Instructions
-              </TabsTrigger>
+            <TabsList className="zero-tabs h-9 w-full sm:w-auto gap-1 px-1 py-1">
               <TabsTrigger
                 value="settings"
                 className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
@@ -197,25 +153,25 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                 Settings
               </TabsTrigger>
               <TabsTrigger
+                value="instructions"
+                className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
+              >
+                <IconFileText size={14} stroke={1.5} />
+                Instructions
+              </TabsTrigger>
+              <TabsTrigger
+                value="schedule"
+                className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
+              >
+                <IconCalendar size={14} stroke={1.5} />
+                Schedule
+              </TabsTrigger>
+              <TabsTrigger
                 value="connectors"
                 className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
               >
                 <IconPlug size={14} stroke={1.5} />
                 Connectors
-              </TabsTrigger>
-              <TabsTrigger
-                value="runs"
-                className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
-              >
-                <IconClock size={14} stroke={1.5} />
-                Runs
-              </TabsTrigger>
-              <TabsTrigger
-                value="flow"
-                className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
-              >
-                <IconGitBranch size={14} stroke={1.5} />
-                Flow
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -225,7 +181,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
       <main className="flex-1 overflow-auto px-4 sm:px-6 pt-4 pb-8">
         <div className="mx-auto max-w-[900px]">
           {activeTab === "instructions" && (
-            <Card className="rounded-2xl border border-border bg-gradient-to-br from-stone-100/95 via-stone-50 to-stone-100/90 shadow-[0_1px_3px_rgba(0,0,0,0.06)] dark:from-stone-800/95 dark:via-stone-800/90 dark:to-stone-900/95 dark:border-border/80">
+            <Card className="zero-card-white">
               <CardContent className="px-7 py-7">
                 <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 sm:items-end">
                   <div className="space-y-5 text-sm text-foreground leading-relaxed flex-1 min-w-0">
@@ -234,7 +190,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                         Description
                       </h2>
                       <p>
-                        Automatically collects and summarizes important team
+                        This agent collects and summarizes important team
                         information every morning.
                       </p>
                     </div>
@@ -276,7 +232,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                       src="/instructions-illustration.png"
                       alt=""
                       role="presentation"
-                      className="h-48 w-auto max-w-[220px] rounded-xl object-cover"
+                      className="h-48 w-auto max-w-[220px] rounded-xl object-contain"
                     />
                   </div>
                 </div>
@@ -288,8 +244,16 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
             </Card>
           )}
 
+          {activeTab === "schedule" && (
+            <ZeroScheduleCard
+              title={`${job.title} schedule`}
+              subtitle="Set a time and prompt for this agent to run automatically."
+              initialSchedule={DUMMY_AGENT_SCHEDULE}
+            />
+          )}
+
           {activeTab === "settings" && (
-            <Card className="rounded-2xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <Card className="zero-card">
               <CardContent className="px-7 py-7 flex flex-col gap-6">
                 <div className="flex flex-col gap-2">
                   <label
@@ -320,53 +284,6 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                     className="w-full rounded-lg border border-border bg-input px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none transition-colors focus:border-primary focus:ring-[3px] focus:ring-primary/10 resize-y min-h-[72px]"
                   />
                 </div>
-                <div className="flex flex-col gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Schedule
-                  </span>
-                  <div className="flex gap-2">
-                    <Select
-                      value={scheduleFrequency}
-                      onValueChange={setScheduleFrequency}
-                    >
-                      <SelectTrigger
-                        id="wf-schedule-frequency"
-                        className="h-9 flex-1 rounded-lg border-border"
-                      >
-                        <SelectValue placeholder="Select frequency" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SCHEDULE_FREQUENCIES.map((f) => (
-                          <SelectItem key={f} value={f}>
-                            {f}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      value={scheduleTime}
-                      onValueChange={setScheduleTime}
-                    >
-                      <SelectTrigger
-                        id="wf-schedule-time"
-                        className="h-9 flex-1 rounded-lg border-border"
-                      >
-                        <IconClock
-                          size={16}
-                          className="shrink-0 text-muted-foreground"
-                        />
-                        <SelectValue placeholder="Select time" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SCHEDULE_TIMES.map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {t}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
                 <div className="flex flex-col gap-3">
                   <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Skills
@@ -379,7 +296,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                           key={skill}
                           className="flex min-w-[120px] max-w-[220px] flex-1 basis-[120px]"
                         >
-                          <span className="flex w-full min-w-0 items-center gap-2 rounded-2xl border border-border/80 bg-muted/50 px-3 py-2.5 text-sm text-foreground transition-colors duration-200 hover:bg-muted hover:border-border">
+                          <span className="zero-chip flex w-full min-w-0 items-center gap-2 rounded-2xl border px-3 py-2.5 text-sm text-foreground transition-colors duration-200">
                             {connectorType ? (
                               <ConnectorIcon type={connectorType} size={16} />
                             ) : (
@@ -415,7 +332,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                             }
                           }}
                         >
-                          <SelectTrigger className="h-10 min-w-[120px] gap-2 rounded-2xl border border-border/80 bg-muted/50 px-3 py-2.5 text-sm text-foreground hover:bg-muted hover:border-border transition-colors duration-200">
+                          <SelectTrigger className="zero-chip h-10 min-w-[120px] gap-2 rounded-2xl border px-3 py-2.5 text-sm text-foreground transition-colors duration-200">
                             <IconPlus size={14} stroke={2} />
                             <SelectValue placeholder="Add skill" />
                           </SelectTrigger>
@@ -442,7 +359,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <div>
-                  <h2 className="text-base font-semibold tracking-tight text-foreground">
+                  <h2 className="text-sm font-semibold tracking-tight text-foreground">
                     Connectors
                   </h2>
                   <p className="text-sm text-muted-foreground">
@@ -460,7 +377,7 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                   const connected = connectedConnectors.includes(type);
                   return (
                     <li key={type}>
-                      <Card className="rounded-xl border border-border/70 bg-card">
+                      <Card className="zero-card">
                         <CardContent className="flex items-center gap-4 px-4 py-3">
                           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted overflow-hidden">
                             <ConnectorIcon type={type} size={24} />
@@ -476,7 +393,10 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
                           <Button
                             size="sm"
                             variant={connected ? "secondary" : "outline"}
-                            className="h-8 shrink-0 rounded-lg px-3"
+                            className={cn(
+                              "h-8 shrink-0 rounded-lg px-3",
+                              !connected && "zero-btn-morandi border",
+                            )}
                             onClick={() => toggleConnector(type)}
                           >
                             {connected ? "Connected" : "Connect"}
@@ -492,8 +412,9 @@ export function ZeroJobDetailPage({ job, onBack }: ZeroJobDetailPageProps) {
 
           {activeTab !== "instructions" &&
             activeTab !== "settings" &&
-            activeTab !== "connectors" && (
-              <Card className="rounded-2xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            activeTab !== "connectors" &&
+            activeTab !== "schedule" && (
+              <Card className="zero-card">
                 <CardContent className="px-7 py-7">
                   <p className="text-sm text-muted-foreground">
                     {activeTab} — coming soon

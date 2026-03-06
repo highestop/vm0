@@ -2,11 +2,7 @@ import { useState } from "react";
 import {
   IconUser,
   IconUsers,
-  IconPlayerPause,
-  IconPlayerPlay,
   IconTrash,
-  IconCircleCheck,
-  IconCircleOff,
   IconDotsVertical,
 } from "@tabler/icons-react";
 import { Card, CardContent, Tabs, TabsList, TabsTrigger } from "@vm0/ui";
@@ -19,34 +15,34 @@ import { ZeroJobDetailPage, type JobItem } from "./zero-job-detail-page.tsx";
 
 type JobScope = "all" | "personal" | "team";
 
-const JOBS: JobItem[] = [
+export const ZERO_TEAM_JOBS: JobItem[] = [
   {
     id: "1",
+    agentName: "Minion 1",
     title: "Daily Digest",
     description: "Get a daily summary of your team's important updates.",
     scope: "team",
-    status: "active",
   },
   {
     id: "2",
+    agentName: "Minion 2",
     title: "GitHub Issue Triage",
     description: "Automatically categorize and prioritize new GitHub issues.",
     scope: "personal",
-    status: "active",
   },
   {
     id: "3",
+    agentName: "Minion 3",
     title: "Weekly Report",
     description: "Receive a weekly summary of your team's achievements.",
     scope: "team",
-    status: "paused",
   },
   {
     id: "4",
+    agentName: "Minion 4",
     title: "Customer Feedback Digest",
     description: "Compile and analyze customer feedback from multiple sources.",
     scope: "personal",
-    status: "active",
   },
 ];
 
@@ -55,9 +51,9 @@ export function ZeroJobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const selectedJob = selectedJobId
-    ? JOBS.find((j) => j.id === selectedJobId)
+    ? ZERO_TEAM_JOBS.find((j) => j.id === selectedJobId)
     : null;
-  const filteredJobs = JOBS.filter(
+  const filteredJobs = ZERO_TEAM_JOBS.filter(
     (job) => filter === "all" || job.scope === filter,
   );
 
@@ -75,11 +71,12 @@ export function ZeroJobsPage() {
       <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-10 pb-3">
         <div className="mx-auto max-w-[900px]">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">
-              Jobs
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">
+              Zero&apos;s sub agents
             </h1>
-            <p className="text-sm text-muted-foreground">
-              Recurring work that Zero handles for your team.
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Sub-agents created by Zero to run tailored workflows for you and
+              your team.
             </p>
           </div>
 
@@ -88,26 +85,26 @@ export function ZeroJobsPage() {
             onValueChange={(v) => setFilter(v as JobScope)}
             className="mt-4 w-full"
           >
-            <TabsList className="h-9 w-full sm:w-auto gap-1 bg-muted/60 px-1 py-1">
+            <TabsList className="zero-tabs h-9 w-full sm:w-auto gap-1 px-1 py-1">
               <TabsTrigger
                 value="all"
                 className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
               >
-                All Jobs
+                All agents
               </TabsTrigger>
               <TabsTrigger
                 value="personal"
                 className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
               >
                 <IconUser size={14} stroke={1.5} />
-                Personal
+                For you
               </TabsTrigger>
               <TabsTrigger
                 value="team"
                 className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
               >
                 <IconUsers size={14} stroke={1.5} />
-                Team
+                For team
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -121,18 +118,22 @@ export function ZeroJobsPage() {
               key={job.id}
               role="button"
               tabIndex={0}
-              className="rounded-2xl border border-border/70 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.04)] cursor-pointer hover:border-border transition-colors"
+              className="zero-card cursor-pointer hover:border-border transition-colors"
               onClick={() => setSelectedJobId(job.id)}
               onKeyDown={(e) => e.key === "Enter" && setSelectedJobId(job.id)}
             >
               <CardContent className="px-6 py-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                  <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex items-center gap-4">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-semibold tracking-tight text-foreground">
+                      <span className="text-sm text-muted-foreground">
+                        {job.agentName}
+                      </span>
+                      <span className="text-muted-foreground/60">·</span>
+                      <h2 className="text-sm font-semibold tracking-tight text-foreground">
                         {job.title}
                       </h2>
-                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-1.5 py-1 text-xs font-medium text-secondary-foreground">
+                      <span className="zero-pill inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs font-medium">
                         {job.scope === "team" ? (
                           <IconUsers
                             size={12}
@@ -148,24 +149,8 @@ export function ZeroJobsPage() {
                         )}
                         {job.scope === "team" ? "Team" : "Personal"}
                       </span>
-                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-1.5 py-1 text-xs font-medium text-secondary-foreground">
-                        {job.status === "active" ? (
-                          <IconCircleCheck
-                            size={12}
-                            stroke={1.5}
-                            className="h-3 w-3 shrink-0 text-green-600 dark:text-green-400"
-                          />
-                        ) : (
-                          <IconCircleOff
-                            size={12}
-                            stroke={1.5}
-                            className="h-3 w-3 shrink-0 text-zinc-500 dark:text-zinc-400"
-                          />
-                        )}
-                        {job.status === "active" ? "Active" : "Paused"}
-                      </span>
                     </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
+                    <p className="mt-0.5 text-sm text-muted-foreground truncate">
                       {job.description}
                     </p>
                   </div>
@@ -175,7 +160,7 @@ export function ZeroJobsPage() {
                         type="button"
                         className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                         onClick={(e) => e.stopPropagation()}
-                        aria-label="Job actions"
+                        aria-label="Agent actions"
                       >
                         <IconDotsVertical size={16} stroke={1.5} />
                       </button>
@@ -185,22 +170,6 @@ export function ZeroJobsPage() {
                       className="flex flex-col gap-0.5 w-40 p-2"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-                      >
-                        {job.status === "active" ? (
-                          <>
-                            <IconPlayerPause size={14} stroke={1.5} />
-                            Pause
-                          </>
-                        ) : (
-                          <>
-                            <IconPlayerPlay size={14} stroke={1.5} />
-                            Start
-                          </>
-                        )}
-                      </button>
                       <button
                         type="button"
                         className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-left text-destructive hover:bg-accent hover:text-accent-foreground transition-colors"

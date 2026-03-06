@@ -54,10 +54,10 @@ export function ZeroWorksPage() {
     <div className="flex flex-1 flex-col min-h-0">
       <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-10 pb-3">
         <div className="mx-auto max-w-[900px]">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">
             Where Zero works
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             Connect with Zero through these channels
           </p>
           <div className="mt-4 relative">
@@ -70,7 +70,7 @@ export function ZeroWorksPage() {
               placeholder="Search tools..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 h-9 rounded-lg bg-muted/40 border-border/70"
+              className="zero-search-input pl-9 h-9 rounded-lg border"
             />
           </div>
         </div>
@@ -81,7 +81,7 @@ export function ZeroWorksPage() {
           {CONNECTED_TOOLS.map((tool) => (
             <div
               key={tool.id}
-              className="flex items-center gap-4 rounded-xl border border-border bg-card p-4"
+              className="zero-card flex items-center gap-4 p-4"
             >
               <div className="shrink-0">
                 {tool.icon === "slack" && (

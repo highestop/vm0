@@ -1,19 +1,23 @@
-import type { ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import {
   IconMessageCircle,
   IconRobot,
-  IconFileText,
   IconFile,
   IconChartLine,
   IconSelector,
   IconLayoutGrid,
   IconSettings,
+  IconCalendar,
+  IconAdjustmentsHorizontal,
   IconUser,
+  IconUsers,
+  IconLogout,
 } from "@tabler/icons-react";
 
 export type ZeroNavId =
   | "chat"
   | "meet"
+  | "schedule"
   | "job"
   | "production"
   | "activity"
@@ -28,9 +32,10 @@ const MAIN_NAV: {
 }[] = [
   { id: "chat", label: "Chat with Zero", icon: IconMessageCircle },
   { id: "meet", label: "Meet Zero", icon: IconRobot },
-  { id: "job", label: "Zero's job", icon: IconFileText },
-  { id: "production", label: "Zero's production", icon: IconFile },
-  { id: "activity", label: "Zero's activity", icon: IconChartLine },
+  { id: "job", label: "Zero's team", icon: IconUsers },
+  { id: "schedule", label: "Schedule", icon: IconCalendar },
+  { id: "production", label: "Documents", icon: IconFile },
+  { id: "activity", label: "Activities", icon: IconChartLine },
 ];
 
 const RECENT_ITEMS: { id: string; label: string }[] = [
@@ -46,15 +51,21 @@ const FOOTER_NAV: {
   icon: ComponentType<{ size?: number; className?: string }>;
 }[] = [
   { id: "works", label: "Where Zero works", icon: IconLayoutGrid },
-  { id: "team", label: "Zero's team", icon: IconSettings },
-  { id: "account", label: "Account", icon: IconUser },
+  { id: "team", label: "Workspace settings", icon: IconSettings },
 ];
+
+export type ZeroAccountAction = "preferences" | "manage" | "signout";
+
+export type ZeroAccountSubId = "preferences" | "manage" | null;
 
 interface ZeroSidebarProps {
   activeId: ZeroNavId;
   onSelect: (id: ZeroNavId) => void;
   onRecentSelect?: (id: string) => void;
   selectedRecentId?: string | null;
+  zeroAvatarSrc?: string;
+  onAvatarClick?: () => void;
+  onAccountAction?: (action: ZeroAccountAction) => void;
 }
 
 export function ZeroSidebar({
@@ -62,22 +73,58 @@ export function ZeroSidebar({
   onSelect,
   onRecentSelect,
   selectedRecentId = null,
+  zeroAvatarSrc = "/zero-avatar.png",
+  onAvatarClick,
+  onAccountAction,
 }: ZeroSidebarProps) {
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountName = "Ming Li";
+  const accountEmail = "ming@vm0.ai";
+  const accountInitial = "M";
+
+  const closeAccountMenu = () => setAccountMenuOpen(false);
+
+  const handleAccountAction = (action: ZeroAccountAction) => {
+    closeAccountMenu();
+    onAccountAction?.(action);
+  };
+
   return (
     <aside className="zero-nav flex h-full w-[255px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar overflow-hidden">
-      {/* Zero avatar + Zero's home — top of nav */}
-      <div className="flex h-[49px] shrink-0 flex-col justify-center border-b border-divider p-2">
-        <div className="flex h-8 items-center gap-2.5 p-2">
-          <img
-            src="/zero-avatar.png"
-            alt="Zero"
-            className="h-8 w-8 shrink-0 rounded-full object-cover object-top block align-middle -mt-1"
-            width={32}
-            height={32}
-          />
-          <span className="text-xl font-semibold leading-8 text-sidebar-foreground shrink-0">
-            {"Zero's home"}
-          </span>
+      {/* Zero + workspace — single module */}
+      <div className="shrink-0 p-2 pb-1">
+        <div className="rounded-lg p-2 transition-colors duration-200 hover:bg-sidebar-accent/50">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onAvatarClick}
+              className="h-8 w-8 shrink-0 flex items-center justify-center overflow-hidden rounded-xl transition-colors duration-150 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              aria-label="Switch Zero avatar"
+            >
+              <img
+                src={zeroAvatarSrc}
+                alt="Zero"
+                className="h-8 w-8 rounded-full object-cover object-top"
+                width={32}
+                height={32}
+              />
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium leading-tight text-sidebar-foreground truncate">
+                Personal Workspace
+              </p>
+              <p className="text-xs leading-tight text-sidebar-foreground opacity-70 truncate mt-px">
+                Free • Owner
+              </p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 flex h-7 w-7 items-center justify-center rounded text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              aria-label="Switch workspace"
+            >
+              <IconSelector size={14} stroke={1.5} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -128,7 +175,7 @@ export function ZeroSidebar({
       </nav>
 
       {/* Footer nav */}
-      <div className="p-2 border-t border-divider">
+      <div className="p-2">
         <div className="flex flex-col gap-1">
           {FOOTER_NAV.map(({ id, label, icon: Icon }) => (
             <button
@@ -145,25 +192,122 @@ export function ZeroSidebar({
               <span className="truncate">{label}</span>
             </button>
           ))}
-        </div>
-        {/* Workspace selector — below Account, bottom of nav */}
-        <div className="mt-2">
-          <div className="flex items-center gap-2 rounded-lg bg-sidebar-accent px-2 py-2.5 transition-colors duration-200">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium leading-5 text-sidebar-foreground">
-                Personal Workspace
-              </p>
-              <p className="truncate text-xs leading-4 text-sidebar-foreground opacity-70">
-                Free • Owner
-              </p>
-            </div>
-            <button
-              type="button"
-              className="shrink-0 rounded p-1 text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              aria-label="Switch workspace"
+          {/* Account — dropdown (aligned with workspace block above) */}
+          <div className="mt-2 pt-1 relative">
+            {accountMenuOpen && (
+              <div
+                className="fixed inset-0 z-10"
+                onClick={closeAccountMenu}
+                aria-hidden="true"
+              />
+            )}
+            <div
+              className={`rounded-lg p-2 transition-colors duration-200 ${
+                activeId === "account" || accountMenuOpen
+                  ? "bg-sidebar-active"
+                  : "hover:bg-sidebar-accent/50"
+              }`}
             >
-              <IconSelector size={16} stroke={1.5} />
-            </button>
+              <button
+                type="button"
+                onClick={() => setAccountMenuOpen((open) => !open)}
+                className="flex w-full items-center gap-2 text-left"
+                aria-expanded={accountMenuOpen}
+                aria-haspopup="true"
+              >
+                <div className="h-8 w-8 shrink-0 rounded-xl bg-orange-200/95 dark:bg-orange-300/80 flex items-center justify-center text-orange-900 dark:text-orange-950 text-sm font-medium">
+                  {accountInitial}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={`text-sm font-medium leading-tight truncate ${
+                      activeId === "account" || accountMenuOpen
+                        ? "text-sidebar-primary"
+                        : "text-sidebar-foreground"
+                    }`}
+                  >
+                    {accountName}
+                  </p>
+                  <p
+                    className={`text-xs leading-tight truncate mt-px ${
+                      activeId === "account" || accountMenuOpen
+                        ? "text-sidebar-primary/80"
+                        : "text-sidebar-foreground opacity-70"
+                    }`}
+                  >
+                    {accountEmail}
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            {accountMenuOpen && (
+              <div className="zero-card-rectangle absolute bottom-full left-0 right-0 mb-2 overflow-hidden z-20">
+                <div className="px-5 py-4 border-b border-border">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-orange-200/95 dark:bg-orange-300/80 flex items-center justify-center text-orange-900 dark:text-orange-950 text-sm font-medium shrink-0">
+                      {accountInitial}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm leading-5 font-medium text-foreground truncate">
+                        {accountName}
+                      </div>
+                      <div className="text-xs leading-4 text-muted-foreground truncate">
+                        {accountEmail}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleAccountAction("preferences")}
+                  className="w-full flex items-center gap-3 px-5 py-4 border-b border-border hover:bg-muted transition-colors text-left"
+                >
+                  <div className="w-9 h-[18px] flex items-center justify-center shrink-0">
+                    <IconAdjustmentsHorizontal
+                      size={20}
+                      stroke={1.5}
+                      className="text-foreground"
+                    />
+                  </div>
+                  <span className="text-sm leading-5 text-foreground">
+                    Preferences
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAccountAction("manage")}
+                  className="w-full flex items-center gap-3 px-5 py-4 border-b border-border hover:bg-muted transition-colors text-left"
+                >
+                  <div className="w-9 h-[18px] flex items-center justify-center shrink-0">
+                    <IconUser
+                      size={20}
+                      stroke={1.5}
+                      className="text-foreground"
+                    />
+                  </div>
+                  <span className="text-sm leading-5 text-foreground">
+                    Manage account
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAccountAction("signout")}
+                  className="w-full flex items-center gap-3 px-5 py-4 hover:bg-muted transition-colors text-left"
+                >
+                  <div className="w-9 h-[18px] flex items-center justify-center shrink-0">
+                    <IconLogout
+                      size={20}
+                      stroke={1.5}
+                      className="text-foreground"
+                    />
+                  </div>
+                  <span className="text-sm leading-5 text-foreground">
+                    Sign out
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

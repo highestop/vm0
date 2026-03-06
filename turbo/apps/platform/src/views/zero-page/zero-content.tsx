@@ -1,11 +1,13 @@
-import type { ZeroNavId } from "./zero-sidebar.tsx";
+import type { ZeroNavId, ZeroAccountSubId } from "./zero-sidebar.tsx";
 import { ZeroChatPage, type DemoScenarioId } from "./zero-chat-page.tsx";
+import { ZeroAccountPage } from "./zero-account-page.tsx";
 import { ZeroJobsPage } from "./zero-jobs-page.tsx";
 import { ZeroMeetPage } from "./zero-meet-page.tsx";
 import { ZeroProductionPage } from "./zero-production-page.tsx";
 import { ZeroActivityPage } from "./zero-activity-page.tsx";
 import { ZeroWorksPage } from "./zero-works-page.tsx";
 import { ZeroTeamPage } from "./zero-team-page.tsx";
+import { ZeroSchedulePage } from "./zero-schedule-page.tsx";
 
 const RECENT_ID_TO_SCENARIO: Record<string, DemoScenarioId> = {
   "1": "rich-summary",
@@ -16,29 +18,40 @@ const RECENT_ID_TO_SCENARIO: Record<string, DemoScenarioId> = {
 
 interface ZeroContentProps {
   sectionId: ZeroNavId;
+  accountSubId?: ZeroAccountSubId | null;
   recentLabel?: string | null;
   recentId?: string | null;
   onClearRecent?: () => void;
   onNavigateToActivity?: () => void;
+  onNavigateToSchedule?: () => void;
+  onNavigateToJob?: () => void;
+  zeroAvatarSrc?: string;
+  onAvatarClick?: () => void;
 }
 
 const SECTION_TITLES: Record<ZeroNavId, string> = {
   chat: "Chat with Zero",
   meet: "Meet Zero",
-  job: "Zero's job",
-  production: "Zero's production",
-  activity: "Zero's activity",
+  schedule: "Schedule",
+  job: "Zero's team",
+  production: "Documents",
+  activity: "Activities",
   works: "Where Zero works",
-  team: "Zero's team",
+  team: "Workspace settings",
   account: "Account",
 };
 
 export function ZeroContent({
   sectionId,
+  accountSubId = null,
   recentLabel,
   recentId,
   onClearRecent,
   onNavigateToActivity,
+  onNavigateToSchedule,
+  onNavigateToJob,
+  zeroAvatarSrc = "/zero-avatar.png",
+  onAvatarClick,
 }: ZeroContentProps) {
   if (sectionId === "chat") {
     const initialScenarioId = recentId
@@ -49,11 +62,23 @@ export function ZeroContent({
         initialScenarioId={initialScenarioId}
         onClearScenario={onClearRecent}
         onNavigateToActivity={onNavigateToActivity}
+        onNavigateToSchedule={onNavigateToSchedule}
+        onNavigateToJob={onNavigateToJob}
+        zeroAvatarSrc={zeroAvatarSrc}
+        onAvatarClick={onAvatarClick}
       />
     );
   }
   if (sectionId === "meet") {
-    return <ZeroMeetPage />;
+    return (
+      <ZeroMeetPage
+        zeroAvatarSrc={zeroAvatarSrc}
+        onAvatarClick={onAvatarClick}
+      />
+    );
+  }
+  if (sectionId === "schedule") {
+    return <ZeroSchedulePage />;
   }
   if (sectionId === "job") {
     return <ZeroJobsPage />;
@@ -70,24 +95,27 @@ export function ZeroContent({
   if (sectionId === "team") {
     return <ZeroTeamPage />;
   }
+  if (sectionId === "account") {
+    return <ZeroAccountPage accountSubId={accountSubId ?? null} />;
+  }
 
   const title = recentLabel ?? SECTION_TITLES[sectionId];
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
       <header className="shrink-0 border-b border-divider bg-transparent px-4 sm:px-6 pt-6 sm:pt-6 pb-4 sm:pb-5">
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-foreground">
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">
           {title}
         </h1>
-        <p className="mt-1 text-sm sm:text-base text-muted-foreground">
+        <p className="mt-0.5 text-sm text-muted-foreground">
           {recentLabel
             ? "Continue your dialogue with Zero"
             : "Zero — your AI assistant"}
         </p>
       </header>
       <main className="flex-1 overflow-auto px-4 sm:px-6 pb-8">
-        <div className="mx-auto max-w-[1200px]">
-          <div className="rounded-xl border border-border bg-card p-6">
+        <div className="mx-auto max-w-[900px]">
+          <div className="zero-card p-6">
             <p className="text-sm text-muted-foreground">
               Content for “{title}” will appear here.
             </p>

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { telegramInstallations } from "../../../db/schema/telegram-installation";
 import { decryptCredentialValue } from "../../crypto/secrets-encryption";
 import { env } from "../../../env";
-import { createTelegramClient, sendMessage } from "../client";
+import { createTelegramClient, sendMessage, deleteMessage } from "../client";
 import { sendThinkingMessage } from "./shared";
 import { fetchTelegramContext } from "../context";
 import { runAgentForTelegram } from "./run-agent";
@@ -13,6 +13,8 @@ import {
   resolveSessionCompose,
   resolveUserLink,
 } from "./shared";
+import { escapeHtml } from "../format";
+import { getPlatformUrl } from "../../url";
 import { logger } from "../../logger";
 import type { TelegramHandlerUpdate } from "./types";
 
@@ -56,10 +58,12 @@ export async function handleTelegramDirectMessage(
   const userLink = await resolveUserLink(installationId, fromUserId);
 
   if (!userLink) {
+    const platformUrl = getPlatformUrl();
+    const connectUrl = `${platformUrl}/telegram/connect?bot=${installation.telegramBotId}`;
     await sendMessage(
       client,
       chatId,
-      "Please link your account first. Use /connect to get started.",
+      `🔗 Connect your account to get started:\n\n<a href="${escapeHtml(connectUrl)}">Open Platform</a>`,
     );
     return;
   }
@@ -133,6 +137,7 @@ export async function handleTelegramDirectMessage(
       installationId,
       chatId,
       messageId: String(message.message_id),
+      rootMessageId: "dm",
       userLinkId: userLink.id,
       agentName,
       composeId,
@@ -146,6 +151,9 @@ export async function handleTelegramDirectMessage(
 
   if (status === "failed") {
     log.error("Failed to dispatch agent run", { response });
+    if (thinkingMessage) {
+      await deleteMessage(client, chatId, thinkingMessage.message_id);
+    }
     await sendMessage(
       client,
       chatId,

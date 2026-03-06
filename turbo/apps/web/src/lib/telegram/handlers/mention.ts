@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { telegramInstallations } from "../../../db/schema/telegram-installation";
 import { decryptCredentialValue } from "../../crypto/secrets-encryption";
 import { env } from "../../../env";
-import { createTelegramClient, sendMessage } from "../client";
+import { createTelegramClient, sendMessage, deleteMessage } from "../client";
 import { sendThinkingMessage } from "./shared";
 import { fetchTelegramContext } from "../context";
 import { runAgentForTelegram } from "./run-agent";
@@ -13,6 +13,8 @@ import {
   resolveSessionCompose,
   resolveUserLink,
 } from "./shared";
+import { escapeHtml } from "../format";
+import { getPlatformUrl } from "../../url";
 import { logger } from "../../logger";
 import type { TelegramHandlerUpdate } from "./types";
 
@@ -64,10 +66,12 @@ export async function handleTelegramMention(
   const userLink = await resolveUserLink(installationId, fromUserId);
 
   if (!userLink) {
+    const platformUrl = getPlatformUrl();
+    const connectUrl = `${platformUrl}/telegram/connect?bot=${installation.telegramBotId}`;
     await sendMessage(
       client,
       chatId,
-      "Please link your account first. Use /connect to get started.",
+      `🔗 Connect your account to get started:\n\n<a href="${escapeHtml(connectUrl)}">Open Platform</a>`,
       { replyToMessageId: message.message_id },
     );
     return;
@@ -102,45 +106,15 @@ export async function handleTelegramMention(
     message.entities,
   );
 
-  // 7. Determine thread anchor
-  let rootMessageId: string | undefined;
-  if (
-    message.reply_to_message?.from?.is_bot &&
-    message.reply_to_message.message_id
-  ) {
-    // Replying to bot's message — use that as thread anchor
-    rootMessageId = String(message.reply_to_message.message_id);
-  }
-  // New mention (not replying) — rootMessageId set after bot replies in callback
-
-  // 8. Look up existing session
-  let existingSessionId: string | undefined;
-  let lastProcessedMessageId: string | undefined;
-  if (rootMessageId) {
-    const session = await lookupTelegramThreadSession(
+  // 7. Determine thread anchor and resolve session
+  const { rootMessageId, existingSessionId, lastProcessedMessageId } =
+    await resolveThreadSession(
+      message,
       chatId,
-      rootMessageId,
       userLink.id,
-    );
-    existingSessionId = session.existingSessionId;
-    lastProcessedMessageId = session.lastProcessedMessageId;
-  }
-
-  // 8b. Validate session's agent matches current default — discard only on positive mismatch
-  if (existingSessionId) {
-    const sessionCompose = await resolveSessionCompose(
-      existingSessionId,
       userLink.vm0UserId,
+      composeId,
     );
-    if (sessionCompose && sessionCompose.composeId !== composeId) {
-      log.debug("Agent changed, starting new session", {
-        sessionComposeId: sessionCompose.composeId,
-        currentComposeId: composeId,
-      });
-      existingSessionId = undefined;
-      lastProcessedMessageId = undefined;
-    }
-  }
 
   // 9. Fetch context
   const { executionContext } = await fetchTelegramContext(
@@ -161,6 +135,7 @@ export async function handleTelegramMention(
       installationId,
       chatId,
       messageId: String(message.message_id),
+      rootMessageId: rootMessageId ?? null,
       userLinkId: userLink.id,
       agentName,
       composeId,
@@ -174,6 +149,9 @@ export async function handleTelegramMention(
 
   if (status === "failed") {
     log.error("Failed to dispatch agent run", { response });
+    if (thinkingMessage) {
+      await deleteMessage(client, chatId, thinkingMessage.message_id);
+    }
     await sendMessage(
       client,
       chatId,
@@ -181,6 +159,55 @@ export async function handleTelegramMention(
       { replyToMessageId: message.message_id },
     );
   }
+}
+
+async function resolveThreadSession(
+  message: TelegramHandlerUpdate["message"],
+  chatId: string,
+  userLinkId: string,
+  vm0UserId: string,
+  composeId: string,
+): Promise<{
+  rootMessageId: string | undefined;
+  existingSessionId: string | undefined;
+  lastProcessedMessageId: string | undefined;
+}> {
+  let rootMessageId: string | undefined;
+  if (
+    message.reply_to_message?.from?.is_bot &&
+    message.reply_to_message.message_id
+  ) {
+    rootMessageId = String(message.reply_to_message.message_id);
+  }
+
+  let existingSessionId: string | undefined;
+  let lastProcessedMessageId: string | undefined;
+  if (rootMessageId) {
+    const session = await lookupTelegramThreadSession(
+      chatId,
+      rootMessageId,
+      userLinkId,
+    );
+    existingSessionId = session.existingSessionId;
+    lastProcessedMessageId = session.lastProcessedMessageId;
+  }
+
+  if (existingSessionId) {
+    const sessionCompose = await resolveSessionCompose(
+      existingSessionId,
+      vm0UserId,
+    );
+    if (sessionCompose && sessionCompose.composeId !== composeId) {
+      log.debug("Agent changed, starting new session", {
+        sessionComposeId: sessionCompose.composeId,
+        currentComposeId: composeId,
+      });
+      existingSessionId = undefined;
+      lastProcessedMessageId = undefined;
+    }
+  }
+
+  return { rootMessageId, existingSessionId, lastProcessedMessageId };
 }
 
 /**

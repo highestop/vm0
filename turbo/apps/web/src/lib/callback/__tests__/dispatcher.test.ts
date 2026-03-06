@@ -8,6 +8,8 @@ import {
   createTestCompose,
   createTestRun,
   createTestCallback,
+  completeTestRun,
+  failTestRun,
 } from "../../../__tests__/api-test-helpers";
 
 const context = testContext();
@@ -118,5 +120,51 @@ describe("dispatchProgressCallbacks", () => {
 
     // Should not throw
     await dispatchProgressCallbacks(testRunId);
+  });
+
+  it("should skip when run is already completed", async () => {
+    let callCount = 0;
+
+    server.use(
+      http.post("http://localhost/api/internal/callbacks/slack", () => {
+        callCount++;
+        return HttpResponse.json({ success: true });
+      }),
+    );
+
+    await createTestCallback({
+      runId: testRunId,
+      url: "http://localhost/api/internal/callbacks/slack",
+      payload: { workspaceId: "T123" },
+    });
+
+    await completeTestRun(user.userId, testRunId);
+
+    await dispatchProgressCallbacks(testRunId);
+
+    expect(callCount).toBe(0);
+  });
+
+  it("should skip when run is already failed", async () => {
+    let callCount = 0;
+
+    server.use(
+      http.post("http://localhost/api/internal/callbacks/slack", () => {
+        callCount++;
+        return HttpResponse.json({ success: true });
+      }),
+    );
+
+    await createTestCallback({
+      runId: testRunId,
+      url: "http://localhost/api/internal/callbacks/slack",
+      payload: { workspaceId: "T123" },
+    });
+
+    await failTestRun(user.userId, testRunId);
+
+    await dispatchProgressCallbacks(testRunId);
+
+    expect(callCount).toBe(0);
   });
 });

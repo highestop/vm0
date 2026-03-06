@@ -13,7 +13,9 @@ import {
   badRequest,
   forbidden,
   concurrentRunLimit,
+  isConcurrentRunLimit,
 } from "../errors";
+import { enqueueRun } from "./run-queue-service";
 import { logger } from "../logger";
 import type { Database } from "../../types/global";
 import type { AgentComposeSnapshot } from "../checkpoint/types";
@@ -41,7 +43,7 @@ const log = logger("service:run");
 // Defense-in-depth: exclude pending runs older than this from concurrency check.
 // The cleanup-sandboxes cron job already transitions pending runs to "timeout" after 5 minutes,
 // so this TTL only matters if the cron job fails to run.
-const PENDING_RUN_TTL_MS = 15 * 60 * 1000; // 15 minutes
+export const PENDING_RUN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
  * Check if user has reached concurrent run limit
@@ -465,6 +467,106 @@ async function markRunFailed(
 }
 
 /**
+ * Shared dispatch pipeline for steps 6-10 of the run creation flow.
+ * Used by both createRun (new runs) and executeQueuedRun (dequeued runs).
+ */
+async function buildAndDispatchRun(opts: {
+  runId: string;
+  createdAt: Date;
+  params: CreateRunParams;
+  composeContent: AgentComposeYaml;
+  apiStartTime: number;
+  scopeId: string | undefined;
+  authorizeTime: number;
+  transactionTime: number;
+}): Promise<{ status: string; sandboxId?: string }> {
+  const {
+    runId,
+    createdAt,
+    params,
+    composeContent,
+    apiStartTime,
+    scopeId,
+    authorizeTime,
+    transactionTime,
+  } = opts;
+  const { userId, agentComposeVersionId, prompt } = params;
+
+  try {
+    // Register callbacks (if any)
+    if (params.callbacks && params.callbacks.length > 0) {
+      await registerCallbacks(runId, params.callbacks);
+    }
+
+    // Generate sandbox token
+    const sandboxToken = await generateSandboxToken(userId, runId);
+    const tokenTime = Date.now();
+
+    // Build execution context
+    const context = await buildContext({
+      checkpointId: params.checkpointId,
+      sessionId: params.sessionId,
+      conversationId: params.conversationId,
+      agentComposeVersionId,
+      artifactName: params.artifactName,
+      artifactVersion: params.artifactVersion,
+      vars: params.vars,
+      secrets: params.secrets,
+      volumeVersions: params.volumeVersions,
+      agentCompose: composeContent,
+      prompt,
+      runId,
+      sandboxToken,
+      userId,
+      agentName: params.agentName,
+      resumedFromCheckpointId: params.resumedFromCheckpointId,
+      continuedFromSessionId: params.sessionId,
+      debugNoMockClaude: params.debugNoMockClaude,
+      modelProvider: params.modelProvider,
+      checkEnv: params.checkEnv,
+      apiStartTime,
+      scopeId,
+    });
+    const buildContextTime = Date.now();
+
+    // Prepare execution context (storage manifest, working dir, etc.)
+    const preparedContext = await prepareForExecution(context);
+    const prepareTime = Date.now();
+
+    // Dispatch to executor
+    const result = await dispatchRun(preparedContext);
+    const dispatchTime = Date.now();
+
+    // Record per-step timing metrics for latency diagnosis
+    const steps = [
+      { op: "api_step_authorize", ms: authorizeTime - apiStartTime },
+      {
+        op: "api_step_validate_and_insert",
+        ms: transactionTime - authorizeTime,
+      },
+      { op: "api_step_callbacks_and_token", ms: tokenTime - transactionTime },
+      { op: "api_step_build_context", ms: buildContextTime - tokenTime },
+      { op: "api_step_prepare", ms: prepareTime - buildContextTime },
+      { op: "api_step_dispatch", ms: dispatchTime - prepareTime },
+    ];
+    for (const step of steps) {
+      recordSandboxOperation({
+        sandboxType: result.sandboxType,
+        actionType: step.op,
+        durationMs: step.ms,
+        success: true,
+      });
+    }
+
+    log.debug(`Run ${runId} dispatched with status: ${result.status}`);
+    return result;
+  } catch (error) {
+    await markRunFailed(runId, createdAt, error);
+    throw error;
+  }
+}
+
+/**
  * Unified run creation pipeline
  *
  * Validates, creates, and dispatches a run in a single call.
@@ -481,7 +583,6 @@ async function markRunFailed(
  * 8. Build execution context
  * 9. Dispatch to executor
  *
- * @throws ConcurrentRunLimitError - concurrent run limit reached
  * @throws ForbiddenError - user cannot access compose
  * @throws BadRequestError - validation failure (missing vars, mutual exclusivity)
  * @throws NotFoundError - compose version not found
@@ -525,119 +626,139 @@ export async function createRun(
   // Step 5: Concurrency check + INSERT in a transaction with advisory lock
   // to prevent TOCTOU race where two concurrent requests both pass the
   // concurrency check before either inserts.
-  const run = await globalThis.services.db.transaction(async (tx) => {
-    // Acquire per-user advisory lock (released when transaction ends)
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
+  // On concurrency failure, enqueue the run instead of rejecting.
+  let run;
+  try {
+    run = await globalThis.services.db.transaction(async (tx) => {
+      // Acquire per-user advisory lock (released when transaction ends)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
 
-    // Check concurrent run limit within the serialized transaction
-    await checkRunConcurrencyLimit(userId, undefined, tx);
+      // Check concurrent run limit within the serialized transaction
+      await checkRunConcurrencyLimit(userId, undefined, tx);
 
-    // INSERT within the same transaction
-    const [newRun] = await tx
-      .insert(agentRuns)
-      .values({
-        userId,
-        scopeId,
-        agentComposeVersionId,
-        status: "pending",
-        prompt,
-        vars: params.vars ?? null,
-        secretNames: params.secrets ? Object.keys(params.secrets) : null,
-        resumedFromCheckpointId: params.resumedFromCheckpointId ?? null,
-        continuedFromSessionId: params.sessionId ?? null,
-        scheduleId: params.scheduleId ?? null,
-        lastHeartbeatAt: new Date(),
-      })
-      .returning();
+      // INSERT within the same transaction
+      const [newRun] = await tx
+        .insert(agentRuns)
+        .values({
+          userId,
+          scopeId,
+          agentComposeVersionId,
+          status: "pending",
+          prompt,
+          vars: params.vars ?? null,
+          secretNames: params.secrets ? Object.keys(params.secrets) : null,
+          resumedFromCheckpointId: params.resumedFromCheckpointId ?? null,
+          continuedFromSessionId: params.sessionId ?? null,
+          scheduleId: params.scheduleId ?? null,
+          lastHeartbeatAt: new Date(),
+        })
+        .returning();
 
-    if (!newRun) {
-      throw new Error("Failed to create run record");
+      if (!newRun) {
+        throw new Error("Failed to create run record");
+      }
+
+      return newRun;
+    });
+  } catch (error) {
+    if (isConcurrentRunLimit(error)) {
+      return enqueueRun({ ...params, scopeId });
     }
-
-    return newRun;
-  });
+    throw error;
+  }
 
   const transactionTime = Date.now();
   log.debug(`Created run ${run.id} for user ${userId}`);
 
-  // From this point on, errors must mark the run as "failed"
-  try {
-    // Step 6: Register callbacks (if any)
-    if (params.callbacks && params.callbacks.length > 0) {
-      await registerCallbacks(run.id, params.callbacks);
-    }
+  const result = await buildAndDispatchRun({
+    runId: run.id,
+    createdAt: run.createdAt,
+    params,
+    composeContent,
+    apiStartTime,
+    scopeId,
+    authorizeTime,
+    transactionTime,
+  });
 
-    // Step 7: Generate sandbox token
-    const sandboxToken = await generateSandboxToken(userId, run.id);
-    const tokenTime = Date.now();
+  return {
+    runId: run.id,
+    status: result.status,
+    sandboxId: result.sandboxId,
+    createdAt: run.createdAt,
+  };
+}
 
-    // Step 8: Build execution context (pass pre-loaded compose to avoid double fetch)
-    const context = await buildContext({
-      checkpointId: params.checkpointId,
-      sessionId: params.sessionId,
-      conversationId: params.conversationId,
-      agentComposeVersionId,
-      artifactName: params.artifactName,
-      artifactVersion: params.artifactVersion,
-      vars: params.vars,
-      secrets: params.secrets,
-      volumeVersions: params.volumeVersions,
-      agentCompose: composeContent,
-      prompt,
-      runId: run.id,
-      sandboxToken,
-      userId,
-      agentName: params.agentName,
-      resumedFromCheckpointId: params.resumedFromCheckpointId,
-      continuedFromSessionId: params.sessionId,
-      debugNoMockClaude: params.debugNoMockClaude,
-      modelProvider: params.modelProvider,
-      checkEnv: params.checkEnv,
-      apiStartTime,
-      scopeId,
-    });
+/**
+ * Execute a previously queued run.
+ *
+ * Runs the createRun pipeline steps 1-10 for an existing agent_runs record.
+ * Re-checks concurrency (another request may have claimed the slot),
+ * then skips INSERT (record already exists) and dispatches.
+ *
+ * Called from drainUserQueue() after dequeuing an entry.
+ *
+ * @throws ConcurrentRunLimitError if the slot was claimed by another request
+ */
+export async function executeQueuedRun(
+  runId: string,
+  params: CreateRunParams,
+): Promise<void> {
+  const apiStartTime = Date.now();
+  const { userId, agentComposeVersionId } = params;
 
-    const buildContextTime = Date.now();
+  // Step 1: Re-check concurrency + update status atomically with advisory lock
+  // to prevent TOCTOU race where a concurrent createRun claims the slot.
+  const [run] = await globalThis.services.db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
+    await checkRunConcurrencyLimit(userId, undefined, tx);
 
-    // Step 9: Prepare execution context (storage manifest, working dir, etc.)
-    const preparedContext = await prepareForExecution(context);
-    const prepareTime = Date.now();
+    return tx
+      .update(agentRuns)
+      .set({
+        status: "pending",
+        lastHeartbeatAt: new Date(),
+      })
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "queued")))
+      .returning();
+  });
+  const transactionTime = Date.now();
 
-    // Step 10: Dispatch to executor
-    const result = await dispatchRun(preparedContext);
-    const dispatchTime = Date.now();
-
-    // Record per-step timing metrics for latency diagnosis
-    const steps = [
-      { op: "api_step_authorize", ms: authorizeTime - apiStartTime },
-      {
-        op: "api_step_validate_and_insert",
-        ms: transactionTime - authorizeTime,
-      },
-      { op: "api_step_callbacks_and_token", ms: tokenTime - transactionTime },
-      { op: "api_step_build_context", ms: buildContextTime - tokenTime },
-      { op: "api_step_prepare", ms: prepareTime - buildContextTime },
-      { op: "api_step_dispatch", ms: dispatchTime - prepareTime },
-    ];
-    for (const step of steps) {
-      recordSandboxOperation({
-        sandboxType: result.sandboxType,
-        actionType: step.op,
-        durationMs: step.ms,
-        success: true,
-      });
-    }
-
-    log.debug(`Run ${run.id} dispatched with status: ${result.status}`);
-
-    return {
-      runId: run.id,
-      status: result.status,
-      sandboxId: result.sandboxId,
-      createdAt: run.createdAt,
-    };
-  } catch (error) {
-    await markRunFailed(run.id, run.createdAt, error);
-    throw error;
+  if (!run) {
+    throw new Error(`Queued run ${runId} not found or already processed`);
   }
+
+  log.debug(`Executing queued run ${runId} for user ${userId}`);
+
+  // Steps 2-3: Load compose version/metadata and verify access
+  const { composeContent } = await loadAndAuthorizeCompose(
+    userId,
+    agentComposeVersionId,
+    params.composeId,
+  );
+  const authorizeTime = Date.now();
+
+  // Step 4: Validate template vars and image access (for new runs only)
+  if (!params.checkpointId && !params.sessionId) {
+    await validateComposeRequirements(
+      userId,
+      composeContent,
+      params.vars,
+      params.checkEnv,
+      params.scopeId,
+    );
+  }
+
+  // Steps 5 already validated at enqueue time, skip
+
+  await buildAndDispatchRun({
+    runId,
+    createdAt: run.createdAt,
+    params,
+    composeContent,
+    apiStartTime,
+    scopeId: params.scopeId,
+    authorizeTime,
+    transactionTime,
+  });
 }

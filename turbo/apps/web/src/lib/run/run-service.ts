@@ -37,6 +37,7 @@ import { getUserScopeByClerkId } from "../scope/scope-service";
 import { getDefaultScope } from "../scope/scope-member-service";
 import { getVariableValues } from "../variable/variable-service";
 import { encryptCredentialValue } from "../crypto/secrets-encryption";
+import type { ScopeTier } from "@vm0/core";
 
 const log = logger("service:run");
 
@@ -45,28 +46,38 @@ const log = logger("service:run");
 // so this TTL only matters if the cron job fails to run.
 export const PENDING_RUN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
+/** Concurrent run limits by scope tier */
+const TIER_CONCURRENCY_LIMITS: Record<ScopeTier, number> = {
+  free: 1,
+  pro: 10,
+};
+
+function getConcurrencyLimitForTier(tier: ScopeTier): number {
+  return TIER_CONCURRENCY_LIMITS[tier];
+}
+
 /**
- * Check if user has reached concurrent run limit
+ * Check if scope has reached concurrent run limit
  *
- * @param userId User ID to check
- * @param limit Maximum allowed concurrent runs (default: 1, or CONCURRENT_RUN_LIMIT env var, 0 = no limit)
+ * @param scopeId Scope ID to check
+ * @param scopeTier Scope tier for tier-based limit (default: "free")
+ * @param db Optional database instance (for use within transactions)
  * @throws ConcurrentRunLimitError if limit exceeded
  */
 async function checkRunConcurrencyLimit(
-  userId: string,
-  limit?: number,
+  scopeId: string,
+  scopeTier: ScopeTier = "free",
   db?: Database,
 ): Promise<void> {
-  // Use provided limit, or env var, or default to 1
+  // Use env var override if set, otherwise use tier-based limit
   // Note: 0 means no limit, so we need explicit undefined check
   const envLimit = env().CONCURRENT_RUN_LIMIT;
-  let effectiveLimit = 1; // Default
-
-  if (limit !== undefined) {
-    effectiveLimit = limit;
-  } else if (envLimit !== undefined && !isNaN(envLimit)) {
-    effectiveLimit = envLimit;
-  }
+  const effectiveLimit =
+    envLimit === 0
+      ? 0
+      : envLimit !== undefined && !isNaN(envLimit)
+        ? envLimit
+        : getConcurrencyLimitForTier(scopeTier);
 
   // Skip check if limit is 0 (no limit)
   if (effectiveLimit === 0) {
@@ -83,7 +94,7 @@ async function checkRunConcurrencyLimit(
     .from(agentRuns)
     .where(
       and(
-        eq(agentRuns.userId, userId),
+        eq(agentRuns.scopeId, scopeId),
         or(
           eq(agentRuns.status, "running"),
           and(
@@ -98,7 +109,7 @@ async function checkRunConcurrencyLimit(
 
   if (activeRunCount >= effectiveLimit) {
     log.debug(
-      `User ${userId} has ${activeRunCount} active runs, limit is ${effectiveLimit}`,
+      `Scope ${scopeId} has ${activeRunCount} active runs, limit is ${effectiveLimit}`,
     );
     throw concurrentRunLimit();
   }
@@ -310,6 +321,8 @@ export interface CreateRunParams {
   // Caller-resolved scope ID for variable resolution (org-aware).
   // When provided, used instead of getUserScopeByClerkId fallback.
   scopeId?: string;
+  // Caller-resolved scope tier for concurrency limit derivation.
+  scopeTier?: ScopeTier;
 }
 
 export interface CreateRunResult {
@@ -638,11 +651,11 @@ export async function createRun(
   let run;
   try {
     run = await globalThis.services.db.transaction(async (tx) => {
-      // Acquire per-user advisory lock (released when transaction ends)
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
+      // Acquire per-scope advisory lock (released when transaction ends)
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${scopeId}))`);
 
       // Check concurrent run limit within the serialized transaction
-      await checkRunConcurrencyLimit(userId, undefined, tx);
+      await checkRunConcurrencyLimit(scopeId, params.scopeTier ?? "free", tx);
 
       // INSERT within the same transaction
       const [newRun] = await tx
@@ -718,9 +731,10 @@ export async function executeQueuedRun(
 
   // Step 1: Re-check concurrency + update status atomically with advisory lock
   // to prevent TOCTOU race where a concurrent createRun claims the slot.
+  const scopeId = params.scopeId ?? "";
   const [run] = await globalThis.services.db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
-    await checkRunConcurrencyLimit(userId, undefined, tx);
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${scopeId}))`);
+    await checkRunConcurrencyLimit(scopeId, params.scopeTier ?? "free", tx);
 
     return tx
       .update(agentRuns)

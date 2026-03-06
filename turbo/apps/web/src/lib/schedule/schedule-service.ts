@@ -4,6 +4,7 @@ import {
   extractVariableReferences,
   groupVariablesBySource,
   getConnectorProvidedSecretNames,
+  scopeTierSchema,
 } from "@vm0/core";
 import { agentSchedules } from "../../db/schema/agent-schedule";
 import {
@@ -855,6 +856,13 @@ async function executeSchedule(
     return;
   }
 
+  // Load scope tier for concurrency limit
+  const [scopeRecord] = await globalThis.services.db
+    .select({ tier: scopes.tier })
+    .from(scopes)
+    .where(eq(scopes.id, compose.scopeId))
+    .limit(1);
+
   // Build callbacks for run completion notifications
   const callbacks: Array<{ url: string; secret: string; payload: unknown }> =
     [];
@@ -911,6 +919,10 @@ async function executeSchedule(
       volumeVersions: schedule.volumeVersions ?? undefined,
       agentName: compose.name,
       callbacks,
+      scopeId: compose.scopeId,
+      scopeTier: scopeRecord
+        ? scopeTierSchema.parse(scopeRecord.tier)
+        : undefined,
     });
     runId = result.runId;
   } catch (error) {

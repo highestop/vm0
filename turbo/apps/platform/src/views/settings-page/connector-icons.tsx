@@ -28,6 +28,7 @@ import stravaIcon from "./icons/strava.svg";
 import supabaseIcon from "./icons/supabase.svg";
 import todoistIcon from "./icons/todoist.svg";
 import vercelIcon from "./icons/vercel.svg";
+import webflowIcon from "./icons/webflow.svg";
 import xIcon from "./icons/x.svg";
 import wixIcon from "./icons/wix.svg";
 import xeroIcon from "./icons/xero.svg";
@@ -61,6 +62,7 @@ const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   supabase: supabaseIcon,
   todoist: todoistIcon,
   vercel: vercelIcon,
+  webflow: webflowIcon,
   wix: wixIcon,
   x: xIcon,
   xero: xeroIcon,

@@ -322,7 +322,7 @@ async fn copy_guest_logs(sandbox: &dyn Sandbox, context: &ExecutionContext, log_
     ];
 
     for (guest_path, host_path) in &files {
-        let cat_cmd = format!("cat {guest_path}");
+        let cat_cmd = format!("cat '{guest_path}'");
         let result = sandbox
             .exec(&ExecRequest {
                 cmd: &cat_cmd,
@@ -424,9 +424,17 @@ async fn restore_session(
         .trim_start_matches('/')
         .replace('/', "-");
     let session_dir = format!("/home/user/.claude/projects/-{project_name}");
+
+    // Validate session_id to prevent path traversal (only allow alnum, dash, underscore)
+    if !is_valid_session_id(&session.session_id) {
+        return Err(crate::error::RunnerError::Internal(format!(
+            "invalid session_id: {}",
+            session.session_id
+        )));
+    }
     let session_path = format!("{session_dir}/{}.jsonl", session.session_id);
 
-    let mkdir_cmd = format!("mkdir -p \"{session_dir}\"");
+    let mkdir_cmd = format!("mkdir -p '{}'", session_dir.replace('\'', "'\\''"));
     sandbox
         .exec(&ExecRequest {
             cmd: &mkdir_cmd,
@@ -444,6 +452,14 @@ async fn restore_session(
 
 /// Proxy CA certificate path inside the guest rootfs (pre-baked at build time).
 const VM_PROXY_CA_PATH: &str = "/usr/local/share/ca-certificates/vm0-proxy-ca.crt";
+
+/// Returns true if the session ID contains only safe characters (alphanumeric, dash, underscore).
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 
 /// Build the environment variables JSON, matching the TS `buildEnvironmentVariables`.
 fn build_env_json(context: &ExecutionContext, api_url: &str) -> HashMap<String, String> {
@@ -904,5 +920,33 @@ mod tests {
         assert!(dmesg_indicates_oom("Out Of Memory: killed process 99"));
         assert!(dmesg_indicates_oom("Killed process 99 (agent)"));
         assert!(dmesg_indicates_oom("OOM-kill: constraint=MEMCG"));
+    }
+
+    #[test]
+    fn session_id_validation_rejects_path_traversal() {
+        let invalid_ids = [
+            "../../etc/passwd",
+            "foo/bar",
+            "a b",
+            "id;rm -rf /",
+            "a\nb",
+            "",
+        ];
+        for id in invalid_ids {
+            assert!(!is_valid_session_id(id), "expected rejection for: {id:?}");
+        }
+    }
+
+    #[test]
+    fn session_id_validation_accepts_valid_ids() {
+        let valid_ids = [
+            "abc-123",
+            "sess_456",
+            "a1b2c3",
+            "01961d3a-c0ab-7891-a6d3-9b52cd28716c",
+        ];
+        for id in valid_ids {
+            assert!(is_valid_session_id(id), "expected acceptance for: {id:?}");
+        }
     }
 }

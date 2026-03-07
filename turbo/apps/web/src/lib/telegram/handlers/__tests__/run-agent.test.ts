@@ -6,12 +6,12 @@ import {
 } from "../../../../__tests__/api-test-helpers";
 import { mockClerk } from "../../../../__tests__/clerk-mock";
 import * as runModule from "../../../run";
-import { runAgentForSlack } from "../run-agent";
-import type { SlackCallbackContext } from "../run-agent";
+import { runAgentForTelegram } from "../run-agent";
+import type { TelegramCallbackContext } from "../run-agent";
 
 const context = testContext();
 
-describe("runAgentForSlack", () => {
+describe("runAgentForTelegram", () => {
   beforeEach(() => {
     context.setupMocks();
   });
@@ -30,18 +30,21 @@ describe("runAgentForSlack", () => {
       createdAt: new Date(),
     });
 
-    const callbackContext: SlackCallbackContext = {
-      workspaceId: uniqueId("T"),
-      channelId: uniqueId("C"),
-      threadTs: "1000000000.000000",
-      messageTs: "1000000001.000000",
+    const callbackContext: TelegramCallbackContext = {
+      installationId: uniqueId("install"),
+      chatId: uniqueId("chat"),
+      messageId: uniqueId("msg"),
+      rootMessageId: null,
       userLinkId: uniqueId("link"),
       agentName: "test-agent",
       composeId,
+      existingSessionId: null,
+      isDM: true,
+      thinkingMessageId: null,
     };
 
-    // When runAgentForSlack is called
-    const result = await runAgentForSlack({
+    // When runAgentForTelegram is called
+    const result = await runAgentForTelegram({
       composeId,
       agentName: "test-agent",
       sessionId: undefined,
@@ -54,7 +57,7 @@ describe("runAgentForSlack", () => {
     // Then the run should be dispatched
     expect(result.status).toBe("dispatched");
 
-    // And createRun should receive artifactName: "artifact"
+    // And createRun should receive artifactName and memoryName
     expect(createRunSpy).toHaveBeenCalledTimes(1);
     expect(createRunSpy.mock.calls[0]![0]).toMatchObject({
       artifactName: "artifact",

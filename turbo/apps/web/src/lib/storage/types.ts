@@ -10,6 +10,12 @@ export type StorageDriver = "vas";
 export type { VolumeConfig };
 
 /**
+ * Default mount path for memory storage inside the sandbox.
+ * Used by executors (E2B/Docker) and storage-service when no explicit mount path is provided.
+ */
+export const DEFAULT_MEMORY_MOUNT_PATH = "/home/user/.vm0/memory";
+
+/**
  * Resolved volume with all template variables replaced
  */
 export interface ResolvedVolume {
@@ -117,4 +123,5 @@ export interface ManifestArtifact {
 export interface StorageManifest {
   storages: ManifestStorage[];
   artifact: ManifestArtifact | null;
+  memory: ManifestArtifact | null;
 }

@@ -2,15 +2,18 @@ import MarkdownPreview, {
   type MarkdownPreviewProps,
 } from "@uiw/react-markdown-preview";
 
+type RewriteArgs = Parameters<
+  NonNullable<MarkdownPreviewProps["rehypeRewrite"]>
+>;
+
 /**
- * Rewrite callback that converts unknown HTML tags to plain text.
- * Agent responses may contain component-like tags (e.g. <OrganizationSwitcher>)
- * that the HTML parser renders as DOM elements, causing React warnings.
+ * Rewrite callback that:
+ * 1. Converts unknown HTML tags to plain text (e.g. <OrganizationSwitcher>)
+ * 2. Strips auto-generated heading anchor links whose SVG icons get sanitized
+ *    into visible `<svg>` text by rehype-sanitize.
  */
-function rewriteUnknownTags(
-  ...args: Parameters<NonNullable<MarkdownPreviewProps["rehypeRewrite"]>>
-) {
-  const VALID_HTML_TAGS: ReadonlySet<string> = new Set([
+const rehypeRewriteHandler = (() => {
+  const validHtmlTags: ReadonlySet<string> = new Set([
     "a",
     "abbr",
     "address",
@@ -104,22 +107,42 @@ function rewriteUnknownTags(
     "wbr",
   ]);
 
-  const [node, , parent] = args;
-  if (
-    node.type === "element" &&
-    !VALID_HTML_TAGS.has(node.tagName) &&
-    parent?.type === "element"
-  ) {
-    const text = `<${node.tagName}>`;
-    Object.assign(node, {
-      type: "text",
-      value: text,
-      tagName: undefined,
-      properties: undefined,
-      children: undefined,
-    });
-  }
-}
+  return (...args: RewriteArgs) => {
+    const [node, , parent] = args;
+
+    // Convert unknown HTML tags to plain text
+    if (
+      node.type === "element" &&
+      !validHtmlTags.has(node.tagName) &&
+      parent?.type === "element"
+    ) {
+      const text = `<${node.tagName}>`;
+      Object.assign(node, {
+        type: "text",
+        value: text,
+        tagName: undefined,
+        properties: undefined,
+        children: undefined,
+      });
+      return;
+    }
+
+    // Strip heading anchor links (`.anchor` class) that contain escaped `<svg>` text.
+    if (
+      node.type === "element" &&
+      node.tagName === "a" &&
+      node.properties?.class === "anchor"
+    ) {
+      Object.assign(node, {
+        type: "text",
+        value: "",
+        tagName: undefined,
+        properties: undefined,
+        children: undefined,
+      });
+    }
+  };
+})();
 
 export function Markdown({ className, style, ...rest }: MarkdownPreviewProps) {
   return (
@@ -132,7 +155,7 @@ export function Markdown({ className, style, ...rest }: MarkdownPreviewProps) {
         fontFamily: "var(--font-family-sans)",
         ...style,
       }}
-      rehypeRewrite={rewriteUnknownTags}
+      rehypeRewrite={rehypeRewriteHandler}
       {...rest}
     />
   );

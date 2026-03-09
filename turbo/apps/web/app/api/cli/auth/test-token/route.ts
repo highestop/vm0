@@ -5,7 +5,7 @@ import { cliTokens } from "../../../../../src/db/schema/cli-tokens";
 import { scopes } from "../../../../../src/db/schema/scope";
 import { scopeMembers } from "../../../../../src/db/schema/scope-member";
 import {
-  getUserScopeByClerkId,
+  getDefaultScopeByClerkUserId,
   generateDefaultScopeSlug,
 } from "../../../../../src/lib/scope/scope-service";
 import {
@@ -45,13 +45,13 @@ function isTestTokenAllowed(request: Request): boolean {
 
 /**
  * Ensure the test user has a scope, creating one directly in the database
- * if necessary. Unlike the normal createUserScope flow, this bypasses
+ * if necessary. Unlike the normal createScope flow, this bypasses
  * Clerk Organization creation entirely — test scopes don't need a real
  * Clerk org, and the Clerk Backend API rejects org creation for
  * e2e test users (403 Forbidden).
  */
 async function ensureTestScope(userId: string): Promise<void> {
-  const existing = await getUserScopeByClerkId(userId);
+  const existing = await getDefaultScopeByClerkUserId(userId);
   if (existing) return;
 
   const slug = generateDefaultScopeSlug(userId);

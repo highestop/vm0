@@ -161,6 +161,11 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     enabled: false,
     enabledUserHashes: STAFF_USER_HASHES,
   },
+  [FeatureSwitchKey.CloseConnector]: {
+    maintainer: "ethan@vm0.ai",
+    enabled: false,
+    enabledUserHashes: STAFF_USER_HASHES,
+  },
   [FeatureSwitchKey.WebflowConnector]: {
     maintainer: "ethan@vm0.ai",
     enabled: false,
@@ -207,6 +212,7 @@ export const CONNECTOR_FEATURE_FLAGS: Partial<
 > = {
   asana: FeatureSwitchKey.AsanaConnector,
   canva: FeatureSwitchKey.CanvaConnector,
+  close: FeatureSwitchKey.CloseConnector,
   computer: FeatureSwitchKey.ComputerConnector,
   deel: FeatureSwitchKey.DeelConnector,
   docusign: FeatureSwitchKey.DocuSignConnector,

@@ -879,7 +879,6 @@ interface BuildContextTimings {
   resolveSource: number;
   resolveScope: number;
   resolveCredentials: number;
-  userPreferences: number;
 }
 
 interface BuildContextResult {
@@ -959,7 +958,6 @@ export async function buildExecutionContext(
   const scopeId = await resolveScopeId(params);
   const resolveScopeEnd = Date.now();
 
-  // Step 4: Fetch secrets/credentials from user's scope and merge with CLI secrets
   // Extract compose structure
   const compose = agentCompose as {
     agents?: Record<
@@ -971,25 +969,33 @@ export async function buildExecutionContext(
     ? Object.values(compose.agents)[0]
     : undefined;
 
-  // Step 4: Resolve all credentials and secrets, then expand environment
+  // Step 4: Resolve credentials and user preferences in parallel
+  // getUserPreferences only needs userId (no scopeId dependency),
+  // so it can run concurrently with credential resolution.
   const resolveCredentialsStart = Date.now();
+  const [credentialsResult, userPrefs] = await Promise.all([
+    resolveCredentialsAndEnvironment(
+      scopeId,
+      agentCompose,
+      firstAgent,
+      vars,
+      params.secrets,
+      params.modelProvider,
+      params.runId,
+      params.checkEnv,
+      params.userId,
+    ),
+    params.userId ? getUserPreferences(params.userId) : Promise.resolve(null),
+  ]);
+  const resolveCredentialsEnd = Date.now();
+
   const {
     secrets: resolvedSecrets,
     credentials: resolvedCredentials,
     environment,
-  } = await resolveCredentialsAndEnvironment(
-    scopeId,
-    agentCompose,
-    firstAgent,
-    vars,
-    params.secrets,
-    params.modelProvider,
-    params.runId,
-    params.checkEnv,
-    params.userId,
-  );
-  const resolveCredentialsEnd = Date.now();
+  } = credentialsResult;
   secrets = resolvedSecrets;
+  const userTimezone = userPrefs?.timezone ?? undefined;
 
   // Step 5: Merge credentials into secrets for client-side log masking
   // Credentials are server-stored user-level secrets and must be masked like CLI secrets
@@ -997,15 +1003,6 @@ export async function buildExecutionContext(
   const mergedSecrets = resolvedCredentials
     ? { ...resolvedCredentials, ...secrets }
     : secrets;
-
-  // Fetch user timezone preference
-  const userPreferencesStart = Date.now();
-  let userTimezone: string | undefined;
-  if (params.userId) {
-    const userPrefs = await getUserPreferences(params.userId);
-    userTimezone = userPrefs.timezone ?? undefined;
-  }
-  const userPreferencesEnd = Date.now();
 
   // Build final execution context
   return {
@@ -1040,7 +1037,6 @@ export async function buildExecutionContext(
       resolveSource: resolveSourceEnd - resolveSourceStart,
       resolveScope: resolveScopeEnd - resolveScopeStart,
       resolveCredentials: resolveCredentialsEnd - resolveCredentialsStart,
-      userPreferences: userPreferencesEnd - userPreferencesStart,
     },
   };
 }

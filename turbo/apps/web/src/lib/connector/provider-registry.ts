@@ -35,6 +35,7 @@ import { xHandler } from "./providers/x-handler";
 import { supabaseHandler } from "./providers/supabase-handler";
 import { todoistHandler } from "./providers/todoist-handler";
 import { webflowHandler } from "./providers/webflow-handler";
+import { metaAdsHandler } from "./providers/meta-ads-handler";
 import { xeroHandler } from "./providers/xero-handler";
 
 export type { AuthUrlResult, OAuthTokenResult };
@@ -72,6 +73,7 @@ export const PROVIDER_HANDLERS: Record<
   vercel: vercelHandler,
   webflow: webflowHandler,
   supabase: supabaseHandler,
+  "meta-ads": metaAdsHandler,
   x: xHandler,
   xero: xeroHandler,
 };

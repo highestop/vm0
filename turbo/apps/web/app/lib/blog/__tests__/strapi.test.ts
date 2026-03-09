@@ -321,6 +321,32 @@ describe("blog/strapi", () => {
     });
   });
 
+  describe("empty and invalid JSON responses", () => {
+    it("throws descriptive error when Strapi returns empty body", async () => {
+      server.use(
+        http.get(`${STRAPI_URL}/api/articles`, () => {
+          return new HttpResponse("", { status: 200 });
+        }),
+      );
+
+      await expect(getPostsFromStrapi("en")).rejects.toThrow(
+        "Strapi returned empty response",
+      );
+    });
+
+    it("throws descriptive error when Strapi returns invalid JSON", async () => {
+      server.use(
+        http.get(`${STRAPI_URL}/api/articles`, () => {
+          return new HttpResponse("<html>Bad Gateway</html>", { status: 200 });
+        }),
+      );
+
+      await expect(getPostsFromStrapi("en")).rejects.toThrow(
+        "Strapi returned invalid JSON",
+      );
+    });
+  });
+
   describe("article transformation", () => {
     it("handles relative cover URLs by prepending STRAPI_URL", async () => {
       server.use(

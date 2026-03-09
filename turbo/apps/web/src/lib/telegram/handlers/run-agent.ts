@@ -3,7 +3,7 @@ import {
   agentComposes,
   agentComposeVersions,
 } from "../../../db/schema/agent-compose";
-import { createRun } from "../../run";
+import { createRun, isRunDispatchError } from "../../run";
 import { buildIntegrationContext } from "../../integration-context";
 import { isConcurrentRunLimit } from "../../errors";
 import { logger } from "../../logger";
@@ -38,7 +38,7 @@ interface RunAgentParams {
 }
 
 interface RunAgentResult {
-  status: "dispatched" | "failed";
+  status: "dispatched" | "queued" | "failed";
   response?: string;
   runId: string | undefined;
 }
@@ -69,9 +69,11 @@ export async function runAgentForTelegram(
     .limit(1);
 
   if (!compose) {
+    log.error("Agent compose not found", { composeId, agentName });
     return {
       status: "failed",
-      response: "Error: Agent configuration not found.",
+      response:
+        "The agent configuration could not be found. Please contact the workspace admin.",
       runId: undefined,
     };
   }
@@ -86,9 +88,11 @@ export async function runAgentForTelegram(
       .limit(1);
 
     if (!latestVersion) {
+      log.error("Agent has no published versions", { composeId, agentName });
       return {
         status: "failed",
-        response: "Error: Agent has no versions configured.",
+        response:
+          "The agent has no published versions. Please publish a version in the dashboard first.",
         runId: undefined,
       };
     }
@@ -122,15 +126,20 @@ export async function runAgentForTelegram(
       ],
     });
 
-    log.debug(`Run ${result.runId} dispatched for Telegram agent ${agentName}`);
+    const status = result.status === "queued" ? "queued" : "dispatched";
+    log.debug(`Run ${result.runId} ${status} for Telegram agent ${agentName}`);
 
     return {
-      status: "dispatched",
+      status,
       runId: result.runId,
     };
   } catch (error) {
-    log.error("Error running agent for Telegram:", error);
     if (isConcurrentRunLimit(error)) {
+      log.warn("Concurrent run limit reached", {
+        composeId,
+        agentName,
+        userId,
+      });
       return {
         status: "failed",
         response:
@@ -138,11 +147,13 @@ export async function runAgentForTelegram(
         runId: undefined,
       };
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const runId = isRunDispatchError(error) ? error.runId : undefined;
+    log.error("Failed to create run", { composeId, agentName, userId, error });
     return {
       status: "failed",
-      response: `Error executing agent: ${message}`,
-      runId: undefined,
+      response:
+        "Something went wrong while starting the agent. Please try again later.",
+      runId,
     };
   }
 }

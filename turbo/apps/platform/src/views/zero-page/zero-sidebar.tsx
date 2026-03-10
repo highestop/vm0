@@ -1,4 +1,6 @@
-import { useState, type ComponentType } from "react";
+import type { ReactNode } from "react";
+import { useCCState } from "ccstate-react/experimental";
+import { useGet, useSet, useLoadable } from "ccstate-react";
 import {
   IconMessageCircle,
   IconRobot,
@@ -11,7 +13,6 @@ import {
   IconUsers,
   IconLogout,
 } from "@tabler/icons-react";
-import { useLoadable } from "ccstate-react";
 import slackIcon from "../settings-page/icons/slack.svg";
 import { clerk$, user$ } from "../../signals/auth.ts";
 import { detach, Reason } from "../../signals/utils.ts";
@@ -27,40 +28,32 @@ export type ZeroNavId =
   | "works"
   | "account";
 
-const MAIN_NAV: {
-  id: ZeroNavId;
-  label: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-}[] = [
-  { id: "chat", label: "Chat with Zero", icon: IconMessageCircle },
-  { id: "meet", label: "Meet Zero", icon: IconRobot },
-  { id: "job", label: "Zero's team", icon: IconUsers },
-  { id: "schedule", label: "Schedule", icon: IconCalendar },
-  { id: "production", label: "Documents", icon: IconFile },
-  { id: "activity", label: "Activities", icon: IconChartLine },
-];
+type NavIcon = (props: { size?: number; className?: string }) => ReactNode;
+const MAIN_NAV = [
+  { id: "chat", label: "Chat with Zero", icon: IconMessageCircle as NavIcon },
+  { id: "meet", label: "Meet Zero", icon: IconRobot as NavIcon },
+  { id: "job", label: "Zero's team", icon: IconUsers as NavIcon },
+  { id: "schedule", label: "Schedule", icon: IconCalendar as NavIcon },
+  { id: "production", label: "Documents", icon: IconFile as NavIcon },
+  { id: "activity", label: "Activities", icon: IconChartLine as NavIcon },
+] as const;
 
-const RECENT_ITEMS: { id: string; label: string }[] = [
+const RECENT_ITEMS = [
   { id: "hello", label: "Hello from Zero" },
   { id: "1", label: "Daily digest workflow" },
   { id: "2", label: "Set up Slack integration" },
   { id: "3", label: "Weekly report automation" },
   { id: "4", label: "Code review reminders" },
-];
+] as const;
 
-const FOOTER_NAV: {
-  id: ZeroNavId;
-  label: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-  iconImg?: string;
-}[] = [
+const FOOTER_NAV = [
   {
-    id: "works",
+    id: "works" as const satisfies ZeroNavId,
     label: "Where Zero works",
-    icon: IconLayoutGrid,
+    icon: IconLayoutGrid as NavIcon,
     iconImg: slackIcon,
   },
-];
+] as const;
 
 export type ZeroAccountAction = "preferences" | "manage" | "signout";
 
@@ -161,7 +154,9 @@ function AccountDropdown({
   activeId: ZeroNavId;
   onAccountAction?: (action: ZeroAccountAction) => void;
 }) {
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuOpen$ = useCCState(false);
+  const accountMenuOpen = useGet(accountMenuOpen$);
+  const setAccountMenuOpen = useSet(accountMenuOpen$);
   const clerkLoadable = useLoadable(clerk$);
   const userLoadable = useLoadable(user$);
   const user = userLoadable.state === "hasData" ? userLoadable.data : null;

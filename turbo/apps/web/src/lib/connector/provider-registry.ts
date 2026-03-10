@@ -8,6 +8,7 @@ import {
 import { agentmailHandler } from "./providers/agentmail-handler";
 import { ahrefsHandler } from "./providers/ahrefs-handler";
 import { airtableHandler } from "./providers/airtable-handler";
+import { axiomHandler } from "./providers/axiom-handler";
 import { asanaHandler } from "./providers/asana-handler";
 import { canvaHandler } from "./providers/canva-handler";
 import { closeHandler } from "./providers/close-handler";
@@ -58,6 +59,7 @@ export const PROVIDER_HANDLERS: Record<
   agentmail: agentmailHandler,
   ahrefs: ahrefsHandler,
   airtable: airtableHandler,
+  axiom: axiomHandler,
   asana: asanaHandler,
   canva: canvaHandler,
   close: closeHandler,

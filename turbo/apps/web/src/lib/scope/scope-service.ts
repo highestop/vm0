@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { clerkClient } from "@clerk/nextjs/server";
 import { scopes } from "../../db/schema/scope";
 import { scopeMembers } from "../../db/schema/scope-member";
@@ -111,6 +111,21 @@ export async function getScopeByClerkOrgId(clerkOrgId: string) {
     .limit(1);
 
   return result[0] ?? null;
+}
+
+/**
+ * Get scopes by multiple Clerk organization IDs in a single query.
+ * Returns a Map from clerkOrgId to scope record.
+ */
+export async function getScopesByClerkOrgIds(
+  clerkOrgIds: string[],
+): Promise<Map<string, typeof scopes.$inferSelect>> {
+  if (clerkOrgIds.length === 0) return new Map();
+  const results = await globalThis.services.db
+    .select()
+    .from(scopes)
+    .where(inArray(scopes.clerkOrgId, clerkOrgIds));
+  return new Map(results.map((s) => [s.clerkOrgId, s]));
 }
 
 /**
@@ -372,6 +387,7 @@ export function isOfficialRunnerGroup(group: string): boolean {
 export async function validateRunnerGroupScope(
   clerkUserId: string,
   group: string,
+  tokenScopeId?: string | null,
 ): Promise<void> {
   const scopeSlug = group.split("/")[0];
   if (!scopeSlug) {
@@ -383,9 +399,17 @@ export async function validateRunnerGroupScope(
     return;
   }
 
-  // TODO: This checks against the user's default scope, but should check scope
-  // membership instead. A user who belongs to multiple scopes can only use runner
-  // groups from their default scope, which is incorrect.
+  // CLI token with stored scope_id — verify slug matches directly
+  if (tokenScopeId) {
+    const scope = await getScopeById(tokenScopeId);
+    if (scope && scope.slug === scopeSlug) {
+      return;
+    }
+    throw forbidden(
+      `Runner group scope "${scopeSlug}" does not match your scope`,
+    );
+  }
+
   const defaultScope = await getDefaultScopeByClerkUserId(clerkUserId);
   if (!defaultScope) {
     throw forbidden(

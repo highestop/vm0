@@ -1,39 +1,46 @@
-import { clerkClient } from "@clerk/nextjs/server";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 import { eq, and, asc } from "drizzle-orm";
 import { scopeMembers } from "../../db/schema/scope-member";
 import { scopes } from "../../db/schema/scope";
 import { badRequest, forbidden, notFound } from "../errors";
 import { logger } from "../logger";
+import { getScopeByClerkOrgId, getScopesByClerkOrgIds } from "./scope-service";
 import type { ScopeRole } from "@vm0/core";
-import { scopeRoleSchema } from "@vm0/core";
 
 const log = logger("service:scope-member");
 
 /**
- * Get a scope member record for a specific user in a scope
- */
-export async function getScopeMember(scopeId: string, userId: string) {
-  const result = await globalThis.services.db
-    .select()
-    .from(scopeMembers)
-    .where(
-      and(eq(scopeMembers.scopeId, scopeId), eq(scopeMembers.userId, userId)),
-    )
-    .limit(1);
-
-  return result[0] ?? null;
-}
-
-/**
  * Require a user to be a member of a scope, or throw 403.
- * Returns the member record with role typed as ScopeRole.
+ * Verifies membership via Clerk API.
  */
 export async function requireScopeMember(scopeId: string, userId: string) {
-  const member = await getScopeMember(scopeId, userId);
-  if (!member) {
+  const [scope] = await globalThis.services.db
+    .select()
+    .from(scopes)
+    .where(eq(scopes.id, scopeId))
+    .limit(1);
+
+  if (!scope?.clerkOrgId || scope.clerkOrgId.startsWith("pending_")) {
     throw forbidden("You are not a member of this scope");
   }
-  return { ...member, role: scopeRoleSchema.parse(member.role) };
+
+  const client = await clerkClient();
+  const memberships = await client.organizations.getOrganizationMembershipList({
+    organizationId: scope.clerkOrgId,
+  });
+
+  const membership = memberships.data.find(
+    (m) => m.publicUserData?.userId === userId,
+  );
+  if (!membership) {
+    throw forbidden("You are not a member of this scope");
+  }
+
+  return {
+    role: mapClerkRole(membership.role),
+    userId,
+    scopeId,
+  };
 }
 
 /**
@@ -51,40 +58,62 @@ export async function getPrimaryAdminMembership(userId: string) {
 }
 
 /**
- * Get user's default scope (first owned scope from scope_members)
- * Falls back to legacy getDefaultScopeByClerkUserId behavior for backward compat
+ * Get user's default scope.
+ *
+ * Fast path: if the JWT session contains an orgId, look up the scope directly
+ * from the database — no Clerk API call needed.
+ *
+ * Slow path: for CLI tokens (no JWT) or when the JWT org has no local scope,
+ * fall back to Clerk Backend API to discover the user's org memberships.
  */
 export async function getDefaultScope(userId: string) {
-  // Find first scope where user is admin (scope creator)
-  const result = await globalThis.services.db
-    .select({
-      scope: scopes,
-      member: scopeMembers,
-    })
-    .from(scopeMembers)
-    .innerJoin(scopes, eq(scopeMembers.scopeId, scopes.id))
-    .where(and(eq(scopeMembers.userId, userId), eq(scopeMembers.role, "admin")))
-    .orderBy(asc(scopeMembers.createdAt))
-    .limit(1);
-
-  if (result[0]) {
-    return result[0];
+  // JWT fast path: use active org from session token
+  const authResult = await auth();
+  if (authResult.orgId) {
+    const scope = await getScopeByClerkOrgId(authResult.orgId);
+    if (scope) {
+      return {
+        scope,
+        member: {
+          role: mapClerkRole(authResult.orgRole ?? "org:member"),
+          userId,
+          scopeId: scope.id,
+        },
+      };
+    }
   }
 
-  // Fallback: find any scope the user is a member of
-  const anyMembership = await globalThis.services.db
-    .select({
-      scope: scopes,
-      member: scopeMembers,
-    })
-    .from(scopeMembers)
-    .innerJoin(scopes, eq(scopeMembers.scopeId, scopes.id))
-    .where(eq(scopeMembers.userId, userId))
-    .orderBy(asc(scopeMembers.createdAt))
-    .limit(1);
+  // Slow path: Clerk API (CLI tokens, or JWT org has no local scope yet)
+  const client = await clerkClient();
+  const memberships = await client.users.getOrganizationMembershipList({
+    userId,
+  });
 
-  if (anyMembership[0]) {
-    return anyMembership[0];
+  // Priority: admin orgs first, then any org
+  const adminMembership = memberships.data.find((m) => m.role === "org:admin");
+  const candidates = adminMembership
+    ? [
+        adminMembership,
+        ...memberships.data.filter((m) => m !== adminMembership),
+      ]
+    : memberships.data;
+
+  // Batch-fetch all scopes by Clerk org IDs in a single query
+  const clerkOrgIds = candidates.map((m) => m.organization.id);
+  const scopeMap = await getScopesByClerkOrgIds(clerkOrgIds);
+
+  for (const membership of candidates) {
+    const scope = scopeMap.get(membership.organization.id);
+    if (scope) {
+      return {
+        scope,
+        member: {
+          role: mapClerkRole(membership.role),
+          userId,
+          scopeId: scope.id,
+        },
+      };
+    }
   }
 
   throw notFound("No scope found for user");
@@ -96,9 +125,13 @@ export async function getDefaultScope(userId: string) {
 export async function resolveScopeId(
   userId: string,
   scopeId: string | undefined,
+  tokenScopeId?: string | null,
 ): Promise<string> {
   if (scopeId) {
     return scopeId;
+  }
+  if (tokenScopeId) {
+    return tokenScopeId;
   }
   const { scope } = await getDefaultScope(userId);
   return scope.id;

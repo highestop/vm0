@@ -1504,6 +1504,34 @@ export const CONNECTOR_TYPES = {
       SIMILARWEB_API_KEY: "$secrets.SIMILARWEB_API_KEY",
     } as Record<string, string>,
   },
+  mailchimp: {
+    label: "Mailchimp",
+    helpText:
+      "Connect your Mailchimp account to manage audiences, campaigns, templates, and automations",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to your [Mailchimp account](https://login.mailchimp.com)\n2. Go to **Account & Billing** → **Extras** → **API keys**\n3. Click **Create A Key**\n4. Copy the API key (format: `xxxxxxxx-us00`)",
+        secrets: {
+          MAILCHIMP_ACCESS_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-us00",
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "api-token",
+    environmentMapping: {
+      MAILCHIMP_API_KEY: "$secrets.MAILCHIMP_ACCESS_TOKEN",
+    } as Record<string, string>,
+    oauth: {
+      authorizationUrl: "https://login.mailchimp.com/oauth2/authorize",
+      tokenUrl: "https://login.mailchimp.com/oauth2/token",
+      scopes: [],
+    } as ConnectorOAuthConfig,
+  },
 } as const;
 
 export type ConnectorType = keyof typeof CONNECTOR_TYPES;
@@ -1679,6 +1707,32 @@ const CONNECTOR_PROXY_CONFIGS: Partial<
     targets: ["https://api.similarweb.com"],
     auth: { headers: { "api-key": "${token}" } },
   },
+  mailchimp: {
+    targets: [
+      "https://us1.api.mailchimp.com/3.0",
+      "https://us2.api.mailchimp.com/3.0",
+      "https://us3.api.mailchimp.com/3.0",
+      "https://us4.api.mailchimp.com/3.0",
+      "https://us5.api.mailchimp.com/3.0",
+      "https://us6.api.mailchimp.com/3.0",
+      "https://us7.api.mailchimp.com/3.0",
+      "https://us8.api.mailchimp.com/3.0",
+      "https://us9.api.mailchimp.com/3.0",
+      "https://us10.api.mailchimp.com/3.0",
+      "https://us11.api.mailchimp.com/3.0",
+      "https://us12.api.mailchimp.com/3.0",
+      "https://us13.api.mailchimp.com/3.0",
+      "https://us14.api.mailchimp.com/3.0",
+      "https://us15.api.mailchimp.com/3.0",
+      "https://us16.api.mailchimp.com/3.0",
+      "https://us17.api.mailchimp.com/3.0",
+      "https://us18.api.mailchimp.com/3.0",
+      "https://us19.api.mailchimp.com/3.0",
+      "https://us20.api.mailchimp.com/3.0",
+      "https://us21.api.mailchimp.com/3.0",
+    ],
+    auth: BEARER_AUTH,
+  },
 };
 
 export const connectorTypeSchema = z.enum([
@@ -1722,6 +1776,7 @@ export const connectorTypeSchema = z.enum([
   "posthog",
   "stripe",
   "similarweb",
+  "mailchimp",
 ]);
 
 /**

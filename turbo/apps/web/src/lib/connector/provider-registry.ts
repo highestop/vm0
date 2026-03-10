@@ -36,6 +36,7 @@ import { sentryHandler } from "./providers/sentry-handler";
 import { vercelHandler } from "./providers/vercel-handler";
 import { xHandler } from "./providers/x-handler";
 import { supabaseHandler } from "./providers/supabase-handler";
+import { mailchimpHandler } from "./providers/mailchimp-handler";
 import { todoistHandler } from "./providers/todoist-handler";
 import { webflowHandler } from "./providers/webflow-handler";
 import { outlookCalendarHandler } from "./providers/outlook-calendar-handler";
@@ -69,6 +70,7 @@ export const PROVIDER_HANDLERS: Record<
   "google-drive": googleDriveHandler,
   "google-sheets": googleSheetsHandler,
   linear: linearHandler,
+  mailchimp: mailchimpHandler,
   mercury: mercuryHandler,
   monday: mondayHandler,
   neon: neonHandler,

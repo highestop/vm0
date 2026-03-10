@@ -36,6 +36,7 @@ export enum FeatureSwitchKey {
   MetaAdsConnector = "metaAdsConnector",
   StripeConnector = "stripeConnector",
   PosthogConnector = "posthogConnector",
+  MailchimpConnector = "mailchimpConnector",
   GitHubIntegration = "githubIntegration",
   TelegramIntegration = "telegramIntegration",
   Zero = "zero",

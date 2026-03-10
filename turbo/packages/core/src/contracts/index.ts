@@ -484,3 +484,9 @@ export {
   type AdminScopeTierContract,
   type ScopeTier,
 } from "./admin";
+export {
+  onboardingStatusContract,
+  onboardingStatusResponseSchema,
+  type OnboardingStatusContract,
+  type OnboardingStatusResponse,
+} from "./onboarding";

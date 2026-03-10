@@ -29,6 +29,7 @@ import outlookMailIcon from "./icons/outlook-mail.svg";
 import posthogIcon from "./icons/posthog.svg";
 import redditIcon from "./icons/reddit.svg";
 import sentryIcon from "./icons/sentry.svg";
+import similarwebIcon from "./icons/similarweb.svg";
 import slackIcon from "./icons/slack.svg";
 import stravaIcon from "./icons/strava.svg";
 import stripeIcon from "./icons/stripe.svg";
@@ -69,6 +70,7 @@ const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   posthog: posthogIcon,
   reddit: redditIcon,
   sentry: sentryIcon,
+  similarweb: similarwebIcon,
   slack: slackIcon,
   strava: stravaIcon,
   stripe: stripeIcon,

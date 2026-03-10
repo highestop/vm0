@@ -36,7 +36,7 @@ export interface ConnectorOAuthConfig {
 /**
  * Base configuration shape for all connector types.
  */
-interface ConnectorConfig {
+export interface ConnectorConfig {
   readonly label: string;
   readonly helpText: string;
   readonly featureFlag?: FeatureSwitchKey;
@@ -54,7 +54,7 @@ interface ConnectorConfig {
  * - `$secrets.X` - lookup secret X from the connector's secrets
  * - Other values are passed through as literals
  */
-export const CONNECTOR_TYPES: Record<ConnectorType, ConnectorConfig> = {
+const CONNECTOR_TYPES_DEF = {
   axiom: {
     label: "Axiom",
     helpText:
@@ -1687,9 +1687,12 @@ export const CONNECTOR_TYPES: Record<ConnectorType, ConnectorConfig> = {
       RESEND_API_KEY: "$secrets.RESEND_API_KEY",
     } as Record<string, string>,
   },
-} as const;
+} satisfies Record<string, ConnectorConfig>;
 
-export type ConnectorType = keyof typeof CONNECTOR_TYPES;
+export type ConnectorType = keyof typeof CONNECTOR_TYPES_DEF;
+
+export const CONNECTOR_TYPES: Record<ConnectorType, ConnectorConfig> =
+  CONNECTOR_TYPES_DEF;
 
 /**
  * Proxy-side connector configuration for token replacement.
@@ -2085,7 +2088,9 @@ export function getConnectorAuthMethods(
 /**
  * Get default auth method for a connector type
  */
-export function getConnectorDefaultAuthMethod(type: ConnectorType): string {
+export function getConnectorDefaultAuthMethod(
+  type: ConnectorType,
+): string | undefined {
   return CONNECTOR_TYPES[type].defaultAuthMethod;
 }
 
@@ -2117,7 +2122,7 @@ export function getConnectorSecretNames(
 export function getConnectorEnvironmentMapping(
   type: ConnectorType,
 ): Record<string, string> {
-  return CONNECTOR_TYPES[type].environmentMapping;
+  return CONNECTOR_TYPES[type].environmentMapping ?? {};
 }
 
 /**

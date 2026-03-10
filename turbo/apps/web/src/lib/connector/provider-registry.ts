@@ -45,6 +45,7 @@ import { outlookMailHandler } from "./providers/outlook-mail-handler";
 import { metaAdsHandler } from "./providers/meta-ads-handler";
 import { posthogHandler } from "./providers/posthog-handler";
 import { plausibleHandler } from "./providers/plausible-handler";
+import { productlaneHandler } from "./providers/productlane-handler";
 import { similarwebHandler } from "./providers/similarweb-handler";
 import { xeroHandler } from "./providers/xero-handler";
 
@@ -93,6 +94,7 @@ export const PROVIDER_HANDLERS: Record<
   "meta-ads": metaAdsHandler,
   posthog: posthogHandler,
   plausible: plausibleHandler,
+  productlane: productlaneHandler,
   similarweb: similarwebHandler,
   x: xHandler,
   xero: xeroHandler,

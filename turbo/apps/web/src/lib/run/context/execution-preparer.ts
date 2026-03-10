@@ -205,7 +205,7 @@ export async function prepareForExecution(
   const scopeStart = Date.now();
   const [agentScopeInfo] = await globalThis.services.db
     .select({
-      scopeId: agentComposes.scopeId,
+      scopeId: scopes.id,
       scopeSlug: scopes.slug,
     })
     .from(agentComposeVersions)

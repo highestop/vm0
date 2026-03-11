@@ -14,6 +14,12 @@ export const onboardingStatusResponseSchema = z.object({
   hasDefaultAgent: z.boolean(),
   defaultAgentName: z.string().nullable(),
   defaultAgentComposeId: z.string().nullable(),
+  defaultAgentMetadata: z
+    .object({
+      displayName: z.string().optional(),
+      sound: z.string().optional(),
+    })
+    .nullable(),
 });
 
 export type OnboardingStatusResponse = z.infer<

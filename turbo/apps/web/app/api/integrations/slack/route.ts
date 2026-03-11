@@ -24,7 +24,7 @@ import {
   getSlackRedirectBaseUrl,
   refreshAppHome,
 } from "../../../../src/lib/slack";
-import { decryptCredentialValue } from "../../../../src/lib/crypto/secrets-encryption";
+import { decryptSecretValue } from "../../../../src/lib/crypto/secrets-encryption";
 import { removePermission } from "../../../../src/lib/agent/permission-service";
 import { getUserEmail } from "../../../../src/lib/auth/get-user-email";
 import { getScopeBySlug } from "../../../../src/lib/scope/scope-service";
@@ -116,10 +116,7 @@ export async function GET(request: Request) {
       const content = version.content as AgentComposeYaml;
       const refs = extractVariableReferences(content);
       const grouped = groupVariablesBySource(refs);
-      requiredSecrets = [
-        ...grouped.secrets.map((s) => s.name),
-        ...grouped.credentials.map((s) => s.name),
-      ];
+      requiredSecrets = grouped.secrets.map((s) => s.name);
       requiredVars = grouped.vars.map((v) => v.name);
     }
   }
@@ -225,7 +222,7 @@ export async function DELETE(request: Request) {
 
   // Refresh App Home to reflect disconnected state
   if (installation) {
-    const botToken = decryptCredentialValue(
+    const botToken = decryptSecretValue(
       installation.encryptedBotToken,
       SECRETS_ENCRYPTION_KEY,
     );

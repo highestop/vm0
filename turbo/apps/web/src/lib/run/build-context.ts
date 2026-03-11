@@ -1125,7 +1125,9 @@ export async function buildExecutionContext(
       params.checkEnv,
       params.userId,
     ),
-    params.userId ? getUserPreferences(params.userId) : Promise.resolve(null),
+    params.userId
+      ? getUserPreferences(runtimeClerkOrgId, params.userId)
+      : Promise.resolve(null),
     Promise.resolve(pendingRuntimeScope),
   ]);
   const resolveSecretsEnd = Date.now();

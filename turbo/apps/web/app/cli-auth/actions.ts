@@ -15,7 +15,7 @@ export async function verifyDeviceAction(
   code: string,
   timezone?: string,
 ): Promise<VerifyResult> {
-  const { userId } = await auth();
+  const { userId, sessionClaims, orgId } = await auth();
 
   if (!userId) {
     return { success: false, error: "Not authenticated" };
@@ -56,9 +56,10 @@ export async function verifyDeviceAction(
     })
     .where(eq(deviceCodes.code, normalizedCode));
 
-  // Auto-set timezone if user has no preference yet (first login)
-  if (timezone) {
-    await setTimezoneIfNotSet(userId, timezone);
+  // Auto-set timezone if user has no preference yet (first login).
+  // Requires orgId because preferences are stored in Clerk org membership metadata.
+  if (timezone && orgId) {
+    await setTimezoneIfNotSet(orgId, userId, timezone, sessionClaims);
   }
 
   return { success: true };

@@ -65,6 +65,7 @@ import { plausibleHandler } from "./providers/plausible-handler";
 import { podchaserHandler } from "./providers/podchaser-handler";
 import { productlaneHandler } from "./providers/productlane-handler";
 import { qdrantHandler } from "./providers/qdrant-handler";
+import { qiitaHandler } from "./providers/qiita-handler";
 import { resendHandler } from "./providers/resend-handler";
 import { scrapeninjaHandler } from "./providers/scrapeninja-handler";
 import { similarwebHandler } from "./providers/similarweb-handler";
@@ -136,6 +137,7 @@ export const PROVIDER_HANDLERS: Record<
   productlane: productlaneHandler,
   pushinator: pushinatorHandler,
   qdrant: qdrantHandler,
+  qiita: qiitaHandler,
   resend: resendHandler,
   scrapeninja: scrapeninjaHandler,
   similarweb: similarwebHandler,

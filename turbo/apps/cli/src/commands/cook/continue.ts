@@ -1,5 +1,4 @@
 import { Command, Option } from "commander";
-import chalk from "chalk";
 import path from "path";
 import { loadCookState, saveCookState } from "../../lib/domain/cook-state";
 import { withErrorHandler } from "../../lib/command";
@@ -35,9 +34,9 @@ export const continueCommand = new Command()
       ) => {
         const state = await loadCookState();
         if (!state.lastSessionId) {
-          console.error(chalk.red("✗ No previous session found"));
-          console.error(chalk.dim("  Run 'vm0 cook <prompt>' first"));
-          process.exit(1);
+          throw new Error("No previous session found", {
+            cause: new Error("Run 'vm0 cook <prompt>' first"),
+          });
         }
 
         const cwd = process.cwd();
@@ -66,8 +65,7 @@ export const continueCommand = new Command()
             { cwd },
           );
         } catch {
-          // Error already displayed by vm0 run
-          process.exit(1);
+          throw new Error("Run command failed");
         }
 
         // Update state with new IDs

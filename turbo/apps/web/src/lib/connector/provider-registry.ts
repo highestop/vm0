@@ -18,6 +18,7 @@ import { canvaHandler } from "./providers/canva-handler";
 import { chatwootHandler } from "./providers/chatwoot-handler";
 import { closeHandler } from "./providers/close-handler";
 import { deelHandler } from "./providers/deel-handler";
+import { devtoHandler } from "./providers/devto-handler";
 import { docusignHandler } from "./providers/docusign-handler";
 import { dropboxHandler } from "./providers/dropbox-handler";
 import { elevenlabsHandler } from "./providers/elevenlabs-handler";
@@ -83,6 +84,7 @@ export const PROVIDER_HANDLERS: Record<
   chatwoot: chatwootHandler,
   close: closeHandler,
   deel: deelHandler,
+  devto: devtoHandler,
   docusign: docusignHandler,
   dropbox: dropboxHandler,
   elevenlabs: elevenlabsHandler,

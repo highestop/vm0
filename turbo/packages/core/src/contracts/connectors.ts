@@ -2666,7 +2666,6 @@ export type ConnectorType = keyof typeof CONNECTOR_TYPES_DEF;
 
 export const CONNECTOR_TYPES: Record<ConnectorType, ConnectorConfig> =
   CONNECTOR_TYPES_DEF;
-
 export const connectorTypeSchema = z.enum([
   "agentmail",
   "ahrefs",

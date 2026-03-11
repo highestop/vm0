@@ -58,6 +58,7 @@ import { outlookMailHandler } from "./providers/outlook-mail-handler";
 import { metaAdsHandler } from "./providers/meta-ads-handler";
 import { posthogHandler } from "./providers/posthog-handler";
 import { pdf4meHandler } from "./providers/pdf4me-handler";
+import { pdfcoHandler } from "./providers/pdfco-handler";
 import { perplexityHandler } from "./providers/perplexity-handler";
 import { pushinatorHandler } from "./providers/pushinator-handler";
 import { plausibleHandler } from "./providers/plausible-handler";
@@ -128,6 +129,7 @@ export const PROVIDER_HANDLERS: Record<
   "meta-ads": metaAdsHandler,
   posthog: posthogHandler,
   pdf4me: pdf4meHandler,
+  pdfco: pdfcoHandler,
   perplexity: perplexityHandler,
   plausible: plausibleHandler,
   podchaser: podchaserHandler,

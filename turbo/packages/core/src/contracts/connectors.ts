@@ -1920,6 +1920,26 @@ const CONNECTOR_TYPES_DEF = {
     } as Record<string, ConnectorAuthMethodConfig>,
     defaultAuthMethod: "api-token",
   },
+  pdfco: {
+    label: "PDF.co",
+    helpText:
+      "Connect your PDF.co account to convert, merge, split, and extract data from PDF documents via API",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to [PDF.co](https://app.pdf.co)\n2. Find your API key on the dashboard\n3. Copy the key",
+        secrets: {
+          PDFCO_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "your-pdfco-api-key",
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "api-token",
+  },
   elevenlabs: {
     label: "ElevenLabs",
     helpText:
@@ -2428,6 +2448,13 @@ const CONNECTOR_PROXY_CONFIGS: Partial<
       }),
     ],
   },
+  pdfco: {
+    services: [
+      service("https://api.pdf.co/v1", {
+        headers: { "x-api-key": "${secrets.PDFCO_TOKEN}" },
+      }),
+    ],
+  },
   apify: {
     services: [service("https://api.apify.com/v2", bearerAuth("APIFY_TOKEN"))],
   },
@@ -2548,6 +2575,7 @@ export const connectorTypeSchema = z.enum([
   "chatwoot",
   "similarweb",
   "mailchimp",
+  "pdfco",
   "perplexity",
   "plausible",
   "productlane",

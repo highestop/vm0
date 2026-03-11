@@ -43,6 +43,7 @@ import openaiIcon from "./icons/openai.svg";
 import outlookCalendarIcon from "./icons/outlook-calendar.svg";
 import outlookMailIcon from "./icons/outlook-mail.svg";
 import pdf4meIcon from "./icons/pdf4me.svg";
+import pdfcoIcon from "./icons/pdfco.svg";
 import perplexityIcon from "./icons/perplexity.svg";
 import plausibleIcon from "./icons/plausible.svg";
 import podchaserIcon from "./icons/podchaser.svg";
@@ -110,6 +111,7 @@ const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   "outlook-calendar": outlookCalendarIcon,
   "outlook-mail": outlookMailIcon,
   pdf4me: pdf4meIcon,
+  pdfco: pdfcoIcon,
   perplexity: perplexityIcon,
   plausible: plausibleIcon,
   podchaser: podchaserIcon,

@@ -14,8 +14,11 @@ import {
   agentComposes,
   agentComposeVersions,
 } from "../../../../src/db/schema/agent-compose";
-import { scopes } from "../../../../src/db/schema/scope";
 import { listSecrets } from "../../../../src/lib/secret/secret-service";
+import {
+  getOrgData,
+  getOrgBySlug,
+} from "../../../../src/lib/scope/org-cache-service";
 import { listVariables } from "../../../../src/lib/variable/variable-service";
 import { listConnectors } from "../../../../src/lib/connector/connector-service";
 import type { AgentComposeYaml } from "../../../../src/types/agent-compose";
@@ -27,7 +30,6 @@ import {
 import { decryptSecretValue } from "../../../../src/lib/crypto/secrets-encryption";
 import { removePermission } from "../../../../src/lib/agent/permission-service";
 import { getUserEmail } from "../../../../src/lib/auth/get-user-email";
-import { getScopeBySlug } from "../../../../src/lib/scope/scope-service";
 import { resolveScope } from "../../../../src/lib/scope/resolve-scope";
 import { syncWorkspaceAgentPermissions } from "../../../../src/lib/slack/permission-sync";
 import { logger } from "../../../../src/lib/logger";
@@ -97,12 +99,15 @@ export async function GET(request: Request) {
       id: agentComposes.id,
       name: agentComposes.name,
       headVersionId: agentComposes.headVersionId,
-      scopeSlug: scopes.slug,
+      clerkOrgId: agentComposes.clerkOrgId,
     })
     .from(agentComposes)
-    .innerJoin(scopes, eq(scopes.clerkOrgId, agentComposes.clerkOrgId))
     .where(eq(agentComposes.id, installation.defaultComposeId))
     .limit(1);
+
+  const scopeSlug = compose
+    ? (await getOrgData(compose.clerkOrgId)).slug
+    : null;
 
   // Extract required secrets/vars from agent compose
   let requiredSecrets: string[] = [];
@@ -155,9 +160,7 @@ export async function GET(request: Request) {
       id: installation.slackWorkspaceId,
       name: installation.slackWorkspaceName,
     },
-    agent: compose
-      ? { id: compose.id, name: compose.name, scopeSlug: compose.scopeSlug }
-      : null,
+    agent: compose ? { id: compose.id, name: compose.name, scopeSlug } : null,
     isAdmin,
     environment: {
       requiredSecrets,
@@ -322,14 +325,14 @@ export async function PATCH(request: Request) {
   // Resolve target scope (no membership check - admin can select any agent)
   let targetClerkOrgId: string;
   if (scopeSlug) {
-    const targetScope = await getScopeBySlug(scopeSlug);
-    if (!targetScope) {
+    const targetOrg = await getOrgBySlug(scopeSlug);
+    if (!targetOrg) {
       return NextResponse.json(
         { error: { message: "Scope not found", code: "BAD_REQUEST" } },
         { status: 400 },
       );
     }
-    targetClerkOrgId = targetScope.clerkOrgId;
+    targetClerkOrgId = targetOrg.clerkOrgId;
   } else {
     const { scope } = await resolveScope(userId, null, null, tokenScopeId);
     targetClerkOrgId = scope.clerkOrgId;

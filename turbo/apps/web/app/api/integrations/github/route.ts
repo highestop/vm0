@@ -15,12 +15,14 @@ import {
   agentComposes,
   agentComposeVersions,
 } from "../../../../src/db/schema/agent-compose";
-import { scopes } from "../../../../src/db/schema/scope";
 import { listSecrets } from "../../../../src/lib/secret/secret-service";
+import {
+  getOrgData,
+  getOrgBySlug,
+} from "../../../../src/lib/scope/org-cache-service";
 import { listVariables } from "../../../../src/lib/variable/variable-service";
 import { listConnectors } from "../../../../src/lib/connector/connector-service";
 import type { AgentComposeYaml } from "../../../../src/types/agent-compose";
-import { getScopeBySlug } from "../../../../src/lib/scope/scope-service";
 import { resolveScope } from "../../../../src/lib/scope/resolve-scope";
 import { deleteInstallation } from "../../../../src/lib/github/github-app";
 import { logger } from "../../../../src/lib/logger";
@@ -91,12 +93,15 @@ export async function GET(request: Request) {
       id: agentComposes.id,
       name: agentComposes.name,
       headVersionId: agentComposes.headVersionId,
-      scopeSlug: scopes.slug,
+      clerkOrgId: agentComposes.clerkOrgId,
     })
     .from(agentComposes)
-    .innerJoin(scopes, eq(scopes.clerkOrgId, agentComposes.clerkOrgId))
     .where(eq(agentComposes.id, installation.defaultComposeId))
     .limit(1);
+
+  const scopeSlug = compose
+    ? (await getOrgData(compose.clerkOrgId)).slug
+    : null;
 
   // Extract required secrets/vars from agent compose
   let requiredSecrets: string[] = [];
@@ -153,9 +158,7 @@ export async function GET(request: Request) {
       targetType: installation.targetType,
       isAdmin,
     },
-    agent: compose
-      ? { id: compose.id, name: compose.name, scopeSlug: compose.scopeSlug }
-      : null,
+    agent: compose ? { id: compose.id, name: compose.name, scopeSlug } : null,
     environment: {
       requiredSecrets,
       requiredVars,
@@ -330,14 +333,14 @@ export async function PATCH(request: Request) {
   // Resolve target scope
   let targetClerkOrgId: string;
   if (scopeSlug) {
-    const targetScope = await getScopeBySlug(scopeSlug);
-    if (!targetScope) {
+    const targetOrg = await getOrgBySlug(scopeSlug);
+    if (!targetOrg) {
       return NextResponse.json(
         { error: { message: "Scope not found", code: "BAD_REQUEST" } },
         { status: 400 },
       );
     }
-    targetClerkOrgId = targetScope.clerkOrgId;
+    targetClerkOrgId = targetOrg.clerkOrgId;
   } else {
     const { scope } = await resolveScope(userId);
     targetClerkOrgId = scope.clerkOrgId;

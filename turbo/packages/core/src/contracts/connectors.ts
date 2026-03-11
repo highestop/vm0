@@ -2239,6 +2239,24 @@ const CONNECTOR_TYPES_DEF = {
     } as Record<string, ConnectorAuthMethodConfig>,
     defaultAuthMethod: "api-token",
   },
+  explorium: {
+    label: "Explorium",
+    helpText:
+      "Connect your Explorium account to access business data enrichment, prospect discovery, and AI-powered data insights",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        secrets: {
+          EXPLORIUM_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "your-explorium-api-key",
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "api-token",
+  },
   devto: {
     label: "Dev.to",
     helpText:
@@ -2998,6 +3016,13 @@ const SERVICE_CONFIGS: Partial<Record<ConnectorType, ServiceConfig>> = {
       }),
     ],
   },
+  explorium: {
+    services: [
+      service("https://api.explorium.ai", {
+        headers: { api_key: "${secrets.EXPLORIUM_TOKEN}" },
+      }),
+    ],
+  },
   devto: {
     apis: [
       api("https://dev.to/api", {
@@ -3156,6 +3181,7 @@ export const connectorTypeSchema = z.enum([
   "firecrawl",
   "scrapeninja",
   "elevenlabs",
+  "explorium",
   "devto",
   "fal",
   "podchaser",

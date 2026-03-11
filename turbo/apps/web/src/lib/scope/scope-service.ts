@@ -11,21 +11,8 @@ import {
   isBadRequest,
 } from "../errors";
 import { logger } from "../logger";
-import { env } from "../../env";
 
 const log = logger("service:scope");
-
-/**
- * Check if an email is a VM0 admin user.
- * Admin users are defined by the VM0_ADMIN_USERS environment variable
- * (comma-separated email list).
- */
-export function isVm0Admin(email: string): boolean {
-  const adminUsers = env().VM0_ADMIN_USERS;
-  if (!adminUsers) return false;
-  const adminList = adminUsers.split(",").map((e) => e.trim().toLowerCase());
-  return adminList.includes(email.toLowerCase());
-}
 
 /**
  * Reserved scope slugs that cannot be used by users
@@ -132,18 +119,14 @@ export async function getScopesByClerkOrgIds(
  *
  * Handles slug validation and scope creation.
  *
- * @param options.skipSlugValidation - Skip reserved-slug checks (for vm0-admin bypass)
  * @param options.clerkOrgId - Clerk org ID to bind the scope to
  */
 export async function createScope(
   clerkUserId: string,
   slug: string,
-  options: { skipSlugValidation?: boolean; clerkOrgId: string },
+  options: { clerkOrgId: string },
 ) {
-  // Validate slug (unless explicitly skipped for vm0-admin)
-  if (!options.skipSlugValidation) {
-    validateScopeSlug(slug);
-  }
+  validateScopeSlug(slug);
 
   // Pre-check slug availability for clear error
   const existingScope = await getScopeBySlug(slug);

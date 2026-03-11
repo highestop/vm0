@@ -546,22 +546,18 @@ def request(flow: http.HTTPFlow) -> None:
 
 def responseheaders(flow: http.HTTPFlow) -> None:
     """
-    Enable streaming for SSE responses to avoid ZlibError.
+    Enable streaming for all responses to avoid ZlibError.
 
     Without streaming, mitmproxy buffers the entire response body and
-    decompresses/recompresses gzip content. For SSE streaming responses
-    (e.g., api.anthropic.com with gzip + text/event-stream), this causes
-    ZlibError because the gzip stream may be incomplete when mitmproxy
-    tries to decode it.
+    decompresses/recompresses gzip content, which causes ZlibError for
+    chunked gzip responses (e.g., api.anthropic.com).
 
-    Only SSE responses are streamed. Other responses remain buffered so
-    the response() hook can still access flow.response.content.
+    Since the response() hook does not process response bodies, it is
+    safe to stream all responses unconditionally.
     """
     if not flow.response:
         return
-    content_type = flow.response.headers.get("content-type", "").lower()
-    if "text/event-stream" in content_type:
-        flow.response.stream = True
+    flow.response.stream = True
 
 
 def response(flow: http.HTTPFlow) -> None:
@@ -581,7 +577,7 @@ def response(flow: http.HTTPFlow) -> None:
 
     # Calculate sizes
     request_size = len(flow.request.content) if flow.request.content else 0
-    response_size = len(flow.response.content) if flow.response and flow.response.content else 0
+    response_size = int(flow.response.headers.get("content-length", 0)) if flow.response else 0
     status_code = flow.response.status_code if flow.response else 0
 
     # Parse URL for host

@@ -212,57 +212,18 @@ class TestRequestHandler:
 
 
 class TestResponseHeadersHandler:
-    """Tests for the responseheaders() hook that enables selective streaming."""
+    """Tests for the responseheaders() hook that enables streaming."""
 
-    def test_sse_enables_streaming(self):
-        """text/event-stream responses should be streamed."""
-        flow = _make_http_flow(host="api.anthropic.com")
+    def test_enables_streaming(self):
+        """All responses should be streamed to avoid ZlibError."""
+        flow = _make_http_flow(host="api.example.com")
         flow.response = MagicMock()
-        flow.response.headers = {"content-type": "text/event-stream"}
+        flow.response.headers = {"content-type": "application/json"}
         flow.response.stream = False
 
         mitm_addon.responseheaders(flow)
 
         assert flow.response.stream is True
-
-    def test_sse_with_charset_enables_streaming(self):
-        """text/event-stream with charset should be streamed."""
-        flow = _make_http_flow(host="api.anthropic.com")
-        flow.response = MagicMock()
-        flow.response.headers = {"content-type": "text/event-stream; charset=utf-8"}
-        flow.response.stream = False
-
-        mitm_addon.responseheaders(flow)
-
-        assert flow.response.stream is True
-
-    def test_non_sse_not_streamed(self):
-        """Non-SSE responses should not be streamed (even if chunked)."""
-        flow = _make_http_flow(host="api.example.com")
-        flow.response = MagicMock()
-        flow.response.headers = {
-            "content-type": "application/json",
-            "transfer-encoding": "chunked",
-        }
-        flow.response.stream = False
-
-        mitm_addon.responseheaders(flow)
-
-        assert flow.response.stream is False
-
-    def test_normal_response_not_streamed(self):
-        """Normal JSON response with Content-Length should not be streamed."""
-        flow = _make_http_flow(host="api.example.com")
-        flow.response = MagicMock()
-        flow.response.headers = {
-            "content-type": "application/json",
-            "content-length": "256",
-        }
-        flow.response.stream = False
-
-        mitm_addon.responseheaders(flow)
-
-        assert flow.response.stream is False
 
     def test_no_response_is_noop(self):
         """Flow without response should not raise."""
@@ -292,7 +253,7 @@ class TestResponseHandler:
         # Add response
         flow.response = MagicMock()
         flow.response.status_code = 200
-        flow.response.content = b"ok"
+        flow.response.headers = {"content-length": "256"}
 
         # Simulate tracked start time
         mitm_addon._request_start_times[flow.id] = __import__("time").time() - 0.1
@@ -310,6 +271,7 @@ class TestResponseHandler:
         assert entry["action"] == "ALLOW"
         assert entry["host"] == "api.anthropic.com"
         assert entry["latency_ms"] > 0
+        assert entry["response_size"] == 256
 
     def test_401_connector_cache_invalidation(self):
         """401 response with connector firewall_rule pops the cache entry."""
@@ -325,7 +287,7 @@ class TestResponseHandler:
 
         flow.response = MagicMock()
         flow.response.status_code = 401
-        flow.response.content = b"Unauthorized"
+        flow.response.headers = {}
 
         # Pre-populate connector token cache
         cache_key = ("run-conn-1", "github", "https://api.github.com")
@@ -353,7 +315,7 @@ class TestResponseHandler:
 
         flow.response = MagicMock()
         flow.response.status_code = 500
-        flow.response.content = b"Internal Server Error"
+        flow.response.headers = {}
 
         mock_log = MagicMock()
         with patch.object(mitm_addon.ctx, "log", mock_log, create=True):

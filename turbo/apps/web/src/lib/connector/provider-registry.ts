@@ -43,6 +43,7 @@ import { notionHandler } from "./providers/notion-handler";
 import { openaiHandler } from "./providers/openai-handler";
 import { redditHandler } from "./providers/reddit-handler";
 import { reporteiHandler } from "./providers/reportei-handler";
+import { serpapiHandler } from "./providers/serpapi-handler";
 import { slackHandler } from "./providers/slack-handler";
 import { stravaHandler } from "./providers/strava-handler";
 import { stripeHandler } from "./providers/stripe-handler";
@@ -120,6 +121,7 @@ export const PROVIDER_HANDLERS: Record<
   "outlook-mail": outlookMailHandler,
   reddit: redditHandler,
   reportei: reporteiHandler,
+  serpapi: serpapiHandler,
   "intervals-icu": intervalsIcuHandler,
   sentry: sentryHandler,
   slack: slackHandler,

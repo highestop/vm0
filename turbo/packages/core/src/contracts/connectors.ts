@@ -1790,6 +1790,26 @@ const CONNECTOR_TYPES_DEF = {
     defaultAuthMethod: "api-token",
     environmentMapping: {} as Record<string, string>,
   },
+  fal: {
+    label: "fal.ai",
+    helpText:
+      "Connect your fal.ai account to run AI models for image generation, video generation, and other AI tasks",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to [fal.ai](https://fal.ai/dashboard)\n2. Go to **Keys** in the sidebar\n3. Click **Create Key**\n4. Copy the key",
+        secrets: {
+          FAL_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "fal_...",
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "api-token",
+  },
 } satisfies Record<string, ConnectorConfig>;
 
 export type ConnectorType = keyof typeof CONNECTOR_TYPES_DEF;
@@ -2153,6 +2173,9 @@ const CONNECTOR_PROXY_CONFIGS: Partial<
       }),
     ],
   },
+  fal: {
+    services: [service("https://fal.run", bearerAuth("FAL_KEY"))],
+  },
 };
 
 export const connectorTypeSchema = z.enum([
@@ -2207,6 +2230,7 @@ export const connectorTypeSchema = z.enum([
   "productlane",
   "resend",
   "elevenlabs",
+  "fal",
 ]);
 
 /**

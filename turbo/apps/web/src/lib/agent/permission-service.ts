@@ -1,19 +1,24 @@
 import { eq, and, or, ne, desc } from "drizzle-orm";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 import { agentComposes } from "../../db/schema/agent-compose";
 import { agentPermissions } from "../../db/schema/agent-permission";
+import { orgMembersCache } from "../../db/schema/org-members-cache";
 import { scopes } from "../../db/schema/scope";
 import { logger } from "../logger";
-import { resolveScope } from "../scope/resolve-scope";
 
 const log = logger("agent:permission");
+
+/** Cache TTL aligned with Clerk JWT TTL */
+const CACHE_TTL_MS = 60_000; // 1 minute
 
 /**
  * Check if a user can access an agent compose
  *
  * Access is granted if:
  * 1. User is the owner of the compose
- * 2. User's resolved scope matches the compose's org (via Clerk org membership)
- * 3. Compose has a 'public' or email-matched permission entry
+ * 2. User is a member of the same Clerk organization
+ * 3. Compose has a 'public' permission entry
+ * 4. User's email matches an 'email' permission entry
  */
 export async function canAccessCompose(
   userId: string,
@@ -23,12 +28,60 @@ export async function canAccessCompose(
   // 1. Owner always has access
   if (compose.userId === userId) return true;
 
-  // 2. Check org membership via scope resolution (trusts JWT + Clerk API)
-  try {
-    const { scope } = await resolveScope(userId);
-    if (scope.clerkOrgId === compose.clerkOrgId) return true;
-  } catch {
-    // Scope resolution failed — continue to ACL check
+  // 2. Check org membership via Clerk
+  const authResult = await auth();
+
+  // JWT fast path: active org matches → trust JWT, no API call
+  if (authResult.orgId === compose.clerkOrgId) {
+    return true;
+  }
+
+  // Cache-backed Clerk API fallback for cross-org or non-session contexts
+  if (!compose.clerkOrgId.startsWith("pending_")) {
+    // Check org_members_cache first (DB read, no Clerk API call)
+    const [cached] = await globalThis.services.db
+      .select({ cachedAt: orgMembersCache.cachedAt })
+      .from(orgMembersCache)
+      .where(
+        and(
+          eq(orgMembersCache.clerkOrgId, compose.clerkOrgId),
+          eq(orgMembersCache.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (cached && Date.now() - cached.cachedAt.getTime() < CACHE_TTL_MS) {
+      return true;
+    }
+
+    // Cache miss or stale — call Clerk API and update cache
+    const client = await clerkClient();
+    const memberships = await client.users.getOrganizationMembershipList({
+      userId,
+      limit: 100,
+    });
+    const isMember = memberships.data.some(
+      (m) => m.organization.id === compose.clerkOrgId,
+    );
+    if (isMember) {
+      // Fire-and-forget: cache write is non-critical, don't block access
+      const now = new Date();
+      void globalThis.services.db
+        .insert(orgMembersCache)
+        .values({
+          clerkOrgId: compose.clerkOrgId,
+          userId,
+          cachedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [orgMembersCache.clerkOrgId, orgMembersCache.userId],
+          set: { cachedAt: now },
+        })
+        .catch((err: unknown) => {
+          log.warn("Failed to update org_members_cache", { err });
+        });
+      return true;
+    }
   }
 
   // 3. Check ACL

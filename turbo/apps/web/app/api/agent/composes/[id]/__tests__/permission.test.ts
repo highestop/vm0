@@ -4,6 +4,7 @@ import { POST as addPermission } from "../permissions/route";
 import {
   createTestRequest,
   createTestCompose,
+  insertOrgMembersCacheEntry,
 } from "../../../../../../src/__tests__/api-test-helpers";
 import {
   testContext,
@@ -15,10 +16,12 @@ const context = testContext();
 
 describe("Agent Compose Permission Checks", () => {
   let testComposeId: string;
+  let ownerClerkOrgId: string;
 
   beforeEach(async () => {
     context.setupMocks();
-    await context.setupUser();
+    const user = await context.setupUser();
+    ownerClerkOrgId = user.clerkOrgId;
 
     const { composeId } = await createTestCompose(uniqueId("agent"));
     testComposeId = composeId;
@@ -140,17 +143,18 @@ describe("Agent Compose Permission Checks", () => {
       expect(data.error.message).toContain("not found");
     });
 
-    it("should allow access when user is in the same Clerk org (via scope resolution)", async () => {
-      // Get owner's org info
-      const owner = await context.user;
-
-      // Switch to another user who is a Clerk member of the same org
-      // (but NOT the compose owner and NOT in scope_members table)
-      const otherUserId = uniqueId("org-member");
+    it("should allow access when user is a member of the same org (JWT fast path)", async () => {
+      // Switch to another user whose active org matches the compose's org
+      // This exercises the JWT fast path (authResult.orgId === compose.clerkOrgId)
       mockClerk({
-        userId: otherUserId,
+        userId: "other-user-123",
+        orgId: ownerClerkOrgId,
         clerkOrgs: [
-          { id: owner.clerkOrgId, slug: "shared-org", name: "shared-org" },
+          {
+            id: ownerClerkOrgId,
+            slug: "shared-org",
+            name: "Shared Org",
+          },
         ],
       });
 
@@ -164,6 +168,138 @@ describe("Agent Compose Permission Checks", () => {
 
       expect(response.status).toBe(200);
       expect(data.id).toBe(testComposeId);
+    });
+
+    it("should allow access via Clerk API fallback when active org differs", async () => {
+      // Switch to another user who belongs to the owner's org but has a
+      // different active org in their session. This exercises the Clerk API
+      // fallback path (users.getOrganizationMembershipList).
+      const differentOrgId = "org_different_active";
+      mockClerk({
+        userId: "other-user-456",
+        orgId: differentOrgId,
+        clerkOrgs: [
+          {
+            id: differentOrgId,
+            slug: "different-org",
+            name: "Different Org",
+          },
+          {
+            id: ownerClerkOrgId,
+            slug: "shared-org",
+            name: "Shared Org",
+          },
+        ],
+      });
+
+      const request = createTestRequest(
+        `http://localhost:3000/api/agent/composes/${testComposeId}`,
+        { method: "GET" },
+      );
+
+      const response = await getCompose(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.id).toBe(testComposeId);
+    });
+
+    it("should allow access from cache without calling Clerk API", async () => {
+      // Pre-seed a fresh cache entry for a user who is NOT in the clerkOrgs list.
+      // If the cache is working, the user gets access without Clerk API finding membership.
+      const cacheUserId = "cache-user-789";
+      await insertOrgMembersCacheEntry({
+        clerkOrgId: ownerClerkOrgId,
+        userId: cacheUserId,
+        cachedAt: new Date(), // fresh
+      });
+
+      // Mock user with a different active org and NO membership in the owner's org
+      mockClerk({
+        userId: cacheUserId,
+        orgId: "org_unrelated",
+        clerkOrgs: [
+          { id: "org_unrelated", slug: "unrelated", name: "Unrelated Org" },
+        ],
+      });
+
+      const request = createTestRequest(
+        `http://localhost:3000/api/agent/composes/${testComposeId}`,
+        { method: "GET" },
+      );
+
+      const response = await getCompose(request);
+      const data = await response.json();
+
+      // Access granted via cache hit — no Clerk API call needed
+      expect(response.status).toBe(200);
+      expect(data.id).toBe(testComposeId);
+    });
+
+    it("should re-query Clerk API when cache entry is stale", async () => {
+      // Pre-seed a stale cache entry (older than 1 minute TTL)
+      const staleUserId = "stale-cache-user-101";
+      const staleCachedAt = new Date(Date.now() - 120_000); // 2 minutes ago
+      await insertOrgMembersCacheEntry({
+        clerkOrgId: ownerClerkOrgId,
+        userId: staleUserId,
+        cachedAt: staleCachedAt,
+      });
+
+      // Mock user with a different active org but WITH membership in owner's org
+      // so the Clerk API fallback succeeds
+      mockClerk({
+        userId: staleUserId,
+        orgId: "org_other_active",
+        clerkOrgs: [
+          { id: "org_other_active", slug: "other", name: "Other Org" },
+          { id: ownerClerkOrgId, slug: "shared-org", name: "Shared Org" },
+        ],
+      });
+
+      const request = createTestRequest(
+        `http://localhost:3000/api/agent/composes/${testComposeId}`,
+        { method: "GET" },
+      );
+
+      const response = await getCompose(request);
+      const data = await response.json();
+
+      // Access granted via Clerk API fallback (stale cache was bypassed)
+      expect(response.status).toBe(200);
+      expect(data.id).toBe(testComposeId);
+    });
+
+    it("should deny access when cache is stale and user is not a member", async () => {
+      // Pre-seed a stale cache entry
+      const nonMemberUserId = "non-member-user-202";
+      const staleCachedAt = new Date(Date.now() - 120_000); // 2 minutes ago
+      await insertOrgMembersCacheEntry({
+        clerkOrgId: ownerClerkOrgId,
+        userId: nonMemberUserId,
+        cachedAt: staleCachedAt,
+      });
+
+      // Mock user with NO membership in the owner's org
+      mockClerk({
+        userId: nonMemberUserId,
+        orgId: "org_unrelated",
+        clerkOrgs: [
+          { id: "org_unrelated", slug: "unrelated", name: "Unrelated Org" },
+        ],
+      });
+
+      const request = createTestRequest(
+        `http://localhost:3000/api/agent/composes/${testComposeId}`,
+        { method: "GET" },
+      );
+
+      const response = await getCompose(request);
+      const data = await response.json();
+
+      // Stale cache does not grant access; Clerk API says not a member → denied
+      expect(response.status).toBe(404);
+      expect(data.error.message).toContain("not found");
     });
 
     it("should always allow owner to access their compose", async () => {

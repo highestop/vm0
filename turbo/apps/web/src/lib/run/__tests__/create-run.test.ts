@@ -15,8 +15,8 @@ import {
   insertStalePendingRun,
   findTestRunRecord,
   findTestRunCallbacks,
-  findTestRunsByUserAndPrompt,
   findTestStorage,
+  findTestRunnerJobEntry,
 } from "../../../__tests__/api-test-helpers";
 import { POST as checkpointWebhook } from "../../../../app/api/webhooks/agent/checkpoints/route";
 import type { AgentComposeYaml } from "../../../types/agent-compose";
@@ -28,7 +28,6 @@ import {
   type CreateRunResult,
 } from "../run-service";
 import { isForbidden, isBadRequest } from "../../errors";
-import { Sandbox } from "@e2b/code-interpreter";
 import { POST as createComposeRoute } from "../../../../app/api/agent/composes/route";
 import { mockClerk } from "../../../__tests__/clerk-mock";
 
@@ -61,15 +60,14 @@ describe("createRun()", () => {
       const result: CreateRunResult = await createRun(baseParams());
 
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
-      expect(result.sandboxId).toBeDefined();
+      expect(result.status).toBe("pending");
       expect(result.createdAt).toBeInstanceOf(Date);
 
       // Verify run record in DB
       const run = await findTestRunRecord(result.runId);
 
       expect(run).toBeDefined();
-      expect(run!.status).toBe("running");
+      expect(run!.status).toBe("pending");
       expect(run!.userId).toBe(user.userId);
       expect(run!.prompt).toBe("Hello, world!");
       expect(run!.lastHeartbeatAt).toBeDefined();
@@ -136,8 +134,8 @@ describe("createRun()", () => {
         baseParams({ prompt: "Pro run 2", scopeTier: "pro" }),
       );
 
-      expect(run1.status).toBe("running");
-      expect(run2.status).toBe("running");
+      expect(run1.status).toBe("pending");
+      expect(run2.status).toBe("pending");
     });
 
     it("should queue 3rd concurrent run for pro tier", async () => {
@@ -162,9 +160,9 @@ describe("createRun()", () => {
         baseParams({ prompt: "Max run 3", scopeTier: "max" }),
       );
 
-      expect(run1.status).toBe("running");
-      expect(run2.status).toBe("running");
-      expect(run3.status).toBe("running");
+      expect(run1.status).toBe("pending");
+      expect(run2.status).toBe("pending");
+      expect(run3.status).toBe("pending");
     });
 
     it("should allow unlimited runs when CONCURRENT_RUN_LIMIT is 0", async () => {
@@ -174,8 +172,8 @@ describe("createRun()", () => {
       const run1 = await createRun(baseParams({ prompt: "Run 1" }));
       const run2 = await createRun(baseParams({ prompt: "Run 2" }));
 
-      expect(run1.status).toBe("running");
-      expect(run2.status).toBe("running");
+      expect(run1.status).toBe("pending");
+      expect(run2.status).toBe("pending");
     });
 
     it("should not count stale pending runs", async () => {
@@ -183,7 +181,7 @@ describe("createRun()", () => {
       await insertStalePendingRun(user.userId, versionId);
 
       const result = await createRun(baseParams());
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should enqueue second run when concurrency limit reached", async () => {
@@ -217,7 +215,7 @@ describe("createRun()", () => {
         agentComposeVersionId: otherCompose.versionId,
         prompt: "Scope 2 run",
       });
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
   });
 
@@ -292,29 +290,6 @@ describe("createRun()", () => {
     });
   });
 
-  describe("Dispatch Failure", () => {
-    it("should mark run as failed when dispatch throws", async () => {
-      vi.mocked(Sandbox.create).mockRejectedValueOnce(
-        new Error("Sandbox creation failed"),
-      );
-
-      await expect(createRun(baseParams())).rejects.toThrow(
-        "Sandbox creation failed",
-      );
-
-      // Verify run is marked as failed in DB
-      const runs = await findTestRunsByUserAndPrompt(
-        user.userId,
-        "Hello, world!",
-      );
-      const run = runs.find((r) => r.status === "failed");
-
-      expect(run).toBeDefined();
-      expect(run!.error).toContain("Sandbox creation failed");
-      expect(run!.completedAt).toBeDefined();
-    });
-  });
-
   describe("Callback Registration", () => {
     it("should register callbacks when provided", async () => {
       const callbacks = [
@@ -346,17 +321,7 @@ describe("createRun()", () => {
       const result = await createRun(baseParams({ memoryName }));
 
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
-
-      // Verify sandbox was called with full memory env vars including VERSION_ID
-      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
-      expect(createCall).toBeDefined();
-      const sandboxOptions = createCall![1] as {
-        envs?: Record<string, string>;
-      };
-      expect(sandboxOptions.envs?.VM0_MEMORY_NAME).toBe(memoryName);
-      expect(sandboxOptions.envs?.VM0_MEMORY_VERSION_ID).toBeDefined();
-      expect(sandboxOptions.envs?.VM0_MEMORY_DRIVER).toBe("vas");
+      expect(result.status).toBe("pending");
     });
 
     it("should succeed when memory already exists (idempotent)", async () => {
@@ -373,14 +338,14 @@ describe("createRun()", () => {
         baseParams({ memoryName, prompt: "second run" }),
       );
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should accept memoryName and dispatch successfully", async () => {
       const result = await createRun(baseParams({ memoryName: "my-memory" }));
 
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should restore memoryName from session in continue flow", async () => {
@@ -420,7 +385,6 @@ describe("createRun()", () => {
       };
 
       // Step 2: Continue from session WITHOUT specifying memoryName
-      vi.mocked(Sandbox.create).mockClear();
       const continueResult = await createRun(
         baseParams({
           sessionId: agentSessionId,
@@ -429,15 +393,7 @@ describe("createRun()", () => {
       );
 
       expect(continueResult.runId).toBeDefined();
-      expect(continueResult.status).toBe("running");
-
-      // Step 3: Verify Sandbox.create was called with VM0_MEMORY_NAME
-      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
-      expect(createCall).toBeDefined();
-      const sandboxOptions = createCall![1] as {
-        envs?: Record<string, string>;
-      };
-      expect(sandboxOptions.envs?.VM0_MEMORY_NAME).toBe("restored-memory");
+      expect(continueResult.status).toBe("pending");
     });
   });
 
@@ -447,7 +403,7 @@ describe("createRun()", () => {
       const result = await createRun(baseParams({ artifactName }));
 
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should succeed when artifact already exists", async () => {
@@ -457,7 +413,7 @@ describe("createRun()", () => {
       const result = await createRun(baseParams({ artifactName }));
 
       expect(result.runId).toBeDefined();
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
   });
 
@@ -527,7 +483,7 @@ describe("createRun()", () => {
         baseParams({ agentComposeVersionId: compose.versionId }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should succeed when optional volume does not exist (skip silently)", async () => {
@@ -549,7 +505,7 @@ describe("createRun()", () => {
         baseParams({ agentComposeVersionId: compose.versionId }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should fail when required volume does not exist", async () => {
@@ -601,7 +557,7 @@ describe("createRun()", () => {
 
       // Even if we now create the volume, it should still succeed
       // because the checkpoint resume should skip this optional volume
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should mount optional volume in session/continue when it now exists (no volumeVersions)", async () => {
@@ -631,7 +587,7 @@ describe("createRun()", () => {
         }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
 
     it("should succeed with mixed volumes (required exists, optional missing)", async () => {
@@ -662,7 +618,7 @@ describe("createRun()", () => {
         baseParams({ agentComposeVersionId: compose.versionId }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
     });
   });
 
@@ -678,13 +634,40 @@ describe("createRun()", () => {
       expect(result.status).toBe("pending");
     });
 
-    it("should fall back to E2B when RUNNER_DEFAULT_GROUP is not set", async () => {
+    it("should use default executor when RUNNER_DEFAULT_GROUP is not set", async () => {
       // RUNNER_DEFAULT_GROUP is not set by default in test env
       mockClerk({ userId: user.userId, email: "team@vm0.ai" });
 
       const result = await createRun(baseParams());
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
+    });
+
+    it("should mark run as failed when runner group scope validation fails", async () => {
+      vi.stubEnv("RUNNER_DEFAULT_GROUP", "nonexistent-scope/default");
+      reloadEnv();
+
+      mockClerk({ userId: user.userId, email: "user@example.com" });
+
+      let caughtError: unknown;
+      try {
+        await createRun(baseParams());
+      } catch (error: unknown) {
+        caughtError = error;
+      }
+
+      // Dispatch failure should throw a ForbiddenError
+      expect(caughtError).toSatisfy(isForbidden);
+
+      // The error should carry runId metadata (RunDispatchError)
+      expect(caughtError).toHaveProperty("runId");
+      const runId = (caughtError as { runId: string }).runId;
+
+      // Verify the run is marked as "failed" in the database
+      const run = await findTestRunRecord(runId);
+      expect(run).toBeDefined();
+      expect(run!.status).toBe("failed");
+      expect(run!.error).toMatch(/nonexistent-scope/);
     });
   });
 
@@ -707,7 +690,7 @@ describe("createRun()", () => {
         }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
 
       // Verify the run record uses the org scope
       const run = await findTestRunRecord(result.runId);
@@ -739,7 +722,7 @@ describe("createRun()", () => {
         }),
       );
 
-      expect(result.status).toBe("running");
+      expect(result.status).toBe("pending");
 
       // Verify artifact storage was created in user's default scope
       const artifact = await findTestStorage(
@@ -777,15 +760,19 @@ describe("createRun()", () => {
         accessToken: "figd_test_secret_123",
       });
 
-      await createRun(baseParams({ agentComposeVersionId: compose.versionId }));
+      const result = await createRun(
+        baseParams({ agentComposeVersionId: compose.versionId }),
+      );
 
-      // Verify the secret was injected into sandbox environment
-      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
-      expect(createCall).toBeDefined();
-      const sandboxOptions = createCall![1] as {
-        envs?: Record<string, string>;
-      };
-      expect(sandboxOptions.envs?.FIGMA_TOKEN).toBe("figd_test_secret_123");
+      expect(result.runId).toBeDefined();
+      expect(result.status).toBe("pending");
+
+      // Verify the runner job queue entry contains the injected secret
+      const job = await findTestRunnerJobEntry(result.runId);
+      expect(job).toBeDefined();
+      expect(job!.executionContext.environment).toMatchObject({
+        FIGMA_TOKEN: "figd_test_secret_123",
+      });
     });
 
     it("should inject api-token-only connector secret (no environmentMapping) into sandbox environment", async () => {
@@ -811,14 +798,19 @@ describe("createRun()", () => {
         accessToken: "pl_test_secret_789",
       });
 
-      await createRun(baseParams({ agentComposeVersionId: compose.versionId }));
+      const result = await createRun(
+        baseParams({ agentComposeVersionId: compose.versionId }),
+      );
 
-      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
-      expect(createCall).toBeDefined();
-      const sandboxOptions = createCall![1] as {
-        envs?: Record<string, string>;
-      };
-      expect(sandboxOptions.envs?.PRODUCTLANE_TOKEN).toBe("pl_test_secret_789");
+      expect(result.runId).toBeDefined();
+      expect(result.status).toBe("pending");
+
+      // Verify the runner job queue entry contains the injected secret
+      const job = await findTestRunnerJobEntry(result.runId);
+      expect(job).toBeDefined();
+      expect(job!.executionContext.environment).toMatchObject({
+        PRODUCTLANE_TOKEN: "pl_test_secret_789",
+      });
     });
 
     it("should inject oauth connector secret via environmentMapping into sandbox environment", async () => {
@@ -839,15 +831,19 @@ describe("createRun()", () => {
         accessToken: "ghp_oauth_test_456",
       });
 
-      await createRun(baseParams({ agentComposeVersionId: compose.versionId }));
+      const result = await createRun(
+        baseParams({ agentComposeVersionId: compose.versionId }),
+      );
 
-      // Verify the mapped secret was injected into sandbox environment
-      const createCall = vi.mocked(Sandbox.create).mock.calls[0];
-      expect(createCall).toBeDefined();
-      const sandboxOptions = createCall![1] as {
-        envs?: Record<string, string>;
-      };
-      expect(sandboxOptions.envs?.GH_TOKEN).toBe("ghp_oauth_test_456");
+      expect(result.runId).toBeDefined();
+      expect(result.status).toBe("pending");
+
+      // Verify the runner job queue entry contains the injected secret
+      const job = await findTestRunnerJobEntry(result.runId);
+      expect(job).toBeDefined();
+      expect(job!.executionContext.environment).toMatchObject({
+        GH_TOKEN: "ghp_oauth_test_456",
+      });
     });
   });
 });

@@ -349,7 +349,7 @@ export const connectConnector$ = command(
       if (isConnected) {
         set(internalSelectedConnectorType$, null);
       }
-      break;
+      return isConnected;
     }
   },
 );

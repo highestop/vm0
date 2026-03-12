@@ -505,8 +505,9 @@ impl Sandbox for FirecrackerSandbox {
             Arc::clone(&self.guest),
         ));
 
-        // Spawn balloon controller if enabled and in snapshot mode.
-        if self.factory_config.balloon_reclaim && self.factory_config.snapshot.is_some() {
+        // Spawn balloon controller to reclaim unused guest memory.
+        // Only in snapshot mode — fresh boot uses --no-api so no API socket exists.
+        if self.factory_config.snapshot.is_some() {
             self.balloon_controller = Some(crate::balloon::spawn(
                 self.sock_paths.api_sock().to_owned(),
                 self.config.resources.memory_mb,

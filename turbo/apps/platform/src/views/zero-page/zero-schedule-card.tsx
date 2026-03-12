@@ -8,8 +8,8 @@ import {
   IconLayoutGrid,
   IconPencil,
   IconTrash,
-  IconLoader2,
 } from "@tabler/icons-react";
+import { LoadingSwitch } from "../components/loading-switch.tsx";
 import {
   Card,
   CardContent,
@@ -23,7 +23,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   cn,
 } from "@vm0/ui";
 import {
@@ -74,7 +73,7 @@ export const WEEKDAY_LABELS = [
   "Sat",
   "Sun",
 ] as const;
-export const CALENDAR_TIME_SLOTS = [
+const CALENDAR_TIME_SLOTS = [
   "6:00 AM",
   "9:00 AM",
   "12:00 PM",
@@ -126,7 +125,7 @@ function formatTimeOfDay(hour: number, minute: number): string {
   return `${hour - 12}:${minute.toString().padStart(2, "0")} PM`;
 }
 
-export function buildScheduleTimeString(params: {
+function buildScheduleTimeString(params: {
   freq: string;
   date?: string;
   hour: number;
@@ -340,7 +339,7 @@ function timeLabelToMinutes(label: string): number {
  * Build the calendar time slots by merging default slots with entry-specific times,
  * sorted chronologically.
  */
-function buildCalendarTimeSlots(
+export function buildCalendarTimeSlots(
   scheduleList: readonly Readonly<ScheduleEntry>[],
 ): string[] {
   const slotSet = new Set<string>(CALENDAR_TIME_SLOTS);
@@ -371,26 +370,6 @@ export function getEntriesInCell(
     return t === timeLabel && dayIndices.includes(dayIndex);
   });
 }
-
-export const DEFAULT_SCHEDULE: readonly Readonly<ScheduleEntry>[] = [
-  {
-    id: "1",
-    time: "Every weekday at 9:00 AM",
-    prompt:
-      "Summarize yesterday's Slack threads and flag anything that needs a response.",
-  },
-  {
-    id: "2",
-    time: "Every 15 minutes",
-    prompt:
-      "Check inbox and calendar; notify me if something is time-sensitive.",
-  },
-  {
-    id: "3",
-    time: "Once on 2026-03-15 at 2:00 PM",
-    prompt: "Generate the Q1 review report and email the link to stakeholders.",
-  },
-];
 
 /** Dummy schedule for sub-agent (job) detail page — one entry per sub-agent. */
 const DUMMY_AGENT_SCHEDULE: readonly Readonly<ScheduleEntry>[] = [
@@ -711,42 +690,34 @@ export function ZeroScheduleCard({
                       key={entry.id}
                       className="flex items-center gap-3 py-2.5 border-b border-border/50 last:border-b-0 text-sm text-foreground hover:bg-muted/30 -mx-1 px-1 rounded transition-colors"
                     >
-                      {onToggleEnabled &&
-                        entry.name !== undefined &&
-                        (toggling ? (
-                          <IconLoader2
-                            size={16}
-                            stroke={2}
-                            className="shrink-0 animate-spin text-muted-foreground"
-                          />
-                        ) : (
-                          <Switch
-                            checked={entry.enabled !== false}
-                            onCheckedChange={(checked) => {
-                              const id = entry.id;
-                              const name = entry.name;
-                              if (name === undefined) {
-                                return;
-                              }
-                              setTogglingIds((prev) => new Set([...prev, id]));
-                              detach(
-                                onToggleEnabled({
-                                  name,
-                                  enabled: checked,
-                                }).finally(() => {
-                                  setTogglingIds((prev) => {
-                                    const next = new Set(prev);
-                                    next.delete(id);
-                                    return next;
-                                  });
-                                }),
-                                Reason.DomCallback,
-                              );
-                            }}
-                            aria-label={`${entry.enabled !== false ? "Disable" : "Enable"} ${entry.time}`}
-                            className="shrink-0 h-5 w-9 data-[state=checked]:bg-primary data-[state=unchecked]:bg-muted [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4"
-                          />
-                        ))}
+                      {onToggleEnabled && entry.name !== undefined && (
+                        <LoadingSwitch
+                          checked={entry.enabled !== false}
+                          loading={toggling}
+                          onCheckedChange={(checked) => {
+                            const id = entry.id;
+                            const name = entry.name;
+                            if (name === undefined) {
+                              return;
+                            }
+                            setTogglingIds((prev) => new Set([...prev, id]));
+                            detach(
+                              onToggleEnabled({
+                                name,
+                                enabled: checked,
+                              }).finally(() => {
+                                setTogglingIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(id);
+                                  return next;
+                                });
+                              }),
+                              Reason.DomCallback,
+                            );
+                          }}
+                          ariaLabel={`${entry.enabled !== false ? "Disable" : "Enable"} ${entry.time}`}
+                        />
+                      )}
                       <span
                         className={cn(
                           "min-w-0 shrink-0",

@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHmac } from "crypto";
 import { clerkClient } from "@clerk/nextjs/server";
 import { requireScopeMember, getDefaultScope } from "./scope-member-service";
 import {
@@ -34,7 +34,7 @@ const SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]{1,2}$/;
  * @returns A slug in format "user-xxxxxxxx" (13 chars total)
  */
 export function generateDefaultScopeSlug(userId: string): string {
-  const hash = createHash("sha256").update(userId).digest("hex");
+  const hash = createHmac("sha256", "scope-slug").update(userId).digest("hex");
   return `user-${hash.slice(0, 8)}`;
 }
 

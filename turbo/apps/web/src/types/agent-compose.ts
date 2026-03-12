@@ -2,6 +2,8 @@
  * Agent compose types matching agent.yaml format
  */
 
+import type { ExpandedServiceConfig } from "@vm0/core";
+
 /**
  * Volume configuration for static dependencies
  * Each volume requires explicit name and version
@@ -80,11 +82,11 @@ interface AgentDefinition {
    */
   experimental_firewall?: ExperimentalFirewall;
   /**
-   * Experimental services for proxy-side token replacement.
-   * Array of service names (e.g., ["gmail", "github"]).
-   * Requires experimental_runner to be configured.
+   * Expanded service configs for proxy-side token replacement.
+   * Resolved from service names at compose time, stored as full objects.
+   * Input format (CLI): string[] — expanded server-side before storage.
    */
-  experimental_services?: string[];
+  experimental_services?: ExpandedServiceConfig[];
   /**
    * Agent metadata for display and personalization.
    */

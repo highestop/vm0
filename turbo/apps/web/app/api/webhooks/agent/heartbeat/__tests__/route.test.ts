@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { POST } from "../route";
 import {
   createTestRequest,
@@ -24,7 +24,6 @@ describe("POST /api/webhooks/agent/heartbeat", () => {
   let testToken: string;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
     context.setupMocks();
     user = await context.setupUser();
 

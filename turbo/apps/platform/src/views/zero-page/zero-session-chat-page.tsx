@@ -1,26 +1,37 @@
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ChangeEvent, MouseEvent } from "react";
 import { useCCState } from "ccstate-react/experimental";
 import { useGet, useSet, useLoadable } from "ccstate-react";
 import {
   IconSend,
+  IconPaperclip,
   IconAlertCircle,
   IconLoader2,
   IconArrowLeft,
   IconUsers,
   IconCalendar,
+  IconX,
+  IconPhoto,
 } from "@tabler/icons-react";
-import { Button, Card, CardContent } from "@vm0/ui";
+import { Button, Card, CardContent, Skeleton } from "@vm0/ui";
 import { Markdown } from "../components/markdown.tsx";
 import { detach, Reason } from "../../signals/utils.ts";
+import {
+  FileAttachmentChip,
+  AttachmentChip,
+} from "./zero-attachment-chips.tsx";
 import { agentDisplayName$ } from "../../signals/zero-page/zero-agent-name.ts";
 import {
   zeroChatMessages$,
   zeroChatSending$,
   zeroChatInput$,
+  zeroChatAttachments$,
   zeroSessionError$,
+  zeroSessionSwitching$,
   setZeroChatInput$,
   clearZeroChatInput$,
   sendZeroChatMessage$,
+  uploadZeroAttachment$,
+  removeZeroAttachment$,
   type ZeroChatMessage,
 } from "../../signals/zero-page/zero-chat.ts";
 
@@ -49,10 +60,17 @@ export function ZeroSessionChatPage({
   const messages = useGet(zeroChatMessages$);
   const sending = useGet(zeroChatSending$);
   const sessionError = useGet(zeroSessionError$);
+  const sessionSwitching = useGet(zeroSessionSwitching$);
   const input = useGet(zeroChatInput$);
   const setInput = useSet(setZeroChatInput$);
   const clearInput = useSet(clearZeroChatInput$);
   const send = useSet(sendZeroChatMessage$);
+  const attachments = useGet(zeroChatAttachments$);
+  const uploadAttachment = useSet(uploadZeroAttachment$);
+  const removeAttachment = useSet(removeZeroAttachment$);
+  const fileInputEl$ = useCCState<HTMLInputElement | null>(null);
+  const fileInputEl = useGet(fileInputEl$);
+  const setFileInputEl = useSet(fileInputEl$);
 
   const messagesEndEl$ = useCCState<HTMLDivElement | null>(null);
   const messagesEndEl = useGet(messagesEndEl$);
@@ -79,6 +97,22 @@ export function ZeroSessionChatPage({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleFileSelect = () => {
+    fileInputEl?.click();
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) {
+      return;
+    }
+    for (const file of files) {
+      detach(uploadAttachment(file), Reason.DomCallback);
+    }
+    // Reset so same file can be selected again
+    e.target.value = "";
   };
 
   return (
@@ -143,7 +177,10 @@ export function ZeroSessionChatPage({
               </div>
             </div>
           )}
-          {!sessionError && messages.length === 0 && (
+          {!sessionError && messages.length === 0 && sessionSwitching && (
+            <ChatSkeleton />
+          )}
+          {!sessionError && messages.length === 0 && !sessionSwitching && (
             <div className="flex-1 flex items-center justify-center py-16">
               <p className="text-sm text-muted-foreground">
                 Send a message to start the conversation
@@ -169,6 +206,17 @@ export function ZeroSessionChatPage({
           <Card className="zero-composer w-full min-w-0 overflow-hidden transition-colors duration-200">
             <CardContent className="p-0">
               <div className="flex flex-col">
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 px-5 pt-3">
+                    {attachments.map((a) => (
+                      <AttachmentChip
+                        key={a.id}
+                        attachment={a}
+                        onRemove={() => removeAttachment(a.id)}
+                      />
+                    ))}
+                  </div>
+                )}
                 <textarea
                   className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm text-foreground placeholder:text-muted-foreground border-0 min-h-[88px] focus:outline-none focus:ring-0"
                   rows={3}
@@ -178,7 +226,25 @@ export function ZeroSessionChatPage({
                   onKeyDown={handleKeyDown}
                   disabled={sending}
                 />
-                <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border/50">
+                <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-border/50">
+                  <div className="flex items-center gap-1 text-muted-foreground">
+                    <input
+                      ref={setFileInputEl}
+                      type="file"
+                      className="hidden"
+                      accept="image/*,.pdf,.txt,.csv,.md,.json"
+                      multiple
+                      onChange={handleFileChange}
+                    />
+                    <button
+                      type="button"
+                      className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      aria-label="Attach file"
+                      onClick={handleFileSelect}
+                    >
+                      <IconPaperclip size={18} stroke={1.5} />
+                    </button>
+                  </div>
                   <Button
                     size="sm"
                     className="rounded-lg h-9 w-9 p-0 shrink-0"
@@ -203,6 +269,48 @@ export function ZeroSessionChatPage({
 }
 
 // ---------------------------------------------------------------------------
+// Skeleton placeholder while session loads
+// ---------------------------------------------------------------------------
+
+function ChatSkeleton() {
+  return (
+    <>
+      {/* User bubble skeleton */}
+      <div className="grid grid-cols-[48px_1fr] gap-3 items-start">
+        <div className="w-9 h-9 shrink-0" />
+        <div className="flex min-w-0 justify-end">
+          <Skeleton className="h-10 w-[60%] rounded-2xl" />
+        </div>
+      </div>
+      {/* Assistant bubble skeleton */}
+      <div className="grid grid-cols-[48px_1fr] gap-3 items-start">
+        <Skeleton className="h-9 w-9 rounded-xl" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-[90%] rounded-lg" />
+          <Skeleton className="h-4 w-[75%] rounded-lg" />
+          <Skeleton className="h-4 w-[40%] rounded-lg" />
+        </div>
+      </div>
+      {/* User bubble skeleton */}
+      <div className="grid grid-cols-[48px_1fr] gap-3 items-start">
+        <div className="w-9 h-9 shrink-0" />
+        <div className="flex min-w-0 justify-end">
+          <Skeleton className="h-10 w-[45%] rounded-2xl" />
+        </div>
+      </div>
+      {/* Assistant bubble skeleton */}
+      <div className="grid grid-cols-[48px_1fr] gap-3 items-start">
+        <Skeleton className="h-9 w-9 rounded-xl" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-[85%] rounded-lg" />
+          <Skeleton className="h-4 w-[60%] rounded-lg" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Chat message components
 // ---------------------------------------------------------------------------
 
@@ -218,7 +326,7 @@ function ChatMessageRow({
   onAvatarClick,
 }: ChatMessageRowProps) {
   if (message.role === "user") {
-    return <UserMessage content={message.content} />;
+    return <UserMessage message={message} />;
   }
   return (
     <AssistantMessage
@@ -229,15 +337,133 @@ function ChatMessageRow({
   );
 }
 
-function UserMessage({ content }: { content: string }) {
+/**
+ * Parse inline attachment lines from message content.
+ * Matches `[Attached file: name](url)` optionally followed by a curl line.
+ * Returns the cleaned content and parsed attachments.
+ */
+function parseInlineAttachments(content: string): {
+  cleanContent: string;
+  parsed: { filename: string; url: string }[];
+} {
+  const parsed: { filename: string; url: string }[] = [];
+  const cleaned = content.replace(
+    /\[Attached file: ([^\]]+)\]\(([^)]+)\)(?:\nDownload with: curl [^\n]*)?\n?/g,
+    (_match, filename: string, url: string) => {
+      parsed.push({ filename, url });
+      return "";
+    },
+  );
+  return { cleanContent: cleaned.trim(), parsed };
+}
+
+function isImageFilename(filename: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg)$/i.test(filename);
+}
+
+function UserMessage({ message }: { message: ZeroChatMessage }) {
+  const { cleanContent, parsed } = parseInlineAttachments(message.content);
+  const lightboxUrl$ = useCCState<string | null>(null);
+  const lightboxUrl = useGet(lightboxUrl$);
+  const setLightboxUrl = useSet(lightboxUrl$);
+
+  // Merge explicit attachments with those parsed from content
+  const allAttachments = [
+    ...(message.attachments ?? []).map((a) => ({
+      filename: a.filename,
+      url: a.url,
+      isImage: a.contentType.startsWith("image/"),
+    })),
+    ...parsed
+      .filter(
+        (p) =>
+          !(message.attachments ?? []).some((a) => a.filename === p.filename),
+      )
+      .map((p) => ({
+        filename: p.filename,
+        url: p.url,
+        isImage: isImageFilename(p.filename),
+      })),
+  ];
+
   return (
-    <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="w-9 h-9 shrink-0" />
-      <div className="flex min-w-0 justify-end">
-        <div className="zero-chat-bubble-user rounded-2xl px-4 py-3 max-w-[85%] text-sm leading-relaxed">
-          {content}
+    <>
+      <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="w-9 h-9 shrink-0" />
+        <div className="flex flex-col items-end min-w-0">
+          <div className="zero-chat-bubble-user rounded-2xl max-w-[85%] text-sm leading-relaxed break-words overflow-hidden">
+            <div className="px-4 py-3">
+              <Markdown source={cleanContent} />
+            </div>
+            {allAttachments.length > 0 && (
+              <div className="border-t border-foreground/10 px-3 py-2.5 flex flex-wrap gap-2">
+                {allAttachments.map((a) =>
+                  a.isImage ? (
+                    <button
+                      key={a.url}
+                      type="button"
+                      onClick={() => setLightboxUrl(a.url)}
+                      className="group relative rounded-lg overflow-hidden border border-foreground/10 hover:border-foreground/25 transition-colors"
+                    >
+                      <img
+                        src={a.url}
+                        alt={a.filename}
+                        className="h-7 max-w-[56px] object-cover"
+                      />
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors">
+                        <IconPhoto
+                          size={18}
+                          className="text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow"
+                        />
+                      </span>
+                    </button>
+                  ) : (
+                    <FileAttachmentChip
+                      key={a.url}
+                      filename={a.filename}
+                      url={a.url}
+                    />
+                  ),
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+      {lightboxUrl && (
+        <ImageLightbox url={lightboxUrl} onClose={() => setLightboxUrl(null)} />
+      )}
+    </>
+  );
+}
+
+function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  const handleBackdropClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      onClose();
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={handleBackdropClick}
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
+        aria-label="Close"
+      >
+        <IconX size={20} stroke={2} />
+      </button>
+      <img
+        src={url}
+        alt=""
+        className="max-h-[85vh] max-w-[90vw] rounded-lg shadow-2xl object-contain animate-in zoom-in-95 duration-200"
+      />
     </div>
   );
 }
@@ -273,7 +499,7 @@ function AssistantMessage({
     return (
       <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
         {avatarButton}
-        <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0">
+        <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0 break-words overflow-hidden">
           <div className="flex items-start gap-1.5 text-destructive">
             <IconAlertCircle size={14} className="shrink-0 mt-0.5" />
             <span>{message.error}</span>
@@ -287,7 +513,7 @@ function AssistantMessage({
     return (
       <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
         {avatarButton}
-        <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0">
+        <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0 break-words overflow-hidden">
           <Markdown source={message.content} />
         </div>
       </div>
@@ -298,7 +524,7 @@ function AssistantMessage({
   return (
     <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
       {avatarButton}
-      <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0">
+      <div className="zero-chat-bubble-assistant rounded-2xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0 break-words overflow-hidden">
         <div className="flex items-center gap-2">
           <IconLoader2
             size={14}

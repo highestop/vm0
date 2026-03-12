@@ -1,13 +1,15 @@
-import type { ReactNode, KeyboardEvent } from "react";
+import type { ReactNode, KeyboardEvent, ChangeEvent } from "react";
 import { useCCState, useCommand } from "ccstate-react/experimental";
 import { useGet, useSet, useLoadable } from "ccstate-react";
-import { onRef } from "../../signals/utils.ts";
+import { onRef, detach, Reason } from "../../signals/utils.ts";
+import {
+  zeroChatAttachments$,
+  uploadZeroAttachment$,
+  removeZeroAttachment$,
+} from "../../signals/zero-page/zero-chat.ts";
 import {
   IconSend,
   IconPaperclip,
-  IconMoodSmile,
-  IconMicrophone,
-  IconPlus,
   IconBriefcase,
   IconSettings,
   IconPlug,
@@ -24,6 +26,7 @@ import {
 import { Button, Card, CardContent, cn } from "@vm0/ui";
 import { ZERO_TEAM_JOBS } from "./zero-jobs-page";
 import { agentDisplayName$ } from "../../signals/zero-page/zero-agent-name.ts";
+import { AttachmentChips } from "./zero-attachment-chips.tsx";
 
 type DemoScenarioId =
   | "hello-from-zero"
@@ -672,6 +675,12 @@ export function ZeroChatPage({
   const input$ = useCCState("");
   const input = useGet(input$);
   const setInput = useSet(input$);
+  const attachments = useGet(zeroChatAttachments$);
+  const uploadAttachment = useSet(uploadZeroAttachment$);
+  const removeAttachment = useSet(removeZeroAttachment$);
+  const fileInputEl$ = useCCState<HTMLInputElement | null>(null);
+  const fileInputEl = useGet(fileInputEl$);
+  const setFileInputEl = useSet(fileInputEl$);
   const conversationActive$ = useCCState(false);
   const conversationActive = useGet(conversationActive$);
   const setConversationActive = useSet(conversationActive$);
@@ -797,6 +806,21 @@ export function ZeroChatPage({
     }
   };
 
+  const handleFileSelect = () => {
+    fileInputEl?.click();
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) {
+      return;
+    }
+    for (const file of files) {
+      detach(uploadAttachment(file), Reason.DomCallback);
+    }
+    e.target.value = "";
+  };
+
   const streamedScenarios = getStreamedScenarios(agentName);
   const scenariosToShow = initialScenarioId
     ? streamedScenarios.filter((s) => s.id === initialScenarioId)
@@ -807,6 +831,17 @@ export function ZeroChatPage({
     (initialScenarioId !== undefined && scenariosToShow.length > 0) ||
     conversationActive;
 
+  const fileInput = (
+    <input
+      ref={setFileInputEl}
+      type="file"
+      className="hidden"
+      accept="image/*,.pdf,.txt,.csv,.md,.json"
+      multiple
+      onChange={handleFileChange}
+    />
+  );
+
   if (showConversation && scenariosToShow.length > 0) {
     const isScenarioFromSidebar = initialScenarioId !== undefined;
     return (
@@ -814,6 +849,7 @@ export function ZeroChatPage({
         ref={streamCleanupRef}
         className="flex flex-1 flex-col min-h-0 bg-transparent"
       >
+        {fileInput}
         <header className="shrink-0 bg-transparent px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button
@@ -991,6 +1027,12 @@ export function ZeroChatPage({
             <Card className="zero-composer w-full min-w-0 overflow-hidden transition-colors duration-200">
               <CardContent className="p-0">
                 <div className="flex flex-col">
+                  {attachments.length > 0 && (
+                    <AttachmentChips
+                      attachments={attachments}
+                      onRemove={removeAttachment}
+                    />
+                  )}
                   <textarea
                     className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm text-foreground placeholder:text-muted-foreground border-0 min-h-[88px] focus:outline-none focus:ring-0"
                     rows={3}
@@ -1000,47 +1042,23 @@ export function ZeroChatPage({
                     onKeyDown={handleKeyDown}
                   />
                   <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-border/50">
-                    <div className="flex items-center gap-1 text-muted-foreground">
-                      <button
-                        type="button"
-                        className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        aria-label="Add"
-                      >
-                        <IconPlus size={18} stroke={1.5} />
-                      </button>
-                      <button
-                        type="button"
-                        className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        aria-label="Attach"
-                      >
-                        <IconPaperclip size={18} stroke={1.5} />
-                      </button>
-                      <button
-                        type="button"
-                        className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        aria-label="Emoji"
-                      >
-                        <IconMoodSmile size={18} stroke={1.5} />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        className="p-2 rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        aria-label="Voice input"
-                      >
-                        <IconMicrophone size={18} stroke={1.5} />
-                      </button>
-                      <Button
-                        size="sm"
-                        className="rounded-lg h-9 w-9 p-0 shrink-0"
-                        onClick={() => handleSend()}
-                        disabled={!input.trim()}
-                        aria-label="Send"
-                      >
-                        <IconSend size={16} stroke={2} />
-                      </Button>
-                    </div>
+                    <button
+                      type="button"
+                      className="p-2 rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors duration-200"
+                      aria-label="Attach"
+                      onClick={handleFileSelect}
+                    >
+                      <IconPaperclip size={18} stroke={1.5} />
+                    </button>
+                    <Button
+                      size="sm"
+                      className="rounded-lg h-9 w-9 p-0 shrink-0"
+                      onClick={() => handleSend()}
+                      disabled={!input.trim()}
+                      aria-label="Send"
+                    >
+                      <IconSend size={16} stroke={2} />
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -1054,6 +1072,7 @@ export function ZeroChatPage({
   // Landing page: full content (title, triggers, composer, actions, prompts)
   return (
     <div ref={carouselRef} className="flex flex-1 flex-col min-h-0">
+      {fileInput}
       <header
         className="shrink-0 bg-transparent px-4 sm:px-6 pt-10 pb-2"
         aria-hidden="true"
@@ -1089,6 +1108,12 @@ export function ZeroChatPage({
           <Card className="zero-composer w-full overflow-hidden transition-colors duration-200">
             <CardContent className="p-0">
               <div className="flex flex-col">
+                {attachments.length > 0 && (
+                  <AttachmentChips
+                    attachments={attachments}
+                    onRemove={removeAttachment}
+                  />
+                )}
                 <textarea
                   className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm text-foreground placeholder:text-muted-foreground border-0 min-h-[88px] focus:outline-none focus:ring-0"
                   rows={3}
@@ -1098,47 +1123,23 @@ export function ZeroChatPage({
                   onKeyDown={handleKeyDown}
                 />
                 <div className="flex items-center justify-between gap-2 px-4 py-3 border-t border-border/50">
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors"
-                      aria-label="Add"
-                    >
-                      <IconPlus size={18} stroke={1.5} />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors"
-                      aria-label="Attach"
-                    >
-                      <IconPaperclip size={18} stroke={1.5} />
-                    </button>
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg hover:bg-muted/60 hover:text-foreground transition-colors"
-                      aria-label="Emoji"
-                    >
-                      <IconMoodSmile size={18} stroke={1.5} />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      className="p-2 rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-                      aria-label="Voice input"
-                    >
-                      <IconMicrophone size={18} stroke={1.5} />
-                    </button>
-                    <Button
-                      size="sm"
-                      className="rounded-lg h-9 w-9 p-0 shrink-0"
-                      onClick={() => handleSend()}
-                      disabled={!input.trim()}
-                      aria-label="Send"
-                    >
-                      <IconSend size={16} stroke={2} />
-                    </Button>
-                  </div>
+                  <button
+                    type="button"
+                    className="p-2 rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors duration-200"
+                    aria-label="Attach"
+                    onClick={handleFileSelect}
+                  >
+                    <IconPaperclip size={18} stroke={1.5} />
+                  </button>
+                  <Button
+                    size="sm"
+                    className="rounded-lg h-9 w-9 p-0 shrink-0"
+                    onClick={() => handleSend()}
+                    disabled={!input.trim()}
+                    aria-label="Send"
+                  >
+                    <IconSend size={16} stroke={2} />
+                  </Button>
                 </div>
               </div>
             </CardContent>

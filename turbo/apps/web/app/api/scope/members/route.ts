@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { initServices } from "../../../../src/lib/init-services";
 import { getAuthContext } from "../../../../src/lib/auth/get-user-id";
-import { requireScopeFromRequest } from "../../../../src/lib/scope/resolve-scope";
+import { requireOrgFromRequest } from "../../../../src/lib/scope/resolve-org";
 import {
-  getScopeMembers,
+  getOrgMembers,
   removeMember,
-} from "../../../../src/lib/scope/scope-member-service";
+} from "../../../../src/lib/scope/org-member-service";
 import {
   isBadRequest,
   isNotFound,
@@ -32,12 +32,8 @@ export async function GET(request: Request) {
   const { userId, orgId: tokenOrgId } = authCtx;
 
   try {
-    const { scope } = await requireScopeFromRequest(
-      request,
-      userId,
-      tokenOrgId,
-    );
-    const status = await getScopeMembers(userId, scope.orgId, scope.slug);
+    const { org } = await requireOrgFromRequest(request, userId, tokenOrgId);
+    const status = await getOrgMembers(userId, org.orgId, org.slug);
     return NextResponse.json(status);
   } catch (error) {
     if (isBadRequest(error)) {
@@ -90,12 +86,12 @@ export async function DELETE(request: Request) {
   const body = parseResult.data;
 
   try {
-    const { scope, member } = await requireScopeFromRequest(
+    const { org, member } = await requireOrgFromRequest(
       request,
       userId,
       tokenOrgId,
     );
-    await removeMember(userId, scope.orgId, member.role, body.email);
+    await removeMember(userId, org.orgId, member.role, body.email);
     return NextResponse.json({
       message: `Removed ${body.email} from scope`,
     });

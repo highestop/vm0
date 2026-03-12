@@ -17,7 +17,7 @@ import { setupAgentDetailPage$ } from "./agent-detail/agent-detail-page.ts";
 import { setupAgentLogsPage$ } from "./agent-detail/agent-logs-page.ts";
 import { setupAgentLogDetailPage$ } from "./agent-detail/agent-log-detail-page.ts";
 import { setupAgentConnectionsPage$ } from "./agent-detail/agent-connections-page.ts";
-import { hasScope$ } from "./scope.ts";
+import { hasOrg$ } from "./org.ts";
 import { logger } from "./log.ts";
 import { setupGlobalMethod$ } from "./bootstrap/global-method.ts";
 import { setupLoggers$ } from "./bootstrap/loggers.ts";
@@ -63,15 +63,15 @@ const ROUTE_CONFIG = [
   },
   {
     path: "/logs",
-    setup: setupScopeRequiredPageWrapper(setupLogsPage$),
+    setup: setupOrgRequiredPageWrapper(setupLogsPage$),
   },
   {
     path: "/logs/:id",
-    setup: setupScopeRequiredPageWrapper(setupLogDetailPage$),
+    setup: setupOrgRequiredPageWrapper(setupLogDetailPage$),
   },
   {
     path: "/settings",
-    setup: setupScopeRequiredPageWrapper(setupSettingsPage$),
+    setup: setupOrgRequiredPageWrapper(setupSettingsPage$),
   },
   {
     path: "/preferences",
@@ -79,19 +79,19 @@ const ROUTE_CONFIG = [
   },
   {
     path: "/agents/:name/logs/:id",
-    setup: setupScopeRequiredPageWrapper(setupAgentLogDetailPage$),
+    setup: setupOrgRequiredPageWrapper(setupAgentLogDetailPage$),
   },
   {
     path: "/agents/:name/logs",
-    setup: setupScopeRequiredPageWrapper(setupAgentLogsPage$),
+    setup: setupOrgRequiredPageWrapper(setupAgentLogsPage$),
   },
   {
     path: "/agents/:name/connections",
-    setup: setupScopeRequiredPageWrapper(setupAgentConnectionsPage$),
+    setup: setupOrgRequiredPageWrapper(setupAgentConnectionsPage$),
   },
   {
     path: "/agents/:name",
-    setup: setupScopeRequiredPageWrapper(setupAgentDetailPage$),
+    setup: setupOrgRequiredPageWrapper(setupAgentDetailPage$),
   },
   {
     path: "/agents",
@@ -99,15 +99,15 @@ const ROUTE_CONFIG = [
   },
   {
     path: "/settings/slack",
-    setup: setupScopeRequiredPageWrapper(setupSlackSettingsPage$),
+    setup: setupOrgRequiredPageWrapper(setupSlackSettingsPage$),
   },
   {
     path: "/settings/github",
-    setup: setupScopeRequiredPageWrapper(setupGitHubSettingsPage$),
+    setup: setupOrgRequiredPageWrapper(setupGitHubSettingsPage$),
   },
   {
     path: "/environment-variables-setup",
-    setup: setupScopeRequiredPageWrapper(setupEnvironmentVariablesSetupPage$),
+    setup: setupOrgRequiredPageWrapper(setupEnvironmentVariablesSetupPage$),
   },
   {
     path: "/provider-setup",
@@ -123,7 +123,7 @@ const ROUTE_CONFIG = [
   },
   {
     path: "/settings/telegram",
-    setup: setupScopeRequiredPageWrapper(setupTelegramSettingsPage$),
+    setup: setupOrgRequiredPageWrapper(setupTelegramSettingsPage$),
   },
   {
     path: "/telegram/connect",
@@ -160,25 +160,25 @@ export const bootstrap$ = command(
   },
 );
 
-function setupScopeRequiredPageWrapper(
+function setupOrgRequiredPageWrapper(
   fn: Command<Promise<void> | void, [AbortSignal]>,
 ) {
   return setupAuthPageWrapper(
     command(async ({ get, set }, signal: AbortSignal) => {
-      L.debug("enter setupScopeRequiredPageWrapper");
+      L.debug("enter setupOrgRequiredPageWrapper");
 
       // First, immediately render the page to provide instant visual feedback
       // The page components will show loading skeletons while data fetches
       await set(fn, signal);
       signal.throwIfAborted();
 
-      // Then check scope in background (after page is already displayed)
-      const scopeExists = await get(hasScope$);
+      // Then check org in background (after page is already displayed)
+      const orgExists = await get(hasOrg$);
       signal.throwIfAborted();
-      L.debug("scopeExists", scopeExists);
+      L.debug("orgExists", orgExists);
 
-      if (!scopeExists) {
-        L.debug("redirect to homepage because scope does not exist");
+      if (!orgExists) {
+        L.debug("redirect to homepage because org does not exist");
         set(navigateInReact$, "/");
         return;
       }

@@ -349,10 +349,10 @@ export const deleteZeroSchedule$ = command(
 );
 
 // ---------------------------------------------------------------------------
-// All-scope schedule entries (for schedule page — no composeId filter)
+// All-org schedule entries (for schedule page — no composeId filter)
 // ---------------------------------------------------------------------------
 
-export interface ScopeScheduleEntry {
+export interface OrgScheduleEntry {
   id: string;
   time: string;
   prompt: string;
@@ -366,17 +366,17 @@ export interface ScopeScheduleEntry {
 const internalAllSchedules$ = state<ScheduleResponse[]>([]);
 const internalAllSchedulesLoaded$ = state(false);
 
-/** Whether the scope schedules have been loaded at least once. */
-export const allScopeSchedulesLoaded$ = computed((get) =>
+/** Whether the org schedules have been loaded at least once. */
+export const allOrgSchedulesLoaded$ = computed((get) =>
   get(internalAllSchedulesLoaded$),
 );
 
-export const allScopeScheduleEntries$ = computed((get) => {
+export const allOrgScheduleEntries$ = computed((get) => {
   const schedules = get(internalAllSchedules$);
   return [...schedules]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map(
-      (s): ScopeScheduleEntry => ({
+      (s): OrgScheduleEntry => ({
         id: s.id,
         time: scheduleToTimeString(s),
         prompt: s.prompt,
@@ -389,7 +389,7 @@ export const allScopeScheduleEntries$ = computed((get) => {
     );
 });
 
-export const fetchAllScopeSchedules$ = command(async ({ get, set }) => {
+export const fetchAllOrgSchedules$ = command(async ({ get, set }) => {
   const fetchFn = get(fetch$);
   try {
     const response = await fetchFn("/api/agent/schedules");
@@ -403,14 +403,14 @@ export const fetchAllScopeSchedules$ = command(async ({ get, set }) => {
     set(internalAllSchedules$, data.schedules);
   } catch (error) {
     throwIfAbort(error);
-    L.error("Failed to fetch all scope schedules:", error);
+    L.error("Failed to fetch all org schedules:", error);
     set(internalAllSchedules$, []);
   } finally {
     set(internalAllSchedulesLoaded$, true);
   }
 });
 
-export const saveScopeSchedule$ = command(
+export const saveOrgSchedule$ = command(
   async (
     { get, set },
     params: ZeroScheduleSaveParams & { composeId: string },
@@ -481,11 +481,11 @@ export const saveScopeSchedule$ = command(
     }
 
     toast.success(params.editName ? "Schedule updated" : "Schedule created");
-    await set(fetchAllScopeSchedules$);
+    await set(fetchAllOrgSchedules$);
   },
 );
 
-export const toggleScopeScheduleEnabled$ = command(
+export const toggleOrgScheduleEnabled$ = command(
   async (
     { get, set },
     params: { name: string; enabled: boolean; composeId: string },
@@ -512,11 +512,11 @@ export const toggleScopeScheduleEnabled$ = command(
       throw new Error(message);
     }
 
-    await set(fetchAllScopeSchedules$);
+    await set(fetchAllOrgSchedules$);
   },
 );
 
-export const deleteScopeSchedule$ = command(
+export const deleteOrgSchedule$ = command(
   async ({ get, set }, params: { name: string; composeId: string }) => {
     const fetchFn = get(fetch$);
     const response = await fetchFn(
@@ -534,6 +534,6 @@ export const deleteScopeSchedule$ = command(
     }
 
     toast.success("Schedule deleted");
-    await set(fetchAllScopeSchedules$);
+    await set(fetchAllOrgSchedules$);
   },
 );

@@ -50,19 +50,19 @@ export async function POST(request: Request) {
   } catch (error) {
     if (isBadRequest(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "BAD_REQUEST" } },
+        { error: { message: "Invalid request", code: "BAD_REQUEST" } },
         { status: 400 },
       );
     }
     if (isForbidden(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "FORBIDDEN" } },
+        { error: { message: "Access denied", code: "FORBIDDEN" } },
         { status: 403 },
       );
     }
     if (isNotFound(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "NOT_FOUND" } },
+        { error: { message: "Resource not found", code: "NOT_FOUND" } },
         { status: 404 },
       );
     }

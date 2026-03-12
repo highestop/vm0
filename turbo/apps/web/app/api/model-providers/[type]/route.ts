@@ -41,7 +41,7 @@ const router = tsr.router(modelProvidersByTypeContract, {
       };
     } catch (error) {
       if (isNotFound(error)) {
-        return createErrorResponse("NOT_FOUND", error.message);
+        return createErrorResponse("NOT_FOUND", "Resource not found");
       }
       throw error;
     }

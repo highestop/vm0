@@ -59,13 +59,18 @@ export async function POST(
   } catch (error) {
     if (isNotFound(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "NOT_FOUND" } },
+        { error: { message: "Resource not found", code: "NOT_FOUND" } },
         { status: 404 },
       );
     }
     if (isSchedulePast(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "SCHEDULE_PAST" } },
+        {
+          error: {
+            message: "Schedule time has already passed",
+            code: "SCHEDULE_PAST",
+          },
+        },
         { status: 400 },
       );
     }

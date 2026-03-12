@@ -39,7 +39,7 @@ const router = tsr.router(composesListContract, {
         return {
           status: 400 as const,
           body: {
-            error: { message: error.message, code: "BAD_REQUEST" },
+            error: { message: "Invalid request", code: "BAD_REQUEST" },
           },
         };
       }

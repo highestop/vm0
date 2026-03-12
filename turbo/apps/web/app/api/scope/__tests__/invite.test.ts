@@ -68,9 +68,7 @@ describe("POST /api/scope/invite - Invite Member", () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error.message).toContain(
-      "scope or org query parameter is required",
-    );
+    expect(data.error.code).toBe("BAD_REQUEST");
   });
 
   it("should invite member and return success message", async () => {

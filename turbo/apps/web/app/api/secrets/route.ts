@@ -97,7 +97,7 @@ const router = tsr.router(secretsMainContract, {
       };
     } catch (error) {
       if (isBadRequest(error)) {
-        return createErrorResponse("BAD_REQUEST", error.message);
+        return createErrorResponse("BAD_REQUEST", "Invalid request");
       }
       throw error;
     }

@@ -52,7 +52,7 @@ const router = tsr.router(schedulesByNameContract, {
         return {
           status: 404 as const,
           body: {
-            error: { message: error.message, code: "NOT_FOUND" },
+            error: { message: "Resource not found", code: "NOT_FOUND" },
           },
         };
       }
@@ -92,7 +92,7 @@ const router = tsr.router(schedulesByNameContract, {
         return {
           status: 404 as const,
           body: {
-            error: { message: error.message, code: "NOT_FOUND" },
+            error: { message: "Resource not found", code: "NOT_FOUND" },
           },
         };
       }

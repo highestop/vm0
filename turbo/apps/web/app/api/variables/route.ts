@@ -104,7 +104,7 @@ const router = tsr.router(variablesMainContract, {
       };
     } catch (error) {
       if (isBadRequest(error)) {
-        return createErrorResponse("BAD_REQUEST", error.message);
+        return createErrorResponse("BAD_REQUEST", "Invalid request");
       }
       throw error;
     }

@@ -59,7 +59,7 @@ export async function POST(
   } catch (error) {
     if (isNotFound(error)) {
       return NextResponse.json(
-        { error: { message: error.message, code: "NOT_FOUND" } },
+        { error: { message: "Resource not found", code: "NOT_FOUND" } },
         { status: 404 },
       );
     }

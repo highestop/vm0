@@ -52,7 +52,7 @@ const router = tsr.router(scopeContract, {
       };
     } catch (error) {
       if (isNotFound(error)) {
-        return createErrorResponse("NOT_FOUND", error.message);
+        return createErrorResponse("NOT_FOUND", "Resource not found");
       }
       throw error;
     }
@@ -111,17 +111,17 @@ const router = tsr.router(scopeContract, {
           return {
             status: 409 as const,
             body: {
-              error: { message: error.message, code: "CONFLICT" },
+              error: { message: "Resource conflict", code: "CONFLICT" },
             },
           };
         }
-        return createErrorResponse("BAD_REQUEST", error.message);
+        return createErrorResponse("BAD_REQUEST", "Invalid request");
       }
       if (isForbidden(error)) {
-        return createErrorResponse("FORBIDDEN", error.message);
+        return createErrorResponse("FORBIDDEN", "Access denied");
       }
       if (isNotFound(error)) {
-        return createErrorResponse("NOT_FOUND", error.message);
+        return createErrorResponse("NOT_FOUND", "Resource not found");
       }
       throw error;
     }

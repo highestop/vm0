@@ -11,7 +11,6 @@ def registry_file(tmp_path):
                 "runId": "run-abc-123",
                 "sandboxToken": "tok-xyz",
                 "mitmEnabled": True,
-                "sealSecretsEnabled": False,
                 "registeredAt": 1700000000000,
                 "firewallRules": [
                     {"domain": "*.vm0.ai", "action": "ALLOW"},
@@ -24,7 +23,6 @@ def registry_file(tmp_path):
                 "runId": "run-def-456",
                 "sandboxToken": "tok-abc",
                 "mitmEnabled": False,
-                "sealSecretsEnabled": False,
                 "registeredAt": 1700000000000,
                 "firewallRules": [],
                 "networkLogPath": str(tmp_path / "network-2.jsonl"),

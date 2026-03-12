@@ -810,13 +810,10 @@ async function resolveSecretsAndEnvironment(
   const modelProviderEnvVars = modelProviderResult.injectedEnvVars;
 
   // Expand environment variables from compose config.
-  // Connector placeholder env vars are handled internally (like sealSecrets).
   const { environment: expandedEnvironment } = expandEnvironmentFromCompose(
     agentCompose,
     mergedVars,
     secrets,
-    userId,
-    runId,
     checkEnv,
     connectorResult.connectedTypes,
   );

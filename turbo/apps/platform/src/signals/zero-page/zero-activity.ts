@@ -1,113 +1,164 @@
 import { command, computed, state, type Computed } from "ccstate";
 import type {
-  LogEntry,
-  LogsListResponse,
   LogDetail,
   AgentEvent,
   AgentEventsResponse,
   LogStatus,
 } from "../logs-page/types.ts";
 import { fetch$ } from "../fetch.ts";
+import { searchParams$, updateSearchParams$ } from "../route.ts";
+import { createCursorPagination } from "../cursor-pagination.ts";
 import { throwIfAbort, detach, Reason } from "../utils.ts";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
+import { zeroTabSub$ } from "./zero-nav.ts";
 import { delay } from "signal-timers";
-const PAGE_LIMIT = 20;
+
 const EVENTS_PAGE_LIMIT = 30;
 const MAX_POLL_INTERVAL = 30_000;
 
 // ---------------------------------------------------------------------------
-// List state
+// Filters — URL-derived
 // ---------------------------------------------------------------------------
 
-const internalSearch$ = state("");
-const internalLogs$ = state<LogEntry[]>([]);
-const internalHasMore$ = state(false);
-const internalNextCursor$ = state<string | null>(null);
-const internalLoading$ = state(false);
+/** Agent filter derived from URL `?agent=` query param. */
+export const zeroActivityAgentFilter$ = computed((get) => {
+  return get(searchParams$).get("agent") ?? "all";
+});
 
-export const zeroActivitySearch$ = computed((get) => get(internalSearch$));
-export const zeroActivityLogs$ = computed((get) => get(internalLogs$));
-export const zeroActivityHasMore$ = computed((get) => get(internalHasMore$));
-export const zeroActivityLoading$ = computed((get) => get(internalLoading$));
+/** Status filter derived from URL `?status=` query param. */
+export const zeroActivityStatusFilter$ = computed((get) => {
+  return get(searchParams$).get("status") ?? "all";
+});
 
-export const setZeroActivitySearch$ = command(
-  async ({ set }, search: string) => {
-    set(internalSearch$, search);
-    set(internalNextCursor$, null);
-    await set(fetchZeroActivityLogs$);
+// ---------------------------------------------------------------------------
+// List — cursor pagination with URL-synced limit/cursor/filters
+// ---------------------------------------------------------------------------
+
+/** Agent name from onboarding (cached so pagination factory can read it). */
+const internalAgentName$ = state<string | null>(null);
+const cachedAgentName$ = computed((get) => get(internalAgentName$));
+
+export const initZeroActivityAgentName$ = command(async ({ get, set }) => {
+  const status = await get(zeroOnboardingStatus$);
+  set(internalAgentName$, status.defaultAgentName);
+});
+
+/** Initialize activity page: load agent name and seed cursor history. */
+export const initZeroActivity$ = command(async ({ set }) => {
+  await set(initZeroActivityAgentName$);
+  set(seedZeroActivityCursorHistory$);
+});
+
+export const {
+  limit$: zeroActivityLimit$,
+  data$: zeroActivityData$,
+  seedCursorHistory$: seedZeroActivityCursorHistory$,
+  hasPrev$: zeroActivityHasPrev$,
+  currentPage$: zeroActivityCurrentPage$,
+  goToNextPage$: goToNextZeroActivityPage$,
+  goToPrevPage$: goToPrevZeroActivityPage$,
+  goForwardTwoPages$: goForwardTwoZeroActivityPages$,
+  goBackTwoPages$: goBackTwoZeroActivityPages$,
+  setRowsPerPage$: setZeroActivityRowsPerPage$,
+  resetPaginationState$: resetZeroActivityPagination$,
+} = createCursorPagination({
+  buildFetchParams: (limit, cursor, get) => {
+    const agentName = get(cachedAgentName$);
+    if (!agentName) {
+      return null;
+    }
+
+    const params = new URLSearchParams({
+      limit: String(limit),
+      name: agentName,
+    });
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+    const statusFilter = get(zeroActivityStatusFilter$);
+    if (statusFilter !== "all") {
+      params.set("status", statusFilter);
+    }
+    return params;
+  },
+  preserveUrlParams: (get) => {
+    const result: Record<string, string> = {};
+    const agent = get(zeroActivityAgentFilter$);
+    if (agent !== "all") {
+      result.agent = agent;
+    }
+    const status = get(zeroActivityStatusFilter$);
+    if (status !== "all") {
+      result.status = status;
+    }
+    return result;
+  },
+});
+
+/** Update a filter — resets pagination and writes to URL. */
+export const setZeroActivityFilter$ = command(
+  ({ get, set }, key: "agent" | "status", value: string) => {
+    set(resetZeroActivityPagination$);
+    const params = new URLSearchParams();
+
+    // Preserve other filter
+    const otherKey = key === "agent" ? "status" : "agent";
+    const otherValue =
+      otherKey === "agent"
+        ? get(zeroActivityAgentFilter$)
+        : get(zeroActivityStatusFilter$);
+    if (otherValue !== "all") {
+      params.set(otherKey, otherValue);
+    }
+
+    if (value !== "all") {
+      params.set(key, value);
+    }
+
+    set(updateSearchParams$, params);
   },
 );
 
 // ---------------------------------------------------------------------------
-// Fetch logs for the default agent
+// Detail state — driven by URL sub-route
 // ---------------------------------------------------------------------------
 
-export const fetchZeroActivityLogs$ = command(async ({ get, set }) => {
-  const status = await get(zeroOnboardingStatus$);
-  const agentName = status.defaultAgentName;
-  if (!agentName) {
-    set(internalLogs$, []);
-    set(internalHasMore$, false);
-    return;
-  }
-
-  set(internalLoading$, true);
-
-  try {
-    const fetchFn = get(fetch$);
-    const search = get(internalSearch$);
-    const cursor = get(internalNextCursor$);
-
-    const params = new URLSearchParams({
-      limit: String(PAGE_LIMIT),
-      name: agentName,
-    });
-    if (search.trim()) {
-      params.set("search", search.trim());
-    }
-    if (cursor) {
-      params.set("cursor", cursor);
-    }
-
-    const response = await fetchFn(`/api/platform/logs?${params.toString()}`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch logs: ${response.statusText}`);
-    }
-
-    const data = (await response.json()) as LogsListResponse;
-    if (cursor) {
-      // Append for "load more"
-      set(internalLogs$, (prev) => [...prev, ...data.data]);
-    } else {
-      set(internalLogs$, data.data);
-    }
-    set(internalHasMore$, data.pagination.hasMore);
-    set(internalNextCursor$, data.pagination.nextCursor);
-  } finally {
-    set(internalLoading$, false);
-  }
-});
-
-export const loadMoreZeroActivityLogs$ = command(async ({ get, set }) => {
-  const hasMore = get(internalHasMore$);
-  if (!hasMore) {
-    return;
-  }
-  await set(fetchZeroActivityLogs$);
-});
-
-// ---------------------------------------------------------------------------
-// Detail state
-// ---------------------------------------------------------------------------
-
-const internalSelectedLogId$ = state<string | null>(null);
 const internalPollingAbort$ = state<AbortController | null>(null);
+const lastSyncedLogId$ = state<string | null>(null);
 
-export const zeroActivitySelectedLogId$ = computed((get) =>
-  get(internalSelectedLogId$),
-);
+/**
+ * Sync the URL sub-route to the detail polling lifecycle.
+ * Idempotent: only restarts polling when the log ID actually changes.
+ */
+export const syncZeroActivitySub$ = command(({ get, set }) => {
+  const sub = get(zeroTabSub$);
+  const prev = get(lastSyncedLogId$);
+  if (sub === prev) {
+    return;
+  }
 
+  // Abort previous polling
+  const prevAbort = get(internalPollingAbort$);
+  if (prevAbort) {
+    prevAbort.abort();
+  }
+  set(internalPollingAbort$, null);
+  set(pagedEvents$, []);
+  set(lastSyncedLogId$, sub);
+
+  if (sub) {
+    const controller = new AbortController();
+    set(internalPollingAbort$, controller);
+    detach(
+      set(setupZeroActivityEventPolling$, controller.signal),
+      Reason.Daemon,
+    );
+  }
+});
+
+/**
+ * Set selected log ID directly (used by tests).
+ */
 export const setZeroActivitySelectedLogId$ = command(
   ({ get, set }, logId: string | null) => {
     // Abort any running polling before changing log
@@ -117,7 +168,7 @@ export const setZeroActivitySelectedLogId$ = command(
     }
     set(internalPollingAbort$, null);
     set(pagedEvents$, []);
-    set(internalSelectedLogId$, logId);
+    set(lastSyncedLogId$, logId);
 
     if (logId) {
       const controller = new AbortController();
@@ -138,7 +189,7 @@ const detailReloadTick$ = state(0);
 
 export const zeroActivityDetail$ = computed(async (get) => {
   get(detailReloadTick$);
-  const logId = get(internalSelectedLogId$);
+  const logId = get(lastSyncedLogId$);
   if (!logId) {
     return null;
   }
@@ -228,7 +279,7 @@ const pollNewEvents$ = command(async ({ get, set }, runId: string) => {
 
 const setupZeroActivityEventPolling$ = command(
   async ({ get, set }, signal: AbortSignal) => {
-    const logId = get(internalSelectedLogId$);
+    const logId = get(lastSyncedLogId$);
     if (!logId) {
       return;
     }
@@ -297,35 +348,15 @@ const setupZeroActivityEventPolling$ = command(
 // Helpers for display conversion
 // ---------------------------------------------------------------------------
 
-export function logStatusToActivityStatus(
-  status: LogStatus,
-): "success" | "error" | "warning" | "running" {
-  switch (status) {
-    case "completed": {
-      return "success";
-    }
-    case "failed": {
-      return "error";
-    }
-    case "timeout":
-    case "cancelled": {
-      return "warning";
-    }
-    case "queued":
-    case "pending":
-    case "running": {
-      return "running";
-    }
-  }
-}
-
 export function formatLogTime(createdAt: string): string {
   const date = new Date(createdAt);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   const hours = date.getHours();
   const minutes = date.getMinutes();
   const ampm = hours >= 12 ? "PM" : "AM";
   const h12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-  return `${String(h12).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${ampm}`;
+  return `${month}/${day} ${String(h12).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${ampm}`;
 }
 
 export function formatDuration(

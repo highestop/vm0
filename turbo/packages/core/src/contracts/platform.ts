@@ -55,6 +55,8 @@ const platformLogEntrySchema = z.object({
   framework: z.string().nullable(),
   status: platformLogStatusSchema,
   createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
 });
 
 /**
@@ -103,6 +105,7 @@ export const platformLogsListContract = c.router({
       agent: z.string().optional(),
       name: z.string().optional(),
       scope: z.string().optional(),
+      status: platformLogStatusSchema.optional(),
     }),
     responses: {
       200: platformLogsListResponseSchema,

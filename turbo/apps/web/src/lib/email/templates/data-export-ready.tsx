@@ -7,17 +7,20 @@ import {
   Link,
   Hr,
 } from "@react-email/components";
+import { UnsubscribeFooter } from "./unsubscribe-footer";
 
 interface DataExportReadyEmailProps {
   downloadUrl: string;
   expiresAt: string;
   artifactCount: number;
+  unsubscribeUrl?: string;
 }
 
 export function DataExportReadyEmail({
   downloadUrl,
   expiresAt,
   artifactCount,
+  unsubscribeUrl,
 }: DataExportReadyEmailProps) {
   return (
     <Html>
@@ -46,6 +49,7 @@ export function DataExportReadyEmail({
             This download link expires on {expiresAt}. If you need a new export
             after it expires, you can request one again.
           </Text>
+          <UnsubscribeFooter unsubscribeUrl={unsubscribeUrl} />
         </Container>
       </Body>
     </Html>

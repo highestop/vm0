@@ -1,10 +1,15 @@
 import { Html, Head, Body, Container, Text, Hr } from "@react-email/components";
+import { UnsubscribeFooter } from "./unsubscribe-footer";
 
 interface InboundErrorEmailProps {
   errorMessage: string;
+  unsubscribeUrl?: string;
 }
 
-export function InboundErrorEmail({ errorMessage }: InboundErrorEmailProps) {
+export function InboundErrorEmail({
+  errorMessage,
+  unsubscribeUrl,
+}: InboundErrorEmailProps) {
   return (
     <Html>
       <Head />
@@ -13,6 +18,7 @@ export function InboundErrorEmail({ errorMessage }: InboundErrorEmailProps) {
           <Text style={errorStyle}>{errorMessage}</Text>
           <Hr style={hrStyle} />
           <Text style={signatureStyle}>VM0</Text>
+          <UnsubscribeFooter unsubscribeUrl={unsubscribeUrl} />
         </Container>
       </Body>
     </Html>

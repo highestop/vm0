@@ -7,17 +7,20 @@ import {
   Link,
   Hr,
 } from "@react-email/components";
+import { UnsubscribeFooter } from "./unsubscribe-footer";
 
 interface ScheduleCompletedEmailProps {
   agentName: string;
   output: string;
   logsUrl: string;
+  unsubscribeUrl?: string;
 }
 
 export function ScheduleCompletedEmail({
   agentName,
   output,
   logsUrl,
+  unsubscribeUrl,
 }: ScheduleCompletedEmailProps) {
   return (
     <Html>
@@ -33,6 +36,7 @@ export function ScheduleCompletedEmail({
             </Link>{" "}
             · Reply to continue
           </Text>
+          <UnsubscribeFooter unsubscribeUrl={unsubscribeUrl} />
         </Container>
       </Body>
     </Html>

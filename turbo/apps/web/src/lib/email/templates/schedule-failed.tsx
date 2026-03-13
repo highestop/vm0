@@ -7,17 +7,20 @@ import {
   Link,
   Hr,
 } from "@react-email/components";
+import { UnsubscribeFooter } from "./unsubscribe-footer";
 
 interface ScheduleFailedEmailProps {
   agentName: string;
   errorMessage: string;
   logsUrl: string;
+  unsubscribeUrl?: string;
 }
 
 export function ScheduleFailedEmail({
   agentName,
   errorMessage,
   logsUrl,
+  unsubscribeUrl,
 }: ScheduleFailedEmailProps) {
   return (
     <Html>
@@ -32,6 +35,7 @@ export function ScheduleFailedEmail({
               Audit
             </Link>
           </Text>
+          <UnsubscribeFooter unsubscribeUrl={unsubscribeUrl} />
         </Container>
       </Body>
     </Html>

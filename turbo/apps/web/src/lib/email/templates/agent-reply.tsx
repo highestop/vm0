@@ -7,17 +7,20 @@ import {
   Link,
   Hr,
 } from "@react-email/components";
+import { UnsubscribeFooter } from "./unsubscribe-footer";
 
 interface AgentReplyEmailProps {
   agentName: string;
   output: string;
   logsUrl: string;
+  unsubscribeUrl?: string;
 }
 
 export function AgentReplyEmail({
   agentName,
   output,
   logsUrl,
+  unsubscribeUrl,
 }: AgentReplyEmailProps) {
   return (
     <Html>
@@ -33,6 +36,7 @@ export function AgentReplyEmail({
             </Link>{" "}
             · Reply to continue
           </Text>
+          <UnsubscribeFooter unsubscribeUrl={unsubscribeUrl} />
         </Container>
       </Body>
     </Html>

@@ -797,7 +797,7 @@ async function resolveOrgs(params: BuildContextParams): Promise<{
 }
 
 interface BuildContextTimings {
-  resolveSourceAndScope: number;
+  resolveSourceAndOrg: number;
   resolveSecrets: number;
 }
 
@@ -979,7 +979,7 @@ export async function buildExecutionContext(
       apiStartTime: params.apiStartTime,
     },
     timings: {
-      resolveSourceAndScope: resolveEnd - resolveStart,
+      resolveSourceAndOrg: resolveEnd - resolveStart,
       resolveSecrets: resolveSecretsEnd - resolveSecretsStart,
     },
   };

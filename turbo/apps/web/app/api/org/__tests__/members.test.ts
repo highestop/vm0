@@ -128,7 +128,7 @@ describe("GET /api/org/members - Org Members", () => {
       expect(statusRes.status).toBe(403);
     });
 
-    it("should return 403 when Clerk API fails during lazy sync", async () => {
+    it("should propagate Clerk API errors during lazy sync", async () => {
       const adminUserId = uniqueId("admin");
       const memberUserId = uniqueId("member");
       const { slug, orgId } = await createTestOrg(adminUserId);
@@ -140,15 +140,14 @@ describe("GET /api/org/members - Org Members", () => {
         memberships: [],
       });
       const client = await clerkClient();
-      vi.mocked(
-        client.organizations.getOrganizationMembershipList,
-      ).mockRejectedValue(new Error("Clerk API unavailable"));
+      vi.mocked(client.users.getOrganizationMembershipList).mockRejectedValue(
+        new Error("Clerk API unavailable"),
+      );
 
       const statusReq = createTestRequest(
         `http://localhost:3000/api/org/members?org=${slug}`,
       );
-      const statusRes = await GET(statusReq);
-      expect(statusRes.status).toBe(403);
+      await expect(GET(statusReq)).rejects.toThrow("Clerk API unavailable");
     });
   });
 });

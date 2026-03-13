@@ -67,7 +67,7 @@ pub struct ExecutionContext {
     #[allow(dead_code)]
     #[serde(default)]
     pub agent_name: Option<String>,
-    // Not yet used by runner — org/agent slug for scoping
+    // Not yet used by runner — org slug for agent
     #[allow(dead_code)]
     #[serde(default)]
     pub agent_org_slug: Option<String>,

@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import ipaddress
 import socket
+from typing import NamedTuple
 from mitmproxy import http, ctx, tls
 from mitmproxy.addonmanager import Loader
 
@@ -128,23 +129,114 @@ def get_original_url(flow: http.HTTPFlow) -> str:
 # Service Header Resolution
 # ============================================================================
 
-def match_service(url: str, vm_services: list | None) -> dict | None:
-    """Match URL against service API base URLs. Returns API entry or None.
+def match_path(path: str, pattern: str) -> dict | None:
+    """Match a URL path against a rule pattern. Returns extracted params or None.
 
-    Iterates flat service list: [{ name, ref, apis }] → apis[].
-    Matches if the URL starts with the base and the next character is '/', '?', or end-of-string.
-    This prevents https://api.github.com matching https://api.github.com.evil.com.
+    - Literal segments must match exactly.
+    - {name} matches a single non-empty path segment.
+    - {name+} matches the rest of the path (zero or more segments). Must be last.
+    """
+    path_segs = [s for s in path.split("/") if s]
+    pattern_segs = [s for s in pattern.split("/") if s]
+
+    params: dict[str, str] = {}
+    pi = 0
+
+    for seg in pattern_segs:
+        if seg.startswith("{") and seg.endswith("}"):
+            name = seg[1:-1]
+            if name.endswith("+"):
+                # Greedy: consume rest of path (zero or more segments)
+                params[name[:-1]] = "/".join(path_segs[pi:])
+                return params
+            # Single segment
+            if pi >= len(path_segs):
+                return None
+            params[name] = path_segs[pi]
+            pi += 1
+        else:
+            if pi >= len(path_segs) or path_segs[pi] != seg:
+                return None
+            pi += 1
+
+    # All pattern segments consumed; path must also be fully consumed
+    if pi != len(path_segs):
+        return None
+    return params
+
+
+class ServiceAllow(NamedTuple):
+    """Permission matched — inject auth headers."""
+    api_entry: dict
+    match_info: dict
+
+
+class ServiceBlock(NamedTuple):
+    """Base URL matched but no permission granted — return 403."""
+    base: str
+
+
+def match_service_request(url: str, method: str, vm_services: list | None) -> ServiceAllow | ServiceBlock | None:
+    """Match request against service permissions.
+
+    Returns:
+      ServiceAllow — permission matched, inject headers
+      ServiceBlock — base URL matched but no permission granted
+      None — no base URL match (not a service request)
     """
     if not vm_services:
         return None
+
+    # Track the first base URL that matched. If we find a base match but no
+    # permission rule allows the request, we block it (fail-closed). Only the
+    # first matched base is recorded — subsequent base matches don't overwrite.
+    blocked_base = None
+
     for service in vm_services:
+        svc_name = service.get("name", "")
+        svc_ref = service.get("ref", "")
         for api_entry in service.get("apis", []):
             base = api_entry.get("base", "").rstrip("/")
-            if base and url.startswith(base):
-                # Ensure match is at a path boundary, not mid-hostname
-                rest = url[len(base):]
-                if not rest or rest[0] in ("/", "?", "#"):
-                    return api_entry
+            if not base or not url.startswith(base):
+                continue
+            rest = url[len(base):]
+            if rest and rest[0] not in ("/", "?", "#"):
+                continue
+
+            # Base URL matched
+            if blocked_base is None:
+                blocked_base = base
+
+            permissions = api_entry.get("permissions")
+            if not permissions:
+                # No permissions defined or empty → block (fail-closed)
+                continue
+
+            # Extract relative path, strip query/fragment
+            rel_path = rest.split("?")[0].split("#")[0] or "/"
+
+            upper_method = method.upper()
+            for perm in permissions:
+                perm_name = perm.get("name", "")
+                for rule_str in perm.get("rules", []):
+                    parts = rule_str.split(" ", 1)
+                    if len(parts) != 2:
+                        continue
+                    rule_method, rule_pattern = parts[0].upper(), parts[1]
+                    if rule_method != "ANY" and rule_method != upper_method:
+                        continue
+                    params = match_path(rel_path, rule_pattern)
+                    if params is not None:
+                        return ServiceAllow(api_entry, {
+                            "service": svc_name,
+                            "ref": svc_ref,
+                            "permission": perm_name,
+                            "params": params,
+                            "rule": rule_str,
+                        })
+
+    if blocked_base is not None:
+        return ServiceBlock(blocked_base)
     return None
 
 
@@ -180,7 +272,7 @@ def get_service_headers(run_id: str, api_id: str, encrypted_secrets: str, auth_h
     return headers
 
 
-def handle_service_request(flow: http.HTTPFlow, api_entry: dict, vm_info: dict) -> None:
+def handle_service_request(flow: http.HTTPFlow, api_entry: dict, vm_info: dict, match_info: dict) -> None:
     """Handle a service-matched request: fetch resolved headers, inject into request."""
     client_ip = flow.client_conn.peername[0]
     service_base = api_entry["base"]
@@ -220,11 +312,16 @@ def handle_service_request(flow: http.HTTPFlow, api_entry: dict, vm_info: dict) 
     for header_name, header_value in headers.items():
         flow.request.headers[header_name] = header_value
 
-    # Store metadata for logging
+    # Store metadata for logging and auditing
     flow.metadata["firewall_action"] = "ALLOW"
     flow.metadata["firewall_rule"] = f"service:{service_base}"
     flow.metadata["service_base"] = service_base
     flow.metadata["service_api_id"] = api_id
+    flow.metadata["service_name"] = match_info.get("service", "")
+    flow.metadata["service_ref"] = match_info.get("ref", "")
+    flow.metadata["service_permission"] = match_info.get("permission", "")
+    flow.metadata["service_rule"] = match_info.get("rule", "")
+    flow.metadata["service_params"] = match_info.get("params", {})
     flow.metadata["original_url"] = get_original_url(flow)
     flow.metadata["vm_run_id"] = run_id
     flow.metadata["vm_client_ip"] = client_ip
@@ -419,14 +516,25 @@ def request(flow: http.HTTPFlow) -> None:
         )
         return
 
-    # --- Step 3: Service match (only for allowed requests) ---
-    # Inject auth headers for configured API services.
+    # --- Step 3: Service match with permission check ---
+    # Match base URL, then check permission rules before injecting auth headers.
     vm_services = vm_info.get("services")
     if vm_services:
         original_url = get_original_url(flow)
-        api_entry = match_service(original_url, vm_services)
-        if api_entry:
-            handle_service_request(flow, api_entry, vm_info)
+        result = match_service_request(original_url, flow.request.method, vm_services)
+        if isinstance(result, ServiceBlock):
+            ctx.log.warn(f"[{run_id}] Service {result.base}: no matching permission for {flow.request.method} {flow.request.path}")
+            flow.metadata["firewall_action"] = "DENY"
+            flow.metadata["firewall_rule"] = f"service:{result.base}"
+            flow.metadata["original_url"] = original_url
+            flow.response = http.Response.make(
+                403,
+                b"No matching service permission",
+                {"Content-Type": "text/plain"},
+            )
+            return
+        if isinstance(result, ServiceAllow):
+            handle_service_request(flow, result.api_entry, vm_info, result.match_info)
             return
 
     # Request is ALLOWED, no service match — pass through directly
@@ -496,6 +604,15 @@ def response(flow: http.HTTPFlow) -> None:
             "request_size": request_size,
             "response_size": response_size,
         }
+
+        # Add service match info if this was a service request
+        svc_base = flow.metadata.get("service_base")
+        if svc_base:
+            log_entry["service_base"] = svc_base
+            log_entry["service_name"] = flow.metadata.get("service_name", "")
+            log_entry["service_ref"] = flow.metadata.get("service_ref", "")
+            log_entry["service_permission"] = flow.metadata.get("service_permission", "")
+            log_entry["service_rule"] = flow.metadata.get("service_rule", "")
 
         # Add response headers useful for debugging gzip/encoding issues
         if flow.response:

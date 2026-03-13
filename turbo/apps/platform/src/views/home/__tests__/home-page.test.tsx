@@ -36,7 +36,7 @@ describe("home page", () => {
 
   it("should show onboarding modal when org returns 404", async () => {
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
     );
@@ -98,7 +98,7 @@ describe("home page", () => {
     let createdType: string | null = null;
 
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
       http.put("/api/model-providers", async ({ request }) => {
@@ -154,7 +154,7 @@ describe("home page", () => {
     });
 
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
       http.put("/api/model-providers", async ({ request }) => {

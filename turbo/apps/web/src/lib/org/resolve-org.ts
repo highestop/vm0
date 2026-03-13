@@ -9,8 +9,28 @@ import type { OrgRole } from "@vm0/core";
 const log = logger("org:resolve");
 
 /**
+ * Wrapper around getOrgData that returns null instead of throwing when the
+ * org cannot be resolved.
+ *
+ * getOrgData throws when Clerk's getOrganization rejects (org not found)
+ * or the fetched org has no slug.  Both are "not-found" semantics that
+ * callers treat as a null result.  Database errors are unlikely to surface
+ * here because getOrgBySlug (called first in the resolution chain) hits the
+ * same DB — if the database were down, it would fail there first.
+ */
+export async function getOrgDataOrNull(
+  orgId: string,
+): Promise<{ orgId: string; slug: string; tier: string } | null> {
+  try {
+    return await getOrgData(orgId);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Lightweight org type based on org_cache data.
- * Replaces the full scopes.$inferSelect type for the resolution path.
+ * Replaces the full org_cache.$inferSelect type for the resolution path.
  */
 export interface ResolvedOrg {
   orgId: string;
@@ -38,7 +58,7 @@ function mapOrgRole(clerkRole: string | undefined | null): OrgRole {
  * Fast path: if the org's orgId matches the JWT's active org,
  * trust the JWT claims and skip the Clerk API call entirely.
  *
- * Slow path: for cross-org access (e.g. ?scope= pointing to a non-active org),
+ * Slow path: for cross-org access (e.g. ?org= pointing to a non-active org),
  * fall back to Clerk Backend API.
  *
  * CLI token path: if tokenOrgId is provided and matches the org,
@@ -119,13 +139,13 @@ function applyJwtTier(
 }
 
 /**
- * Resolve org from request context using org_cache (never queries scopes table).
+ * Resolve org from request context using org_cache.
  *
  * Uses JWT claims for membership verification when possible (zero Clerk API calls).
  * Falls back to Clerk Backend API for cross-org access or CLI tokens without org_id.
  *
  * Resolution order:
- * 1. orgSlug (?scope=<slug> query param) -> org_cache lookup, verify membership
+ * 1. orgSlug (?org=<slug> query param) -> org_cache lookup, verify membership
  * 2. orgId (from JWT session token or CLI token) -> org_cache lookup
  * 3. Fallback -> user's default org via Clerk API
  *
@@ -140,7 +160,7 @@ export async function resolveOrg(
 ): Promise<{ org: ResolvedOrg; member: ResolvedMember }> {
   const authResult = await auth();
 
-  // 1. Explicit org selection via ?scope= query param (highest priority)
+  // 1. Explicit org selection via ?org= query param (highest priority)
   if (orgSlug) {
     const orgData = await getOrgBySlug(orgSlug);
     if (!orgData) throw notFound("Org not found");
@@ -185,7 +205,7 @@ export async function resolveOrg(
 }
 
 /**
- * Extract and validate org from a request's ?scope= or ?org= query parameter.
+ * Extract and validate org from a request's ?org= query parameter.
  * Throws if the param is missing, the org doesn't exist, or the user
  * is not a member.
  *
@@ -197,22 +217,15 @@ export async function requireOrgFromRequest(
   tokenOrgId?: string | null,
 ): Promise<{ org: ResolvedOrg; member: ResolvedMember }> {
   const url = new URL(request.url);
-  const orgSlug = url.searchParams.get("scope");
-  const orgParam = url.searchParams.get("org");
+  const orgSlug = url.searchParams.get("org");
 
-  let orgData: ResolvedOrg | null = null;
-
-  if (orgSlug) {
-    orgData = await getOrgBySlug(orgSlug);
-  } else if (orgParam) {
-    try {
-      orgData = await getOrgData(orgParam);
-    } catch {
-      orgData = null;
-    }
-  } else {
+  if (!orgSlug) {
     throw badRequest("org query parameter is required");
   }
+
+  // Try slug first, fall back to orgId (callers may pass either via ?org=)
+  const orgData =
+    (await getOrgBySlug(orgSlug)) ?? (await getOrgDataOrNull(orgSlug));
 
   if (!orgData) {
     throw notFound("Org not found");

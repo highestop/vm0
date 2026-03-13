@@ -30,9 +30,8 @@ const router = tsr.router(modelProvidersMainContract, {
     }
     const { userId, orgId: tokenOrgId } = authCtx;
 
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
-    const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+    const orgSlug = new URL(request.url).searchParams.get("org");
+    const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
     const providers = await listModelProviders(org.orgId, userId);
 
     return {
@@ -71,9 +70,8 @@ const router = tsr.router(modelProvidersMainContract, {
     log.debug("upserting model provider", { userId, type, selectedModel });
 
     try {
-      const orgSlug = new URL(request.url).searchParams.get("scope");
-      const orgParam = new URL(request.url).searchParams.get("org");
-      const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+      const orgSlug = new URL(request.url).searchParams.get("org");
+      const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
 
       // Determine if this is a multi-auth provider or legacy provider
       const isMultiAuth = hasAuthMethods(type);

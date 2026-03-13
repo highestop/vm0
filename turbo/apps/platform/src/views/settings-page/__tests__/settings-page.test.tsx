@@ -14,7 +14,7 @@ const user = userEvent.setup();
 describe("settings page", () => {
   it("should be redirect if user has no org", async () => {
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
     );

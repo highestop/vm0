@@ -33,9 +33,8 @@ const router = tsr.router(secretsByNameContract, {
     }
     const { userId, orgId: tokenOrgId } = authCtx;
 
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
-    const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+    const orgSlug = new URL(request.url).searchParams.get("org");
+    const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
     const secret = await getSecret(org.orgId, userId, params.name);
     if (!secret) {
       return createErrorResponse(
@@ -72,9 +71,8 @@ const router = tsr.router(secretsByNameContract, {
     log.debug("deleting secret", { userId, name: params.name });
 
     try {
-      const orgSlug = new URL(request.url).searchParams.get("scope");
-      const orgParam = new URL(request.url).searchParams.get("org");
-      const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+      const orgSlug = new URL(request.url).searchParams.get("org");
+      const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
       await deleteSecret(org.orgId, userId, params.name);
 
       return {

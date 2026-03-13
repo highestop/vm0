@@ -46,7 +46,7 @@ describe("completeZeroOnboarding$", () => {
           },
         });
       }),
-      http.put("*/api/scopes/default-agent", () => {
+      http.put("*/api/orgs/default-agent", () => {
         return HttpResponse.json({ ok: true });
       }),
     );
@@ -92,7 +92,7 @@ describe("completeZeroOnboarding$", () => {
           },
         });
       }),
-      http.put("*/api/scopes/default-agent", async ({ request }) => {
+      http.put("*/api/orgs/default-agent", async ({ request }) => {
         defaultAgentBody = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({ ok: true });
       }),
@@ -119,7 +119,7 @@ describe("completeZeroOnboarding$", () => {
           },
         });
       }),
-      http.put("*/api/scopes/default-agent", () => {
+      http.put("*/api/orgs/default-agent", () => {
         return HttpResponse.json({ ok: true });
       }),
     );
@@ -186,7 +186,7 @@ describe("completeZeroOnboarding$", () => {
           },
         });
       }),
-      http.put("*/api/scopes/default-agent", () => {
+      http.put("*/api/orgs/default-agent", () => {
         return HttpResponse.json({ ok: true });
       }),
     );

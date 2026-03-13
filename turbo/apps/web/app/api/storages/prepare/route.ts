@@ -103,12 +103,11 @@ const router = tsr.router(storagesPrepareContract, {
     const { userId, orgId: tokenOrgId } = authCtx;
 
     // Resolve user's default org
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
+    const orgSlug = new URL(request.url).searchParams.get("org");
     const { org: runtimeOrg } = await resolveOrg(
       userId,
       orgSlug,
-      orgParam,
+      null,
       tokenOrgId,
     );
 

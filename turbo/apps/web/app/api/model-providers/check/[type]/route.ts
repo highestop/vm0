@@ -22,9 +22,8 @@ const router = tsr.router(modelProvidersCheckContract, {
     }
     const { userId, orgId: tokenOrgId } = authCtx;
 
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
-    const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+    const orgSlug = new URL(request.url).searchParams.get("org");
+    const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
     const result = await checkSecretExists(org.orgId, userId, params.type);
 
     return {

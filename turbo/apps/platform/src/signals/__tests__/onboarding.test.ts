@@ -21,7 +21,7 @@ const context = testContext();
 describe("startOnboarding$", () => {
   it("visit an org protected page without an org will redirect to the onboarding page", async () => {
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
     );
@@ -39,7 +39,7 @@ describe("startOnboarding$", () => {
 describe("needsOnboarding$", () => {
   it("should return true when no org exists", async () => {
     server.use(
-      http.get("/api/scope", () => {
+      http.get("/api/org", () => {
         return new HttpResponse(null, { status: 404 });
       }),
     );

@@ -446,9 +446,8 @@ const router = tsr.router(runsMainContract, {
 
     // Resolve org for variable/secret resolution.
     // The actual variable fetching happens in build-context.ts.
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
-    const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+    const orgSlug = new URL(request.url).searchParams.get("org");
+    const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
 
     // Delegate run creation, validation, and dispatch to createRun()
     try {

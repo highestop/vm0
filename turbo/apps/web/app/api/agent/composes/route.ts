@@ -21,7 +21,10 @@ import {
 import { getAuthContext } from "../../../../src/lib/auth/get-user-id";
 import { eq, and } from "drizzle-orm";
 import { computeComposeVersionId } from "../../../../src/lib/agent-compose/content-hash";
-import { resolveOrg } from "../../../../src/lib/org/resolve-org";
+import {
+  resolveOrg,
+  getOrgDataOrNull,
+} from "../../../../src/lib/org/resolve-org";
 import { getOrgBySlug } from "../../../../src/lib/org/org-cache-service";
 import { getUserEmail } from "../../../../src/lib/auth/get-user-email";
 import { canAccessCompose } from "../../../../src/lib/agent/permission-service";
@@ -44,12 +47,14 @@ const router = tsr.router(composesMainContract, {
 
     // Resolve org: for cross-org lookups (shared agents), skip membership
     // check and rely on canAccessCompose for authorization instead.
-    // isCrossOrgLookup is true when an explicit scope/org param is provided,
+    // isCrossOrgLookup is true when an explicit org param is provided,
     // which requires canAccessCompose authorization below.
-    const isCrossOrgLookup = Boolean(query.scope || query.org);
+    const isCrossOrgLookup = Boolean(query.org);
     let orgId: string;
-    if (query.scope) {
-      const orgData = await getOrgBySlug(query.scope);
+    if (query.org) {
+      // Try slug first, fall back to orgId (callers may pass either via ?org=)
+      const orgData =
+        (await getOrgBySlug(query.org)) ?? (await getOrgDataOrNull(query.org));
       if (!orgData) {
         return {
           status: 404 as const,
@@ -62,8 +67,6 @@ const router = tsr.router(composesMainContract, {
         };
       }
       orgId = orgData.orgId;
-    } else if (query.org) {
-      orgId = query.org;
     } else {
       const { org: resolvedOrg } = await resolveOrg(
         userId,

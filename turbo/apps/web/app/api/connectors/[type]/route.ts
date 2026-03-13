@@ -22,9 +22,8 @@ const router = tsr.router(connectorsByTypeContract, {
     }
     const { userId, orgId: tokenOrgId } = authCtx;
 
-    const orgSlug = new URL(request.url).searchParams.get("scope");
-    const orgParam = new URL(request.url).searchParams.get("org");
-    const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+    const orgSlug = new URL(request.url).searchParams.get("org");
+    const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
     const connector = await getConnector(org.orgId, userId, params.type);
 
     if (!connector) {
@@ -50,9 +49,8 @@ const router = tsr.router(connectorsByTypeContract, {
     const { userId, orgId: tokenOrgId } = authCtx;
 
     try {
-      const orgSlug = new URL(request.url).searchParams.get("scope");
-      const orgParam = new URL(request.url).searchParams.get("org");
-      const { org } = await resolveOrg(userId, orgSlug, orgParam, tokenOrgId);
+      const orgSlug = new URL(request.url).searchParams.get("org");
+      const { org } = await resolveOrg(userId, orgSlug, null, tokenOrgId);
       await deleteConnector(org.orgId, userId, params.type);
 
       return {

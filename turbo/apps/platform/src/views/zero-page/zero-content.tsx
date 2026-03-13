@@ -18,8 +18,9 @@ interface ZeroContentProps {
   onSendMessage?: (message: string) => void;
   onNavigateToActivity?: () => void;
   onNavigateToSchedule?: () => void;
-  onNavigateToJob?: () => void;
+  onNavigateToTeam?: () => void;
   onNavigateToChat?: () => void;
+  selectedAgentName?: string | null;
   onNavigateToMeet?: (tab?: string) => void;
   onBackFromSession?: () => void;
   zeroAvatarSrc?: string;
@@ -33,7 +34,7 @@ function getSectionTitles(
     chat: `Chat with ${agentName}`,
     meet: `Meet ${agentName}`,
     schedule: "Schedule",
-    job: `${agentName}'s team`,
+    team: `${agentName}'s team`,
     activity: "Activities",
     works: `Where ${agentName} works`,
     settings: "Settings",
@@ -47,8 +48,9 @@ export function ZeroContent({
   onSendMessage,
   onNavigateToActivity,
   onNavigateToSchedule,
-  onNavigateToJob,
+  onNavigateToTeam,
   onNavigateToChat,
+  selectedAgentName,
   onNavigateToMeet,
   onBackFromSession,
   zeroAvatarSrc = "/zero-avatar.png",
@@ -64,7 +66,7 @@ export function ZeroContent({
           zeroAvatarSrc={zeroAvatarSrc}
           onAvatarClick={onAvatarClick}
           onBack={onBackFromSession}
-          onNavigateToJob={onNavigateToJob}
+          onNavigateToTeam={onNavigateToTeam}
           onNavigateToSchedule={onNavigateToSchedule}
         />
       );
@@ -74,7 +76,7 @@ export function ZeroContent({
         onSendMessage={onSendMessage}
         onNavigateToActivity={onNavigateToActivity}
         onNavigateToSchedule={onNavigateToSchedule}
-        onNavigateToJob={onNavigateToJob}
+        onNavigateToTeam={onNavigateToTeam}
         onNavigateToMeet={onNavigateToMeet}
         zeroAvatarSrc={zeroAvatarSrc}
         onAvatarClick={onAvatarClick}
@@ -92,8 +94,13 @@ export function ZeroContent({
   if (sectionId === "schedule") {
     return <ZeroSchedulePage />;
   }
-  if (sectionId === "job") {
-    return <ZeroJobsPage onNavigateToChat={onNavigateToChat} />;
+  if (sectionId === "team") {
+    return (
+      <ZeroJobsPage
+        onNavigateToChat={onNavigateToChat}
+        selectedAgentName={selectedAgentName}
+      />
+    );
   }
   if (sectionId === "activity") {
     return <ZeroActivityPage />;
@@ -124,7 +131,7 @@ export function ZeroContent({
         <div className="mx-auto max-w-[900px]">
           <div className="zero-card p-6">
             <p className="text-sm text-muted-foreground">
-              Content for “{title}” will appear here.
+              Content for &quot;{title}&quot; will appear here.
             </p>
           </div>
         </div>

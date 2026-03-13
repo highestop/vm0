@@ -178,7 +178,11 @@ function useSessionLifecycle(
   return { recentSessions, recentSessionsLoading, recentSessionsError };
 }
 
-export function ZeroAppShell() {
+interface ZeroAppShellProps {
+  initialJobAgent?: string | null;
+}
+
+export function ZeroAppShell({ initialJobAgent }: ZeroAppShellProps) {
   const userLoadable = useLoadable(user$);
   const isLoggedIn =
     userLoadable.state === "hasData" && userLoadable.data !== undefined;
@@ -346,9 +350,10 @@ export function ZeroAppShell() {
             sectionId={activeId}
             inSession={inSession}
             onSendMessage={handleSendFromDemo}
+            selectedAgentName={initialJobAgent}
             onNavigateToActivity={() => setActiveId("activity")}
             onNavigateToSchedule={() => setActiveId("schedule")}
-            onNavigateToJob={() => setActiveId("job")}
+            onNavigateToTeam={() => setActiveId("team")}
             onNavigateToChat={() => setActiveId("chat")}
             onNavigateToMeet={(section) => {
               setActiveId("meet");

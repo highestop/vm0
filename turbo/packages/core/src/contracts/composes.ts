@@ -319,6 +319,7 @@ export const composesVersionsContract = c.router({
  * Compose list item schema (used in list response)
  */
 const composeListItemSchema = z.object({
+  id: z.string(),
   name: z.string(),
   displayName: z.string().nullable().optional(),
   headVersionId: z.string().nullable(),

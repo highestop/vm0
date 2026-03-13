@@ -1,5 +1,6 @@
 interface AgentMetadata {
   displayName?: string;
+  description?: string;
   sound?: string;
 }
 
@@ -86,6 +87,10 @@ function buildProfileParagraph(metadata: AgentMetadata): string | null {
 
   if (metadata.displayName) {
     parts.push(`Your name is ${metadata.displayName}.`);
+  }
+
+  if (metadata.description) {
+    parts.push(metadata.description);
   }
 
   if (metadata.sound) {

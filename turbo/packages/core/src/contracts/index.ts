@@ -474,3 +474,8 @@ export {
   type OnboardingStatusContract,
   type OnboardingStatusResponse,
 } from "./onboarding";
+export {
+  skillsResolveContract,
+  skillFrontmatterSchema,
+  type SkillsResolveContract,
+} from "./skills";

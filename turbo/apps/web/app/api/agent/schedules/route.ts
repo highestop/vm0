@@ -9,12 +9,12 @@ import { getAuthContext } from "../../../../src/lib/auth/get-user-id";
 import { deploySchedule, listSchedules } from "../../../../src/lib/schedule";
 import { logger } from "../../../../src/lib/logger";
 import { isNotFound, isBadRequest } from "../../../../src/lib/errors";
-import { resolveOrgId } from "../../../../src/lib/org/org-member-service";
+import { resolveOrg } from "../../../../src/lib/org/resolve-org";
 
 const log = logger("api:schedules");
 
 const router = tsr.router(schedulesMainContract, {
-  deploy: async ({ body, headers }) => {
+  deploy: async ({ body, headers }, { request }) => {
     initServices();
 
     const authCtx = await getAuthContext(headers.authorization);
@@ -33,7 +33,10 @@ const router = tsr.router(schedulesMainContract, {
     try {
       // Note: vars and secrets are no longer accepted via API
       // They must be managed via platform tables (vm0 secret set, vm0 var set)
-      const orgId = await resolveOrgId(userId);
+      const orgSlug = new URL(request.url).searchParams.get("org");
+      const {
+        org: { orgId },
+      } = await resolveOrg(userId, orgSlug);
 
       const result = await deploySchedule(userId, orgId, {
         name: body.name,

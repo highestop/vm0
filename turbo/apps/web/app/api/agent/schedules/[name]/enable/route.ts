@@ -5,7 +5,7 @@ import { getAuthContext } from "../../../../../../src/lib/auth/get-user-id";
 import { enableSchedule } from "../../../../../../src/lib/schedule";
 import { logger } from "../../../../../../src/lib/logger";
 import { isNotFound, isSchedulePast } from "../../../../../../src/lib/errors";
-import { resolveOrgId } from "../../../../../../src/lib/org/org-member-service";
+import { resolveOrg } from "../../../../../../src/lib/org/resolve-org";
 
 const log = logger("api:schedules:enable");
 
@@ -48,7 +48,10 @@ export async function POST(
   }
   const body = parseResult.data;
 
-  const orgId = await resolveOrgId(userId);
+  const orgSlug = new URL(request.url).searchParams.get("org");
+  const {
+    org: { orgId },
+  } = await resolveOrg(userId, orgSlug);
 
   log.debug(`Enabling schedule ${name} for compose ${body.composeId}`);
 

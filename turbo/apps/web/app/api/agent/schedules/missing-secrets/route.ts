@@ -9,7 +9,7 @@ import {
   getUserAgents,
   batchFetchVersionContents,
 } from "../../../../../src/lib/agent/get-user-agents";
-import { getDefaultOrgByUserId } from "../../../../../src/lib/org/org-service";
+import { resolveOrgOrNull } from "../../../../../src/lib/org/resolve-org";
 
 const log = logger("api:agents:missing-secrets");
 
@@ -51,7 +51,8 @@ export async function GET(request: Request) {
   }
 
   // Get user's org to query configured secrets
-  const runtimeOrg = await getDefaultOrgByUserId(userId);
+  const orgSlug = new URL(request.url).searchParams.get("org");
+  const runtimeOrg = await resolveOrgOrNull(userId, orgSlug);
   if (!runtimeOrg) {
     return NextResponse.json({ agents: [] });
   }

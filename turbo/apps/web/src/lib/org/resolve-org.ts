@@ -1,8 +1,9 @@
-import { auth } from "@clerk/nextjs/server";
-import { forbidden, badRequest, notFound } from "../errors";
+import { auth, clerkClient } from "@clerk/nextjs/server";
+import { eq, desc } from "drizzle-orm";
+import { forbidden, badRequest, notFound, isNotFound } from "../errors";
 import { logger } from "../logger";
+import { orgMembersCache } from "../../db/schema/org-members-cache";
 import { getOrgBySlug, getOrgData } from "./org-cache-service";
-import { getDefaultOrg } from "./org-member-service";
 import { verifyMembershipCached } from "./org-membership-cache";
 
 import type { OrgRole } from "@vm0/core";
@@ -10,22 +11,44 @@ import type { OrgRole } from "@vm0/core";
 const log = logger("org:resolve");
 
 /**
+ * Returns true when the error represents a "resource not found" condition
+ * that should be treated as null rather than re-thrown.
+ *
+ * Covers:
+ * - Our own NotFoundError (from errors.ts)
+ * - Clerk API 404 responses (ClerkAPIResponseError with status 404)
+ * - Missing-slug guard in getOrgData ("has no slug")
+ */
+function isOrgNotFoundError(error: unknown): boolean {
+  if (isNotFound(error)) return true;
+  if (error instanceof Error) {
+    // Clerk API 404 responses (ClerkAPIResponseError with numeric status)
+    const statusHolder = error as { status?: unknown };
+    if (statusHolder.status === 404) return true;
+    // Clerk SDK org-not-found rejections: "Organization <id> not found"
+    // Also covers missing-slug guard: "Clerk organization <id> has no slug"
+    if (/organization\b.*\b(not found|has no slug)/i.test(error.message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Wrapper around getOrgData that returns null instead of throwing when the
  * org cannot be resolved.
  *
- * getOrgData throws when Clerk's getOrganization rejects (org not found)
- * or the fetched org has no slug.  Both are "not-found" semantics that
- * callers treat as a null result.  Database errors are unlikely to surface
- * here because getOrgBySlug (called first in the resolution chain) hits the
- * same DB — if the database were down, it would fail there first.
+ * Only swallows not-found errors (our NotFoundError, Clerk API 404,
+ * missing slug). Unexpected errors (DB failures, timeouts) propagate.
  */
 export async function getOrgDataOrNull(
   orgId: string,
 ): Promise<{ orgId: string; slug: string; tier: string } | null> {
   try {
     return await getOrgData(orgId);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isOrgNotFoundError(error)) return null;
+    throw error;
   }
 }
 
@@ -43,7 +66,7 @@ export interface ResolvedOrg {
  * Minimal member object returned by org resolution.
  * Contains only the fields used downstream (primarily `role` for permission checks).
  */
-export type ResolvedMember = {
+type ResolvedMember = {
   role: OrgRole;
   userId: string;
 };
@@ -112,8 +135,9 @@ function applyJwtTier(
  *
  * Resolution order:
  * 1. orgSlug (?org=<slug> query param) -> org_cache lookup, verify membership
- * 2. orgId (from JWT session token) -> org_cache lookup
- * 3. Fallback -> user's default org via Clerk API
+ * 2. orgId (from JWT session token) -> org_cache lookup, verify membership
+ * 3. org_members_cache (1min TTL) -> org_cache lookup, verify membership
+ * 4. Clerk API slow path (last resort) -> org_cache lookup
  *
  * When the resolved org matches the JWT's active org, `tier` is read from
  * sessionClaims.org_tier (falling back to org_cache value if missing).
@@ -144,19 +168,82 @@ export async function resolveOrg(
       const member = await verifyMembership(orgData, userId, authResult);
       return { org: applyJwtTier(orgData, authResult), member };
     } catch (error) {
-      // Re-throw forbidden errors (user is not a member)
-      if (error instanceof Error && error.message.includes("not a member")) {
+      // Only fall through to tier 3/4 for not-found errors (org doesn't exist).
+      // Re-throw everything else (forbidden, DB errors, timeouts).
+      if (!isOrgNotFoundError(error)) {
         throw error;
       }
-      // Org not found in Clerk — fall through to default org
       log.debug("orgId lookup failed, falling through to default", {
         orgId: effectiveOrgId,
       });
     }
   }
 
-  // 3. Default org fallback
-  return getDefaultOrg(userId);
+  // 3. org_members_cache fallback (1min TTL)
+  const [cached] = await globalThis.services.db
+    .select()
+    .from(orgMembersCache)
+    .where(eq(orgMembersCache.userId, userId))
+    .orderBy(desc(orgMembersCache.cachedAt))
+    .limit(1);
+
+  if (cached && Date.now() - cached.cachedAt.getTime() < 60_000) {
+    const orgData = await getOrgDataOrNull(cached.orgId);
+    if (orgData) {
+      const member = await verifyMembership(orgData, userId, authResult);
+      return { org: applyJwtTier(orgData, authResult), member };
+    }
+  }
+
+  // 4. Clerk API slow path (last resort)
+  const client = await clerkClient();
+  const memberships = await client.users.getOrganizationMembershipList({
+    userId,
+  });
+
+  // Priority: admin orgs first, then any org
+  const adminMembership = memberships.data.find((m) => m.role === "org:admin");
+  const candidates = adminMembership
+    ? [
+        adminMembership,
+        ...memberships.data.filter((m) => m !== adminMembership),
+      ]
+    : memberships.data;
+
+  for (const membership of candidates) {
+    const mOrgId = membership.organization.id;
+    const orgData = await getOrgDataOrNull(mOrgId);
+    if (orgData) {
+      return {
+        org: applyJwtTier(orgData, authResult),
+        member: {
+          role: mapOrgRole(membership.role),
+          userId,
+        },
+      };
+    }
+  }
+
+  throw notFound("No org found for user");
+}
+
+/**
+ * Null-safe org resolution. Returns null if no org found, instead of throwing.
+ *
+ * Used by handlers that operate outside request context
+ * (Slack, Telegram, email) where missing org is expected.
+ */
+export async function resolveOrgOrNull(
+  userId: string,
+  orgSlug?: string | null,
+): Promise<ResolvedOrg | null> {
+  try {
+    const { org } = await resolveOrg(userId, orgSlug);
+    return org;
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
 }
 
 /**

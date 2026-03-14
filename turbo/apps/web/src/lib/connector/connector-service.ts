@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import {
   CONNECTOR_TYPES,
   type ConnectorType,
@@ -516,6 +516,43 @@ export async function refreshConnectorAccessToken(
     log.warn(`${connectorType} token refresh failed: ${message}`);
     return null;
   }
+}
+
+/**
+ * Get tokenExpiresAt for connectors matching the given types.
+ * Returns a map of connector type → expiry timestamp (epoch seconds), or null if non-expiring.
+ */
+export async function getConnectorExpiry(
+  orgId: string,
+  userId: string,
+  connectorTypes: string[],
+): Promise<Map<string, number | null>> {
+  const result = new Map<string, number | null>();
+  if (connectorTypes.length === 0) return result;
+
+  const rows = await globalThis.services.db
+    .select({
+      type: connectors.type,
+      tokenExpiresAt: connectors.tokenExpiresAt,
+    })
+    .from(connectors)
+    .where(
+      and(
+        eq(connectors.orgId, orgId),
+        eq(connectors.userId, userId),
+        inArray(connectors.type, connectorTypes),
+      ),
+    );
+
+  for (const row of rows) {
+    result.set(
+      row.type,
+      row.tokenExpiresAt
+        ? Math.floor(row.tokenExpiresAt.getTime() / 1000)
+        : null,
+    );
+  }
+  return result;
 }
 
 /**

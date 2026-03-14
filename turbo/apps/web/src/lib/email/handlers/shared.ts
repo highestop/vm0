@@ -31,7 +31,7 @@ interface EmailTriggerAddress {
  * - "reply+token@vm0.bot" → null (reply address, not trigger)
  * - "invalid@vm0.bot" → null (no plus sign)
  */
-export function parseEmailTriggerAddress(
+function parseEmailTriggerAddress(
   toAddress: string,
 ): EmailTriggerAddress | null {
   // Match: org+agent@domain (case-insensitive)
@@ -61,13 +61,93 @@ export function parseEmailTriggerAddress(
  * - "reply+token@vm0.bot" → null (has plus sign)
  * - "@vm0.bot" → null (empty local part)
  */
-export function parseAgentOnlyAddress(toAddress: string): string | null {
+function parseAgentOnlyAddress(toAddress: string): string | null {
   if (toAddress.includes("+")) return null;
 
   const match = toAddress.match(/^([a-z0-9][a-z0-9-]*)@/i);
   if (!match?.[1]) return null;
 
   return match[1].toLowerCase();
+}
+
+/**
+ * Parsed inbound email address with separate runtime org and agent org.
+ *
+ * - runtimeOrg: explicit runtime org slug, or null (resolve from user default)
+ * - agentOrg: explicit agent org slug, or null (same as runtime org)
+ * - agentName: the agent name
+ */
+interface ParsedEmailAddress {
+  runtimeOrg: string | null;
+  agentOrg: string | null;
+  agentName: string;
+}
+
+// Slug segment: starts with alphanumeric, may contain hyphens
+const SLUG = "[a-z0-9][a-z0-9-]*";
+
+// runtimeorg+agentorg/agentname@domain
+const RE_FULL = new RegExp(`^(${SLUG})\\+(${SLUG})/(${SLUG})@`, "i");
+// agentorg/agentname@domain
+const RE_ORG_SLASH_AGENT = new RegExp(`^(${SLUG})/(${SLUG})@`, "i");
+
+/**
+ * Unified inbound email address parser.
+ *
+ * Supports four formats (tried in order of specificity):
+ * 1. runtimeorg+agentorg/agentname@domain  → explicit runtime + agent org
+ * 2. agentorg/agentname@domain             → agent org explicit, runtime from user default
+ * 3. org+agent@domain (legacy)             → agentOrg=org, runtime from user default
+ * 4. agentname@domain                      → both orgs from user default
+ *
+ * Returns null for reply+token addresses and unrecognized formats.
+ */
+export function parseInboundEmailAddress(
+  toAddress: string,
+): ParsedEmailAddress | null {
+  if (isReplyAddress(toAddress)) return null;
+
+  // 1. runtimeorg+agentorg/agentname@domain
+  const fullMatch = toAddress.match(RE_FULL);
+  if (fullMatch?.[1] && fullMatch[2] && fullMatch[3]) {
+    return {
+      runtimeOrg: fullMatch[1].toLowerCase(),
+      agentOrg: fullMatch[2].toLowerCase(),
+      agentName: fullMatch[3].toLowerCase(),
+    };
+  }
+
+  // 2. agentorg/agentname@domain
+  const slashMatch = toAddress.match(RE_ORG_SLASH_AGENT);
+  if (slashMatch?.[1] && slashMatch[2]) {
+    return {
+      runtimeOrg: null,
+      agentOrg: slashMatch[1].toLowerCase(),
+      agentName: slashMatch[2].toLowerCase(),
+    };
+  }
+
+  // 3. org+agent@domain (legacy)
+  const triggerAddr = parseEmailTriggerAddress(toAddress);
+  if (triggerAddr) {
+    return {
+      runtimeOrg: null,
+      agentOrg: triggerAddr.org,
+      agentName: triggerAddr.agent,
+    };
+  }
+
+  // 4. agentname@domain
+  const agentOnly = parseAgentOnlyAddress(toAddress);
+  if (agentOnly) {
+    return {
+      runtimeOrg: null,
+      agentOrg: null,
+      agentName: agentOnly,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -426,6 +506,7 @@ export async function saveEmailThreadSession(opts: {
   agentSessionId: string;
   lastEmailMessageId: string | null;
   replyToToken: string;
+  orgId?: string;
 }): Promise<void> {
   await globalThis.services.db.insert(emailThreadSessions).values({
     userId: opts.userId,
@@ -433,6 +514,7 @@ export async function saveEmailThreadSession(opts: {
     agentSessionId: opts.agentSessionId,
     lastEmailMessageId: opts.lastEmailMessageId,
     replyToToken: opts.replyToToken,
+    orgId: opts.orgId ?? null,
   });
 }
 

@@ -489,6 +489,20 @@ export async function refreshConnectorAccessToken(
       );
     }
 
+    // Update tokenExpiresAt so subsequent expiry checks are accurate.
+    // Fallback to 1 hour — all providers without expires_in (e.g. Notion) have ~1h tokens.
+    const expiresAt = new Date(Date.now() + (result.expiresIn ?? 3600) * 1000);
+    await globalThis.services.db
+      .update(connectors)
+      .set({ tokenExpiresAt: expiresAt, updatedAt: new Date() })
+      .where(
+        and(
+          eq(connectors.orgId, orgId),
+          eq(connectors.userId, userId),
+          eq(connectors.type, connectorType),
+        ),
+      );
+
     // Update in-memory secrets map so subsequent mapping uses fresh token
     connectorSecrets[accessTokenSecret] = result.accessToken;
     if (result.refreshToken) {

@@ -81,6 +81,19 @@ describe("createRun()", () => {
       expect(run!.lastHeartbeatAt).not.toBeNull();
     });
 
+    it("should refresh lastHeartbeatAt during pipeline", async () => {
+      const result = await createRun(baseParams());
+
+      const run = await findTestRunRecord(result.runId);
+
+      // The mid-pipeline heartbeat UPDATE runs after generateSandboxToken +
+      // buildContext, so lastHeartbeatAt must be strictly later than
+      // createdAt (which is set by the initial INSERT's defaultNow()).
+      expect(run!.lastHeartbeatAt!.getTime()).toBeGreaterThan(
+        run!.createdAt.getTime(),
+      );
+    });
+
     it("should store vars when provided", async () => {
       const vars = { MY_VAR: "value1", OTHER_VAR: "value2" };
       const result = await createRun(baseParams({ vars }));

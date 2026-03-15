@@ -2,7 +2,10 @@ import { createHandler, tsr } from "../../../../src/lib/ts-rest-handler";
 import { cronCleanupSandboxesContract, createErrorResponse } from "@vm0/core";
 import { initServices } from "../../../../src/lib/init-services";
 import { agentRuns } from "../../../../src/db/schema/agent-run";
-import { transitionRunStatus } from "../../../../src/lib/run/run-status";
+import {
+  transitionRunStatus,
+  dispatchTerminalSideEffects,
+} from "../../../../src/lib/run/run-status";
 import {
   agentComposeVersions,
   agentComposes,
@@ -14,6 +17,7 @@ import { deleteS3Objects } from "../../../../src/lib/s3/s3-client";
 import {
   cleanupExpiredQueueEntries,
   drainStaleQueues,
+  drainOrgQueue,
 } from "../../../../src/lib/run/run-queue-service";
 import { executeQueuedRun } from "../../../../src/lib/run/run-service";
 import { logger } from "../../../../src/lib/logger";
@@ -143,6 +147,7 @@ const router = tsr.router(cronCleanupSandboxesContract, {
     const staleRuns = await globalThis.services.db
       .select({
         id: agentRuns.id,
+        orgId: agentRuns.orgId,
         status: agentRuns.status,
         sandboxId: agentRuns.sandboxId,
         lastHeartbeatAt: agentRuns.lastHeartbeatAt,
@@ -225,6 +230,14 @@ const router = tsr.router(cronCleanupSandboxesContract, {
             log.debug(`Run ${run.id} already transitioned, skipping timeout`);
             continue;
           }
+
+          // Dispatch callbacks (e.g., loop schedule advancement) and drain queue
+          await dispatchTerminalSideEffects(
+            run.id,
+            "timeout",
+            timeoutReason,
+            () => drainOrgQueue(run.orgId, executeQueuedRun),
+          );
 
           const isDebug =
             run.composeName?.startsWith(DEBUG_COMPOSE_PREFIX) ?? false;

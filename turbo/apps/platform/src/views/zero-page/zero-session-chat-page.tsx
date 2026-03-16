@@ -1,6 +1,6 @@
 import type { KeyboardEvent, ChangeEvent, MouseEvent } from "react";
 import { useCCState } from "ccstate-react/experimental";
-import { useGet, useSet, useLoadable } from "ccstate-react";
+import { useGet, useSet, useLoadable, useLastLoadable } from "ccstate-react";
 import {
   IconSend,
   IconPaperclip,
@@ -12,7 +12,17 @@ import {
   IconX,
   IconPhoto,
 } from "@tabler/icons-react";
-import { Button, Card, CardContent, Skeleton } from "@vm0/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  Skeleton,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@vm0/ui";
 import { Markdown } from "../components/markdown.tsx";
 import { detach, Reason } from "../../signals/utils.ts";
 import {
@@ -33,7 +43,9 @@ import {
   uploadZeroAttachment$,
   removeZeroAttachment$,
   type ZeroChatMessage,
+  zeroChatRunSummaries$,
 } from "../../signals/zero-page/zero-chat.ts";
+import { useModelSelection } from "./zero-model-preference.ts";
 
 // ---------------------------------------------------------------------------
 // ZeroSessionChatPage — real conversation backed by agent runs
@@ -45,6 +57,7 @@ interface ZeroSessionChatPageProps {
   onBack?: () => void;
   onNavigateToTeam?: () => void;
   onNavigateToSchedule?: () => void;
+  chatAgentName?: string;
 }
 
 export function ZeroSessionChatPage({
@@ -53,10 +66,12 @@ export function ZeroSessionChatPage({
   onBack,
   onNavigateToTeam,
   onNavigateToSchedule,
+  chatAgentName,
 }: ZeroSessionChatPageProps) {
   const agentNameLoadable = useLoadable(agentDisplayName$);
-  const agentName =
+  const defaultAgentName =
     agentNameLoadable.state === "hasData" ? agentNameLoadable.data : "Zero";
+  const agentName = chatAgentName ?? defaultAgentName;
   const messages = useGet(zeroChatMessages$);
   const sending = useGet(zeroChatSending$);
   const sessionError = useGet(zeroSessionError$);
@@ -71,6 +86,10 @@ export function ZeroSessionChatPage({
   const fileInputEl$ = useCCState<HTMLInputElement | null>(null);
   const fileInputEl = useGet(fileInputEl$);
   const setFileInputEl = useSet(fileInputEl$);
+
+  // Model provider selector (shared logic)
+  const { modelOptions, selectedModel, setSelectedModel, persistSelection } =
+    useModelSelection(agentName);
 
   const messagesEndEl$ = useCCState<HTMLDivElement | null>(null);
   const messagesEndEl = useGet(messagesEndEl$);
@@ -89,11 +108,19 @@ export function ZeroSessionChatPage({
       return;
     }
     clearInput();
-    detach(send(trimmed), Reason.DomCallback);
+    persistSelection();
+    const opts =
+      selectedModel !== "default"
+        ? { modelProvider: selectedModel }
+        : undefined;
+    detach(send(trimmed, opts), Reason.DomCallback);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.nativeEvent.isComposing) {
+      return;
+    }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
     }
@@ -245,19 +272,40 @@ export function ZeroSessionChatPage({
                       <IconPaperclip size={18} stroke={1.5} />
                     </button>
                   </div>
-                  <Button
-                    size="sm"
-                    className="rounded-lg h-9 w-9 p-0 shrink-0"
-                    onClick={handleSend}
-                    disabled={!input.trim() || sending}
-                    aria-label="Send"
-                  >
-                    {sending ? (
-                      <IconLoader2 size={16} className="animate-spin" />
-                    ) : (
-                      <IconSend size={16} stroke={2} />
-                    )}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={selectedModel}
+                      onValueChange={setSelectedModel}
+                    >
+                      <SelectTrigger className="h-9 min-w-[140px] rounded-lg border-border bg-transparent text-sm text-foreground">
+                        <SelectValue placeholder="Model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelOptions.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className="text-sm"
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm"
+                      className="rounded-lg h-9 w-9 p-0 shrink-0"
+                      onClick={handleSend}
+                      disabled={!input.trim() || sending}
+                      aria-label="Send"
+                    >
+                      {sending ? (
+                        <IconLoader2 size={16} className="animate-spin" />
+                      ) : (
+                        <IconSend size={16} stroke={2} />
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -468,6 +516,30 @@ function ImageLightbox({ url, onClose }: { url: string; onClose: () => void }) {
   );
 }
 
+function RunActivityLine() {
+  const summariesLoadable = useLastLoadable(zeroChatRunSummaries$);
+  const summaries =
+    summariesLoadable.state === "hasData" ? summariesLoadable.data : [];
+  const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <IconLoader2
+        size={14}
+        className="animate-spin text-muted-foreground shrink-0"
+      />
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <p
+          key={latest ?? "thinking"}
+          className="text-muted-foreground truncate animate-in fade-in slide-in-from-bottom-1 duration-300"
+        >
+          {latest ?? "Thinking..."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 interface AssistantMessageProps {
   message: ZeroChatMessage;
   zeroAvatarSrc: string;
@@ -520,18 +592,12 @@ function AssistantMessage({
     );
   }
 
-  // Thinking / loading state
+  // Thinking / loading state — show live run activity
   return (
     <div className="grid grid-cols-[48px_1fr] gap-3 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
       {avatarButton}
-      <div className="zero-chat-bubble-assistant rounded-xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0 break-words overflow-hidden">
-        <div className="flex items-center gap-2">
-          <IconLoader2
-            size={14}
-            className="animate-spin text-muted-foreground"
-          />
-          <span className="text-muted-foreground">Thinking...</span>
-        </div>
+      <div className="zero-chat-bubble-assistant rounded-xl border backdrop-blur-sm px-4 py-4 text-sm leading-relaxed min-w-0 overflow-hidden">
+        <RunActivityLine />
       </div>
     </div>
   );

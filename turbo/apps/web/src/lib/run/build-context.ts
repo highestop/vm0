@@ -10,6 +10,7 @@ import {
   getConnectorEnvironmentMapping,
   connectorTypeSchema,
   MODEL_PROVIDER_TYPES,
+  VALID_CAPABILITIES,
   type ExperimentalServices,
   type ConnectorType,
   type ModelProviderType,
@@ -801,6 +802,23 @@ function buildExperimentalServices(
 }
 
 /**
+ * Extract experimental_capabilities from the first agent in compose.
+ * Returns undefined if not present or empty.
+ */
+function buildExperimentalCapabilities(
+  agentCompose: unknown,
+): (typeof VALID_CAPABILITIES)[number][] | undefined {
+  const compose = agentCompose as AgentComposeYaml | undefined;
+  if (!compose?.agents) return undefined;
+
+  const firstAgent = Object.values(compose.agents)[0];
+  const capabilities = firstAgent?.experimental_capabilities;
+  if (!capabilities || capabilities.length === 0) return undefined;
+
+  return [...capabilities];
+}
+
+/**
  * Build unified execution context from various parameter sources.
  * Supports: new run, checkpoint resume, session continue.
  *
@@ -910,6 +928,9 @@ export async function buildExecutionContext(
   const experimentalServices =
     buildExperimentalServices(agentCompose) ?? undefined;
 
+  // Build experimental capabilities list from compose
+  const experimentalCapabilities = buildExperimentalCapabilities(agentCompose);
+
   // Build final execution context
   return {
     runtimeOrg,
@@ -930,6 +951,7 @@ export async function buildExecutionContext(
       environment,
       userTimezone,
       experimentalServices,
+      experimentalCapabilities,
       resumeSession,
       resumeArtifact,
       // Metadata for vm0_start event

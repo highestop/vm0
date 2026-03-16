@@ -457,6 +457,8 @@ export {
   type UserPreferencesContract,
   type UserPreferencesResponse,
   type UpdateUserPreferencesRequest,
+  sendModeSchema,
+  type SendMode,
 } from "./user-preferences";
 export {
   orgListContract,

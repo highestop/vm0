@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ChangeEvent, MouseEvent } from "react";
+import type { ChangeEvent, MouseEvent } from "react";
 import { useCCState } from "ccstate-react/experimental";
 import { useGet, useSet, useLoadable, useLastLoadable } from "ccstate-react";
 import {
@@ -48,6 +48,7 @@ import {
   zeroChatQueuePosition$,
 } from "../../signals/zero-page/zero-chat.ts";
 import { useModelSelection } from "./zero-model-preference.ts";
+import { useSendKeyHandler } from "./zero-send-key.ts";
 
 // ---------------------------------------------------------------------------
 // ZeroSessionChatPage — real conversation backed by agent runs
@@ -118,15 +119,7 @@ export function ZeroSessionChatPage({
     detach(send(trimmed, opts), Reason.DomCallback);
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing) {
-      return;
-    }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const handleKeyDown = useSendKeyHandler(handleSend);
 
   const handleFileSelect = () => {
     fileInputEl?.click();

@@ -6,6 +6,7 @@ import {
   createTestRun,
   completeTestRun,
   failTestRun,
+  createOrphanTestRun,
 } from "../../../../../../src/__tests__/api-test-helpers";
 import {
   testContext,
@@ -164,5 +165,23 @@ describe("GET /api/platform/logs/[id]", () => {
     expect(response.status).toBe(200);
     expect(data.status).toBe("failed");
     expect(data.error).toBeDefined();
+  });
+
+  it("should return run details when compose version has been deleted", async () => {
+    const { runId } = await createOrphanTestRun(user.userId, user.orgId, {
+      prompt: "Orphan run prompt",
+    });
+
+    const request = createTestRequest(
+      `http://localhost:3000/api/platform/logs/${runId}`,
+    );
+    const response = await GET(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.id).toBe(runId);
+    expect(data.prompt).toBe("Orphan run prompt");
+    expect(data.agentName).toBe("unknown");
+    expect(data.framework).toBeNull();
   });
 });

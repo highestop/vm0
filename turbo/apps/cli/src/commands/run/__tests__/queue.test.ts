@@ -39,15 +39,13 @@ describe("run queue command", () => {
               agentName: "data-processor",
               userEmail: "alice@example.com",
               createdAt: new Date(Date.now() - 120000).toISOString(),
-              isOwner: true,
               runId: "run-uuid-1",
             },
             {
               position: 2,
-              agentName: "my-agent",
-              userEmail: "bob@example.com",
+              agentName: null,
+              userEmail: null,
               createdAt: new Date(Date.now() - 60000).toISOString(),
-              isOwner: false,
               runId: null,
             },
           ],
@@ -65,8 +63,9 @@ describe("run queue command", () => {
     expect(logCalls).toContain("USER");
     expect(logCalls).toContain("data-processor");
     expect(logCalls).toContain("alice@example.com");
-    expect(logCalls).toContain("my-agent");
-    expect(logCalls).toContain("bob@example.com");
+    // Other user's entries are masked
+    expect(logCalls).toContain("-");
+    expect(logCalls).not.toContain("bob@example.com");
   });
 
   it("marks own entries with you indicator", async () => {
@@ -80,15 +79,13 @@ describe("run queue command", () => {
               agentName: "my-agent",
               userEmail: "alice@example.com",
               createdAt: new Date().toISOString(),
-              isOwner: true,
               runId: "run-uuid-1",
             },
             {
               position: 2,
-              agentName: "other-agent",
-              userEmail: "bob@example.com",
+              agentName: null,
+              userEmail: null,
               createdAt: new Date().toISOString(),
-              isOwner: false,
               runId: null,
             },
           ],
@@ -156,7 +153,6 @@ describe("run queue command", () => {
               agentName: "test-agent",
               userEmail: "user@example.com",
               createdAt: new Date().toISOString(),
-              isOwner: true,
               runId: "run-1",
             },
           ],

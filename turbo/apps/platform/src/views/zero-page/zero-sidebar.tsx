@@ -69,23 +69,46 @@ import {
 } from "../../signals/zero-page/zero-pinned-agents.ts";
 import { VM0ClerkProvider } from "../clerk/clerk-provider.tsx";
 import { ClerkOrgSwitcher } from "./clerk-org-switcher.tsx";
+import { agentAvatarOverrides$ } from "../../signals/zero-page/zero-agent-avatars.ts";
 
 /** Max pinned sub-agents (default agent counts as 1, total slots = 5). */
 const MAX_PINNED = 4;
 
-const AGENT_AVATARS = [
+export const AGENT_AVATARS = [
   "/avatars/avatar-1.png",
   "/avatars/avatar-2.png",
   "/avatars/avatar-3.png",
   "/avatars/avatar-4.png",
 ] as const;
 
-export function getAgentAvatar(name: string): string {
+function getAgentAvatar(name: string): string {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = (hash * 31 + name.charCodeAt(i)) | 0;
   }
   return AGENT_AVATARS[Math.abs(hash) % AGENT_AVATARS.length];
+}
+
+/**
+ * Reactive hook that returns the agent avatar, respecting any user override.
+ */
+export function useAgentAvatar(name: string): string {
+  const overrides = useGet(agentAvatarOverrides$);
+  return overrides[name] ?? getAgentAvatar(name);
+}
+
+/** Reactive avatar image that respects user overrides. */
+function AgentAvatarImg({
+  name,
+  alt,
+  className,
+}: {
+  name: string;
+  alt: string;
+  className: string;
+}) {
+  const src = useAgentAvatar(name);
+  return <img src={src} alt={alt} className={className} />;
 }
 
 export interface SubagentInfo {
@@ -553,8 +576,8 @@ function SortablePinnedAgent({
       >
         <IconGripVertical size={14} />
       </button>
-      <img
-        src={getAgentAvatar(agent.name)}
+      <AgentAvatarImg
+        name={agent.name}
         alt={agent.displayName ?? agent.name}
         className="h-8 w-8 shrink-0 rounded-lg object-cover object-top"
       />
@@ -704,8 +727,8 @@ function ManagePinnedAgentsDialog({
                   key={agent.id}
                   className="flex items-center gap-2 px-1 py-2 rounded-lg hover:bg-muted/50 transition-colors"
                 >
-                  <img
-                    src={getAgentAvatar(agent.name)}
+                  <AgentAvatarImg
+                    name={agent.name}
                     alt={agent.displayName ?? agent.name}
                     className="h-8 w-8 shrink-0 rounded-lg object-cover object-top opacity-60"
                   />
@@ -976,8 +999,8 @@ export function ZeroSidebar({
                           }`}
                           onClick={() => onNewChat?.(agent.id)}
                         >
-                          <img
-                            src={getAgentAvatar(agent.name)}
+                          <AgentAvatarImg
+                            name={agent.name}
                             alt={agent.displayName ?? agent.name}
                             className="h-full w-full object-cover object-top"
                           />

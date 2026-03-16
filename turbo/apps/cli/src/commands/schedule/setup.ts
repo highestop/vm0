@@ -139,6 +139,8 @@ interface SetupOptions {
   prompt?: string;
   artifactName: string;
   enable?: boolean;
+  notifyEmail?: boolean;
+  notifySlack?: boolean;
 }
 
 interface ExistingScheduleDefaults {
@@ -160,6 +162,8 @@ interface ScheduleListItem {
   vars?: Record<string, string> | null;
   secretNames?: string[] | null;
   enabled?: boolean;
+  notifyEmail?: boolean;
+  notifySlack?: boolean;
 }
 
 /**
@@ -394,6 +398,48 @@ async function gatherPromptText(
 }
 
 /**
+ * Gather notification preferences from options or interactive prompts
+ */
+async function gatherNotificationPreferences(
+  optionNotifyEmail: boolean | undefined,
+  optionNotifySlack: boolean | undefined,
+  existingSchedule: ScheduleListItem | undefined,
+): Promise<{ notifyEmail?: boolean; notifySlack?: boolean }> {
+  // If flags were explicitly provided, use them
+  if (optionNotifyEmail !== undefined && optionNotifySlack !== undefined) {
+    return {
+      notifyEmail: optionNotifyEmail,
+      notifySlack: optionNotifySlack,
+    };
+  }
+
+  // Non-interactive: use flags if set, otherwise leave undefined (server defaults)
+  if (!isInteractive()) {
+    return {
+      notifyEmail: optionNotifyEmail,
+      notifySlack: optionNotifySlack,
+    };
+  }
+
+  // Interactive: prompt for each unset flag
+  const notifyEmail =
+    optionNotifyEmail ??
+    (await promptConfirm(
+      "Enable email notifications?",
+      existingSchedule?.notifyEmail ?? true,
+    ));
+
+  const notifySlack =
+    optionNotifySlack ??
+    (await promptConfirm(
+      "Enable Slack notifications?",
+      existingSchedule?.notifySlack ?? true,
+    ));
+
+  return { notifyEmail, notifySlack };
+}
+
+/**
  * Resolve agent and get composeId with content
  */
 async function resolveAgent(
@@ -549,6 +595,8 @@ async function buildAndDeploy(params: {
   timezone: string;
   prompt: string;
   artifactName: string;
+  notifyEmail?: boolean;
+  notifySlack?: boolean;
 }): Promise<DeployResult> {
   let cronExpression: string | undefined;
   let atTimeISO: string | undefined;
@@ -578,6 +626,12 @@ async function buildAndDeploy(params: {
     timezone: params.timezone,
     prompt: params.prompt,
     artifactName: params.artifactName,
+    ...(params.notifyEmail !== undefined && {
+      notifyEmail: params.notifyEmail,
+    }),
+    ...(params.notifySlack !== undefined && {
+      notifySlack: params.notifySlack,
+    }),
   });
 
   return deployResult;
@@ -716,6 +770,10 @@ export const setupCommand = new Command()
   .option("-p, --prompt <text>", "Prompt to run")
   .option("--artifact-name <name>", "Artifact name", "artifact")
   .option("-e, --enable", "Enable schedule immediately after creation")
+  .option("--notify-email", "Enable email notifications (default: true)")
+  .option("--no-notify-email", "Disable email notifications")
+  .option("--notify-slack", "Enable Slack notifications (default: true)")
+  .option("--no-notify-slack", "Disable Slack notifications")
   .action(
     withErrorHandler(async (agentName: string, options: SetupOptions) => {
       // 1. Resolve agent to composeId and get content
@@ -780,7 +838,14 @@ export const setupCommand = new Command()
         return;
       }
 
-      // 7. Build trigger and deploy
+      // 7. Gather notification preferences
+      const { notifyEmail, notifySlack } = await gatherNotificationPreferences(
+        options.notifyEmail,
+        options.notifySlack,
+        existingSchedule,
+      );
+
+      // 8. Build trigger and deploy
       // Secrets and vars are managed via platform (vm0 secret set, vm0 var set)
       // Schedule only defines "when" to run, not configuration
       const deployResult = await buildAndDeploy({
@@ -795,6 +860,8 @@ export const setupCommand = new Command()
         timezone,
         prompt: promptText_,
         artifactName: options.artifactName,
+        notifyEmail,
+        notifySlack,
       });
 
       // 8. Display deployment result

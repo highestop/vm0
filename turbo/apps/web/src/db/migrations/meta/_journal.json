@@ -1009,6 +1009,13 @@
       "when": 1773637739953,
       "tag": "0143_skinny_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1773642430405,
+      "tag": "0144_parallel_silver_fox",
+      "breakpoints": true
     }
   ]
 }

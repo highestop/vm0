@@ -2,7 +2,7 @@
  * Agent compose types matching agent.yaml format
  */
 
-import type { ExpandedServiceConfig } from "@vm0/core";
+import type { ExpandedServiceConfig, VALID_CAPABILITIES } from "@vm0/core";
 
 /**
  * Volume configuration for static dependencies
@@ -50,6 +50,11 @@ interface AgentDefinition {
    * Input format (CLI): string[] — expanded server-side before storage.
    */
   experimental_services?: ExpandedServiceConfig[];
+  /**
+   * Capabilities that the agent is allowed to use.
+   * Validated at compose time against VALID_CAPABILITIES.
+   */
+  experimental_capabilities?: (typeof VALID_CAPABILITIES)[number][];
   /**
    * Agent metadata for display and personalization.
    */

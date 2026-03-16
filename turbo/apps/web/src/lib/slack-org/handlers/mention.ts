@@ -71,7 +71,7 @@ export async function handleOrgMention(
   );
 
   if (!connection) {
-    // Post ephemeral login prompt
+    // Post ephemeral login prompt (no thread_ts so it's visible in the channel)
     const connectUrl = buildOrgConnectUrl(
       context.workspaceId,
       context.userId,
@@ -80,7 +80,6 @@ export async function handleOrgMention(
     await client.chat.postEphemeral({
       channel: context.channelId,
       user: context.userId,
-      thread_ts: threadTs,
       text: "Please connect your account first",
       blocks: buildLoginPromptMessage(connectUrl),
     });
@@ -110,6 +109,7 @@ export async function handleOrgMention(
     return;
   }
   const agentName = agent.name;
+  const agentLabel = agent.displayName ?? agent.name;
 
   // 4. Show thinking indicator
   await setThreadStatus(client, context.channelId, threadTs, "is thinking...");
@@ -196,9 +196,7 @@ export async function handleOrgMention(
   } else if (status === "failed") {
     log.error("Failed to dispatch agent run", { response });
     const errorText = response ?? "Sorry, an error occurred. Please try again.";
-    const logsUrl = runId
-      ? buildLogsUrl(runId, agentName)
-      : buildAgentLogsUrl(agentName);
+    const logsUrl = runId ? buildLogsUrl(runId) : buildAgentLogsUrl();
     const deepLinks = detectDeepLinks(errorText, getPlatformUrl(), agentName);
     await client.chat.postMessage({
       channel: context.channelId,
@@ -206,7 +204,7 @@ export async function handleOrgMention(
       text: errorText,
       blocks: buildAgentResponseMessage(
         errorText,
-        agentName,
+        agentLabel,
         logsUrl,
         deepLinks,
       ),

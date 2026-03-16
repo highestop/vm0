@@ -184,14 +184,19 @@ export function buildOrgConnectUrl(
   workspaceId: string,
   slackUserId: string,
   channelId: string,
+  threadTs?: string,
 ): string {
-  const baseUrl = getPlatformUrl();
+  const url = new URL(getPlatformUrl());
+  url.hostname = url.hostname.replace("platform", "www");
   const params = new URLSearchParams({
     w: workspaceId,
     u: slackUserId,
     c: channelId,
   });
-  return `${baseUrl}/integrations/slack/org/connect?${params.toString()}`;
+  if (threadTs) {
+    params.set("t", threadTs);
+  }
+  return `${url.origin}/api/slack/org/connect?${params.toString()}`;
 }
 
 /**
@@ -210,8 +215,20 @@ export async function ensureOrgArtifact(
 export {
   fetchConversationContexts,
   enrichMessageContent,
-  buildLogsUrl,
-  buildAgentLogsUrl,
   getWorkspaceAgent,
   resolveSessionCompose,
 } from "../../slack/handlers/shared";
+
+/**
+ * Build the logs URL for a run in the org flow.
+ */
+export function buildLogsUrl(runId: string): string {
+  return `${getPlatformUrl()}/zero/activity/${encodeURIComponent(runId)}`;
+}
+
+/**
+ * Build the agent-level activity URL (no specific run).
+ */
+export function buildAgentLogsUrl(): string {
+  return `${getPlatformUrl()}/zero/activity`;
+}

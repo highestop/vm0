@@ -79,12 +79,13 @@ export async function handleOrgDirectMessage(
       context.workspaceId,
       context.userId,
       context.channelId,
+      threadTs,
     );
     await postMessage(
       client,
       context.channelId,
       "Please connect your account first",
-      { blocks: buildLoginPromptMessage(connectUrl) },
+      { threadTs, blocks: buildLoginPromptMessage(connectUrl) },
     );
     return;
   }
@@ -112,6 +113,7 @@ export async function handleOrgDirectMessage(
     return;
   }
   const agentName = agent.name;
+  const agentLabel = agent.displayName ?? agent.name;
 
   // 4. Show thinking indicator
   await setThreadStatus(client, context.channelId, threadTs, "is thinking...");
@@ -195,15 +197,13 @@ export async function handleOrgDirectMessage(
     });
   } else if (status === "failed") {
     const errorText = response ?? "Sorry, an error occurred. Please try again.";
-    const logsUrl = runId
-      ? buildLogsUrl(runId, agentName)
-      : buildAgentLogsUrl(agentName);
+    const logsUrl = runId ? buildLogsUrl(runId) : buildAgentLogsUrl();
     const deepLinks = detectDeepLinks(errorText, getPlatformUrl(), agentName);
     await postMessage(client, context.channelId, errorText, {
       threadTs,
       blocks: buildAgentResponseMessage(
         errorText,
-        agentName,
+        agentLabel,
         logsUrl,
         deepLinks,
       ),

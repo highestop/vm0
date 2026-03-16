@@ -23,6 +23,7 @@ import {
 import type { AskUserQuestion } from "../../../../../src/lib/slack/blocks";
 import { runAgentForSlackOrg } from "../../../../../src/lib/slack-org/handlers/run-agent";
 import type { SlackOrgCallbackContext } from "../../../../../src/lib/slack-org/handlers/run-agent";
+import { getWorkspaceAgent } from "../../../../../src/lib/slack-org/handlers/shared";
 import { refreshOrgAppHome } from "../../../../../src/lib/slack-org/handlers/app-home";
 import { disconnect } from "../../../../../src/lib/slack-org/connect-service";
 import { logger } from "../../../../../src/lib/logger";
@@ -483,7 +484,7 @@ async function finishSubmit(
       claimed.slackChannelId,
       claimed.slackMessageTs,
       claimed.slackWorkspaceId,
-      "Slack installation not found. Please reconnect the VM0 app.",
+      "Slack installation not found. Please reconnect the Zero app.",
     );
     return;
   }
@@ -494,12 +495,16 @@ async function finishSubmit(
   );
   const client = createSlackClient(botToken);
 
+  // Resolve display name for user-visible blocks
+  const agentInfo = await getWorkspaceAgent(claimed.composeId);
+  const agentLabel = agentInfo?.displayName ?? claimed.agentName;
+
   // Replace interactive card with answered summary
   if (claimed.slackMessageTs) {
     const answeredBlocks = buildAskUserAnsweredBlocks(
       questions,
       answers,
-      claimed.agentName,
+      agentLabel,
     );
     await updateMessage(
       client,
@@ -535,7 +540,7 @@ async function finishSubmit(
       claimed.slackChannelId,
       claimed.slackMessageTs,
       claimed.slackWorkspaceId,
-      "Your VM0 account connection was not found. Please reconnect your account.",
+      "Your Zero account connection was not found. Please reconnect your account.",
     );
     return;
   }

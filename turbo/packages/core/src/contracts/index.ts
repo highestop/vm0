@@ -300,12 +300,6 @@ export {
   type ArtifactEntry,
   type StorageManifest,
   type ResumeSession,
-  firewallApiSchema,
-  firewallSchema,
-  experimentalFirewallSchema,
-  type FirewallApi,
-  type Firewall,
-  type ExperimentalFirewall,
 } from "./runners";
 
 export {
@@ -435,15 +429,21 @@ export {
 } from "./connectors";
 
 export {
-  getFirewallConfig,
   extractSecretNamesFromApis,
+  firewallPermissionSchema,
+  firewallApiSchema,
+  firewallSchema,
+  experimentalFirewallSchema,
+  firewallConfigSchema,
   type FirewallConfig,
   type ExpandedFirewallConfig,
-} from "./firewall";
+  type FirewallApi,
+  type Firewall,
+  type ExperimentalFirewall,
+} from "./firewalls";
 
 export {
   expandFirewallConfigs,
-  resolveFirewallConfig,
   collectAndValidatePermissions,
   validateRule,
   validateBaseUrl,

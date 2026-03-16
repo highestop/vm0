@@ -22,7 +22,7 @@ import {
 } from "../../../../../../src/db/schema/storage";
 import { getUserId } from "../../../../../../src/lib/auth/get-user-id";
 import { getUserEmail } from "../../../../../../src/lib/auth/get-user-email";
-import { canAccessCompose } from "../../../../../../src/lib/agent/permission-service";
+import { canAccessCompose } from "../../../../../../src/lib/agent/compose-access";
 import {
   downloadManifest,
   downloadS3Buffer,
@@ -78,7 +78,7 @@ export async function GET(
     );
   }
 
-  // Check access (owner or shared via email/public)
+  // Check access (owner or org member)
   const userEmail = await getUserEmail(userId);
   const hasAccess = await canAccessCompose(userId, userEmail, result);
   if (!hasAccess) {

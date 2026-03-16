@@ -18,7 +18,6 @@
       "ignoreDependencies": [
         "e2b",
         "@testing-library/react",
-        "@types/tar",
         "import-in-the-middle",
         "require-in-the-middle",
         "cpu-features"

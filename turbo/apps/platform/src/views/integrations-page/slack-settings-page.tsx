@@ -204,23 +204,10 @@ export function SlackSettingsPage() {
   const openConfirm = useSet(openSlackDisconnectDialog$);
   const closeConfirm = useSet(closeSlackDisconnectDialog$);
 
-  // Construct qualified agent name that matches the format used in agentsList$
-  // (shared agents use "org/name", owned agents use just "name").
-  const qualifiedAgentName = (() => {
-    if (!data?.agent) {
-      return undefined;
-    }
-    const fullName = `${data.agent.orgSlug}/${data.agent.name}`;
-    // If the qualified name exists in agents list, use it (shared agent)
-    if (agents.some((a) => a.name === fullName)) {
-      return fullName;
-    }
-    // Otherwise use bare name (owned agent)
-    return data.agent.name;
-  })();
+  const qualifiedAgentName = data?.agent?.name;
 
   // Ensure the current workspace agent appears in the dropdown even if
-  // it isn't in the user's own agents list (e.g. shared by another user).
+  // it isn't in the user's own agents list.
   const agentOptions = (() => {
     if (!qualifiedAgentName) {
       return agents;

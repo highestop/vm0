@@ -101,6 +101,9 @@ class TestMatchFirewallRequest:
         result = mitm_addon.match_firewall_request("https://api.github.com/repos", "GET", fw_configs)
         assert isinstance(result, FirewallBlock)
         assert result.base == "https://api.github.com"
+        assert result.firewall_ref == "github"
+        assert result.method == "GET"
+        assert result.path == "/repos"
 
     def test_permission_match_allows(self):
         fw_configs = _wrap_firewall([{
@@ -508,6 +511,10 @@ class TestHandleFirewallRequest:
         assert flow.response.status_code == 502
         assert flow.metadata["firewall_action"] == "DENY"
         assert flow.metadata["firewall_rule"] == "firewall:https://api.github.com"
+        body = json.loads(flow.response.content)
+        assert body["error"] == "firewall_auth_failed"
+        assert "API unreachable" in body["message"]
+        assert body["firewall"] == "github"
 
     def test_no_response_set_on_success(self):
         """On success, flow.response should remain None (request continues to origin)."""
@@ -537,6 +544,9 @@ class TestHandleFirewallRequest:
         assert flow.response is not None
         assert flow.response.status_code == 502
         assert flow.metadata["firewall_action"] == "DENY"
+        body = json.loads(flow.response.content)
+        assert body["error"] == "firewall_auth_unavailable"
+        assert body["firewall"] == "github"
 
 
 # =========================================================================

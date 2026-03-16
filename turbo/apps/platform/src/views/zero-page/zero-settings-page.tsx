@@ -117,7 +117,7 @@ function ZeroDefaultProvider() {
       <h2 className="text-base font-semibold tracking-tight text-foreground">
         Default model provider
       </h2>
-      <div className="flex flex-col rounded-[var(--zero-card-radius)] border border-[var(--zero-card-border)] bg-card shadow-[var(--zero-card-shadow)]">
+      <div className="zero-card cursor-pointer">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center px-5 py-4">
           <div className="flex flex-1 flex-col gap-1 min-w-0">
             <span className="text-sm font-medium text-foreground">
@@ -135,7 +135,7 @@ function ZeroDefaultProvider() {
             </span>
           ) : (
             <Select value={currentDefault} onValueChange={handleChange}>
-              <SelectTrigger className="w-full sm:w-[260px] h-9 shrink-0 rounded-lg border-border/70">
+              <SelectTrigger className="zero-form-border w-full sm:w-[260px] h-9 shrink-0 rounded-lg">
                 <SelectValue placeholder="Select a default provider" />
               </SelectTrigger>
               <SelectContent>
@@ -185,7 +185,7 @@ function ZeroProviderList() {
           <button
             type="button"
             onClick={() => setAddDialogOpen(true)}
-            className="flex flex-col rounded-[var(--zero-card-radius)] border border-dashed border-border/80 transition-colors hover:border-border hover:bg-muted/30 group"
+            className="flex flex-col rounded-[var(--zero-card-radius)] border border-dashed border-[hsl(var(--gray-400))] transition-colors hover:border-[hsl(var(--gray-400))] hover:bg-muted/30 group"
           >
             <div className="flex h-14 items-center gap-2.5 px-5">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center">
@@ -199,7 +199,7 @@ function ZeroProviderList() {
                 Add provider
               </span>
             </div>
-            <div className="flex h-11 items-center border-t border-dashed border-border/80 px-5 group-hover:border-border">
+            <div className="flex h-11 items-center border-t border-dashed border-[hsl(var(--gray-400))] px-5 group-hover:border-[hsl(var(--gray-400))]">
               <span className="text-xs text-muted-foreground/70">
                 Browse supported providers
               </span>
@@ -230,7 +230,7 @@ function ZeroProviderList() {
                   openEdit(p);
                 }
               }}
-              className="flex flex-col rounded-[var(--zero-card-radius)] border border-[var(--zero-card-border)] bg-card shadow-[var(--zero-card-shadow)] cursor-pointer transition-colors hover:bg-muted/50"
+              className="zero-card cursor-pointer"
             >
               <div className="flex h-14 items-center gap-2.5 px-5">
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center">

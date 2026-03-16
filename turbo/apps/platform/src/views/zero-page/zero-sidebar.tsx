@@ -189,12 +189,10 @@ function useAccountSessions() {
 }
 
 function AccountDropdown({
-  activeId,
   onAccountAction,
   onResetAgent,
   collapsed = false,
 }: {
-  activeId: ZeroNavId;
   onAccountAction?: (action: ZeroAccountAction) => void;
   onResetAgent?: () => void;
   collapsed?: boolean;
@@ -243,11 +241,7 @@ function AccountDropdown({
           className={`flex items-center rounded-lg transition-colors duration-200 ${
             collapsed
               ? "justify-center p-2 h-10 w-10"
-              : `w-full gap-2 p-2 text-left ${
-                  activeId === "preferences"
-                    ? "bg-sidebar-active"
-                    : "hover:bg-sidebar-accent/50"
-                }`
+              : "w-full gap-2 p-2 text-left hover:bg-sidebar-accent/50"
           }`}
         >
           <AccountAvatar
@@ -257,22 +251,10 @@ function AccountDropdown({
           />
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p
-                className={`text-sm font-medium leading-tight truncate ${
-                  activeId === "preferences"
-                    ? "text-sidebar-primary"
-                    : "text-sidebar-foreground"
-                }`}
-              >
+              <p className="text-sm font-medium leading-tight truncate text-sidebar-foreground">
                 {accountName}
               </p>
-              <p
-                className={`text-xs leading-tight truncate mt-px ${
-                  activeId === "preferences"
-                    ? "text-sidebar-primary/80"
-                    : "text-sidebar-foreground opacity-70"
-                }`}
-              >
+              <p className="text-xs leading-tight truncate mt-px text-sidebar-foreground opacity-70">
                 {accountEmail}
               </p>
             </div>
@@ -493,8 +475,10 @@ function RecentChatSection({
               {recentSessionsError}
             </p>
           ) : filteredSessions.length === 0 ? (
-            <p className="px-2 py-2 text-xs text-muted-foreground">
-              {searchTerm.trim() ? "No matching chats" : "No recent chats"}
+            <p className="px-2 py-2 text-xs text-muted-foreground/70 leading-relaxed">
+              {searchTerm.trim()
+                ? "No matching chats"
+                : "Your chats will appear here"}
             </p>
           ) : (
             filteredSessions.map((session) => (
@@ -832,7 +816,6 @@ export function ZeroSidebar({
           {/* Account avatar */}
           <div className="p-2 flex justify-center">
             <AccountDropdown
-              activeId={activeId}
               onAccountAction={onAccountAction}
               onResetAgent={onResetAgent}
               collapsed
@@ -1016,9 +999,9 @@ export function ZeroSidebar({
                   <img
                     src={iconImg}
                     alt=""
-                    className="h-4 w-4 shrink-0"
-                    width={16}
-                    height={16}
+                    className="h-3.5 w-3.5 shrink-0"
+                    width={14}
+                    height={14}
                   />
                 ) : (
                   <Icon size={16} className="shrink-0" />
@@ -1028,7 +1011,6 @@ export function ZeroSidebar({
             ))}
             {/* Account dropdown */}
             <AccountDropdown
-              activeId={activeId}
               onAccountAction={onAccountAction}
               onResetAgent={onResetAgent}
             />

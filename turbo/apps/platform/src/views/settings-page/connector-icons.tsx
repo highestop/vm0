@@ -1,4 +1,5 @@
 import type { ConnectorType } from "@vm0/core";
+import { cn } from "@vm0/ui";
 
 import agentmailIcon from "./icons/agentmail.svg";
 import ahrefsIcon from "./icons/ahrefs.svg";
@@ -202,6 +203,17 @@ const CONNECTOR_ICONS: Readonly<Record<ConnectorType, string>> = Object.freeze({
   zeptomail: zeptomailIcon,
 });
 
+const MONOCHROME_ICONS: Readonly<Record<string, true>> = Object.freeze({
+  agentmail: true,
+  "bright-data": true,
+  dify: true,
+  github: true,
+  hume: true,
+  notion: true,
+  openai: true,
+  x: true,
+});
+
 export function ConnectorIcon({
   type,
   size = 28,
@@ -211,6 +223,12 @@ export function ConnectorIcon({
 }) {
   const icon = CONNECTOR_ICONS[type];
   return (
-    <img src={icon} width={size} height={size} alt="" className="shrink-0" />
+    <img
+      src={icon}
+      width={size}
+      height={size}
+      alt=""
+      className={cn("shrink-0", type in MONOCHROME_ICONS && "zero-icon-mono")}
+    />
   );
 }

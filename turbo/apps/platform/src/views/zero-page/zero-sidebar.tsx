@@ -162,6 +162,7 @@ interface SessionAccount {
 interface ZeroSidebarProps {
   activeId: ZeroNavId;
   agentName?: string | null;
+  defaultAgentRawName?: string | null;
   zeroAvatarSrc?: string;
   subagents?: SubagentInfo[];
   currentChatAgentId?: string | null;
@@ -174,7 +175,7 @@ interface ZeroSidebarProps {
   recentSessions?: ChatThreadListItem[];
   recentSessionsLoading?: boolean;
   recentSessionsError?: string | null;
-  onNewChat?: (agentId: string | null) => void;
+  onNewChat?: (agent: { id: string; name: string } | null) => void;
   onResetAgent?: () => void;
 }
 
@@ -506,7 +507,7 @@ function RecentChatSection({
       )}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         <div className="flex flex-col gap-1">
-          {recentSessionsLoading ? (
+          {recentSessionsLoading && recentSessions.length === 0 ? (
             <div className="flex items-center justify-center py-3">
               <IconLoader2
                 size={14}
@@ -784,6 +785,7 @@ function ManagePinnedAgentsDialog({
 export function ZeroSidebar({
   activeId,
   agentName,
+  defaultAgentRawName,
   zeroAvatarSrc = "/zero-avatar.png",
   subagents = [],
   currentChatAgentId = null,
@@ -971,14 +973,20 @@ export function ZeroSidebar({
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <button
-                type="button"
-                className={`flex w-full h-8 items-center gap-2 rounded-lg px-2 text-left text-sm leading-5 transition-colors duration-200 ${
-                  activeId === "chat" && currentChatAgentId === null
+              <Link
+                pathname={defaultAgentRawName ? "/zero/talk/:name" : "/zero"}
+                options={
+                  defaultAgentRawName
+                    ? { pathParams: { name: defaultAgentRawName } }
+                    : undefined
+                }
+                className={`flex w-full h-8 items-center gap-2 rounded-lg px-2 text-left text-sm leading-5 no-underline transition-colors duration-200 ${
+                  activeId === "chat" &&
+                  !selectedRecentId &&
+                  currentChatAgentId === null
                     ? "bg-sidebar-active text-sidebar-primary font-medium"
                     : "text-sidebar-foreground hover:bg-sidebar-accent"
                 }`}
-                onClick={() => onNewChat?.(null)}
               >
                 <img
                   src={zeroAvatarSrc}
@@ -986,17 +994,19 @@ export function ZeroSidebar({
                   className="h-5 w-5 shrink-0 rounded-md object-cover object-top"
                 />
                 <span className="truncate">{displayName}</span>
-              </button>
+              </Link>
               {pinnedAgents.map((agent) => (
-                <button
+                <Link
                   key={agent.id}
-                  type="button"
-                  className={`flex w-full h-8 items-center gap-2 rounded-lg px-2 text-left text-sm leading-5 transition-colors duration-200 ${
-                    activeId === "chat" && currentChatAgentId === agent.id
+                  pathname="/zero/talk/:name"
+                  options={{ pathParams: { name: agent.name } }}
+                  className={`flex w-full h-8 items-center gap-2 rounded-lg px-2 text-left text-sm leading-5 no-underline transition-colors duration-200 ${
+                    activeId === "chat" &&
+                    !selectedRecentId &&
+                    currentChatAgentId === agent.id
                       ? "bg-sidebar-active text-sidebar-primary font-medium"
                       : "text-sidebar-foreground hover:bg-sidebar-accent"
                   }`}
-                  onClick={() => onNewChat?.(agent.id)}
                 >
                   <AgentAvatarImg
                     name={agent.name}
@@ -1006,7 +1016,7 @@ export function ZeroSidebar({
                   <span className="truncate">
                     {agent.displayName ?? agent.name}
                   </span>
-                </button>
+                </Link>
               ))}
               <button
                 type="button"

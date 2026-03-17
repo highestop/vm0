@@ -1539,13 +1539,40 @@ jobs:
         env:
           WEB_URL: ${{ needs.deploy-web.outputs.preview-url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      - name: Upload Lighthouse report (web)
+      - name: Locate LHCI output (web)
+        id: lhci-dir-web
         if: always()
+        run: |
+          for d in e2e/lighthouse/.lighthouseci .lighthouseci; do
+            if [ -f "$d/manifest.json" ]; then
+              echo "dir=$d" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "dir=" >> "$GITHUB_OUTPUT"
+      - name: Upload Lighthouse report (web)
+        if: always() && steps.lhci-dir-web.outputs.dir != ''
         uses: actions/upload-artifact@v4
         with:
           name: lighthouse-report-web
-          path: e2e/lighthouse/lighthouse-reports/web/
+          path: ${{ steps.lhci-dir-web.outputs.dir }}/
           retention-days: 7
+      - name: Format Lighthouse comment (web)
+        if: success() && github.event_name == 'pull_request' && steps.lhci-dir-web.outputs.dir != ''
+        id: lighthouse-comment-web
+        run: |
+          comment=$(node e2e/lighthouse/format-report.cjs "Web" "${{ steps.lhci-dir-web.outputs.dir }}")
+          {
+            echo "body<<LIGHTHOUSE_EOF"
+            echo "$comment"
+            echo "LIGHTHOUSE_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Post Lighthouse comment (web)
+        if: steps.lighthouse-comment-web.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: lighthouse-web
+          message: ${{ steps.lighthouse-comment-web.outputs.body }}
 
   # Lighthouse CI audit for platform homepage (failure blocks merge, skip is allowed)
   lighthouse-platform:
@@ -1580,13 +1607,40 @@ jobs:
           WEB_URL: ${{ needs.deploy-web.outputs.preview-url }}
           PLATFORM_URL: ${{ needs.prepare.outputs.platform-preview-url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      - name: Upload Lighthouse report (platform)
+      - name: Locate LHCI output (platform)
+        id: lhci-dir-platform
         if: always()
+        run: |
+          for d in e2e/lighthouse/.lighthouseci .lighthouseci; do
+            if [ -f "$d/manifest.json" ]; then
+              echo "dir=$d" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "dir=" >> "$GITHUB_OUTPUT"
+      - name: Upload Lighthouse report (platform)
+        if: always() && steps.lhci-dir-platform.outputs.dir != ''
         uses: actions/upload-artifact@v4
         with:
           name: lighthouse-report-platform
-          path: e2e/lighthouse/lighthouse-reports/platform/
+          path: ${{ steps.lhci-dir-platform.outputs.dir }}/
           retention-days: 7
+      - name: Format Lighthouse comment (platform)
+        if: success() && github.event_name == 'pull_request' && steps.lhci-dir-platform.outputs.dir != ''
+        id: lighthouse-comment-platform
+        run: |
+          comment=$(node e2e/lighthouse/format-report.cjs "Platform" "${{ steps.lhci-dir-platform.outputs.dir }}")
+          {
+            echo "body<<LIGHTHOUSE_EOF"
+            echo "$comment"
+            echo "LIGHTHOUSE_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Post Lighthouse comment (platform)
+        if: steps.lighthouse-comment-platform.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: lighthouse-platform
+          message: ${{ steps.lighthouse-comment-platform.outputs.body }}
 
   # CI Gate: single required check for merge queue
   # Aggregates all job results — must ALWAYS run to report explicit success/failure.

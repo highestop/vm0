@@ -15,6 +15,7 @@ import { secrets } from "../../db/schema/secret";
 import { encryptSecretValue } from "../crypto";
 import { badRequest, notFound } from "../errors";
 import { logger } from "../logger";
+import { ORG_SENTINEL_USER_ID } from "../org/org-sentinel";
 
 const log = logger("service:model-provider");
 
@@ -79,15 +80,19 @@ function getTypesForFramework(framework: ModelProviderFramework): string[] {
 
 /**
  * Atomically assign isDefault=true to a provider, but only if no other provider
- * for the same framework already has isDefault=true.
+ * for the same framework already has isDefault=true for the same userId scope.
  *
  * Uses a single UPDATE with NOT EXISTS subquery to prevent the race condition
  * where two concurrent inserts both set isDefault=true.
+ *
+ * The userId filter ensures org-level defaults (sentinel userId) and user-level
+ * defaults are independent — they do not interfere with each other.
  *
  * @returns true if isDefault was set, false if another default already exists
  */
 async function assignDefaultIfFirst(
   orgId: string,
+  userId: string,
   providerId: string,
   framework: ModelProviderFramework,
 ): Promise<boolean> {
@@ -106,6 +111,7 @@ async function assignDefaultIfFirst(
             .where(
               and(
                 eq(modelProviders.orgId, orgId),
+                eq(modelProviders.userId, userId),
                 eq(modelProviders.isDefault, true),
                 ne(modelProviders.id, providerId),
                 inArray(modelProviders.type, frameworkTypes),
@@ -293,6 +299,7 @@ export async function upsertModelProvider(
   if (!provider!.isDefault) {
     const isDefault = await assignDefaultIfFirst(
       orgId,
+      userId,
       provider!.id,
       framework,
     );
@@ -518,6 +525,7 @@ export async function upsertMultiAuthModelProvider(
   if (!provider!.isDefault) {
     const isDefault = await assignDefaultIfFirst(
       orgId,
+      userId,
       provider!.id,
       framework,
     );
@@ -850,4 +858,90 @@ export async function getDefaultModelProvider(
     createdAt: defaultProvider.createdAt,
     updatedAt: defaultProvider.updatedAt,
   });
+}
+
+// ============================================================================
+// Org-Level Model Provider Functions
+//
+// These delegate to the user-level functions using ORG_SENTINEL_USER_ID.
+// The sentinel userId ensures org and user providers are fully isolated.
+// ============================================================================
+
+/**
+ * List all org-level model providers
+ */
+export function listOrgModelProviders(
+  orgId: string,
+): Promise<ModelProviderInfo[]> {
+  return listModelProviders(orgId, ORG_SENTINEL_USER_ID);
+}
+
+/**
+ * Create or update an org-level model provider (single-secret).
+ * Uses ORG_SENTINEL_USER_ID for org-scoped storage.
+ */
+export function upsertOrgModelProvider(
+  orgId: string,
+  type: ModelProviderType,
+  secret: string,
+  selectedModel?: string,
+): Promise<{ provider: ModelProviderInfo; created: boolean }> {
+  return upsertModelProvider(
+    orgId,
+    ORG_SENTINEL_USER_ID,
+    type,
+    secret,
+    selectedModel,
+  );
+}
+
+/**
+ * Create or update an org-level multi-auth model provider (e.g., aws-bedrock).
+ * Uses ORG_SENTINEL_USER_ID for org-scoped storage.
+ */
+export function upsertOrgMultiAuthModelProvider(
+  orgId: string,
+  type: ModelProviderType,
+  authMethod: string,
+  secretValues: Record<string, string>,
+  selectedModel?: string,
+): Promise<{ provider: ModelProviderInfo; created: boolean }> {
+  return upsertMultiAuthModelProvider(
+    orgId,
+    ORG_SENTINEL_USER_ID,
+    type,
+    authMethod,
+    secretValues,
+    selectedModel,
+  );
+}
+
+/**
+ * Delete an org-level model provider and its secrets
+ */
+export function deleteOrgModelProvider(
+  orgId: string,
+  type: ModelProviderType,
+): Promise<void> {
+  return deleteModelProvider(orgId, ORG_SENTINEL_USER_ID, type);
+}
+
+/**
+ * Set an org-level model provider as default for its framework
+ */
+export function setOrgModelProviderDefault(
+  orgId: string,
+  type: ModelProviderType,
+): Promise<ModelProviderInfo> {
+  return setModelProviderDefault(orgId, ORG_SENTINEL_USER_ID, type);
+}
+
+/**
+ * Get the org-level default model provider for a framework
+ */
+export function getOrgDefaultModelProvider(
+  orgId: string,
+  framework: ModelProviderFramework,
+): Promise<ModelProviderInfo | null> {
+  return getDefaultModelProvider(orgId, ORG_SENTINEL_USER_ID, framework);
 }

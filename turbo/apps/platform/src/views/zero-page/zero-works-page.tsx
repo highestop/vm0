@@ -1,4 +1,4 @@
-import { useCCState } from "ccstate-react/experimental";
+import { useCCState, useCommand } from "ccstate-react/experimental";
 import { useGet, useSet, useLoadable } from "ccstate-react";
 import {
   IconCircleCheck,
@@ -24,8 +24,16 @@ import {
   slackOrgData$,
   disconnectSlackOrg$,
   uninstallSlackOrg$,
+  pollSlackConnection$,
 } from "../../signals/zero-page/zero-slack.ts";
-import { detach, Reason } from "../../signals/utils.ts";
+import { detach, onRef, Reason } from "../../signals/utils.ts";
+
+/** Append a cache-busting timestamp so the browser never reuses a cached OAuth redirect. */
+function openFreshOAuth(url: string) {
+  const fresh = new URL(url, window.location.origin);
+  fresh.searchParams.set("_t", String(Date.now()));
+  window.open(fresh.toString(), "_blank");
+}
 
 function SlackCardActions({
   isConnected,
@@ -57,7 +65,7 @@ function SlackCardActions({
           variant="outline"
           size="sm"
           className="h-8 shrink-0 gap-1.5 rounded-lg"
-          onClick={() => window.open(installUrl, "_blank")}
+          onClick={() => openFreshOAuth(installUrl)}
         >
           <IconDownload size={14} stroke={1.5} />
           Install to Slack
@@ -68,7 +76,7 @@ function SlackCardActions({
           variant="outline"
           size="sm"
           className="h-8 shrink-0 gap-1.5 rounded-lg"
-          onClick={() => window.open(connectUrl, "_blank")}
+          onClick={() => openFreshOAuth(connectUrl)}
         >
           Connect
         </Button>
@@ -126,9 +134,22 @@ function SlackCard({ agentName }: { agentName: string }) {
   const isInstalled = slackData?.isInstalled ?? isConnected;
   const isAdmin = slackData?.isAdmin ?? false;
 
+  // Poll for Slack connection while not connected — auto-detects when the
+  // user completes OAuth in another tab.
+  const startPolling$ = useCommand(
+    ({ set }, _el: HTMLElement, signal: AbortSignal) => {
+      detach(set(pollSlackConnection$, signal), Reason.DomCallback);
+    },
+  );
+  const pollingRef$ = onRef(startPolling$);
+  const pollingRef = useSet(pollingRef$);
+
   return (
     <>
-      <div className="zero-card flex items-center gap-4 p-4">
+      <div
+        ref={isConnected ? undefined : pollingRef}
+        className="zero-card flex items-center gap-4 p-4"
+      >
         <div className="shrink-0">
           <img src="/slack-icon.svg" alt="" className="h-7 w-7" />
         </div>

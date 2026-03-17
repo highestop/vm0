@@ -9,15 +9,21 @@ import { slackOrgConnections } from "../../../../../../src/db/schema/slack-org-c
 import {
   adminConnect,
   memberConnect,
+  notifyConnectSuccess,
 } from "../../../../../../src/lib/slack-org/connect-service";
 import {
   resolveDefaultComposeId,
   getWorkspaceAgent,
 } from "../../../../../../src/lib/slack-org/handlers/shared";
+import { logger } from "../../../../../../src/lib/logger";
+
+const log = logger("api:slack-org:connect");
 
 const connectBodySchema = z.object({
   workspaceId: z.string().min(1),
   slackUserId: z.string().min(1),
+  channelId: z.string().optional(),
+  threadTs: z.string().optional(),
 });
 
 /**
@@ -118,7 +124,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { workspaceId, slackUserId } = parseResult.data;
+  const { workspaceId, slackUserId, channelId, threadTs } = parseResult.data;
 
   // Resolve org and check membership
   const { org, member } = await resolveOrg(userId);
@@ -164,6 +170,16 @@ export async function POST(request: Request) {
       slackUserId,
     });
 
+    void notifyConnectSuccess({
+      installation,
+      slackUserId,
+      orgId: org.orgId,
+      channelId,
+      threadTs,
+    }).catch((err) =>
+      log.warn("Failed to notify connect success", { error: err }),
+    );
+
     return NextResponse.json({
       success: true,
       connectionId: result.connection.id,
@@ -171,15 +187,23 @@ export async function POST(request: Request) {
     });
   }
 
-  // Already bound — member connect
+  // Already bound — verify org match
   if (installation.orgId !== org.orgId) {
+    // Check if user is a member of the workspace's org but has the wrong active org
+    let isMemberOfTargetOrg = false;
+    try {
+      await resolveOrg(userId, null, installation.orgId);
+      isMemberOfTargetOrg = true;
+    } catch {
+      // Not a member
+    }
+
+    const message = isMemberOfTargetOrg
+      ? "Your active organization doesn't match this Slack workspace. Please switch to the correct organization in the platform sidebar before connecting."
+      : "You don't have access to the organization this Slack workspace belongs to. Contact the organization admin for an invite.";
+
     return NextResponse.json(
-      {
-        error: {
-          message: "This workspace is connected to a different org",
-          code: "FORBIDDEN",
-        },
-      },
+      { error: { message, code: "FORBIDDEN" } },
       { status: 403 },
     );
   }
@@ -190,6 +214,16 @@ export async function POST(request: Request) {
     workspaceId,
     slackUserId,
   });
+
+  void notifyConnectSuccess({
+    installation,
+    slackUserId,
+    orgId: org.orgId,
+    channelId,
+    threadTs,
+  }).catch((err) =>
+    log.warn("Failed to notify connect success", { error: err }),
+  );
 
   return NextResponse.json({
     success: true,

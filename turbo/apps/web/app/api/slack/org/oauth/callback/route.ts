@@ -4,14 +4,18 @@ import { initServices } from "../../../../../../src/lib/init-services";
 import { env } from "../../../../../../src/env";
 import {
   exchangeOAuthCode,
+  exchangeOAuthCodeForUser,
   getSlackRedirectBaseUrl,
-  createSlackClient,
 } from "../../../../../../src/lib/slack";
 import { encryptSecretValue } from "../../../../../../src/lib/crypto/secrets-encryption";
 import { slackOrgInstallations } from "../../../../../../src/db/schema/slack-org-installation";
 import { slackOrgConnections } from "../../../../../../src/db/schema/slack-org-connection";
 import { requireOrgMember } from "../../../../../../src/lib/org/org-member-service";
-import { refreshOrgAppHome } from "../../../../../../src/lib/slack-org/handlers/app-home";
+import {
+  adminConnect,
+  memberConnect,
+  notifyConnectSuccess,
+} from "../../../../../../src/lib/slack-org/connect-service";
 import { getPlatformUrl } from "../../../../../../src/lib/url";
 import { logger } from "../../../../../../src/lib/logger";
 
@@ -20,21 +24,26 @@ const log = logger("slack-org:oauth-callback");
 interface OAuthState {
   orgId: string | null;
   vm0UserId: string | null;
+  flow: "install" | "connect";
 }
 
 function parseOAuthState(state: string | null): OAuthState {
-  if (!state) return { orgId: null, vm0UserId: null };
+  if (!state) {
+    return { orgId: null, vm0UserId: null, flow: "install" };
+  }
   try {
     const parsed = JSON.parse(state) as {
       orgId?: string;
       vm0UserId?: string;
+      flow?: string;
     };
     return {
       orgId: parsed.orgId ?? null,
       vm0UserId: parsed.vm0UserId ?? null,
+      flow: parsed.flow === "connect" ? "connect" : "install",
     };
   } catch {
-    return { orgId: null, vm0UserId: null };
+    return { orgId: null, vm0UserId: null, flow: "install" };
   }
 }
 
@@ -43,23 +52,18 @@ function parseOAuthState(state: string | null): OAuthState {
  *
  * GET /api/slack/org/oauth/callback
  *
- * Handles the OAuth redirect from Slack after app installation.
+ * Handles OAuth redirects from Slack for two flows:
  *
- * Platform flow (state has orgId + vm0UserId):
- *   - Verify user is org admin
- *   - Upsert installation with org_id and installed_by_user_id
- *   - Create connection record
- *   - Redirect to platform
+ * 1. Install flow (state.flow = "install", default):
+ *    - Upsert installation with bot token
+ *    - Platform flow (orgId + vm0UserId): verify admin, create connection
+ *    - Slack flow (no orgId): create unbound installation
  *
- * Slack flow (no orgId in state):
- *   - Upsert installation with org_id = NULL
- *   - Redirect to "workspace installed" page
- *
- * Re-install (installation exists with org_id):
- *   - Preserve org_id and installed_by_user_id
- *   - Update bot token only
- *
- * Note: User-level connect is handled by /api/slack/org/connect (cookie-based).
+ * 2. Connect flow (state.flow = "connect"):
+ *    - User already has an installed workspace; just needs to link their Slack identity
+ *    - Exchange code for authed_user.id
+ *    - Look up installation for the org, create connection record
+ *    - Redirect to /slack/connect
  */
 export async function GET(request: Request) {
   initServices();
@@ -95,6 +99,19 @@ export async function GET(request: Request) {
 
   const state = parseOAuthState(url.searchParams.get("state"));
   const redirectUri = `${baseUrl}/api/slack/org/oauth/callback`;
+
+  // Connect flow uses a lightweight exchange that may not return bot tokens.
+  // We use a separate helper that tolerates missing bot fields.
+  if (state.flow === "connect") {
+    return handleConnectCallback({
+      code,
+      redirectUri,
+      state,
+      platformUrl,
+      clientId: SLACK_CLIENT_ID,
+      clientSecret: SLACK_CLIENT_SECRET,
+    });
+  }
 
   let oauthResult;
   try {
@@ -135,7 +152,7 @@ export async function GET(request: Request) {
         requestedOrgId: state.orgId,
       });
       return NextResponse.redirect(
-        `${platformUrl}/zero/works?error=${encodeURIComponent("This Slack workspace is already installed by another organization. Please contact the workspace admin to uninstall first.")}`,
+        `${platformUrl}/slack/connect?error=${encodeURIComponent("This Slack workspace is already installed by another organization. Please contact the workspace admin to uninstall first.")}`,
       );
     }
 
@@ -175,8 +192,11 @@ export async function GET(request: Request) {
 
   // Platform install flow: verify admin and create connection
   if (state.orgId && state.vm0UserId) {
+    const orgId = state.orgId;
+    const vm0UserId = state.vm0UserId;
+
     // Verify user is org admin
-    const member = await requireOrgMember(state.orgId, state.vm0UserId);
+    const member = await requireOrgMember(orgId, vm0UserId);
     if (member.role !== "admin") {
       return NextResponse.redirect(
         `${platformUrl}/slack/failed?error=${encodeURIComponent("Only org admins can install Slack for an organization.")}`,
@@ -189,30 +209,136 @@ export async function GET(request: Request) {
       .values({
         slackUserId: oauthResult.authedUserId,
         slackWorkspaceId: oauthResult.teamId,
-        vm0UserId: state.vm0UserId,
-        orgId: state.orgId,
+        vm0UserId,
+        orgId,
       })
       .onConflictDoNothing();
 
-    // Refresh App Home for the installing user (best-effort)
-    const client = createSlackClient(oauthResult.accessToken);
+    // Send DM + welcome and refresh App Home (best-effort, fire-and-forget)
     const [inst] = await db
       .select()
       .from(slackOrgInstallations)
       .where(eq(slackOrgInstallations.slackWorkspaceId, oauthResult.teamId))
       .limit(1);
     if (inst) {
-      await refreshOrgAppHome(client, inst, oauthResult.authedUserId).catch(
-        (err) =>
-          log.warn("Failed to refresh App Home after install", { error: err }),
+      void notifyConnectSuccess({
+        installation: inst,
+        slackUserId: oauthResult.authedUserId,
+        orgId,
+      }).catch((err) =>
+        log.warn("Failed to notify connect success after install", {
+          error: err,
+        }),
       );
     }
 
-    return NextResponse.redirect(`${platformUrl}/zero/works?installed=1`);
+    return NextResponse.redirect(
+      `${platformUrl}/slack/connect?status=connected&workspace=${encodeURIComponent(oauthResult.teamName)}`,
+    );
   }
 
   // Slack flow: redirect to success page
   return NextResponse.redirect(
     `${platformUrl}/slack/installed?workspace=${encodeURIComponent(oauthResult.teamName)}`,
+  );
+}
+
+/**
+ * Handle the OAuth callback for the "connect" flow.
+ *
+ * The connect flow is used when a workspace is already installed but the
+ * current user hasn't linked their Slack identity yet.  We exchange the
+ * OAuth code to learn the user's Slack ID, then create a connection record.
+ */
+async function handleConnectCallback(params: {
+  code: string;
+  redirectUri: string;
+  state: OAuthState;
+  platformUrl: string;
+  clientId: string;
+  clientSecret: string;
+}): Promise<NextResponse> {
+  const { code, redirectUri, state, platformUrl, clientId, clientSecret } =
+    params;
+
+  if (!state.orgId || !state.vm0UserId) {
+    return NextResponse.redirect(
+      `${platformUrl}/slack/connect?error=${encodeURIComponent("Invalid connect state.")}`,
+    );
+  }
+
+  let userIdentity;
+  try {
+    userIdentity = await exchangeOAuthCodeForUser(
+      clientId,
+      clientSecret,
+      code,
+      redirectUri,
+    );
+  } catch (err) {
+    log.error("Slack OAuth exchange failed (connect flow)", { error: err });
+    return NextResponse.redirect(
+      `${platformUrl}/slack/connect?error=${encodeURIComponent("Failed to connect Slack account. Please try again.")}`,
+    );
+  }
+
+  const db = globalThis.services.db;
+
+  // Find the installation for this org
+  const [installation] = await db
+    .select()
+    .from(slackOrgInstallations)
+    .where(eq(slackOrgInstallations.orgId, state.orgId))
+    .limit(1);
+
+  if (!installation) {
+    return NextResponse.redirect(
+      `${platformUrl}/slack/connect?error=${encodeURIComponent("No Slack workspace installed for this organization.")}`,
+    );
+  }
+
+  // Verify workspace matches (user must have authed with the right workspace)
+  if (userIdentity.teamId !== installation.slackWorkspaceId) {
+    return NextResponse.redirect(
+      `${platformUrl}/slack/connect?error=${encodeURIComponent("You authenticated with a different Slack workspace. Please use the workspace connected to your organization.")}`,
+    );
+  }
+
+  // Create connection using the appropriate service function
+  const member = await requireOrgMember(state.orgId, state.vm0UserId);
+  if (member.role === "admin") {
+    await adminConnect({
+      userId: state.vm0UserId,
+      orgId: state.orgId,
+      workspaceId: installation.slackWorkspaceId,
+      slackUserId: userIdentity.authedUserId,
+    });
+  } else {
+    await memberConnect({
+      userId: state.vm0UserId,
+      orgId: state.orgId,
+      workspaceId: installation.slackWorkspaceId,
+      slackUserId: userIdentity.authedUserId,
+    });
+  }
+
+  log.info("User connected via OAuth", {
+    vm0UserId: state.vm0UserId,
+    orgId: state.orgId,
+    slackUserId: userIdentity.authedUserId,
+    workspaceId: installation.slackWorkspaceId,
+  });
+
+  // Send DM + refresh App Home (best-effort, fire-and-forget)
+  void notifyConnectSuccess({
+    installation,
+    slackUserId: userIdentity.authedUserId,
+    orgId: state.orgId,
+  }).catch((err) =>
+    log.warn("Failed to notify connect success", { error: err }),
+  );
+
+  return NextResponse.redirect(
+    `${platformUrl}/slack/connect?status=connected&workspace=${encodeURIComponent(installation.slackWorkspaceName ?? "")}`,
   );
 }

@@ -2000,6 +2000,7 @@ export async function createCompletedTestRun(options: {
  */
 export async function findUsageDaily(
   userId: string,
+  orgId: string,
   date: string,
 ): Promise<{ runCount: number; runTimeMs: number } | undefined> {
   const [row] = await globalThis.services.db
@@ -2008,7 +2009,13 @@ export async function findUsageDaily(
       runTimeMs: usageDaily.runTimeMs,
     })
     .from(usageDaily)
-    .where(and(eq(usageDaily.userId, userId), eq(usageDaily.date, date)));
+    .where(
+      and(
+        eq(usageDaily.userId, userId),
+        eq(usageDaily.orgId, orgId),
+        eq(usageDaily.date, date),
+      ),
+    );
   return row;
 }
 

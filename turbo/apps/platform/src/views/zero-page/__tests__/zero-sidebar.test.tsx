@@ -11,7 +11,7 @@ describe("zero sidebar", () => {
   it("should render clerk org switcher", async () => {
     await setupPage({
       context,
-      path: "/zero",
+      path: "/",
     });
 
     expect(screen.getByText("OrganizationSwitcher")).toBeInTheDocument();
@@ -20,7 +20,7 @@ describe("zero sidebar", () => {
   it("should enable dataExport feature switch via localStorage override", async () => {
     await setupPage({
       context,
-      path: "/zero",
+      path: "/",
       featureSwitches: { dataExport: true },
     });
 
@@ -31,7 +31,7 @@ describe("zero sidebar", () => {
   it("should disable dataExport feature switch when not overridden", async () => {
     await setupPage({
       context,
-      path: "/zero",
+      path: "/",
       featureSwitches: { dataExport: false },
     });
 

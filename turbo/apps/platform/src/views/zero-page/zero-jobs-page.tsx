@@ -1,13 +1,13 @@
-import { useGet, useLastResolved, useSet, useLoadable } from "ccstate-react";
+import { useGet, useLastResolved, useLoadable } from "ccstate-react";
 import { IconCrown, IconMessageCircle, IconUsers } from "@tabler/icons-react";
-import { Button, Card, CardContent } from "@vm0/ui";
+import { Card, CardContent } from "@vm0/ui";
 import {
   zeroSubagents$,
   agentsLoading$,
   agentsError$,
 } from "../../signals/zero-page/zero-agents.ts";
-import { navigateInReact$ } from "../../signals/route.ts";
 import { agentDisplayName$ } from "../../signals/zero-page/zero-agent-name.ts";
+import { Link } from "../router/link.tsx";
 import { ZeroJobDetailPage } from "./zero-job-detail-page.tsx";
 import { useAgentAvatar } from "./zero-sidebar.tsx";
 
@@ -28,7 +28,6 @@ export function ZeroJobsPage({
   const agents = useLastResolved(zeroSubagents$);
   const loading = useGet(agentsLoading$);
   const error = useGet(agentsError$);
-  const navigate = useSet(navigateInReact$);
 
   if (selectedAgentName) {
     return <ZeroJobDetailPage agentName={selectedAgentName} />;
@@ -51,45 +50,40 @@ export function ZeroJobsPage({
       <main className="flex-1 overflow-auto px-4 sm:px-6 pt-4 pb-8">
         <div className="mx-auto max-w-[900px] flex flex-col gap-6">
           {/* Zero — full width */}
-          <Card
-            role="button"
-            tabIndex={0}
-            className="zero-card cursor-pointer"
-            onClick={() =>
-              navigate("/zero/:tab", { pathParams: { tab: "meet" } })
-            }
-            onKeyDown={(e) =>
-              e.key === "Enter" &&
-              navigate("/zero/:tab", { pathParams: { tab: "meet" } })
-            }
+          <Link
+            pathname="/zero/:tab"
+            options={{ pathParams: { tab: "meet" } }}
+            className="block no-underline text-inherit"
           >
-            <CardContent className="p-5 flex items-center gap-4">
-              <img
-                src={zeroAvatarSrc}
-                alt={agentName}
-                className="h-12 w-12 shrink-0 rounded-full object-cover object-top"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-semibold tracking-tight text-foreground truncate">
-                    {agentName}
-                  </h2>
-                  <span className="zero-pill inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 text-xs font-medium">
-                    <IconCrown
-                      size={12}
-                      stroke={1.8}
-                      className="shrink-0 text-amber-500 dark:text-amber-400"
-                    />
-                    Lead
-                  </span>
+            <Card className="zero-card cursor-pointer hover:bg-muted/30 transition-colors">
+              <CardContent className="p-5 flex items-center gap-4">
+                <img
+                  src={zeroAvatarSrc}
+                  alt={agentName}
+                  className="h-12 w-12 shrink-0 rounded-full object-cover object-top"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-semibold tracking-tight text-foreground truncate">
+                      {agentName}
+                    </h2>
+                    <span className="zero-pill inline-flex items-center gap-1.5 rounded-lg border px-2 py-0.5 text-xs font-medium">
+                      <IconCrown
+                        size={12}
+                        stroke={1.8}
+                        className="shrink-0 text-amber-500 dark:text-amber-400"
+                      />
+                      Lead
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    Your primary AI assistant that manages your team and
+                    orchestrates workflows.
+                  </p>
                 </div>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Your primary AI assistant that manages your team and
-                  orchestrates workflows.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </Link>
 
           {/* Sub-agents grid */}
           {loading && (!agents || agents.length === 0) && (
@@ -114,14 +108,12 @@ export function ZeroJobsPage({
             <Card className="zero-card">
               <CardContent className="px-6 py-6 text-center space-y-3">
                 <p className="text-sm text-destructive">{error}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="zero-btn-morandi"
-                  onClick={() => navigate("/zero")}
+                <Link
+                  pathname="/zero"
+                  className="zero-btn-morandi inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-sm font-medium no-underline text-inherit hover:bg-accent"
                 >
                   Retry
-                </Button>
+                </Link>
               </CardContent>
             </Card>
           )}
@@ -168,15 +160,14 @@ export function ZeroJobsPage({
               </button>
 
               {agents.map((agent) => (
-                <AgentCard
+                <Link
                   key={agent.name}
-                  agent={agent}
-                  onNavigate={() =>
-                    navigate("/zero/team/:name", {
-                      pathParams: { name: agent.name },
-                    })
-                  }
-                />
+                  pathname="/zero/team/:name"
+                  options={{ pathParams: { name: agent.name } }}
+                  className="block no-underline text-inherit"
+                >
+                  <AgentCard agent={agent} />
+                </Link>
               ))}
             </div>
           )}
@@ -188,25 +179,17 @@ export function ZeroJobsPage({
 
 function AgentCard({
   agent,
-  onNavigate,
 }: {
   agent: {
     name: string;
     displayName?: string | null;
     description?: string | null;
   };
-  onNavigate: () => void;
 }) {
   const avatarSrc = useAgentAvatar(agent.name);
   const displayName = agent.displayName ?? agent.name;
   return (
-    <Card
-      role="button"
-      tabIndex={0}
-      className="zero-card cursor-pointer flex flex-col"
-      onClick={onNavigate}
-      onKeyDown={(e) => e.key === "Enter" && onNavigate()}
-    >
+    <Card className="zero-card cursor-pointer flex flex-col hover:bg-muted/30 transition-colors h-full">
       <CardContent className="p-5 flex flex-col flex-1 gap-3">
         <span className="self-start inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-muted-foreground">
           <IconUsers

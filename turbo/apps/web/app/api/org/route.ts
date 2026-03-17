@@ -7,10 +7,7 @@ import { orgContract, createErrorResponse, ApiError } from "@vm0/core";
 import { initServices } from "../../../src/lib/init-services";
 import { getAuthContext } from "../../../src/lib/auth/get-user-id";
 import { updateOrgSlug } from "../../../src/lib/org/org-service";
-import {
-  resolveOrg,
-  resolveDefaultOrgFromCache,
-} from "../../../src/lib/org/resolve-org";
+import { resolveOrg } from "../../../src/lib/org/resolve-org";
 import type { ResolvedOrg } from "../../../src/lib/org/resolve-org";
 import { logger } from "../../../src/lib/logger";
 import { isBadRequest, isForbidden, isNotFound } from "../../../src/lib/errors";
@@ -27,12 +24,12 @@ function resolvedOrgToResponse(resolved: ResolvedOrg) {
 
 const router = tsr.router(orgContract, {
   /**
-   * GET /api/org - Get current user's default org
+   * GET /api/org - Get current user's org
    *
-   * Resolves the active org via orgId from Clerk session,
-   * or falls back to the user's default org (first admin membership).
+   * Resolves the active org via ?org= query param, orgId from Clerk session,
+   * or explicit org context. Requires explicit org selection.
    */
-  get: async ({ headers }) => {
+  get: async ({ headers }, { request }) => {
     initServices();
 
     const authCtx = await getAuthContext(headers.authorization);
@@ -41,26 +38,17 @@ const router = tsr.router(orgContract, {
     }
     const { userId } = authCtx;
 
+    const orgSlug = new URL(request.url).searchParams.get("org");
+
     try {
-      const { org: resolvedOrg } = await resolveOrg(userId);
+      const { org: resolvedOrg } = await resolveOrg(userId, orgSlug);
 
       return {
         status: 200 as const,
         body: resolvedOrgToResponse(resolvedOrg),
       };
     } catch (error) {
-      if (isBadRequest(error)) {
-        // CLI tokens lack Clerk session — fall back to org_members_cache
-        const cachedOrg = await resolveDefaultOrgFromCache(userId);
-        if (cachedOrg) {
-          return {
-            status: 200 as const,
-            body: resolvedOrgToResponse(cachedOrg),
-          };
-        }
-        return createErrorResponse("NOT_FOUND", "Resource not found");
-      }
-      if (isNotFound(error)) {
+      if (isNotFound(error) || isBadRequest(error)) {
         return createErrorResponse("NOT_FOUND", "Resource not found");
       }
       throw error;
@@ -70,10 +58,10 @@ const router = tsr.router(orgContract, {
   /**
    * PUT /api/org - Update active org slug
    *
-   * Resolves the active org via orgId from Clerk session,
-   * or falls back to the user's default org (first admin membership).
+   * Resolves the active org via ?org= query param or orgId from Clerk session.
+   * Requires explicit org context.
    */
-  update: async ({ body, headers }) => {
+  update: async ({ body, headers }, { request }) => {
     initServices();
 
     const authCtx = await getAuthContext(headers.authorization);
@@ -83,32 +71,21 @@ const router = tsr.router(orgContract, {
     const { userId } = authCtx;
 
     const { slug, force } = body;
+    const orgSlug = new URL(request.url).searchParams.get("org");
 
     log.debug("updating org", { userId, slug, force });
 
     let resolvedOrg;
     try {
-      ({ org: resolvedOrg } = await resolveOrg(userId));
+      ({ org: resolvedOrg } = await resolveOrg(userId, orgSlug));
     } catch (error) {
-      if (isBadRequest(error)) {
-        // CLI tokens lack Clerk session — fall back to org_members_cache
-        const cachedOrg = await resolveDefaultOrgFromCache(userId);
-        if (cachedOrg) {
-          resolvedOrg = cachedOrg;
-        } else {
-          return createErrorResponse(
-            "NOT_FOUND",
-            "No org configured. Set your org with: vm0 org set <slug>",
-          );
-        }
-      } else if (isNotFound(error)) {
+      if (isNotFound(error) || isBadRequest(error)) {
         return createErrorResponse(
           "NOT_FOUND",
           "No org configured. Set your org with: vm0 org set <slug>",
         );
-      } else {
-        throw error;
       }
+      throw error;
     }
 
     try {

@@ -574,7 +574,11 @@ export async function refreshConnectorAccessToken(
     return result.accessToken;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    log.warn(`${connectorType} token refresh failed: ${message}`);
+    log.warn(`${connectorType} token refresh failed: ${message}`, {
+      connectorType,
+      orgId,
+      userId,
+    });
 
     // Mark connector as needing reconnect so the UI can surface the failure
     await globalThis.services.db
@@ -587,7 +591,6 @@ export async function refreshConnectorAccessToken(
           eq(connectors.type, connectorType),
         ),
       );
-
     return null;
   }
 }

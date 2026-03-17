@@ -4,7 +4,6 @@ import { ZeroChatPage } from "./zero-chat-page.tsx";
 import { ZeroSessionChatPage } from "./zero-session-chat-page.tsx";
 import { ZeroPreferencesPage } from "./zero-account-page.tsx";
 import { ZeroJobsPage } from "./zero-jobs-page.tsx";
-import { ZeroMeetPage } from "./zero-meet-page.tsx";
 import { ZeroActivityPage } from "./zero-activity-page.tsx";
 import { ZeroWorksPage } from "./zero-works-page.tsx";
 import { ZeroSchedulePage } from "./zero-schedule-page.tsx";
@@ -31,10 +30,10 @@ interface ZeroContentProps {
   chatAgentName?: string;
   /** Override avatar for the chat page when a sub-agent is selected. */
   chatAvatarSrc?: string;
-  /** Cycle avatar — only used by meet (team detail) page. */
-  onAvatarClick?: () => void;
   /** Navigate to agent profile — clicking chat header avatar. */
   onChatAvatarClick?: () => void;
+  /** Cycle the default agent (Zero) avatar. */
+  onCycleZeroAvatar?: () => void;
 }
 
 function getSectionTitles(
@@ -42,7 +41,6 @@ function getSectionTitles(
 ): Readonly<Record<ZeroNavId, string>> {
   return {
     chat: `Chat with ${agentName}`,
-    meet: `Meet ${agentName}`,
     schedule: "Scheduled",
     team: `${agentName}'s team`,
     activity: "Activities",
@@ -66,8 +64,8 @@ export function ZeroContent({
   zeroAvatarSrc = "/zero-avatar.png",
   chatAgentName,
   chatAvatarSrc,
-  onAvatarClick,
   onChatAvatarClick,
+  onCycleZeroAvatar,
 }: ZeroContentProps) {
   const agentNameLoadable = useLoadable(agentDisplayName$);
   const agentName =
@@ -98,14 +96,6 @@ export function ZeroContent({
       />
     );
   }
-  if (sectionId === "meet") {
-    return (
-      <ZeroMeetPage
-        zeroAvatarSrc={zeroAvatarSrc}
-        onAvatarClick={onAvatarClick}
-      />
-    );
-  }
   if (sectionId === "schedule") {
     return <ZeroSchedulePage />;
   }
@@ -115,6 +105,7 @@ export function ZeroContent({
         onNavigateToChat={onNavigateToChat}
         selectedAgentName={selectedAgentName}
         zeroAvatarSrc={zeroAvatarSrc}
+        onCycleZeroAvatar={onCycleZeroAvatar}
       />
     );
   }

@@ -2665,6 +2665,16 @@ export async function setTestRunStatus(
     .where(eq(agentRuns.id, runId));
 }
 
+export async function setTestRunModelProvider(
+  runId: string,
+  modelProvider: string,
+): Promise<void> {
+  await globalThis.services.db
+    .update(agentRuns)
+    .set({ modelProvider })
+    .where(eq(agentRuns.id, runId));
+}
+
 export async function expireQueueEntry(runId: string) {
   // Set expiresAt far enough in the past to avoid any timing issues in CI
   await globalThis.services.db
@@ -3203,17 +3213,19 @@ export async function insertTestCreditPricing(
   options?: {
     inputTokenPrice?: number;
     outputTokenPrice?: number;
+    modelProvider?: string;
   },
 ): Promise<void> {
   initServices();
   const inputTokenPrice = options?.inputTokenPrice ?? 100;
   const outputTokenPrice = options?.outputTokenPrice ?? 200;
+  const modelProvider = options?.modelProvider ?? "";
 
   await globalThis.services.db
     .insert(creditPricing)
-    .values({ model, inputTokenPrice, outputTokenPrice })
+    .values({ model, modelProvider, inputTokenPrice, outputTokenPrice })
     .onConflictDoUpdate({
-      target: creditPricing.model,
+      target: [creditPricing.model, creditPricing.modelProvider],
       set: { inputTokenPrice, outputTokenPrice },
     });
 }
@@ -3229,6 +3241,7 @@ export async function insertTestCreditUsage(
   options: {
     userId?: string;
     model?: string;
+    modelProvider?: string;
     inputTokens?: number;
     outputTokens?: number;
     numEvents?: number;
@@ -3274,6 +3287,7 @@ export async function insertTestCreditUsage(
       orgId,
       userId,
       model: options.model ?? "gpt-4",
+      modelProvider: options.modelProvider ?? "",
       inputTokens: options.inputTokens ?? 1000,
       outputTokens: options.outputTokens ?? 500,
       numEvents: options.numEvents ?? 2,
@@ -3323,6 +3337,7 @@ export async function findTestCreditUsageByRunId(runId: string): Promise<
       orgId: string;
       userId: string;
       model: string;
+      modelProvider: string;
       inputTokens: number;
       outputTokens: number;
       numEvents: number;
@@ -3339,6 +3354,7 @@ export async function findTestCreditUsageByRunId(runId: string): Promise<
       orgId: creditUsage.orgId,
       userId: creditUsage.userId,
       model: creditUsage.model,
+      modelProvider: creditUsage.modelProvider,
       inputTokens: creditUsage.inputTokens,
       outputTokens: creditUsage.outputTokens,
       numEvents: creditUsage.numEvents,

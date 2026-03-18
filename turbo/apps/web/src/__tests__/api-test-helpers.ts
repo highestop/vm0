@@ -634,6 +634,7 @@ export async function createTestRunInDb(
   options?: {
     status?: string;
     prompt?: string;
+    continuedFromSessionId?: string;
     createdAt?: Date;
     orgId?: string;
     startedAt?: Date;
@@ -659,6 +660,7 @@ export async function createTestRunInDb(
     {
       status: options?.status ?? "pending",
       prompt: options?.prompt ?? "test prompt",
+      continuedFromSessionId: options?.continuedFromSessionId,
       createdAt: options?.createdAt,
       startedAt: options?.startedAt,
       completedAt: options?.completedAt,

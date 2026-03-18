@@ -7,7 +7,8 @@ import {
   zeroAddedSkills$,
   addZeroSkill$,
   saveZeroSkills$,
-} from "../zero-meet.ts";
+} from "../zero-skills.ts";
+import { setZeroChatAgent$ } from "../zero-nav.ts";
 
 const context = testContext();
 
@@ -15,8 +16,8 @@ interface ComposeJobPayload {
   content: { agents: Record<string, { skills?: string[] }> };
 }
 
-function getComposeContent(payload: Record<string, unknown>) {
-  return (payload as unknown as ComposeJobPayload).content;
+function getComposeContent(payload: ComposeJobPayload) {
+  return payload.content;
 }
 
 function mockComposeApi(content: {
@@ -71,11 +72,60 @@ describe("zeroAddedSkills$", () => {
     const skills = await context.store.get(zeroAddedSkills$);
     expect(skills).toStrictEqual([]);
   });
+
+  it("should seed skills from sub-agent compose when chat agent is set", async () => {
+    const subAgentComposeId = "sub-agent-compose-id";
+
+    // Default agent has slack only
+    mockComposeApi({
+      agents: {
+        zero: {
+          framework: "claude-code",
+          skills: ["https://github.com/vm0-ai/vm0-skills/tree/main/slack"],
+        },
+      },
+    });
+
+    // Sub-agent has github only
+    server.use(
+      http.get(`*/api/agent/composes/${subAgentComposeId}`, () => {
+        return HttpResponse.json({
+          id: subAgentComposeId,
+          name: "cycling-coach",
+          headVersionId: "v1",
+          content: {
+            version: "1",
+            agents: {
+              "cycling-coach": {
+                framework: "claude-code",
+                skills: [
+                  "https://github.com/vm0-ai/vm0-skills/tree/main/github",
+                ],
+              },
+            },
+          },
+        });
+      }),
+    );
+
+    await setupPage({
+      context,
+      path: "/talk/cycling-coach",
+      withoutRender: true,
+    });
+    await context.store.set(setZeroChatAgent$, {
+      id: subAgentComposeId,
+      name: "cycling-coach",
+    });
+
+    const skills = await context.store.get(zeroAddedSkills$);
+    expect(skills).toStrictEqual(["github"]);
+  });
 });
 
 describe("addZeroSkill$", () => {
   it("should add a skill locally and save to compose", async () => {
-    let postedContent: Record<string, unknown> | null = null;
+    let postedContent: ComposeJobPayload | null = null;
 
     mockComposeApi({
       agents: {
@@ -88,7 +138,7 @@ describe("addZeroSkill$", () => {
 
     server.use(
       http.post("*/api/compose/jobs", async ({ request }) => {
-        postedContent = (await request.json()) as Record<string, unknown>;
+        postedContent = (await request.json()) as ComposeJobPayload;
         return HttpResponse.json({
           jobId: "job-1",
           status: "completed",
@@ -118,7 +168,7 @@ describe("addZeroSkill$", () => {
     // Save triggers the compose job
     await context.store.set(saveZeroSkills$);
 
-    expect(postedContent).toBeTruthy();
+    expect(postedContent).not.toBeNull();
     const content = getComposeContent(postedContent!);
     const agentKey = Object.keys(content.agents)[0];
     expect(content.agents[agentKey].skills).toContain(

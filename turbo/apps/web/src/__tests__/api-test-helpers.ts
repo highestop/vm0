@@ -3338,6 +3338,18 @@ export async function createTestSlackOrgConnection(opts: {
 
   const slackUserId = opts.slackUserId ?? `U-${randomUUID().slice(0, 8)}`;
 
+  const [installation] = await globalThis.services.db
+    .select({ orgId: slackOrgInstallations.orgId })
+    .from(slackOrgInstallations)
+    .where(eq(slackOrgInstallations.slackWorkspaceId, opts.slackWorkspaceId))
+    .limit(1);
+
+  if (!installation?.orgId) {
+    throw new Error(
+      `No installation with orgId found for workspace ${opts.slackWorkspaceId}`,
+    );
+  }
+
   const [connection] = await globalThis.services.db
     .insert(slackOrgConnections)
     .values({

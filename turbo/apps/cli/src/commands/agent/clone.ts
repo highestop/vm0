@@ -9,34 +9,45 @@ import * as tar from "tar";
 import { stringify as yamlStringify } from "yaml";
 import { getComposeByName, getStorageDownload } from "../../lib/api";
 import { getInstructionsStorageName } from "@vm0/core";
-import type { AgentComposeContent } from "../../lib/domain/compose-types";
+import type {
+  AgentComposeContent,
+  AgentDefinition,
+} from "../../lib/domain/compose-types";
 import { withErrorHandler } from "../../lib/command";
 
 /**
- * Remove deprecated fields from compose content
+ * Clean compose content for local use.
+ * Strips any extra fields not part of the agent definition schema
+ * (e.g., deprecated fields from old stored composes).
  */
 function cleanComposeContent(
   content: AgentComposeContent,
 ): AgentComposeContent {
-  const cleaned: AgentComposeContent = {
+  const agents: Record<string, AgentDefinition> = {};
+  for (const [name, agent] of Object.entries(content.agents)) {
+    const cleaned: AgentDefinition = {
+      framework: agent.framework,
+    };
+    if (agent.description) cleaned.description = agent.description;
+    if (agent.volumes) cleaned.volumes = agent.volumes;
+    if (agent.environment) cleaned.environment = agent.environment;
+    if (agent.instructions) cleaned.instructions = agent.instructions;
+    if (agent.skills) cleaned.skills = agent.skills;
+    if (agent.experimental_runner)
+      cleaned.experimental_runner = agent.experimental_runner;
+    agents[name] = cleaned;
+  }
+
+  const result: AgentComposeContent = {
     version: content.version,
-    agents: {},
+    agents,
   };
 
-  for (const [agentName, agent] of Object.entries(content.agents)) {
-    // Destructure to exclude deprecated fields
-    const { image, working_dir: workingDir, ...rest } = agent;
-    void image;
-    void workingDir;
-    cleaned.agents[agentName] = rest;
-  }
-
-  // Keep volumes section if it exists
   if (content.volumes) {
-    cleaned.volumes = content.volumes;
+    result.volumes = content.volumes;
   }
 
-  return cleaned;
+  return result;
 }
 
 /**
@@ -139,7 +150,7 @@ export const cloneCommand = new Command()
 
       const content = compose.content as AgentComposeContent;
 
-      // Clean up deprecated fields
+      // Strip any extra fields not part of the agent definition schema
       const cleanedContent = cleanComposeContent(content);
 
       // Convert to YAML

@@ -10,6 +10,7 @@ import type { StorageManifest } from "../../storage/types";
 import { DEFAULT_PROFILE } from "@vm0/core";
 import { badRequest } from "../../errors";
 import { logger } from "../../logger";
+import { extractWorkingDir } from "../utils/extract-working-dir";
 import {
   agentComposes,
   agentComposeVersions,
@@ -18,27 +19,6 @@ import { getOrgData } from "../../org/org-cache-service";
 import { extractCliAgentType } from "../utils";
 
 const log = logger("context:preparer");
-
-/**
- * Extract working directory from agent compose config
- * This is required for resume and storage operations
- */
-function extractWorkingDir(agentCompose: unknown): string {
-  const compose = agentCompose as AgentComposeYaml | undefined;
-  if (!compose?.agents) {
-    throw badRequest(
-      "Agent must have working_dir configured (no default allowed)",
-    );
-  }
-  const agents = Object.values(compose.agents);
-  const workingDir = agents[0]?.working_dir;
-  if (!workingDir) {
-    throw badRequest(
-      "Agent must have working_dir configured (no default allowed)",
-    );
-  }
-  return workingDir;
-}
 
 /**
  * Resolve runner group from agent compose config

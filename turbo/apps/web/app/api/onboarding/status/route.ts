@@ -10,6 +10,7 @@ import {
   agentComposes,
   agentComposeVersions,
 } from "../../../../src/db/schema/agent-compose";
+import { zeroAgents } from "../../../../src/db/schema/zero-agent";
 import { eq, and } from "drizzle-orm";
 import { agentComposeApiContentSchema } from "@vm0/core";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -48,6 +49,70 @@ async function isMemberOnboardingDone(
   return metadata?.onboarding_done === true;
 }
 
+interface DefaultAgentInfo {
+  name: string;
+  composeId: string;
+  metadata: {
+    displayName?: string;
+    description?: string;
+    sound?: string;
+  } | null;
+  skills: string[];
+}
+
+async function resolveDefaultAgent(
+  orgId: string,
+  composeId: string,
+): Promise<DefaultAgentInfo | null> {
+  // Single query: JOIN compose + zero_agents + head version
+  const [row] = await globalThis.services.db
+    .select({
+      name: agentComposes.name,
+      displayName: zeroAgents.displayName,
+      description: zeroAgents.description,
+      sound: zeroAgents.sound,
+      content: agentComposeVersions.content,
+    })
+    .from(agentComposes)
+    .leftJoin(
+      zeroAgents,
+      and(eq(zeroAgents.orgId, orgId), eq(zeroAgents.name, agentComposes.name)),
+    )
+    .leftJoin(
+      agentComposeVersions,
+      eq(agentComposes.headVersionId, agentComposeVersions.id),
+    )
+    .where(eq(agentComposes.id, composeId))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const metadata =
+    (row.displayName ?? row.description ?? row.sound)
+      ? {
+          displayName: row.displayName ?? undefined,
+          description: row.description ?? undefined,
+          sound: row.sound ?? undefined,
+        }
+      : null;
+
+  let skills: string[] = [];
+  if (row.content) {
+    const parsed = agentComposeApiContentSchema.safeParse(row.content);
+    if (parsed.success) {
+      const agentKey = Object.keys(parsed.data.agents)[0];
+      const agentDef = agentKey ? parsed.data.agents[agentKey] : undefined;
+      if (agentDef) {
+        skills = agentDef.skills ?? [];
+      }
+    }
+  }
+
+  return { name: row.name, composeId, metadata, skills };
+}
+
 const router = tsr.router(onboardingStatusContract, {
   getStatus: async ({ headers }, { request }) => {
     initServices();
@@ -62,20 +127,10 @@ const router = tsr.router(onboardingStatusContract, {
       };
     }
 
-    // Check if org exists
     let hasOrg = false;
     let resolvedOrgId: string | null = null;
     let hasModelProvider = false;
-    let hasDefaultAgent = false;
-    let defaultAgentName: string | null = null;
-    let defaultAgentComposeId: string | null = null;
-    let defaultAgentMetadata: {
-      displayName?: string;
-      description?: string;
-      sound?: string;
-    } | null = null;
-    let defaultAgentSkills: string[] = [];
-
+    let defaultAgent: DefaultAgentInfo | null = null;
     let isAdmin = false;
 
     const orgSlug = new URL(request.url).searchParams.get("org");
@@ -104,62 +159,26 @@ const router = tsr.router(onboardingStatusContract, {
         authCtx.sessionClaims?.org_default_agent_compose_id ?? null;
 
       if (claimAgentComposeId) {
-        const [compose] = await globalThis.services.db
-          .select({
-            name: agentComposes.name,
-            headVersionId: agentComposes.headVersionId,
-            content: agentComposeVersions.content,
-          })
-          .from(agentComposes)
-          .leftJoin(
-            agentComposeVersions,
-            eq(agentComposes.headVersionId, agentComposeVersions.id),
-          )
-          .where(eq(agentComposes.id, claimAgentComposeId))
-          .limit(1);
-
-        if (compose) {
-          hasDefaultAgent = true;
-          defaultAgentName = compose.name;
-          defaultAgentComposeId = claimAgentComposeId;
-
-          // Extract metadata from compose content
-          const parsed = agentComposeApiContentSchema.safeParse(
-            compose.content,
-          );
-          if (parsed.success) {
-            const agentKey = Object.keys(parsed.data.agents)[0];
-            const agentDef = agentKey
-              ? parsed.data.agents[agentKey]
-              : undefined;
-            if (agentDef) {
-              defaultAgentMetadata = agentDef.metadata ?? null;
-              defaultAgentSkills = agentDef.skills ?? [];
-            }
-          }
-        }
+        defaultAgent = await resolveDefaultAgent(
+          resolvedOrg.orgId,
+          claimAgentComposeId,
+        );
       }
     } catch (error) {
       if (!isNotFound(error) && !isBadRequest(error)) {
         throw error;
       }
-      // Org not found or no explicit org context — all flags stay false
     }
 
-    // Admins need onboarding when no default agent is configured.
-    // Members need onboarding when they haven't completed the member welcome flow
-    // (tracked via Clerk membership metadata `onboarding_done`).
     let needsOnboarding: boolean;
     if (!hasOrg) {
       needsOnboarding = true;
     } else if (isAdmin) {
-      needsOnboarding = !hasDefaultAgent;
+      needsOnboarding = !defaultAgent;
     } else {
-      // resolvedOrgId is set whenever hasOrg is true (both come from the same try block)
       if (!resolvedOrgId) {
         throw new Error("resolvedOrgId is null despite hasOrg being true");
       }
-      // Read onboarding_done from org_members_cache first, fall back to Clerk API.
       const onboardingDone = await isMemberOnboardingDone(
         resolvedOrgId,
         authCtx.userId,
@@ -174,11 +193,11 @@ const router = tsr.router(onboardingStatusContract, {
         isAdmin,
         hasOrg,
         hasModelProvider,
-        hasDefaultAgent,
-        defaultAgentName,
-        defaultAgentComposeId,
-        defaultAgentMetadata,
-        defaultAgentSkills,
+        hasDefaultAgent: defaultAgent !== null,
+        defaultAgentName: defaultAgent?.name ?? null,
+        defaultAgentComposeId: defaultAgent?.composeId ?? null,
+        defaultAgentMetadata: defaultAgent?.metadata ?? null,
+        defaultAgentSkills: defaultAgent?.skills ?? [],
       },
     };
   },

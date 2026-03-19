@@ -34,10 +34,9 @@ import { env } from "../../../../../../src/env";
 import {
   getInstructionsStorageName,
   getInstructionsFilename,
-  injectMetadataFrontmatter,
   stripMetadataFrontmatter,
+  agentComposeApiContentSchema,
 } from "@vm0/core";
-import type { AgentComposeYaml } from "../../../../../../src/types/agent-compose";
 import { extractFileFromTar } from "../../../../../../src/lib/tar";
 
 export async function GET(
@@ -96,14 +95,14 @@ export async function GET(
   }
 
   // Extract instructions filename from compose content
-  const content = result.content as AgentComposeYaml | null;
-  if (!content?.agents) {
+  const parsed = agentComposeApiContentSchema.safeParse(result.content);
+  if (!parsed.success) {
     return NextResponse.json({ content: null, filename: null });
   }
 
-  const agentKeys = Object.keys(content.agents);
+  const agentKeys = Object.keys(parsed.data.agents);
   const firstKey = agentKeys[0];
-  const agentDef = firstKey ? content.agents[firstKey] : null;
+  const agentDef = firstKey ? parsed.data.agents[firstKey] : undefined;
   // Use the explicit instructions filename from YAML, or fall back to the
   // framework-canonical name (e.g. CLAUDE.md for claude-code).  The CLI may
   // upload instructions without setting the `instructions` field in the YAML.
@@ -171,32 +170,19 @@ export async function GET(
     });
   }
 
-  // Strip any metadata the CLI may have baked in, then inject fresh metadata
-  // from the compose content so it always reflects the latest agent settings.
+  // Strip any legacy metadata blocks that the CLI may have baked in.
+  // New uploads no longer inject metadata; this handles the transition period.
+  // Only strip when legacy markers are present to avoid trimming clean content.
   const rawContent = fileContent.toString("utf-8");
-  const metadata = extractAgentMetadata(content);
-  const finalContent = metadata
-    ? injectMetadataFrontmatter(stripMetadataFrontmatter(rawContent), metadata)
+  const hasLegacyBlocks =
+    rawContent.includes("[AGENT_PROFILE]") ||
+    rawContent.includes("<!-- ZERO_PROFILE");
+  const finalContent = hasLegacyBlocks
+    ? stripMetadataFrontmatter(rawContent)
     : rawContent;
 
   return NextResponse.json({
     content: finalContent,
     filename: instructionsFilename,
   });
-}
-
-/**
- * Extract agent metadata from compose content for the first agent.
- */
-function extractAgentMetadata(
-  content: AgentComposeYaml,
-): { displayName?: string; description?: string; sound?: string } | undefined {
-  if (!content.agents) {
-    return undefined;
-  }
-  const agentKey = Object.keys(content.agents)[0];
-  if (!agentKey) {
-    return undefined;
-  }
-  return content.agents[agentKey]?.metadata;
 }

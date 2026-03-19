@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { authHeadersSchema, initContract } from "./base";
 import { apiErrorSchema } from "./errors";
+import { triggerSourceSchema } from "./logs";
 import { orgTierSchema } from "./orgs";
 
 const c = initContract();
@@ -59,6 +60,9 @@ const unifiedRunRequestSchema = z.object({
 
   // Optional list of tools to disable in Claude CLI (passed as --disallowed-tools)
   disallowedTools: z.array(z.string()).optional(),
+
+  // How the run was triggered (defaults to "cli" on the server if not provided)
+  triggerSource: triggerSourceSchema.optional(),
 });
 
 /**
@@ -586,7 +590,7 @@ const queueEntrySchema = z.object({
   isOwner: z.boolean(),
   runId: z.string().nullable(),
   prompt: z.string().nullable(),
-  triggerSource: z.enum(["schedule", "chat", "api"]).nullable(),
+  triggerSource: triggerSourceSchema.nullable(),
   sessionLink: z.string().nullable(),
 });
 

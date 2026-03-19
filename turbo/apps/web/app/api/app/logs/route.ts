@@ -22,6 +22,7 @@ import { getAuthContext } from "../../../../src/lib/auth/get-auth-context";
 import { resolveOrg } from "../../../../src/lib/org/resolve-org";
 import { isNotFound, isForbidden } from "../../../../src/lib/errors";
 import { logger } from "../../../../src/lib/logger";
+import { inferTriggerSource } from "../../../../src/lib/run/trigger-source";
 import { eq, and, desc, lt, or, ilike, count, type SQL } from "drizzle-orm";
 
 const log = logger("api:app:logs");
@@ -184,6 +185,9 @@ const router = tsr.router(logsListContract, {
         createdAt: agentRuns.createdAt,
         startedAt: agentRuns.startedAt,
         completedAt: agentRuns.completedAt,
+        triggerSource: agentRuns.triggerSource,
+        scheduleId: agentRuns.scheduleId,
+        continuedFromSessionId: agentRuns.continuedFromSessionId,
         composeName: agentComposes.name,
         orgId: agentComposes.orgId,
         sessionId: conversations.cliAgentSessionId,
@@ -254,7 +258,7 @@ const router = tsr.router(logsListContract, {
           displayName: run.displayName ?? null,
           orgSlug: run.orgId ? (slugMap.get(run.orgId) ?? null) : null,
           framework: extractFramework(run.composeContent),
-          modelProvider: run.modelProvider ?? null,
+          triggerSource: inferTriggerSource(run),
           status: run.status as LogStatus,
           createdAt: run.createdAt.toISOString(),
           startedAt: run.startedAt?.toISOString() ?? null,

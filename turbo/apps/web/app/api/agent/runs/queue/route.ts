@@ -7,6 +7,7 @@ import {
   getEffectiveConcurrencyLimit,
   PENDING_RUN_TTL_MS,
 } from "../../../../../src/lib/run/run-service";
+import { inferTriggerSource } from "../../../../../src/lib/run/trigger-source";
 import { getCachedUser } from "../../../../../src/lib/auth/user-cache-service";
 import { agentRuns } from "../../../../../src/db/schema/agent-run";
 import {
@@ -29,15 +30,6 @@ import {
 
 const RECENT_RUNS_FOR_ETA = 20;
 const PROMPT_TRUNCATE_LENGTH = 200;
-
-function inferTriggerSource(run: {
-  scheduleId: string | null;
-  continuedFromSessionId: string | null;
-}): "schedule" | "chat" | "api" {
-  if (run.scheduleId) return "schedule";
-  if (run.continuedFromSessionId) return "chat";
-  return "api";
-}
 
 const router = tsr.router(runsQueueContract, {
   getQueue: async ({ headers }, { request }) => {
@@ -92,6 +84,7 @@ const router = tsr.router(runsQueueContract, {
         agentName: agentComposes.name,
         agentDisplayName: zeroAgents.displayName,
         prompt: agentRuns.prompt,
+        triggerSource: agentRuns.triggerSource,
         scheduleId: agentRuns.scheduleId,
         continuedFromSessionId: agentRuns.continuedFromSessionId,
       })

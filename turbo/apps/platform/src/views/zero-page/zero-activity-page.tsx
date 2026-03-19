@@ -1,5 +1,4 @@
 import { useGet, useSet, useLoadable } from "ccstate-react";
-import { useCCState } from "ccstate-react/experimental";
 import {
   IconClock,
   IconChevronRight,
@@ -15,7 +14,10 @@ import {
   SelectValue,
   cn,
 } from "@vm0/ui";
-import type { LogEntry } from "../../signals/zero-page/log-types.ts";
+import {
+  TRIGGER_SOURCE_LABELS,
+  type LogEntry,
+} from "../../signals/zero-page/log-types.ts";
 import { StatusBadge } from "./components/logs/status-badge.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { ZeroActivityDetailPage } from "./zero-activity-detail-page.tsx";
@@ -29,7 +31,7 @@ import {
   zeroActivityHasPrev$,
   zeroActivityCurrentPage$,
   syncZeroActivitySub$,
-  refreshZeroActivity$,
+  refreshZeroActivityOnce$,
   goToNextZeroActivityPage$,
   goToPrevZeroActivityPage$,
   goForwardTwoZeroActivityPages$,
@@ -53,7 +55,7 @@ const STATUS_OPTIONS: readonly Readonly<{ value: string; label: string }>[] = [
 ];
 
 const ROW_GRID =
-  "grid grid-cols-[1fr_1fr_8rem_5rem_2.5rem] gap-x-6 items-center";
+  "grid grid-cols-[1fr_5rem_1fr_8rem_5rem_2.5rem] gap-x-6 items-center";
 
 function ActivityRow({
   entry,
@@ -73,6 +75,11 @@ function ActivityRow({
       <div className={cn(ROW_GRID)}>
         <div className="min-w-0 truncate text-left text-sm font-medium text-foreground">
           {agentName}
+        </div>
+        <div className="text-left text-sm text-muted-foreground">
+          {entry.triggerSource
+            ? TRIGGER_SOURCE_LABELS[entry.triggerSource]
+            : "—"}
         </div>
         <div className="text-left">
           <StatusBadge status={entry.status} zeroStyle />
@@ -116,18 +123,8 @@ export function ZeroActivityPage() {
   const goForwardTwo = useSet(goForwardTwoZeroActivityPages$);
   const goBackTwo = useSet(goBackTwoZeroActivityPages$);
   const setRowsPerPage = useSet(setZeroActivityRowsPerPage$);
-  const refresh = useSet(refreshZeroActivity$);
-
-  // Refresh activity data every time this tab is entered
-  const didRefresh$ = useCCState(false);
-  const didRefresh = useGet(didRefresh$);
-  const setDidRefresh = useSet(didRefresh$);
-  if (!didRefresh) {
-    queueMicrotask(() => {
-      setDidRefresh(true);
-      refresh();
-    });
-  }
+  const refreshOnce = useSet(refreshZeroActivityOnce$);
+  refreshOnce();
 
   // URL-driven detail: /activity/:logId
   const sub = useGet(zeroTabSub$);
@@ -225,6 +222,7 @@ export function ZeroActivityPage() {
                     )}
                   >
                     <div className="text-left">Agent</div>
+                    <div className="text-left">Source</div>
                     <div className="text-left">Status</div>
                     <div className="text-left">Start Time</div>
                     <div className="text-left">Duration</div>

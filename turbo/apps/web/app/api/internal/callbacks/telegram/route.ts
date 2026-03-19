@@ -19,9 +19,13 @@ import {
   buildTelegramResponse,
   buildTelegramErrorResponse,
 } from "../../../../../src/lib/telegram/format";
-import { detectDeepLinks } from "../../../../../src/lib/deep-links";
 import { getAppUrl } from "../../../../../src/lib/url";
-import { getRunOutput } from "../../../../../src/lib/slack/handlers/run-agent";
+import {
+  extractRunOutput,
+  buildDeepLinksFromFlags,
+  formatAskUserDenials,
+  type RunOutput,
+} from "../../../../../src/lib/run/extract-run-output";
 import {
   saveTelegramThreadSession,
   storeTelegramMessage,
@@ -98,6 +102,20 @@ async function findNewSessionId(
   return newSession?.id;
 }
 
+/**
+ * Build a plain-text output string from the already-fetched RunOutput,
+ * avoiding a redundant Axiom query.
+ */
+function buildOutputText(output: RunOutput): string | undefined {
+  if (output.askUserDenials.length > 0) {
+    const formatted = formatAskUserDenials(output.askUserDenials);
+    if (formatted) {
+      return output.result ? `${output.result}\n\n${formatted}` : formatted;
+    }
+  }
+  return output.result ?? undefined;
+}
+
 interface CompletionContext {
   client: ReturnType<typeof createTelegramClient>;
   runId: string;
@@ -145,15 +163,19 @@ async function handleCompletion(ctx: CompletionContext): Promise<void> {
       error,
     });
   }
-  const output = status === "completed" ? await getRunOutput(runId) : undefined;
+  const runOutput = await extractRunOutput(runId, error);
 
   // Build response text
   const logsUrl = buildLogsUrl(runId);
   let htmlOutput: string;
   let responseText: string | undefined;
   if (status === "completed") {
-    responseText = output ?? "Task completed successfully.";
-    const deepLinks = detectDeepLinks(responseText, getAppUrl(), agentName);
+    responseText = buildOutputText(runOutput) ?? "Task completed successfully.";
+    const deepLinks = buildDeepLinksFromFlags(
+      runOutput,
+      getAppUrl(),
+      agentName,
+    );
     htmlOutput = buildTelegramResponse(
       responseText,
       agentName,

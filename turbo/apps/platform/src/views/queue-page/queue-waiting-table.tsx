@@ -1,9 +1,13 @@
+import { useSet } from "ccstate-react";
 import { cn } from "@vm0/ui";
-import type { QueueEntry } from "../../signals/queue-page/queue-signals.ts";
+import {
+  cancelQueueRun$,
+  type QueueEntry,
+} from "../../signals/queue-page/queue-signals.ts";
 import { SimpleLink } from "../router/link.tsx";
 
 const ROW_GRID =
-  "grid grid-cols-[2.5rem_1fr_1fr_5rem_5rem_7rem] gap-x-4 items-center";
+  "grid grid-cols-[2.5rem_1fr_1fr_5rem_5rem_7rem_4rem] gap-x-6 items-center";
 
 function formatDuration(ms: number): string {
   if (ms < 60_000) {
@@ -35,6 +39,7 @@ export function QueueWaitingTable({
   queue,
   estimatedTimePerRun,
 }: QueueWaitingTableProps) {
+  const cancelRun = useSet(cancelQueueRun$);
   return (
     <div>
       <p className="text-sm font-medium text-muted-foreground mb-2 px-1">
@@ -45,11 +50,11 @@ export function QueueWaitingTable({
           No tasks in queue.
         </div>
       ) : (
-        <div className="zero-card overflow-hidden px-6 pb-2">
+        <div className="zero-card overflow-hidden px-4 sm:px-7 pb-3">
           <div
             className={cn(
               ROW_GRID,
-              "sticky top-0 z-10 -mx-4 px-4 py-2.5 text-xs font-medium text-muted-foreground bg-card border-b border-border/40",
+              "sticky top-0 z-10 -mx-4 px-4 py-3 text-sm font-medium text-muted-foreground bg-card border-b border-border/40",
             )}
           >
             <div>#</div>
@@ -58,46 +63,61 @@ export function QueueWaitingTable({
             <div>Queued</div>
             <div>Est. Wait</div>
             <div>Activity logs</div>
+            <div>Cancel</div>
           </div>
-          {queue.map((entry) => (
-            <div
-              key={entry.runId ?? `queue-${entry.position}`}
-              className={cn(
-                ROW_GRID,
-                "py-2.5 -mx-4 px-4 border-b border-border/40 last:border-b-0",
-              )}
-            >
-              <div className="text-sm font-medium text-muted-foreground tabular-nums">
-                {entry.position}
-              </div>
-              <div className="text-sm font-medium text-foreground truncate">
-                {entry.agentDisplayName ?? entry.agentName}
-              </div>
-              <div className="text-sm text-muted-foreground truncate">
-                {entry.userEmail}
-              </div>
-              <div className="text-sm text-muted-foreground tabular-nums">
-                {formatRelativeTime(entry.createdAt)}
-              </div>
-              <div className="text-sm text-muted-foreground tabular-nums">
-                {estimatedTimePerRun
-                  ? formatDuration(estimatedTimePerRun * entry.position)
-                  : "--"}
-              </div>
-              <div>
-                {entry.runId ? (
-                  <SimpleLink
-                    href={`/activity/${entry.runId}`}
-                    className="text-sm text-primary hover:underline"
-                  >
-                    View logs
-                  </SimpleLink>
-                ) : (
-                  <span className="text-sm text-muted-foreground">--</span>
+          {queue.map((entry) => {
+            const runId = entry.runId;
+            return (
+              <div
+                key={runId ?? `queue-${entry.position}`}
+                className={cn(
+                  ROW_GRID,
+                  "py-3 -mx-4 px-4 border-b border-border/40 last:border-b-0",
                 )}
+              >
+                <div className="text-sm font-medium text-muted-foreground tabular-nums">
+                  {entry.position}
+                </div>
+                <div className="text-sm font-medium text-foreground truncate">
+                  {entry.agentDisplayName ?? entry.agentName}
+                </div>
+                <div className="text-sm text-muted-foreground truncate">
+                  {entry.userEmail}
+                </div>
+                <div className="text-sm text-muted-foreground tabular-nums">
+                  {formatRelativeTime(entry.createdAt)}
+                </div>
+                <div className="text-sm text-muted-foreground tabular-nums">
+                  {estimatedTimePerRun
+                    ? formatDuration(estimatedTimePerRun * entry.position)
+                    : "--"}
+                </div>
+                <div>
+                  {runId ? (
+                    <SimpleLink
+                      href={`/activity/${runId}`}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      View logs
+                    </SimpleLink>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">--</span>
+                  )}
+                </div>
+                <div>
+                  {entry.isOwner && runId && (
+                    <button
+                      type="button"
+                      className="text-sm text-destructive hover:underline"
+                      onClick={() => void cancelRun(runId)}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

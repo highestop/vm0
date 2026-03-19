@@ -378,25 +378,6 @@ export {
 } from "./logs";
 
 export {
-  composeJobsMainContract,
-  composeJobsByIdContract,
-  webhookComposeCompleteContract,
-  composeJobStatusSchema,
-  composeJobResultSchema,
-  composeJobSourceSchema,
-  createComposeJobRequestSchema,
-  composeJobResponseSchema,
-  type ComposeJobsMainContract,
-  type ComposeJobsByIdContract,
-  type WebhookComposeCompleteContract,
-  type ComposeJobStatus,
-  type ComposeJobResult,
-  type ComposeJobSource,
-  type CreateComposeJobRequest,
-  type ComposeJobResponse,
-} from "./compose-jobs";
-
-export {
   connectorsMainContract,
   connectorsByTypeContract,
   connectorSessionsContract,
@@ -538,3 +519,19 @@ export {
   type OrgVariablesMainContract,
   type OrgVariablesByNameContract,
 } from "./org-variables";
+export {
+  zeroAgentsMainContract,
+  zeroAgentsByNameContract,
+  zeroAgentInstructionsContract,
+  zeroAgentResponseSchema,
+  zeroAgentRequestSchema,
+  zeroAgentInstructionsResponseSchema,
+  zeroAgentInstructionsRequestSchema,
+  type ZeroAgentsMainContract,
+  type ZeroAgentsByNameContract,
+  type ZeroAgentInstructionsContract,
+  type ZeroAgentResponse,
+  type ZeroAgentRequest,
+  type ZeroAgentInstructionsResponse,
+  type ZeroAgentInstructionsRequest,
+} from "./zero-agents";

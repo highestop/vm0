@@ -256,6 +256,11 @@ export {
   // Firewall gateway for model providers
   MODEL_PROVIDER_FIREWALL_CONFIGS,
   getModelProviderFirewall,
+  // VM0 managed provider
+  VM0_ORG_SLUG,
+  VM0_MODEL_TO_PROVIDER,
+  getVm0ConcreteProviderType,
+  getVm0Vendor,
 } from "./model-providers";
 export {
   sessionsContract,

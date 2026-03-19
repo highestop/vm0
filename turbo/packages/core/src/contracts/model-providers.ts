@@ -22,6 +22,45 @@ export interface AuthMethodConfig {
 }
 
 /**
+ * The org slug authorized to use the VM0 managed provider.
+ */
+export const VM0_ORG_SLUG = "vm0";
+
+/**
+ * Mapping from VM0 managed model names to their concrete provider type and vendor.
+ * Used at build-context time to resolve the meta-provider to a real provider.
+ *
+ * NOTE: Defined before MODEL_PROVIDER_TYPES so the vm0 entry can derive its
+ * models list from this mapping via Object.keys().
+ */
+export const VM0_MODEL_TO_PROVIDER: Record<
+  string,
+  { concreteType: string; vendor: string }
+> = {
+  "claude-sonnet-4.6": {
+    concreteType: "anthropic-api-key",
+    vendor: "anthropic",
+  },
+  "claude-opus-4.6": {
+    concreteType: "anthropic-api-key",
+    vendor: "anthropic",
+  },
+  "kimi-k2.5": { concreteType: "moonshot-api-key", vendor: "moonshot" },
+  "kimi-k2-thinking-turbo": {
+    concreteType: "moonshot-api-key",
+    vendor: "moonshot",
+  },
+  "kimi-k2-thinking": {
+    concreteType: "moonshot-api-key",
+    vendor: "moonshot",
+  },
+  "glm-5": { concreteType: "zai-api-key", vendor: "zai" },
+  "glm-4.7": { concreteType: "zai-api-key", vendor: "zai" },
+  "glm-4.5-air": { concreteType: "zai-api-key", vendor: "zai" },
+  "MiniMax-M2.1": { concreteType: "minimax-api-key", vendor: "minimax" },
+};
+
+/**
  * Model Provider type configuration
  * Maps type to framework, secret name, and display info
  *
@@ -290,6 +329,12 @@ export const MODEL_PROVIDER_TYPES = {
     allowCustomModel: true,
     customModelPlaceholder: "anthropic.claude-sonnet-4-20250514-v1:0",
   },
+  vm0: {
+    framework: "claude-code" as const,
+    label: "VM0 Managed",
+    models: Object.keys(VM0_MODEL_TO_PROVIDER) as string[],
+    defaultModel: "claude-sonnet-4.6",
+  },
 } as const;
 
 export type ModelProviderType = keyof typeof MODEL_PROVIDER_TYPES;
@@ -447,9 +492,38 @@ export const modelProviderTypeSchema = z.enum([
   "vercel-ai-gateway",
   "azure-foundry",
   "aws-bedrock",
+  "vm0",
 ]);
 
 export const modelProviderFrameworkSchema = z.enum(["claude-code"]);
+
+/**
+ * Get the concrete provider type for a VM0 managed model.
+ * Throws if the model is not in the VM0 model mapping.
+ */
+export function getVm0ConcreteProviderType(model: string): ModelProviderType {
+  const entry = VM0_MODEL_TO_PROVIDER[model];
+  if (!entry) {
+    throw new Error(
+      `Unknown VM0 model "${model}". Valid models: ${Object.keys(VM0_MODEL_TO_PROVIDER).join(", ")}`,
+    );
+  }
+  return entry.concreteType as ModelProviderType;
+}
+
+/**
+ * Get the vendor name for a VM0 managed model.
+ * Used for key pool lookup.
+ */
+export function getVm0Vendor(model: string): string {
+  const entry = VM0_MODEL_TO_PROVIDER[model];
+  if (!entry) {
+    throw new Error(
+      `Unknown VM0 model "${model}". Valid models: ${Object.keys(VM0_MODEL_TO_PROVIDER).join(", ")}`,
+    );
+  }
+  return entry.vendor;
+}
 
 /**
  * Get framework for a model provider type
@@ -608,9 +682,11 @@ export function allowsCustomModel(type: ModelProviderType): boolean {
  * Returns undefined for providers without feature gating.
  */
 export function getProviderFeatureFlag(
-  _type: ModelProviderType,
+  type: ModelProviderType,
 ): FeatureSwitchKey | undefined {
-  void _type;
+  if (type === "vm0") {
+    return FeatureSwitchKey.Vm0ModelProvider;
+  }
   return undefined;
 }
 

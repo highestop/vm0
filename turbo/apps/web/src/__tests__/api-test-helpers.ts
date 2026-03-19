@@ -101,6 +101,8 @@ import {
 } from "../db/schema/agent-compose";
 import { conversations } from "../db/schema/conversation";
 import { uniqueId, uniqueNumericId } from "./test-helpers";
+import { vm0ApiKeys } from "../db/schema/vm0-api-key";
+import { getVm0ApiKey } from "../lib/vm0-key/vm0-key-service";
 
 /**
  * Helper to create a NextRequest for testing.
@@ -3552,4 +3554,26 @@ export async function findOrgMembersEntry(orgId: string, userId: string) {
     .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
     .limit(1);
   return row;
+}
+
+/**
+ * Insert test VM0 API keys into the key pool.
+ */
+export async function insertVm0ApiKeys(
+  keys: Array<{
+    vendor: string;
+    model: string;
+    apiKey: string;
+    label?: string;
+  }>,
+) {
+  initServices();
+  await globalThis.services.db.insert(vm0ApiKeys).values(keys);
+}
+
+/**
+ * Get a VM0 API key from the pool for a vendor.
+ */
+export async function getTestVm0ApiKey(vendor: string) {
+  return getVm0ApiKey(vendor);
 }

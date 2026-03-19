@@ -354,6 +354,9 @@ export async function resolveSessionCompose(
 /**
  * Enrich message content with file attachments and Slack user info.
  * Shared between direct-message and mention handlers.
+ *
+ * Returns prompt (message text + files) and userContext (Slack user metadata)
+ * separately so callers can route them to user prompt vs system prompt.
  */
 export async function enrichMessageContent(opts: {
   messageContent: string;
@@ -363,8 +366,8 @@ export async function enrichMessageContent(opts: {
   threadTs: string;
   client: SlackClient;
   userId: string;
-}): Promise<string> {
-  let content = opts.messageContent;
+}): Promise<{ prompt: string; userContext: string }> {
+  let prompt = opts.messageContent;
 
   // Include files attached to the current message in the prompt
   if (opts.files && opts.files.length > 0) {
@@ -374,16 +377,17 @@ export async function enrichMessageContent(opts: {
       opts.botToken,
       imageSessionId,
     );
-    content = `${content}\n\n${filesText}`;
+    prompt = `${prompt}\n\n${filesText}`;
   }
 
-  // Prepend Slack user info to the prompt
+  // Build user context for system prompt
+  let userContext = "";
   const userInfo = await fetchSlackUserInfo(opts.client, opts.userId);
   if (userInfo) {
-    content = `[Slack User]\n${userInfo}\n\n${content}`;
+    userContext = `# Current User\n[Slack User]\n${userInfo}`;
   }
 
-  return content;
+  return { prompt, userContext };
 }
 
 /**

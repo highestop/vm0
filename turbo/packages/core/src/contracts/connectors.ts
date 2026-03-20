@@ -2344,6 +2344,26 @@ const CONNECTOR_TYPES_DEF = {
     } as Record<string, ConnectorAuthMethodConfig>,
     defaultAuthMethod: "api-token",
   },
+  brevo: {
+    label: "Brevo",
+    helpText:
+      "Connect your Brevo account to manage email campaigns, transactional emails, and CRM contacts",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to [Brevo](https://app.brevo.com)\n2. Go to **Settings** → **SMTP & API** → **API Keys**\n3. Copy your API key",
+        secrets: {
+          BREVO_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "xkeysib-...",
+          },
+        },
+      },
+    } as Record<string, ConnectorAuthMethodConfig>,
+    defaultAuthMethod: "api-token",
+  },
   "brave-search": {
     label: "Brave Search",
     helpText:
@@ -3297,6 +3317,7 @@ export const connectorTypeSchema = z.enum([
   "wix",
   "cal-com",
   "v0",
+  "brevo",
   "customer-io",
 ]);
 

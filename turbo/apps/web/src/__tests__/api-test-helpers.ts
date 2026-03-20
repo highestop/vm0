@@ -77,6 +77,7 @@ import { POST as enableScheduleRoute } from "../../app/api/agent/schedules/[name
 import { POST as disableScheduleRoute } from "../../app/api/agent/schedules/[name]/disable/route";
 import { GET as getScheduleRunsRoute } from "../../app/api/agent/schedules/[name]/runs/route";
 import type { ScheduleResponse } from "../lib/schedule/schedule-service";
+import { grantOrgCredits } from "../lib/org/org-service";
 import { POST as storagePrepareRoute } from "../../app/api/storages/prepare/route";
 import { POST as storageCommitRoute } from "../../app/api/storages/commit/route";
 import { PUT as setSecretRoute } from "../../app/api/secrets/route";
@@ -3728,4 +3729,64 @@ export async function countSlackOrgPendingQuestions(
     .from(slackOrgPendingQuestions)
     .where(eq(slackOrgPendingQuestions.connectionId, connectionId));
   return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// org credit helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Grant credits to an org atomically. Wraps grantOrgCredits in a transaction.
+ */
+export async function grantCreditsToOrg(
+  orgId: string,
+  amount: number,
+): Promise<void> {
+  await globalThis.services.db.transaction(async (tx) => {
+    await grantOrgCredits(tx, orgId, amount);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stripe billing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Set Stripe billing fields on an org in the `org_metadata` table.
+ */
+export async function updateOrgStripeFields(
+  orgId: string,
+  fields: {
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
+    subscriptionStatus?: string | null;
+    currentPeriodEnd?: Date | null;
+    lastProcessedInvoiceId?: string | null;
+    tier?: string;
+  },
+): Promise<void> {
+  await globalThis.services.db
+    .update(orgMetadata)
+    .set({ ...fields, updatedAt: new Date() })
+    .where(eq(orgMetadata.orgId, orgId));
+}
+
+/**
+ * Read all billing-related fields from an org in the `org_metadata` table.
+ */
+export async function getOrgBillingFields(orgId: string) {
+  const [row] = await globalThis.services.db
+    .select({
+      tier: orgMetadata.tier,
+      credits: orgMetadata.credits,
+      stripeCustomerId: orgMetadata.stripeCustomerId,
+      stripeSubscriptionId: orgMetadata.stripeSubscriptionId,
+      subscriptionStatus: orgMetadata.subscriptionStatus,
+      currentPeriodEnd: orgMetadata.currentPeriodEnd,
+      lastProcessedInvoiceId: orgMetadata.lastProcessedInvoiceId,
+    })
+    .from(orgMetadata)
+    .where(eq(orgMetadata.orgId, orgId))
+    .limit(1);
+  return row ?? null;
 }

@@ -17,6 +17,7 @@ import { braveSearchHandler } from "./providers/brave-search-handler";
 import { brightDataHandler } from "./providers/bright-data-handler";
 import { browserbaseHandler } from "./providers/browserbase-handler";
 import { browserlessHandler } from "./providers/browserless-handler";
+import { calComHandler } from "./providers/cal-com-handler";
 import { calendlyHandler } from "./providers/calendly-handler";
 import { canvaHandler } from "./providers/canva-handler";
 import { chatwootHandler } from "./providers/chatwoot-handler";
@@ -144,6 +145,7 @@ export const PROVIDER_HANDLERS: Record<
   "bright-data": brightDataHandler,
   browserbase: browserbaseHandler,
   browserless: browserlessHandler,
+  "cal-com": calComHandler,
   calendly: calendlyHandler,
   canva: canvaHandler,
   chatwoot: chatwootHandler,

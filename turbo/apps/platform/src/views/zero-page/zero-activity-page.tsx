@@ -31,7 +31,6 @@ import {
   zeroActivityHasPrev$,
   zeroActivityCurrentPage$,
   syncZeroActivitySub$,
-  refreshZeroActivityOnce$,
   goToNextZeroActivityPage$,
   goToPrevZeroActivityPage$,
   goForwardTwoZeroActivityPages$,
@@ -123,8 +122,6 @@ export function ZeroActivityPage() {
   const goForwardTwo = useSet(goForwardTwoZeroActivityPages$);
   const goBackTwo = useSet(goBackTwoZeroActivityPages$);
   const setRowsPerPage = useSet(setZeroActivityRowsPerPage$);
-  const refreshOnce = useSet(refreshZeroActivityOnce$);
-  refreshOnce();
 
   // URL-driven detail: /activity/:logId
   const sub = useGet(zeroTabSub$);

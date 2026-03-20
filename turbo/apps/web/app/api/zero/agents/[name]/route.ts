@@ -151,7 +151,8 @@ const router = tsr.router(zeroAgentsByNameContract, {
       };
     }
 
-    // Write metadata to zero_agents
+    // Write metadata to zero_agents — only overwrite fields explicitly provided
+    const now = new Date();
     await globalThis.services.db
       .insert(zeroAgents)
       .values({
@@ -164,23 +165,39 @@ const router = tsr.router(zeroAgentsByNameContract, {
       .onConflictDoUpdate({
         target: [zeroAgents.orgId, zeroAgents.name],
         set: {
-          displayName: body.displayName ?? null,
-          description: body.description ?? null,
-          sound: body.sound ?? null,
-          updatedAt: new Date(),
+          updatedAt: now,
+          ...(body.displayName !== undefined && {
+            displayName: body.displayName,
+          }),
+          ...(body.description !== undefined && {
+            description: body.description,
+          }),
+          ...(body.sound !== undefined && { sound: body.sound }),
         },
       });
 
     log.info(`Updated zero agent: ${result.composeName}`);
+
+    // Re-query to return actual persisted state
+    const [agent] = await globalThis.services.db
+      .select()
+      .from(zeroAgents)
+      .where(
+        and(
+          eq(zeroAgents.orgId, org.orgId),
+          eq(zeroAgents.name, result.composeName),
+        ),
+      )
+      .limit(1);
 
     return {
       status: 200 as const,
       body: {
         name: result.composeName,
         agentComposeId: result.composeId,
-        description: body.description ?? null,
-        displayName: body.displayName ?? null,
-        sound: body.sound ?? null,
+        description: agent?.description ?? null,
+        displayName: agent?.displayName ?? null,
+        sound: agent?.sound ?? null,
         connectors: extractConnectors(content),
       },
     };

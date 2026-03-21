@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
@@ -57,7 +57,7 @@ describe("zero works page - header", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Connect with Zero through these channels"),
+        screen.getByText(/connect with zero through these channels/i),
       ).toBeInTheDocument();
     });
   });
@@ -140,6 +140,17 @@ describe("zero works page - slack card connected state", () => {
       screen.queryByRole("button", { name: "Connect" }),
     ).not.toBeInTheDocument();
   });
+
+  it("should show default description when installed", async () => {
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
+    await renderWorksPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/team communication and collaboration/i),
+      ).toBeInTheDocument();
+    });
+  });
 });
 
 describe("zero works page - slack not installed", () => {
@@ -169,7 +180,7 @@ describe("zero works page - slack not installed", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Ask your admin to install the Slack integration"),
+        screen.getByText(/ask your admin to install/i),
       ).toBeInTheDocument();
     });
   });
@@ -277,25 +288,8 @@ describe("zero works page - uninstall confirmation dialog", () => {
   it("should call uninstall API when confirming uninstall", async () => {
     let uninstallCalled = false;
 
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
     server.use(
-      http.get("*/api/zero/integrations/slack", () => {
-        return HttpResponse.json({
-          isConnected: true,
-          isInstalled: true,
-          workspaceName: "Test Workspace",
-          isAdmin: true,
-          installUrl: "/api/zero/integrations/slack/install",
-          connectUrl: "/api/zero/integrations/slack/connect",
-          defaultAgentName: "zero",
-          agentOrgSlug: "test-org",
-          environment: {
-            requiredSecrets: [],
-            requiredVars: [],
-            missingSecrets: [],
-            missingVars: [],
-          },
-        });
-      }),
       http.delete("*/api/zero/integrations/slack", ({ request }) => {
         const url = new URL(request.url);
         if (url.searchParams.get("action") === "uninstall") {
@@ -327,12 +321,9 @@ describe("zero works page - uninstall confirmation dialog", () => {
       ).toBeInTheDocument();
     });
 
-    // Click the confirmation Uninstall button in the dialog
-    const dialogButtons = screen.getAllByRole("button", { name: "Uninstall" });
-    const confirmButton = dialogButtons.find((btn) =>
-      btn.closest("[role='dialog']"),
-    );
-    fireEvent.click(confirmButton!);
+    // Click "Uninstall" button in dialog to confirm
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
 
     await waitFor(() => {
       expect(uninstallCalled).toBeTruthy();
@@ -389,25 +380,8 @@ describe("zero works page - disconnect", () => {
   it("should call disconnect API when Disconnect is clicked", async () => {
     let disconnectCalled = false;
 
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
     server.use(
-      http.get("*/api/zero/integrations/slack", () => {
-        return HttpResponse.json({
-          isConnected: true,
-          isInstalled: true,
-          workspaceName: "Test Workspace",
-          isAdmin: true,
-          installUrl: null,
-          connectUrl: null,
-          defaultAgentName: "zero",
-          agentOrgSlug: "test-org",
-          environment: {
-            requiredSecrets: [],
-            requiredVars: [],
-            missingSecrets: [],
-            missingVars: [],
-          },
-        });
-      }),
       http.delete("*/api/zero/integrations/slack", ({ request }) => {
         const url = new URL(request.url);
         if (!url.searchParams.get("action")) {

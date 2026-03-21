@@ -1,5 +1,5 @@
 import { command, computed, state } from "ccstate";
-import { pathname$, updatePathname$, navigateInReact$ } from "../route.ts";
+import { pathname$, navigateInReact$ } from "../route.ts";
 import type {
   ZeroNavId,
   ZeroAccountAction,
@@ -115,9 +115,14 @@ export const setZeroChatAgent$ = command(
 
 /**
  * Navigate to a specific chat session — `/chat/:sessionId`.
+ *
+ * Always performs a full route navigation so that `loadRoute$` fires and
+ * the correct page setup runs (e.g. when navigating from /team).
+ * `setupZeroPage$` guards heavy work behind `initialDataLoaded$`, so
+ * re-entry from an already-loaded zero page is cheap.
  */
 export const navigateToZeroSession$ = command(({ set }, sessionId: string) => {
-  set(updatePathname$, `/chat/${sessionId}`);
+  set(navigateInReact$, "/chat/:sessionId", { pathParams: { sessionId } });
 });
 
 /**

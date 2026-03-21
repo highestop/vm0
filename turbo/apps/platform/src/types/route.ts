@@ -12,6 +12,7 @@ export type RoutePath =
   | "/queue"
   | "/schedule"
   | "/preferences"
+  | "/settings"
   | "/works"
   | "/__internal-connector-logos"
   | `/projects/${string}`;

@@ -5,6 +5,7 @@ export type RoutePath =
   | "/activity"
   | "/activity/:logId"
   | "/chat/:sessionId"
+  | "/team"
   | "/team/:name"
   | "/talk/:name"
   | "/slack/connect"

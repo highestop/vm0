@@ -1,4 +1,5 @@
 /* eslint-disable ccstate/no-use-ccstate-in-views */
+import type { Ref } from "react";
 import { useCCState } from "ccstate-react/experimental";
 import {
   useGet,
@@ -216,7 +217,7 @@ function ActivityHeaderCard({
   );
 }
 
-export function ZeroActivityDetailPage() {
+export function ZeroActivityDetailPage({ ref }: { ref?: Ref<HTMLDivElement> }) {
   const detailLoadable = useLastLoadable(zeroActivityDetail$);
   const eventsLoadable = useLastLoadable(zeroActivityEvents$);
   // Resolve agent display name from the detail response
@@ -233,9 +234,17 @@ export function ZeroActivityDetailPage() {
   const eventsReady = eventsLoadable.state === "hasData";
   if (!detail || !eventsReady) {
     if (detailLoadable.state === "hasError") {
-      return <ActivityNotFound />;
+      return (
+        <div ref={ref}>
+          <ActivityNotFound />
+        </div>
+      );
     }
-    return <ActivitySkeleton />;
+    return (
+      <div ref={ref}>
+        <ActivitySkeleton />
+      </div>
+    );
   }
 
   const events: AgentEvent[] = eventsLoadable.data;
@@ -262,7 +271,7 @@ export function ZeroActivityDetailPage() {
   const time = formatLogTime(detail.createdAt);
   const duration = formatDuration(detail.startedAt, detail.completedAt);
   return (
-    <div className="h-full flex flex-col min-h-0 overflow-hidden">
+    <div ref={ref} className="h-full flex flex-col min-h-0 overflow-hidden">
       <div className="flex-1 flex flex-col min-h-0 overflow-auto">
         <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
           <ActivityBreadcrumbLink />

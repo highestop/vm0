@@ -1,23 +1,77 @@
 #!/usr/bin/env bats
 
-# Real Claude smoke test — verify actual LLM execution (not mock).
+# Real Claude smoke tests — verify actual LLM execution (not mock).
 # Requires ANTHROPIC_API_KEY set in CI via secrets.CI_ANTHROPIC_API_KEY.
 #
-# Tests two auth paths sequentially in a single test to avoid parallel
-# conflicts (model-provider setup/remove is org-level shared state):
-#   1. cook path — API key passed as environment secret
-#   2. run path — API key injected via org model-provider (production flow)
+# Test 0 (version): print sandbox Claude Code version for debugging
+# Test 1 (basic): baseline LLM execution — math prompt, verify correct answer
+# Test 2 (flags): --append-system-prompt, --disallowed-tools
+#   Verifies CLI flags pass through guest-agent → Claude CLI pipeline:
+#   - Commander.js variadic arg parsing works (regression for #5788)
+#   - append-system-prompt reaches Claude (verifiable via SIGNATURE)
 
 load '../../helpers/setup'
 
-setup() {
-    export TEST_DIR="$(mktemp -d)"
+setup_file() {
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        skip "ANTHROPIC_API_KEY not set - required for real Claude tests"
+    fi
+
     export UNIQUE_ID="$(date +%s%3N)-$RANDOM"
+    export TEST_DIR="$(mktemp -d)"
     export AGENT_NAME="e2e-real-claude-${UNIQUE_ID}"
-    export ARTIFACT_NAME="e2e-real-claude-art-${UNIQUE_ID}"
+    export VOLUME_NAME="e2e-real-claude-vol-${UNIQUE_ID}"
+
+    # Create volume for claude-files (needed by both tests)
+    mkdir -p "$TEST_DIR/$VOLUME_NAME"
+    cd "$TEST_DIR/$VOLUME_NAME"
+    cat > CLAUDE.md << 'VOLEOF'
+This is a test file for the volume.
+VOLEOF
+    $CLI_COMMAND volume init --name "$VOLUME_NAME" >/dev/null
+    $CLI_COMMAND volume push >/dev/null
+    cd - >/dev/null
+
+    # Set up model-provider once for all tests
+    $CLI_COMMAND org model-provider setup \
+        --type "anthropic-api-key" --secret "$ANTHROPIC_API_KEY"
+
+    # Compose agents separately (only one agent per compose is supported)
+    cat > "$TEST_DIR/vm0-basic.yaml" <<EOF
+version: "1.0"
+agents:
+  ${AGENT_NAME}:
+    description: "Real Claude smoke test"
+    framework: claude-code
+    volumes:
+      - claude-files:/home/user/.claude
+    working_dir: /home/user/workspace
+volumes:
+  claude-files:
+    name: $VOLUME_NAME
+    version: latest
+EOF
+
+    cat > "$TEST_DIR/vm0-flags.yaml" <<EOF
+version: "1.0"
+agents:
+  ${AGENT_NAME}-flags:
+    description: "Real Claude flags test"
+    framework: claude-code
+    volumes:
+      - claude-files:/home/user/.claude
+    working_dir: /home/user/workspace
+volumes:
+  claude-files:
+    name: $VOLUME_NAME
+    version: latest
+EOF
+
+    $CLI_COMMAND compose "$TEST_DIR/vm0-basic.yaml" >/dev/null
+    $CLI_COMMAND compose "$TEST_DIR/vm0-flags.yaml" >/dev/null
 }
 
-teardown() {
+teardown_file() {
     # Clean up model provider (best-effort)
     $CLI_COMMAND org model-provider remove "anthropic-api-key" 2>/dev/null || true
     if [ -n "$TEST_DIR" ] && [ -d "$TEST_DIR" ]; then
@@ -25,68 +79,64 @@ teardown() {
     fi
 }
 
-@test "real claude: cook with env secret and run with model-provider" {
+# Test 0: Print sandbox Claude Code version for debugging
+@test "t27-0: print sandbox claude version" {
     if [ -z "$ANTHROPIC_API_KEY" ]; then
-        fail "ANTHROPIC_API_KEY not set - required for real Claude test"
+        skip "ANTHROPIC_API_KEY not set"
     fi
 
-    # -- Part 1: cook path (API key as environment secret) --
-    echo "# Part 1: cook with environment secret..."
-    cd "$TEST_DIR"
+    # Run claude --version inside the sandbox to confirm which binary is installed
+    run timeout 60 $CLI_COMMAND run "$AGENT_NAME" \
+        --model-provider "anthropic-api-key" \
+        --debug-no-mock-claude \
+        "Run 'claude --version' with the Bash tool and include the exact output"
 
-    cat > vm0.yaml <<EOF
-version: "1.0"
+    assert_success
+    # Print output for CI log inspection
+    echo "# Sandbox Claude version output:"
+    echo "$output"
+}
 
-agents:
-  $AGENT_NAME:
-    description: "Real Claude smoke test"
-    framework: claude-code
-    working_dir: /home/user/workspace
-    environment:
-      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-EOF
+# Test 1: Baseline — real Claude CLI processes a prompt and returns correct result
+@test "t27-1: basic run with real claude" {
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        skip "ANTHROPIC_API_KEY not set"
+    fi
 
-    cat > .env <<EOF
-ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
-EOF
-
-    run timeout 120 $CLI_COMMAND cook --no-auto-update --debug-no-mock-claude \
+    run timeout 120 $CLI_COMMAND run "$AGENT_NAME" \
+        --model-provider "anthropic-api-key" \
+        --debug-no-mock-claude \
         "Compute 123+456 and reply with exactly: RESULT=<answer>"
 
     assert_success
     assert_output --partial "◆ Claude Code Completed"
     assert_output --partial "RESULT=579"
+}
 
-    # -- Part 2: run path (model-provider injects credential via proxy) --
-    echo "# Part 2: run with model-provider injection..."
+# Test 2: CLI flags — verify the full guest-agent → Claude CLI flag pipeline.
+#
+# Verifies:
+#   - --disallowed-tools doesn't swallow the prompt (#5788 regression)
+#   - --append-system-prompt reaches Claude (SIGNATURE in response)
+#
+# Note: --settings hooks don't execute in the Firecracker sandbox (see #5832).
+@test "t27-2: run with cli flags (append-system-prompt, disallowed-tools)" {
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        skip "ANTHROPIC_API_KEY not set"
+    fi
 
-    $CLI_COMMAND org model-provider setup \
-        --type "anthropic-api-key" --secret "$ANTHROPIC_API_KEY"
-
-    cat > "$TEST_DIR/run-vm0.yaml" <<EOF
-version: "1.0"
-
-agents:
-  ${AGENT_NAME}-mp:
-    description: "Real Claude via model-provider"
-    framework: claude-code
-    working_dir: /home/user/workspace
-EOF
-
-    $CLI_COMMAND compose "$TEST_DIR/run-vm0.yaml"
-
-    mkdir -p "$TEST_DIR/$ARTIFACT_NAME"
-    cd "$TEST_DIR/$ARTIFACT_NAME"
-    $CLI_COMMAND artifact init --name "$ARTIFACT_NAME" >/dev/null
-    echo "test" > test.txt
-    $CLI_COMMAND artifact push >/dev/null
-
-    run timeout 120 $CLI_COMMAND run "${AGENT_NAME}-mp" \
-        --artifact-name "$ARTIFACT_NAME" \
+    # "--" separates variadic --disallowed-tools from the prompt
+    # (Commander.js <tools...> would otherwise swallow subsequent args)
+    run timeout 120 $CLI_COMMAND run "${AGENT_NAME}-flags" \
         --model-provider "anthropic-api-key" \
         --debug-no-mock-claude \
-        "Compute 789+101 and reply with exactly: RESULT=<answer>"
+        --append-system-prompt "Always end your final response with SIGNATURE=smoke-test" \
+        --disallowed-tools CronCreate CronList CronDelete \
+        -- "Compute 789+101 and reply with exactly: RESULT=<answer>"
 
     assert_success
+    assert_output --partial "◆ Claude Code Completed"
     assert_output --partial "RESULT=890"
+    # Verify --append-system-prompt reached Claude (agent follows the instruction)
+    assert_output --partial "SIGNATURE=smoke-test"
 }

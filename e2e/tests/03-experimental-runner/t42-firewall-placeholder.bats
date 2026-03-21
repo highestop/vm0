@@ -157,4 +157,19 @@ EOF
 
     assert_output --partial "ALLOWED_STATUS=200"
     assert_output --partial "BLOCKED_STATUS=403"
+
+    # Verify network logs capture firewall activity
+    RUN_ID=$(echo "$output" | grep -oP 'Run ID:\s+\K[a-f0-9-]{36}' | head -1)
+    [ -n "$RUN_ID" ] || {
+        echo "# Failed to extract Run ID"
+        return 1
+    }
+
+    run $CLI_COMMAND logs "$RUN_ID" --network --tail 100
+    assert_success
+    # ALLOW: repos endpoint matches metadata:read
+    assert_output --partial "GET    200"
+    assert_output --partial "https://api.github.com/repos/vm0-ai/vm0 [github]"
+    # DENY: search endpoint has no matching permission
+    assert_output --partial "GET    DENY https://api.github.com/search/code?q=vm0 [github]"
 }

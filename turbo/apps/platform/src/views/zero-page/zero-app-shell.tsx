@@ -21,11 +21,9 @@ import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
 import {
   zeroActiveId$,
   zeroInChat$,
-  zeroSessionId$,
   zeroChatAgentId$,
   zeroChatAgentName$,
   zeroTalkAgentResolved$,
-  navigateToZeroSession$,
   navigateFromZeroSession$,
   zeroAvatarIndex$,
   cycleZeroAvatar$,
@@ -33,17 +31,9 @@ import {
   setZeroShowAboutPage$,
   zeroSidebarCollapsed$,
   setZeroSidebarCollapsed$,
-  handleZeroNavSelect$,
-  handleZeroAccountAction$,
 } from "../../signals/zero-page/zero-nav.ts";
 import { navigateInReact$ } from "../../signals/route.ts";
-import {
-  zeroSessionList$,
-  zeroSessionListLoading$,
-  zeroSessionListError$,
-  startNewZeroSession$,
-  sendFromZeroDemo$,
-} from "../../signals/zero-page/zero-chat.ts";
+import { sendFromZeroDemo$ } from "../../signals/zero-page/zero-chat.ts";
 
 import zeroAvatarImg from "./assets/zero-avatar.png";
 import avatar1Img from "./assets/avatar-1.png";
@@ -151,17 +141,6 @@ function ZeroAppSkeleton({ visible }: { visible: boolean }) {
 
 function useSkeletonVisibility(isLoggedIn: boolean, dataReady: boolean) {
   return isLoggedIn && !dataReady;
-}
-
-/**
- * Manages session lifecycle: fetches session list when onboarding completes,
- * and auto-sends an introductory message for new users.
- */
-function useSessionLifecycle() {
-  const recentSessions = useGet(zeroSessionList$);
-  const recentSessionsLoading = useGet(zeroSessionListLoading$);
-  const recentSessionsError = useGet(zeroSessionListError$);
-  return { recentSessions, recentSessionsLoading, recentSessionsError };
 }
 
 function GuestNavBar({ onAbout }: { onAbout: () => void }) {
@@ -313,9 +292,7 @@ export function ZeroAppShell({ initialJobAgent }: ZeroAppShellProps) {
   const subagentAvatarSrc = useAgentAvatar(selectedSubagent?.name ?? "");
   const chatAvatarSrc = selectedSubagent ? subagentAvatarSrc : zeroAvatarSrc;
   const inChat = useGet(zeroInChat$);
-  const urlSessionId = useGet(zeroSessionId$);
   const inSession = inChat;
-  const startNewSession = useSet(startNewZeroSession$);
   const handleSendFromDemo = useSet(sendFromZeroDemo$);
 
   // When visiting /talk/:name, wait for the agent to be resolved
@@ -323,34 +300,14 @@ export function ZeroAppShell({ initialJobAgent }: ZeroAppShellProps) {
   const talkAgentResolved = useGet(zeroTalkAgentResolved$);
   const talkAgentReady = !talkAgentName || talkAgentResolved;
 
-  const { recentSessions, recentSessionsLoading, recentSessionsError } =
-    useSessionLifecycle();
-
   const resolvedAgentName = selectedSubagent?.name ?? defaultRawName;
   const {
-    navigateInReact,
     handleNavigateToSchedule,
     handleNavigateToMeet,
     handleChatAvatarClick,
   } = useContentNavigation(resolvedAgentName);
 
-  const navigateToSession = useSet(navigateToZeroSession$);
   const navigateBack = useSet(navigateFromZeroSession$);
-  const handleNavSelect = useSet(handleZeroNavSelect$);
-  const handleAccountAction = useSet(handleZeroAccountAction$);
-
-  const handleNewChat = (agent: { id: string; name: string } | null) => {
-    startNewSession();
-    // navigateInReact triggers loadRoute$ → setupZeroPage$ → resolveAndSwitchAgent
-    // which sets the agent and fetches the session list.
-    if (agent) {
-      navigateInReact("/talk/:name", {
-        pathParams: { name: agent.name },
-      });
-    } else {
-      navigateInReact("/");
-    }
-  };
 
   const sidebarCollapsed = useGet(zeroSidebarCollapsed$);
   const setSidebarCollapsed = useSet(setZeroSidebarCollapsed$);
@@ -369,24 +326,7 @@ export function ZeroAppShell({ initialJobAgent }: ZeroAppShellProps) {
           zeroAvatarSrc={zeroAvatarSrc}
         />
       )}
-      <ZeroSidebar
-        activeId={activeId}
-        agentName={agentDisplayName}
-        defaultAgentRawName={defaultRawName}
-        zeroAvatarSrc={zeroAvatarSrc}
-        subagents={subagents}
-        currentChatAgentId={currentChatAgentId}
-        collapsed={sidebarCollapsed}
-        onCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onSelect={handleNavSelect}
-        onRecentSelect={navigateToSession}
-        selectedRecentId={urlSessionId}
-        onAccountAction={handleAccountAction}
-        recentSessions={recentSessions}
-        recentSessionsLoading={recentSessionsLoading}
-        recentSessionsError={recentSessionsError}
-        onNewChat={handleNewChat}
-      />
+      <ZeroSidebar />
       {/* Mobile backdrop when sidebar is open */}
       {!sidebarCollapsed && (
         <div

@@ -12,6 +12,7 @@ import { setupActivityPage$ } from "./activity-page/activity-page-setup.ts";
 import { setupActivityDetailPage$ } from "./activity-page/activity-detail-page-setup.ts";
 import { setupTeamPage$ } from "./team-page/team-page-setup.ts";
 import { setupTeamDetailPage$ } from "./team-page/team-detail-page-setup.ts";
+import { setupWorksPage$ } from "./works-page/works-page-setup.ts";
 import { setupPreferencesPage$ } from "./preferences-page/preferences-page-setup.ts";
 import { setupInternalConnectorLogos$ } from "./internal-connector-logos-setup.ts";
 const ROUTE_CONFIG = [
@@ -50,6 +51,10 @@ const ROUTE_CONFIG = [
   {
     path: "/activity",
     setup: setupAuthPageWrapper(setupActivityPage$),
+  },
+  {
+    path: "/works",
+    setup: setupAuthPageWrapper(setupWorksPage$),
   },
   {
     path: "/preferences",

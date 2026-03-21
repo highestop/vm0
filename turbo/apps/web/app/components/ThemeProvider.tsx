@@ -2,9 +2,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
-  useSyncExternalStore,
+  useState,
   type ReactNode,
 } from "react";
 
@@ -26,17 +27,7 @@ export function useTheme() {
   return context;
 }
 
-function subscribeToThemeChanges(callback: () => void): () => void {
-  window.addEventListener("storage", callback);
-  const mql = window.matchMedia("(prefers-color-scheme: dark)");
-  mql.addEventListener("change", callback);
-  return () => {
-    window.removeEventListener("storage", callback);
-    mql.removeEventListener("change", callback);
-  };
-}
-
-function getThemeSnapshot(): Theme {
+function resolveClientTheme(): Theme {
   const saved = localStorage.getItem("theme") as Theme | null;
   if (saved === "light" || saved === "dark") {
     return saved;
@@ -46,8 +37,12 @@ function getThemeSnapshot(): Theme {
     : "light";
 }
 
-function getServerThemeSnapshot(): Theme {
-  return "dark";
+function applyTheme(newTheme: Theme) {
+  localStorage.setItem("theme", newTheme);
+  document.documentElement.setAttribute("data-theme", newTheme);
+  // localStorage.setItem doesn't fire storage events in the same tab,
+  // so dispatch manually for cross-tab sync
+  window.dispatchEvent(new Event("storage"));
 }
 
 interface ThemeProviderProps {
@@ -55,28 +50,50 @@ interface ThemeProviderProps {
 }
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const theme = useSyncExternalStore(
-    subscribeToThemeChanges,
-    getThemeSnapshot,
-    getServerThemeSnapshot,
-  );
+  // Start with "dark" to match the server render and the HTML default data-theme="dark".
+  // The inline script in layout.tsx prevents FOUC by setting the correct data-theme
+  // before paint. After hydration, useEffect reads the real client theme.
+  const [theme, setThemeState] = useState<Theme>("dark");
 
+  // After mount, sync state with the actual client theme
+  useEffect(() => {
+    setThemeState(resolveClientTheme());
+  }, []);
+
+  // Apply data-theme attribute whenever theme changes
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
-    localStorage.setItem("theme", newTheme);
-    document.documentElement.setAttribute("data-theme", newTheme);
-    // localStorage.setItem doesn't fire storage events in the same tab,
-    // so dispatch manually to trigger useSyncExternalStore re-read
-    window.dispatchEvent(new Event("storage"));
-  };
+  // Subscribe to external theme changes (storage events, OS preference changes)
+  useEffect(() => {
+    const onStorage = () => {
+      setThemeState(resolveClientTheme());
+    };
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onMediaChange = () => {
+      setThemeState(resolveClientTheme());
+    };
+    window.addEventListener("storage", onStorage);
+    mql.addEventListener("change", onMediaChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      mql.removeEventListener("change", onMediaChange);
+    };
+  }, []);
 
-  const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-  };
+  const setTheme = useCallback((newTheme: Theme) => {
+    applyTheme(newTheme);
+    setThemeState(newTheme);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setThemeState((current) => {
+      const newTheme = current === "dark" ? "light" : "dark";
+      applyTheme(newTheme);
+      return newTheme;
+    });
+  }, []);
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>

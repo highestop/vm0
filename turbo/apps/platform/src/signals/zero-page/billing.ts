@@ -1,7 +1,10 @@
 import { command, computed, state } from "ccstate";
 import { fetch$ } from "../fetch.ts";
 import { logger } from "../log.ts";
-import { setSelectedPlanTier$ } from "./billing-dialog-state.ts";
+import {
+  setSelectedPlanTier$,
+  syncAutoRechargeForm$,
+} from "./billing-dialog-state.ts";
 
 const log = logger("billing");
 
@@ -11,12 +14,19 @@ const log = logger("billing");
 
 export type BillingTier = "free" | "pro" | "max";
 
+interface AutoRechargeConfig {
+  enabled: boolean;
+  threshold: number | null;
+  amount: number | null;
+}
+
 export interface BillingStatus {
   tier: BillingTier;
   credits: number;
   subscriptionStatus: string | null;
   currentPeriodEnd: string | null;
   hasSubscription: boolean;
+  autoRecharge: AutoRechargeConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -25,6 +35,7 @@ export interface BillingStatus {
 
 const internalDialogOpen$ = state(false);
 const internalDialogLoading$ = state(false);
+const billingReload$ = state(0);
 
 // ---------------------------------------------------------------------------
 // Selectors
@@ -40,6 +51,7 @@ export const billingDialogLoading$ = computed((get) =>
  * Use with useLastLoadable() in views for automatic loading.
  */
 export const billingStatusAsync$ = computed(async (get) => {
+  get(billingReload$);
   const fetchFn = await get(fetch$);
   const response = await fetchFn("/api/billing/status");
   if (!response.ok) {
@@ -58,6 +70,14 @@ export const openBillingDialog$ = command(async ({ get, set }) => {
   const status = await get(billingStatusAsync$);
   const currentTier = (status?.tier as BillingTier) ?? "free";
   set(setSelectedPlanTier$, currentTier);
+  set(
+    syncAutoRechargeForm$,
+    status?.autoRecharge ?? {
+      enabled: false,
+      threshold: null,
+      amount: null,
+    },
+  );
   set(internalDialogOpen$, true);
 });
 
@@ -123,3 +143,40 @@ export const startDowngrade$ = command(async ({ get, set }) => {
     set(internalDialogLoading$, false);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Auto-recharge
+// ---------------------------------------------------------------------------
+
+export const saveAutoRecharge$ = command(
+  async (
+    { get, set },
+    config: { enabled: boolean; threshold?: number; amount?: number },
+  ) => {
+    set(internalDialogLoading$, true);
+
+    const fetchFn = get(fetch$);
+    const response = await fetchFn("/api/billing/auto-recharge", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+
+    const data = (await response.json()) as {
+      enabled?: boolean;
+      error?: string;
+    };
+
+    set(internalDialogLoading$, false);
+
+    if (!response.ok) {
+      log.error("Auto-recharge save failed", data.error);
+      return { ok: false, error: data.error };
+    }
+
+    // Invalidate billing status cache so the dialog shows fresh data on re-open
+    set(billingReload$, (x) => x + 1);
+
+    return { ok: true };
+  },
+);

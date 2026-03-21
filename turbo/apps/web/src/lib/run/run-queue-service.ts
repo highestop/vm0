@@ -5,7 +5,9 @@ import { agentRunQueue } from "../../db/schema/agent-run-queue";
 import { orgMetadata } from "../../db/schema/org-metadata";
 import { env } from "../../env";
 import { logger } from "../logger";
-import { isConcurrentRunLimit } from "../errors";
+import { isConcurrentRunLimit, insufficientCredits } from "../errors";
+import { modelProviders } from "../../db/schema/model-provider";
+import { ORG_SENTINEL_USER_ID } from "../org/org-sentinel";
 import {
   encryptSecretsMap,
   decryptSecretsMap,
@@ -195,14 +197,15 @@ async function dequeueNextAtomic(
       // Serialize all queue operations for this org
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${orgId}))`);
 
-      // Look up org tier from org table (source of truth).
+      // Look up org tier and credits from org table (source of truth).
       // Falls back to "free" (most conservative limit) if row is missing.
       const [orgRow] = await tx
-        .select({ tier: orgMetadata.tier })
+        .select({ tier: orgMetadata.tier, credits: orgMetadata.credits })
         .from(orgMetadata)
         .where(eq(orgMetadata.orgId, orgId))
         .limit(1);
       const orgTier = parseOrgTier(orgRow?.tier);
+      const orgCredits = orgRow?.credits ?? null;
 
       // Check concurrency FIRST — don't dequeue if no slot available
       await checkRunConcurrencyLimit(orgId, orgTier, tx);
@@ -210,14 +213,17 @@ async function dequeueNextAtomic(
       // Fetch all queue entries for this org (ordered FIFO).
       // Typically 0-2 entries; iterating in-transaction to skip
       // already-processed runs without releasing the advisory lock.
+      // JOIN agentRuns to read modelProvider for credit check.
       const rows = await tx.execute<{
         run_id: string;
         encrypted_params: string | null;
+        model_provider: string | null;
       }>(
-        sql`SELECT run_id, encrypted_params
-         FROM agent_run_queue
-         WHERE org_id = ${orgId}
-         ORDER BY created_at ASC`,
+        sql`SELECT q.run_id, q.encrypted_params, r.model_provider
+         FROM agent_run_queue q
+         JOIN agent_runs r ON r.id = q.run_id
+         WHERE q.org_id = ${orgId}
+         ORDER BY q.created_at ASC`,
       );
 
       for (const row of rows.rows) {
@@ -225,6 +231,29 @@ async function dequeueNextAtomic(
         await tx
           .delete(agentRunQueue)
           .where(eq(agentRunQueue.runId, row.run_id));
+
+        // Check credits for VM0 provider runs
+        if (orgCredits !== null && orgCredits <= 0) {
+          const isVm0 = await resolveIsVm0Provider(
+            row.model_provider,
+            orgId,
+            tx,
+          );
+          if (isVm0) {
+            await transitionRunStatus(
+              row.run_id,
+              {
+                status: "failed",
+                error: insufficientCredits(orgCredits).message,
+                completedAt: new Date(),
+              },
+              ["queued"],
+              tx,
+            );
+            log.debug(`Run ${row.run_id} failed credit check, skipping`);
+            continue;
+          }
+        }
 
         // Update run status — fails silently if run was already cancelled/failed
         const [updated] = await tx
@@ -258,6 +287,33 @@ async function dequeueNextAtomic(
     }
     throw error;
   }
+}
+
+/**
+ * Resolve whether the effective model provider is VM0.
+ * Queries the model_providers table within the provided transaction
+ * to maintain advisory lock guarantees.
+ */
+async function resolveIsVm0Provider(
+  modelProvider: string | null,
+  orgId: string,
+  db: typeof globalThis.services.db,
+): Promise<boolean> {
+  if (modelProvider === "vm0") return true;
+  if (modelProvider && modelProvider !== "vm0") return false;
+  // null → check org default within the transaction
+  const [defaultProvider] = await db
+    .select({ type: modelProviders.type })
+    .from(modelProviders)
+    .where(
+      and(
+        eq(modelProviders.orgId, orgId),
+        eq(modelProviders.userId, ORG_SENTINEL_USER_ID),
+        eq(modelProviders.isDefault, true),
+      ),
+    )
+    .limit(1);
+  return defaultProvider?.type === "vm0";
 }
 
 /**

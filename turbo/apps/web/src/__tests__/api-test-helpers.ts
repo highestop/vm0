@@ -1700,7 +1700,7 @@ const OAUTH_PROVIDER_MOCKS: Record<
       refresh_token: "linear-refresh-token",
       expires_in: 86399,
       token_type: "Bearer",
-      scope: "read,write",
+      scope: "read,write,issues:create,comments:create,timeSchedule:write",
     }),
     buildUserResponse: (opts) => ({
       data: {

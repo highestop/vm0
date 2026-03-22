@@ -3895,3 +3895,82 @@ export async function getOrgAutoRechargeFields(orgId: string) {
     .limit(1);
   return row ?? null;
 }
+
+/**
+ * Set Stripe subscription fields on org_metadata for testing billing-related flows.
+ */
+export async function updateOrgStripeSubscription(
+  orgId: string,
+  subscriptionId: string,
+  status: string,
+): Promise<void> {
+  await globalThis.services.db
+    .update(orgMetadata)
+    .set({
+      stripeSubscriptionId: subscriptionId,
+      subscriptionStatus: status,
+      updatedAt: new Date(),
+    })
+    .where(eq(orgMetadata.orgId, orgId));
+}
+
+/**
+ * Update agent compose's orgId. Useful when tests need telegram installations
+ * or other compose-linked entities to belong to a specific org.
+ */
+export async function updateAgentComposeOrg(
+  composeId: string,
+  orgId: string,
+): Promise<void> {
+  await globalThis.services.db
+    .update(agentComposes)
+    .set({ orgId })
+    .where(eq(agentComposes.id, composeId));
+}
+
+/**
+ * Create a telegram installation for a specific compose with a known bot token.
+ * Returns the installation ID.
+ */
+export async function createTelegramInstallationForCompose(
+  composeId: string,
+  adminUserId: string,
+  botToken: string,
+): Promise<string> {
+  const encryptionKey = globalThis.services.env.SECRETS_ENCRYPTION_KEY;
+  const encryptedBotToken = encryptSecretValue(botToken, encryptionKey);
+
+  const rows = await globalThis.services.db
+    .insert(telegramInstallations)
+    .values({
+      telegramBotId: `bot-${randomUUID().slice(0, 8)}`,
+      encryptedBotToken,
+      webhookSecret: `secret-${randomUUID().slice(0, 8)}`,
+      defaultComposeId: composeId,
+      adminUserId,
+    })
+    .returning();
+
+  if (!rows[0]) throw new Error("Failed to create telegram installation");
+  return rows[0].id;
+}
+
+/**
+ * Create a Slack org installation for a specific org.
+ */
+export async function createSlackInstallationForOrg(
+  orgId: string,
+  workspaceId: string,
+): Promise<void> {
+  const encryptionKey = globalThis.services.env.SECRETS_ENCRYPTION_KEY;
+
+  await globalThis.services.db
+    .insert(slackOrgInstallations)
+    .values({
+      slackWorkspaceId: workspaceId,
+      orgId,
+      encryptedBotToken: encryptSecretValue("xoxb-test-token", encryptionKey),
+      botUserId: `U${randomUUID().slice(0, 8)}`,
+    })
+    .onConflictDoNothing();
+}

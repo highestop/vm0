@@ -67,7 +67,7 @@ import {
   zeroSessionListError$,
   startNewZeroSession$,
 } from "../../signals/zero-page/zero-chat.ts";
-import { navigateInReact$ } from "../../signals/route.ts";
+import { navigateTo$ } from "../../signals/route.ts";
 import {
   pinnedAgentIds$,
   savingPinnedAgents$,
@@ -88,7 +88,7 @@ import {
   AgentAvatarImg,
   type SubagentInfo,
 } from "./zero-sidebar-shared.tsx";
-import { Link, SimpleLink } from "../router/link.tsx";
+import { Link } from "../router/link.tsx";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import { apiBaseForNavigation$ } from "../../signals/fetch.ts";
 import {
@@ -589,9 +589,10 @@ function RecentChatSection({
             </p>
           ) : (
             filteredSessions.map((session) => (
-              <SimpleLink
+              <Link
                 key={session.id}
-                href={`/chat/${session.id}`}
+                pathname="/chat/:sessionId"
+                options={{ pathParams: { sessionId: session.id } }}
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey || e.shiftKey) {
                     return;
@@ -608,7 +609,7 @@ function RecentChatSection({
                 <span className="truncate min-w-0 flex-1">
                   {session.preview ?? "New chat"}
                 </span>
-              </SimpleLink>
+              </Link>
             ))
           )}
         </div>
@@ -842,13 +843,13 @@ export function ZeroSidebar() {
   const recentSessionsLoading = useGet(zeroSessionListLoading$);
   const recentSessionsError = useGet(zeroSessionListError$);
   const startNewSession = useSet(startNewZeroSession$);
-  const navigateInReact = useSet(navigateInReact$);
+  const navigateTo = useSet(navigateTo$);
   const onNewChat = (agent: { id: string; name: string } | null) => {
     startNewSession();
     if (agent) {
-      navigateInReact("/talk/:name", { pathParams: { name: agent.name } });
+      navigateTo("/talk/:name", { pathParams: { name: agent.name } });
     } else {
-      navigateInReact("/");
+      navigateTo("/");
     }
   };
   const displayName = agentName || "Zero";

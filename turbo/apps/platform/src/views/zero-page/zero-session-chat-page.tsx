@@ -53,7 +53,7 @@ import {
   withdrawQueuedMessage$,
 } from "../../signals/zero-page/zero-chat.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
-import { Link, SimpleLink } from "../router/link.tsx";
+import { Link } from "../router/link.tsx";
 import { setOrgManageDialogOpen$ } from "../../signals/zero-page/settings/org-manage-dialog.ts";
 import { setActiveTab$ } from "../../signals/zero-page/settings/org-manage-tabs-state.ts";
 import {
@@ -432,12 +432,12 @@ function RunActivityLine() {
         />
         <p className="text-muted-foreground text-xs truncate">
           {queueLabel(queuePosition)}{" "}
-          <SimpleLink
-            href="/queue"
+          <Link
+            pathname="/queue"
             className="underline hover:text-foreground transition-colors"
           >
             View queue
-          </SimpleLink>
+          </Link>
         </p>
       </div>
     );
@@ -624,13 +624,14 @@ function AssistantMessage({ message, zeroAvatarSrc }: AssistantMessageProps) {
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <SimpleLink
-                href={`/activity/${message.runId}`}
+              <Link
+                pathname="/activity/:logId"
+                options={{ pathParams: { logId: message.runId } }}
                 className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
                 aria-label="View run logs"
               >
                 <IconChartLine size={18} stroke={1.5} />
-              </SimpleLink>
+              </Link>
             </TooltipTrigger>
             <TooltipContent side="bottom">View activity logs</TooltipContent>
           </Tooltip>

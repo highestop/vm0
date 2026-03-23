@@ -36,7 +36,7 @@ import {
   sendZeroChatMessage$,
   startNewZeroSession$,
 } from "../../signals/zero-page/zero-chat.ts";
-import { updatePathname$ } from "../../signals/route.ts";
+import { navigateTo$ } from "../../signals/route.ts";
 import {
   allConnectorTypes$,
   connectConnector$,
@@ -305,7 +305,7 @@ export function ZeroOnboarding({
   const dismissOnboarding = useSet(dismissZeroOnboarding$);
   const sendMessage = useSet(sendZeroChatMessage$);
   const startNewSession = useSet(startNewZeroSession$);
-  const navigate = useSet(updatePathname$);
+  const navigate = useSet(navigateTo$);
   const onboardingError = useGet(zeroOnboardingError$);
   const clearOnboardingError = useSet(clearZeroOnboardingError$);
   const reloadBilling = useSet(reloadBillingStatus$);
@@ -362,7 +362,7 @@ export function ZeroOnboarding({
           return;
         }
         reloadBilling();
-        navigate("/chat");
+        navigate("/");
         startNewSession();
         detach(
           sendMessage("Who are you and what can you do?"),
@@ -563,7 +563,7 @@ export function MemberWelcome({
   const step = useGet(memberWelcomeStep$);
   const setStep = useSet(setMemberWelcomeStep$);
   const completeMember = useSet(completeMemberOnboarding$);
-  const navigate = useSet(updatePathname$);
+  const navigate = useSet(navigateTo$);
   const startNewSession = useSet(startNewZeroSession$);
   const sendIntro = useSet(sendZeroChatMessage$);
   const saving = useGet(zeroSaving$);
@@ -614,7 +614,7 @@ export function MemberWelcome({
     detach(
       (async () => {
         await completeMember();
-        navigate("/chat");
+        navigate("/");
         startNewSession();
         detach(
           sendIntro("Who are you and what can you do?"),

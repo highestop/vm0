@@ -17,7 +17,6 @@ import {
   IconPlus,
   IconChevronRight,
   IconSwitchHorizontal,
-  IconSettings,
   IconLoader2,
   IconSearch,
   IconX,
@@ -189,12 +188,6 @@ const FOOTER_NAV = [
     label: "Where Zero works",
     icon: IconLayoutGrid as NavIcon,
     iconImg: slackIcon,
-  },
-  {
-    id: "settings" as const satisfies ZeroNavId,
-    label: "Settings",
-    icon: IconSettings as NavIcon,
-    iconImg: undefined,
   },
 ] as const;
 

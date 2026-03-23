@@ -1,5 +1,5 @@
 {
-  "id": "aebd0fac-edf3-42ff-a941-491efca94854",
+  "id": "cd655500-4431-44e4-8aae-c800bdd02d03",
   "prevId": "eb5fb49d-f4ab-4834-9440-065d454809d0",
   "version": "7",
   "dialect": "postgresql",
@@ -3439,6 +3439,24 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "current_period_start": {
+          "name": "current_period_start",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "current_period_end": {
+          "name": "current_period_end",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "billing_cached_at": {
+          "name": "billing_cached_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {

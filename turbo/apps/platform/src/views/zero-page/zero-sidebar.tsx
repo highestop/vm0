@@ -7,6 +7,7 @@ import {
   useSet,
 } from "ccstate-react";
 import {
+  IconChartBar,
   IconChartLine,
   IconLayoutGrid,
   IconCalendar,
@@ -26,6 +27,7 @@ import {
   IconDatabaseExport,
   IconCrown,
   IconPin,
+  IconSettings,
 } from "@tabler/icons-react";
 import {
   DndContext,
@@ -170,6 +172,7 @@ export type ZeroNavId =
   | "team"
   | "activity"
   | "works"
+  | "usage"
   | "settings"
   | "preferences"
   | "queue"
@@ -182,14 +185,37 @@ const MANAGE_NAV = [
   { id: "activity", label: "Activity logs", icon: IconChartLine as NavIcon },
 ] as const;
 
+interface FooterNavItem {
+  id: ZeroNavId;
+  label: string;
+  icon: NavIcon;
+  iconImg: string | undefined;
+  featureGate: FeatureSwitchKey | undefined;
+}
+
 const FOOTER_NAV = [
   {
-    id: "works" as const satisfies ZeroNavId,
+    id: "works",
     label: "Where Zero works",
     icon: IconLayoutGrid as NavIcon,
     iconImg: slackIcon,
+    featureGate: undefined,
   },
-] as const;
+  {
+    id: "usage",
+    label: "Usage",
+    icon: IconChartBar as NavIcon,
+    iconImg: undefined,
+    featureGate: FeatureSwitchKey.Usage,
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: IconSettings as NavIcon,
+    iconImg: undefined,
+    featureGate: undefined,
+  },
+] as const satisfies readonly FooterNavItem[];
 
 export type ZeroAccountAction = "preferences" | "manage" | "signout";
 
@@ -1050,7 +1076,9 @@ export function ZeroSidebar() {
     ...item,
     label: item.label.replace("Zero", displayName),
   }));
-  const footerNav = FOOTER_NAV.map((item) => ({
+  const footerNav = FOOTER_NAV.filter(
+    (item) => !item.featureGate || features?.[item.featureGate],
+  ).map((item) => ({
     ...item,
     label: item.label.replace("Zero", displayName),
   }));

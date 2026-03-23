@@ -22,6 +22,7 @@ import {
   zeroSaving$,
   setZeroStep$,
   completeZeroOnboarding$,
+  dismissZeroOnboarding$,
   zeroSelectedConnectors$,
   toggleZeroConnector$,
   zeroOnboardingError$,
@@ -300,6 +301,7 @@ export function ZeroOnboarding({
   const selectedConnectors = useGet(zeroSelectedConnectors$);
   const toggleConnector = useSet(toggleZeroConnector$);
   const completeOnboarding = useSet(completeZeroOnboarding$);
+  const dismissOnboarding = useSet(dismissZeroOnboarding$);
   const sendMessage = useSet(sendZeroChatMessage$);
   const startNewSession = useSet(startNewZeroSession$);
   const navigate = useSet(updatePathname$);
@@ -330,7 +332,11 @@ export function ZeroOnboarding({
     const controller = new AbortController();
     detach(
       (async () => {
-        await completeOnboarding(controller.signal);
+        const result = await completeOnboarding(controller.signal);
+        if (!result) {
+          return;
+        }
+        dismissOnboarding();
         // Admin with install URL: open Slack OAuth install flow
         if (slackData?.isAdmin && slackData.installUrl) {
           const url = new URL(slackData.installUrl, window.location.origin);
@@ -348,13 +354,17 @@ export function ZeroOnboarding({
     const controller = new AbortController();
     detach(
       (async () => {
-        await completeOnboarding(controller.signal);
-        navigate("/");
+        const result = await completeOnboarding(controller.signal);
+        if (!result) {
+          return;
+        }
+        navigate("/chat");
         startNewSession();
         detach(
           sendMessage("Who are you and what can you do?"),
           Reason.DomCallback,
         );
+        dismissOnboarding();
       })(),
       Reason.DomCallback,
     );
@@ -552,6 +562,7 @@ export function MemberWelcome({
   const navigate = useSet(updatePathname$);
   const startNewSession = useSet(startNewZeroSession$);
   const sendIntro = useSet(sendZeroChatMessage$);
+  const saving = useGet(zeroSaving$);
   const selectedConnectorType = useGet(selectedConnectorType$);
   const setSelected = useSet(setSelectedConnectorType$);
   const connectConnectorFn = useSet(connectConnector$);
@@ -599,7 +610,7 @@ export function MemberWelcome({
     detach(
       (async () => {
         await completeMember();
-        navigate("/");
+        navigate("/chat");
         startNewSession();
         detach(
           sendIntro("Who are you and what can you do?"),
@@ -784,8 +795,9 @@ export function MemberWelcome({
                   variant="outline"
                   className="w-full rounded-lg zero-btn-morandi"
                   onClick={handleOpenSlack}
+                  disabled={saving}
                 >
-                  Go to Slack
+                  {saving ? "Saving\u2026" : "Go to Slack"}
                 </Button>
               </div>
               <div className="zero-card flex flex-col items-center text-center rounded-xl border border-border p-5">
@@ -809,8 +821,9 @@ export function MemberWelcome({
                   variant="outline"
                   className="w-full rounded-lg zero-btn-morandi"
                   onClick={handleContinueWeb}
+                  disabled={saving}
                 >
-                  Chat with {agentName}
+                  {saving ? "Saving\u2026" : `Chat with ${agentName}`}
                 </Button>
               </div>
             </div>
@@ -826,6 +839,7 @@ export function MemberWelcome({
                   setStep("welcome");
                 }
               }}
+              disabled={saving}
             >
               Back
             </Button>

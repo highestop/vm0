@@ -22,7 +22,6 @@ import { orgMetadata } from "../../db/schema/org-metadata";
 import { modelProviders } from "../../db/schema/model-provider";
 import { enqueueRun, drainOrgQueue } from "./run-queue-service";
 import { ORG_SENTINEL_USER_ID } from "../org/org-sentinel";
-import { buildAgentIdentityPrompt } from "../agent-identity";
 import { logger } from "../logger";
 import type { Database } from "../../types/global";
 import type { AgentComposeSnapshot } from "../checkpoint/types";
@@ -42,7 +41,12 @@ import { canAccessCompose } from "../agent/compose-access";
 
 import { getVariableValues } from "../variable/variable-service";
 import { encryptSecretValue } from "../crypto/secrets-encryption";
-import { type OrgTier, type TriggerSource, orgTierSchema } from "@vm0/core";
+import {
+  type OrgTier,
+  type RunStatus,
+  type TriggerSource,
+  orgTierSchema,
+} from "@vm0/core";
 import { getOrgData } from "../org/org-cache-service";
 
 const log = logger("service:run");
@@ -490,7 +494,7 @@ export interface StartRunParams {
 
 export interface CreateRunResult {
   runId: string;
-  status: string;
+  status: RunStatus;
   sandboxId?: string;
   createdAt: Date;
 }
@@ -700,7 +704,7 @@ async function buildAndDispatchRun(opts: {
   orgId: string;
   authorizeTime: number;
   transactionTime: number;
-}): Promise<{ status: string; sandboxId?: string }> {
+}): Promise<{ status: RunStatus; sandboxId?: string }> {
   const {
     runId,
     createdAt,
@@ -1025,23 +1029,12 @@ export async function startRun(
   const orgData = await getOrgData(authOrgId);
   const orgTier = orgTierSchema.parse(orgData.tier);
 
-  // 4. Inject agent identity metadata into appendSystemPrompt
-  let { appendSystemPrompt } = params;
-  if (resolved.composeId) {
-    const identity = await buildAgentIdentityPrompt(resolved.composeId);
-    if (identity) {
-      appendSystemPrompt = appendSystemPrompt
-        ? `${identity}\n\n${appendSystemPrompt}`
-        : identity;
-    }
-  }
-
-  // 5. Delegate to createRun with fully resolved params
+  // 4. Delegate to createRun with fully resolved params
   return createRun({
     userId: params.userId,
     agentComposeVersionId: resolved.agentComposeVersionId,
     prompt: params.prompt,
-    appendSystemPrompt,
+    appendSystemPrompt: params.appendSystemPrompt,
     disallowedTools: params.disallowedTools,
     tools: params.tools,
     settings: params.settings,

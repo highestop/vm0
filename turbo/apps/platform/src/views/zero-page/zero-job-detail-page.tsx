@@ -55,6 +55,8 @@ import {
   discardZeroJobConnectors$,
   zeroJobActiveTab$,
   setZeroJobActiveTab$,
+  zeroJobFirewallPolicies$,
+  setZeroJobFirewallPolicies$,
 } from "../../signals/zero-page/zero-job-detail.ts";
 import type { AgentDetail } from "../../signals/zero-page/agent-types.ts";
 import { zeroOnboardingStatus$ } from "../../signals/zero-page/zero-onboarding.ts";
@@ -204,7 +206,13 @@ function extractAgentFields(
 // Tab wrappers — resolve signals into shared component props
 // ---------------------------------------------------------------------------
 
-function JobConnectorsTab({ agentName }: { agentName: string }) {
+function JobConnectorsTab({
+  agentName,
+  agentDisplayName,
+}: {
+  agentName: string;
+  agentDisplayName: string;
+}) {
   const addedConnectors = useGet(zeroJobAddedConnectors$);
   const connectorsDirty = useGet(zeroJobConnectorsDirty$);
   const connectorsSaving = useGet(zeroJobSettingsSaving$);
@@ -212,6 +220,8 @@ function JobConnectorsTab({ agentName }: { agentName: string }) {
   const removeConnector = useSet(removeZeroJobConnector$);
   const saveConnectors = useSet(saveZeroJobConnectors$);
   const discardConnectors = useSet(discardZeroJobConnectors$);
+  const firewallPolicies = useGet(zeroJobFirewallPolicies$);
+  const setFirewallPolicies = useSet(setZeroJobFirewallPolicies$);
 
   return (
     <ZeroConnectorsTab
@@ -220,6 +230,9 @@ function JobConnectorsTab({ agentName }: { agentName: string }) {
       connectorsDirty={connectorsDirty}
       connectorsSaving={connectorsSaving}
       agentName={agentName}
+      agentDisplayName={agentDisplayName}
+      firewallPolicies={firewallPolicies}
+      onFirewallPoliciesChange={setFirewallPolicies}
       onAddConnector={addConnector}
       onRemoveConnector={removeConnector}
       onSaveConnectors={() => detach(saveConnectors(), Reason.DomCallback)}
@@ -441,7 +454,10 @@ export function ZeroJobDetailPage({
 
       <main className="shrink-0 px-4 sm:px-6 pt-4 pb-16">
         {activeTab === "connectors" && (
-          <JobConnectorsTab agentName={displayName} />
+          <JobConnectorsTab
+            agentName={agentName}
+            agentDisplayName={displayName}
+          />
         )}
 
         {activeTab === "schedule" && <JobScheduleTab agentName={displayName} />}

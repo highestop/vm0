@@ -268,6 +268,7 @@ const router = tsr.router(zeroAgentInstructionsContract, {
         displayName: agent?.displayName ?? null,
         sound: agent?.sound ?? null,
         connectors: extractConnectors(existingContent),
+        firewallPolicies: agent?.firewallPolicies ?? null,
       },
     };
   },

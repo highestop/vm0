@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { authHeadersSchema, initContract } from "./base";
 import { apiErrorSchema } from "./errors";
+import { firewallPoliciesSchema } from "./firewalls";
 
 const c = initContract();
 
@@ -14,6 +15,7 @@ export const zeroAgentResponseSchema = z.object({
   displayName: z.string().nullable(),
   sound: z.string().nullable(),
   connectors: z.array(z.string()),
+  firewallPolicies: firewallPoliciesSchema.nullable(),
 });
 
 /**
@@ -139,6 +141,34 @@ export const zeroAgentsByNameContract = c.router({
 });
 
 /**
+ * Update firewall policies request schema
+ */
+export const zeroAgentFirewallPoliciesRequestSchema = z.object({
+  name: z.string(),
+  policies: firewallPoliciesSchema,
+});
+
+/**
+ * Contract for PUT /api/zero/firewall-policies
+ */
+export const zeroAgentFirewallPoliciesContract = c.router({
+  update: {
+    method: "PUT",
+    path: "/api/zero/firewall-policies",
+    headers: authHeadersSchema,
+    body: zeroAgentFirewallPoliciesRequestSchema,
+    responses: {
+      200: zeroAgentResponseSchema,
+      400: apiErrorSchema,
+      401: apiErrorSchema,
+      403: apiErrorSchema,
+      404: apiErrorSchema,
+    },
+    summary: "Update zero agent firewall policies (admin only)",
+  },
+});
+
+/**
  * Contract for GET/PUT /api/zero/agents/:name/instructions
  */
 export const zeroAgentInstructionsContract = c.router({
@@ -182,8 +212,13 @@ export type ZeroAgentInstructionsResponse = z.infer<
 export type ZeroAgentInstructionsRequest = z.infer<
   typeof zeroAgentInstructionsRequestSchema
 >;
+export type ZeroAgentFirewallPoliciesRequest = z.infer<
+  typeof zeroAgentFirewallPoliciesRequestSchema
+>;
 
 export type ZeroAgentsMainContract = typeof zeroAgentsMainContract;
 export type ZeroAgentsByNameContract = typeof zeroAgentsByNameContract;
 export type ZeroAgentInstructionsContract =
   typeof zeroAgentInstructionsContract;
+export type ZeroAgentFirewallPoliciesContract =
+  typeof zeroAgentFirewallPoliciesContract;

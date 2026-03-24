@@ -1,6 +1,7 @@
-import { useGet, useSet, useLastLoadable } from "ccstate-react";
+import { useState } from "react";
+import { useGet, useSet, useLastLoadable, useLoadable } from "ccstate-react";
 import { IconPlus } from "@tabler/icons-react";
-import type { ConnectorType } from "@vm0/core";
+import type { ConnectorType, FirewallPolicies } from "@vm0/core";
 import { ZeroConnectorCard } from "./zero-connector-card.tsx";
 import {
   allConnectorTypes$,
@@ -21,6 +22,12 @@ import {
   ConnectModal,
 } from "./components/settings/add-connection-dialog.tsx";
 import { ScopeReviewModal } from "./components/settings/scope-review-modal.tsx";
+import { FirewallPermissionsDrawer } from "./components/settings/firewall-permissions-dialog.tsx";
+import {
+  hasFirewallConfig,
+  saveFirewallPolicies$,
+} from "../../signals/zero-page/settings/firewalls.ts";
+import { isOrgAdmin$ } from "../../signals/org.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { detach, Reason } from "../../signals/utils.ts";
 import { ZeroUnsavedBar } from "./zero-unsaved-bar.tsx";
@@ -35,6 +42,9 @@ interface ZeroConnectorsTabProps {
   onSaveConnectors: () => void;
   onDiscardConnectors: () => void;
   agentName?: string;
+  agentDisplayName?: string;
+  firewallPolicies?: FirewallPolicies | null;
+  onFirewallPoliciesChange?: (policies: FirewallPolicies | null) => void;
 }
 
 export function ZeroConnectorsTab({
@@ -43,6 +53,9 @@ export function ZeroConnectorsTab({
   connectorsDirty,
   connectorsSaving,
   agentName,
+  agentDisplayName,
+  firewallPolicies,
+  onFirewallPoliciesChange,
   onAddConnector,
   onRemoveConnector,
   onSaveConnectors,
@@ -60,6 +73,12 @@ export function ZeroConnectorsTab({
 
   const scopeReviewType = useGet(scopeReviewType$);
   const setScopeReviewType = useSet(setScopeReviewType$);
+
+  const [firewallType, setFirewallType] = useState<ConnectorType | null>(null);
+  const saveFirewallPol = useSet(saveFirewallPolicies$);
+
+  const adminLoadable = useLoadable(isOrgAdmin$);
+  const isAdmin = adminLoadable.state === "hasData" && adminLoadable.data;
 
   const optimisticConnected = useGet(justConnectedTypes$);
 
@@ -144,6 +163,8 @@ export function ZeroConnectorsTab({
                 label={connectorMap.get(name as ConnectorType)?.label ?? name}
                 connector={effectiveConnector}
                 pollingType={pollingType}
+                hasFirewall={hasFirewallConfig(name as ConnectorType)}
+                isAdmin={isAdmin}
                 onConnect={() => {
                   const ct = connectorMap.get(name as ConnectorType);
                   if (
@@ -167,6 +188,9 @@ export function ZeroConnectorsTab({
                 }}
                 onRemove={() => handleRemoveConnector(name)}
                 onReviewScopes={() => setScopeReviewType(name as ConnectorType)}
+                onManagePermissions={() =>
+                  setFirewallType(name as ConnectorType)
+                }
               />
             );
           })}
@@ -179,7 +203,7 @@ export function ZeroConnectorsTab({
         excludeTypes={addedSet}
         onConnectSuccess={handleConnectSuccess}
         onAdd={handleConnectSuccess}
-        agentName={agentName}
+        agentName={agentDisplayName ?? agentName}
       />
 
       {selectedType && (
@@ -201,6 +225,22 @@ export function ZeroConnectorsTab({
             setScopeReviewType(null);
             detach(connect(type, signal), Reason.DomCallback);
           }}
+        />
+      )}
+
+      {firewallType && agentName && (
+        <FirewallPermissionsDrawer
+          connectorType={firewallType}
+          agentName={agentDisplayName ?? agentName}
+          initialPolicies={firewallPolicies ?? {}}
+          onApply={async (policies) => {
+            const saved = await saveFirewallPol(agentName, policies);
+            if (saved !== undefined) {
+              onFirewallPoliciesChange?.(saved);
+            }
+            toast.success("Permissions updated");
+          }}
+          onClose={() => setFirewallType(null)}
         />
       )}
 

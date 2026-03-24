@@ -90,6 +90,7 @@ const router = tsr.router(zeroAgentsByNameContract, {
         displayName: agent?.displayName ?? null,
         sound: agent?.sound ?? null,
         connectors,
+        firewallPolicies: agent?.firewallPolicies ?? null,
       },
     };
   },
@@ -202,6 +203,7 @@ const router = tsr.router(zeroAgentsByNameContract, {
         displayName: agent?.displayName ?? null,
         sound: agent?.sound ?? null,
         connectors: extractConnectors(content),
+        firewallPolicies: agent?.firewallPolicies ?? null,
       },
     };
   },
@@ -294,6 +296,7 @@ const router = tsr.router(zeroAgentsByNameContract, {
         displayName: agent?.displayName ?? null,
         sound: agent?.sound ?? null,
         connectors: extractConnectors(compose.content),
+        firewallPolicies: agent?.firewallPolicies ?? null,
       },
     };
   },

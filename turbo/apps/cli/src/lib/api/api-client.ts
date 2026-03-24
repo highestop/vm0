@@ -12,7 +12,6 @@ import {
   composesVersionsContract,
   sessionsByIdContract,
   checkpointsByIdContract,
-  orgContract,
   storagesPrepareContract,
   storagesCommitContract,
   storagesDownloadContract,
@@ -50,7 +49,6 @@ import type {
   CheckpointResponse,
   AgentComposeSnapshot as CoreAgentComposeSnapshot,
   ComposeResponse,
-  OrgResponse as CoreOrgResponse,
   LogsSearchResponse as CoreLogsSearchResponse,
 } from "@vm0/core";
 
@@ -63,7 +61,7 @@ export type TelemetryMetric = CoreTelemetryMetric;
 export type NetworkLogEntry = CoreNetworkLogEntry;
 export type AgentComposeSnapshot = CoreAgentComposeSnapshot;
 export type ApiError = ApiErrorResponse;
-export type OrgResponse = CoreOrgResponse;
+
 export type GetSystemLogResponse = SystemLogResponse;
 export type GetMetricsResponse = MetricsResponse;
 export type GetAgentEventsResponse = AgentEventsResponse;
@@ -444,63 +442,6 @@ class ApiClient {
     // Error cases
     const errorBody = result.body as ApiErrorResponse;
     const message = errorBody.error?.message || "Failed to fetch network logs";
-    throw new Error(message);
-  }
-
-  /**
-   * Get current user's default org
-   */
-  async getOrg(): Promise<OrgResponse> {
-    const baseUrl = await this.getBaseUrl();
-    const headers = await this.getHeaders();
-
-    // Create ts-rest client with config
-    const client = initClient(orgContract, {
-      baseUrl,
-      baseHeaders: headers,
-      jsonQuery: false,
-    });
-
-    const result = await client.get({ headers: {} });
-
-    // ts-rest returns discriminated union based on status code
-    if (result.status === 200) {
-      return result.body;
-    }
-
-    // Error cases
-    const errorBody = result.body as ApiErrorResponse;
-    const message = errorBody.error?.message || "Failed to get org";
-    throw new Error(message);
-  }
-
-  /**
-   * Update user's default org slug
-   */
-  async updateOrg(body: {
-    slug: string;
-    force?: boolean;
-  }): Promise<OrgResponse> {
-    const baseUrl = await this.getBaseUrl();
-    const headers = await this.getHeaders();
-
-    // Create ts-rest client with config
-    const client = initClient(orgContract, {
-      baseUrl,
-      baseHeaders: headers,
-      jsonQuery: false,
-    });
-
-    const result = await client.update({ body });
-
-    // ts-rest returns discriminated union based on status code
-    if (result.status === 200) {
-      return result.body;
-    }
-
-    // Error cases
-    const errorBody = result.body as ApiErrorResponse;
-    const message = errorBody.error?.message || "Failed to update org";
     throw new Error(message);
   }
 

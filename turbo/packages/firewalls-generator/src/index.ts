@@ -28,6 +28,7 @@ import { generate as generateNotion } from "./notion";
 import { generate as generateOpenai } from "./openai";
 import { generate as generatePosthog } from "./posthog";
 import { generate as generateResend } from "./resend";
+import { generate as generateSentry } from "./sentry";
 import { generate as generateSlack } from "./slack";
 import { generate as generateStripe } from "./stripe";
 import { generate as generateTodoist } from "./todoist";
@@ -62,6 +63,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   openai: generateOpenai,
   posthog: generatePosthog,
   resend: generateResend,
+  sentry: generateSentry,
   slack: generateSlack,
   stripe: generateStripe,
   todoist: generateTodoist,

@@ -120,6 +120,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   openai: ["openai"],
   posthog: ["posthog"],
   resend: ["resend"],
+  sentry: ["sentry"],
   stripe: ["stripe"],
   todoist: ["todoist"],
   vercel: ["vercel"],

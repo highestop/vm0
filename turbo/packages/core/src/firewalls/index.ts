@@ -19,6 +19,7 @@ import { closeFirewall } from "./close.generated";
 import { cloudflareFirewall } from "./cloudflare.generated";
 import { confluenceFirewall } from "./confluence.generated";
 import { deepseekFirewall } from "./deepseek.generated";
+import { devtoFirewall } from "./devto.generated";
 import { discordFirewall } from "./discord.generated";
 import { elevenlabsFirewall } from "./elevenlabs.generated";
 import { falFirewall } from "./fal.generated";
@@ -69,6 +70,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   cloudflare: cloudflareFirewall,
   confluence: confluenceFirewall,
   deepseek: deepseekFirewall,
+  devto: devtoFirewall,
   discord: discordFirewall,
   elevenlabs: elevenlabsFirewall,
   fal: falFirewall,

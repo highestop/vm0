@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useGet, useSet, useLoadable, useLastLoadable } from "ccstate-react";
 import {
+  addScheduleOpen$,
+  setAddScheduleOpen$,
+  editingScheduleId$,
+  setEditingScheduleId$,
+} from "../../signals/zero-page/schedule-card.ts";
+import {
   IconPencil,
   IconList,
   IconLayoutGrid,
@@ -77,6 +83,7 @@ function buildCombinedSchedule(
     enabled: e.enabled,
     notifyEmail: e.notifyEmail,
     notifySlack: e.notifySlack,
+    slackChannelId: e.slackChannelId,
     name: e.name,
     intervalSeconds: e.intervalSeconds,
     agentLabel:
@@ -628,10 +635,12 @@ export function ZeroSchedulePage() {
   const [scheduleViewMode, setScheduleViewMode] = useState<"list" | "calendar">(
     "list",
   );
-  const [editingEntry, setEditingEntry] = useState<CombinedEntry | null>(null);
+  const createOpen = useGet(addScheduleOpen$);
+  const setCreateOpen = useSet(setAddScheduleOpen$);
+  const editingScheduleId = useGet(editingScheduleId$);
+  const setEditingId = useSet(setEditingScheduleId$);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<CombinedEntry | null>(
     null,
   );
@@ -643,12 +652,15 @@ export function ZeroSchedulePage() {
     nameToDisplay,
   );
 
+  const editingEntry =
+    combinedSchedule.find((e) => e.id === editingScheduleId) ?? null;
+
   const agentOrder = [
     ...new Set(combinedSchedule.map((e) => e.agentLabel)),
   ] as const;
 
   const openEditSchedule = (entry: CombinedEntry) => {
-    setEditingEntry(entry);
+    setEditingId(entry.id);
   };
 
   const handleCreateSave = (values: ScheduleFormValues) => {
@@ -667,6 +679,7 @@ export function ZeroSchedulePage() {
         agentId: values.composeId,
         notifyEmail: values.notifyEmail,
         notifySlack: values.notifySlack,
+        slackChannelId: values.slackChannelId,
       })
         .then(() => {
           setCreateOpen(false);
@@ -704,9 +717,10 @@ export function ZeroSchedulePage() {
         agentId: editingEntry.agentId,
         notifyEmail: values.notifyEmail,
         notifySlack: values.notifySlack,
+        slackChannelId: values.slackChannelId,
       })
         .then(() => {
-          setEditingEntry(null);
+          setEditingId(null);
         })
         .catch((error: unknown) => {
           throwIfAbort(error);
@@ -841,7 +855,7 @@ export function ZeroSchedulePage() {
               key={editingEntry.id}
               open
               mode="edit"
-              onClose={() => setEditingEntry(null)}
+              onClose={() => setEditingId(null)}
               onSave={handleEditSave}
               saving={saving}
               saveError={saveError}
@@ -858,6 +872,7 @@ export function ZeroSchedulePage() {
                 dayOfMonth: parsed.dayOfMonth ?? "1",
                 notifyEmail: editingEntry.notifyEmail ?? false,
                 notifySlack: editingEntry.notifySlack ?? false,
+                slackChannelId: editingEntry.slackChannelId ?? null,
               }}
             />
           );

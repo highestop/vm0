@@ -27,6 +27,7 @@ import { googleSheetsFirewall } from "./google-sheets.generated";
 import { hubspotFirewall } from "./hubspot.generated";
 import { jiraFirewall } from "./jira.generated";
 import { linearFirewall } from "./linear.generated";
+import { mondayFirewall } from "./monday.generated";
 import { notionFirewall } from "./notion.generated";
 import { openaiFirewall } from "./openai.generated";
 import { resendFirewall } from "./resend.generated";
@@ -60,6 +61,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   hubspot: hubspotFirewall,
   jira: jiraFirewall,
   linear: linearFirewall,
+  monday: mondayFirewall,
   notion: notionFirewall,
   openai: openaiFirewall,
   resend: resendFirewall,

@@ -112,6 +112,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   atlassian: ["jira", "confluence"],
   jira: ["jira"],
   linear: ["linear"],
+  monday: ["monday"],
   figma: ["figma"],
   notion: ["notion"],
   openai: ["openai"],

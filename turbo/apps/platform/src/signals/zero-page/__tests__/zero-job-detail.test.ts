@@ -59,8 +59,8 @@ function mockSchedules() {
     schedules: [
       {
         id: "sched-1",
-        composeId: "compose-1",
-        composeName: "my-agent",
+        zeroAgentId: "compose-1",
+        agentName: "my-agent",
         name: "daily-run",
         enabled: true,
         triggerType: "cron",
@@ -74,8 +74,8 @@ function mockSchedules() {
       },
       {
         id: "sched-2",
-        composeId: "compose-2",
-        composeName: "other-agent",
+        zeroAgentId: "compose-2",
+        agentName: "other-agent",
         name: "other-run",
         enabled: true,
         triggerType: "cron",
@@ -316,12 +316,13 @@ describe("zero-job-detail signals", () => {
       await context.store.set(saveZeroJobSchedule$, params);
 
       expect(capturedBody).toMatchObject({
-        composeId: "compose-1",
+        zeroAgentId: "compose-1",
         timezone: "UTC",
         prompt: "Run daily task",
         enabled: true,
         cronExpression: "30 9 * * *",
       });
+      expect(capturedBody).not.toHaveProperty("composeId");
     });
 
     it("should include description in save request when provided", async () => {
@@ -425,12 +426,13 @@ describe("zero-job-detail signals", () => {
       await context.store.set(saveZeroJobSchedule$, params);
 
       expect(capturedBody).toMatchObject({
-        composeId: "compose-1",
+        zeroAgentId: "compose-1",
         prompt: "Poll every 5 min",
         intervalSeconds: 300,
       });
       expect(capturedBody).not.toHaveProperty("cronExpression");
       expect(capturedBody).not.toHaveProperty("atTime");
+      expect(capturedBody).not.toHaveProperty("composeId");
     });
 
     it("should throw for save when API returns error", async () => {
@@ -499,7 +501,7 @@ describe("zero-job-detail signals", () => {
       await context.store.set(deleteZeroJobSchedule$, "daily-run");
 
       expect(capturedUrl).toContain("/api/zero/schedules/daily-run");
-      expect(capturedUrl).toContain("composeId=compose-1");
+      expect(capturedUrl).toContain("zeroAgentId=compose-1");
 
       const entries = await context.store.get(zeroJobScheduleEntries$);
       expect(entries).toStrictEqual([]);
@@ -540,8 +542,9 @@ describe("zero-job-detail signals", () => {
   });
 
   describe("toggleZeroJobScheduleEnabled$", () => {
-    it("should send enable request for a schedule", async () => {
+    it("should send enable request with zeroAgentId in body", async () => {
       let capturedUrl = "";
+      let capturedBody: Record<string, unknown> | null = null;
 
       server.use(
         http.get("http://localhost:3000/api/zero/agents/my-agent", () => {
@@ -564,8 +567,9 @@ describe("zero-job-detail signals", () => {
       server.use(
         http.post(
           "http://localhost:3000/api/zero/schedules/:name/:action",
-          ({ request }) => {
+          async ({ request }) => {
             capturedUrl = request.url;
+            capturedBody = (await request.json()) as Record<string, unknown>;
             return HttpResponse.json({ ok: true });
           },
         ),
@@ -580,6 +584,9 @@ describe("zero-job-detail signals", () => {
       });
 
       expect(capturedUrl).toContain("/api/zero/schedules/daily-run/enable");
+      expect(capturedBody).not.toBeNull();
+      expect(capturedBody!["zeroAgentId"]).toBe("compose-1");
+      expect(capturedBody).not.toHaveProperty("composeId");
     });
 
     it("should send disable request for a schedule", async () => {

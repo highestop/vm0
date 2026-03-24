@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 
 import postgres from "postgres";
+import { SEED_SKILLS } from "../src/lib/zero/seed-skills";
 
 /**
  * Dev seed: populate credit_pricing and vm0_api_keys tables.
@@ -132,6 +133,30 @@ async function devSeed() {
       console.log(`  ${k.vendor}/${k.model}`);
     }
     console.log(`✅ Seeded ${apiKeys.length} vm0 API key entries`);
+
+    // --- skills (seed skills + common connectors) ---
+    console.log("Seeding skills...");
+    const skillNames = [...SEED_SKILLS, "github"];
+    let seededCount = 0;
+    for (const name of skillNames) {
+      const url = `https://github.com/vm0-ai/vm0-skills/tree/main/${name}`;
+      const fullPath = `vm0-ai/vm0-skills/tree/main/${name}`;
+      const frontmatter = JSON.stringify({
+        name,
+        description: `${name} skill`,
+        vm0_secrets: [],
+        vm0_vars: [],
+      });
+      const result = await sql`
+        INSERT INTO skills (url, name, full_path, version_hash, frontmatter)
+        VALUES (${url}, ${name}, ${fullPath}, NULL, ${frontmatter}::jsonb)
+        ON CONFLICT (url) DO NOTHING
+      `;
+      if (result.count > 0) seededCount++;
+    }
+    console.log(
+      `✅ Seeded skills: ${seededCount} new, ${skillNames.length - seededCount} already existed`,
+    );
   } finally {
     await sql.end();
   }

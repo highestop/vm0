@@ -10,6 +10,7 @@ import { timeout } from "signal-timers";
 import type { AgentEvent, LogStatus } from "./log-types.ts";
 import { fetch$ } from "../fetch.ts";
 import { throwIfAbort, detach, Reason } from "../utils.ts";
+import { toast } from "@vm0/ui/components/ui/sonner";
 import { logger } from "../log.ts";
 import { setupPollingLoop$, type PageResult } from "./polling.ts";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
@@ -186,14 +187,14 @@ async function createChatThread(
   fetchFn: typeof fetch,
   agentComposeId: string,
   title?: string,
-): Promise<{ id: string; title: string | null } | null> {
+): Promise<{ id: string; title: string | null }> {
   const response = await fetchFn("/api/zero/chat-threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentComposeId, title }),
   });
   if (!response.ok) {
-    return null;
+    throw new Error("Failed to create chat thread");
   }
   const data = (await response.json()) as {
     id: string;
@@ -930,6 +931,58 @@ export const startNewZeroSession$ = command(({ get, set }) => {
 });
 
 // ---------------------------------------------------------------------------
+// Commands: create new chat session (from sidebar "New chat" button)
+// ---------------------------------------------------------------------------
+
+const creatingNewSession$ = state(false);
+export const zeroCreatingNewSession$ = computed((get) =>
+  get(creatingNewSession$),
+);
+
+export const createNewChatSession$ = command(
+  async ({ get, set }, agentComposeId: string | null) => {
+    set(creatingNewSession$, true);
+    try {
+      set(startNewZeroSession$);
+
+      const resolvedComposeId =
+        agentComposeId ??
+        (await get(zeroOnboardingStatus$)).defaultAgentComposeId;
+      if (!resolvedComposeId) {
+        toast.error("No agent available for new chat session");
+        return;
+      }
+
+      const fetchFn = get(fetch$);
+      const thread = await createChatThread(fetchFn, resolvedComposeId);
+
+      set(internalChatThreadId$, thread.id);
+
+      const now = new Date().toISOString();
+      set(internalSessionList$, (prev) => [
+        {
+          id: thread.id,
+          title: thread.title,
+          preview: null,
+          agentComposeId: resolvedComposeId,
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...prev,
+      ]);
+
+      set(navigateToZeroSession$, thread.id);
+    } catch (error) {
+      throwIfAbort(error);
+      L.error("Failed to create new chat session:", error);
+      toast.error("Failed to create new chat session");
+    } finally {
+      set(creatingNewSession$, false);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Commands: send message
 // ---------------------------------------------------------------------------
 
@@ -1001,8 +1054,11 @@ async function ensureChatThread(
   }
 
   const title = prompt.trim().slice(0, 100);
-  const thread = await createChatThread(fetchFn, composeId, title);
-  if (!thread) {
+  let thread: { id: string; title: string | null };
+  try {
+    thread = await createChatThread(fetchFn, composeId, title);
+  } catch (error) {
+    throwIfAbort(error);
     set(internalMessages$, (prev) => {
       const updated = [...prev];
       updated[updated.length - 1] = {

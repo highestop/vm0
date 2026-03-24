@@ -29,6 +29,7 @@
     "generate:monday": "tsx src/index.ts monday",
     "generate:notion": "tsx src/index.ts notion",
     "generate:openai": "tsx src/index.ts openai",
+    "generate:posthog": "tsx src/index.ts posthog",
     "generate:resend": "tsx src/index.ts resend",
     "generate:slack": "tsx src/index.ts slack",
     "generate:stripe": "tsx src/index.ts stripe",

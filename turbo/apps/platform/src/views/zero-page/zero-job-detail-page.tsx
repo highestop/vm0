@@ -27,7 +27,6 @@ import { TONE_OPTIONS, type Tone } from "./zero-tone-constants.ts";
 import type { ScheduleEntry } from "./zero-schedule-card.tsx";
 import {
   zeroJobDetail$,
-  zeroJobDetailLoading$,
   zeroJobDetailError$,
   zeroJobInstructions$,
   zeroJobInstructionsLoading$,
@@ -319,7 +318,6 @@ export function ZeroJobDetailPage({
   onCycleAvatar,
 }: ZeroJobDetailPageProps) {
   const detail = useGet(zeroJobDetail$);
-  const loading = useGet(zeroJobDetailLoading$);
   const error = useGet(zeroJobDetailError$);
   const agents = useGet(agentsList$);
   const listItem = agents.find((a) => a.name === agentName);
@@ -367,7 +365,7 @@ export function ZeroJobDetailPage({
       setAgentAvatarCmd(agentName, next);
     });
 
-  if (loading && !detail) {
+  if (!detail && !error) {
     return <DetailSkeleton />;
   }
 

@@ -132,6 +132,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   jotform: ["jotform"],
   linear: ["linear"],
   loops: ["loops"],
+  minimax: ["minimax"],
   monday: ["monday"],
   neon: ["neon"],
   figma: ["figma"],

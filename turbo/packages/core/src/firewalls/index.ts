@@ -49,6 +49,7 @@ import { jiraFirewall } from "./jira.generated";
 import { jotformFirewall } from "./jotform.generated";
 import { linearFirewall } from "./linear.generated";
 import { loopsFirewall } from "./loops.generated";
+import { minimaxFirewall } from "./minimax.generated";
 import { mondayFirewall } from "./monday.generated";
 import { neonFirewall } from "./neon.generated";
 import { notionFirewall } from "./notion.generated";
@@ -119,6 +120,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   jotform: jotformFirewall,
   linear: linearFirewall,
   loops: loopsFirewall,
+  minimax: minimaxFirewall,
   monday: mondayFirewall,
   neon: neonFirewall,
   notion: notionFirewall,

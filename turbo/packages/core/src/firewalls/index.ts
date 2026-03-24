@@ -31,6 +31,7 @@ import { hubspotFirewall } from "./hubspot.generated";
 import { jiraFirewall } from "./jira.generated";
 import { linearFirewall } from "./linear.generated";
 import { mondayFirewall } from "./monday.generated";
+import { neonFirewall } from "./neon.generated";
 import { notionFirewall } from "./notion.generated";
 import { openaiFirewall } from "./openai.generated";
 import { perplexityFirewall } from "./perplexity.generated";
@@ -74,6 +75,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   jira: jiraFirewall,
   linear: linearFirewall,
   monday: mondayFirewall,
+  neon: neonFirewall,
   notion: notionFirewall,
   openai: openaiFirewall,
   perplexity: perplexityFirewall,

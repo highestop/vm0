@@ -117,6 +117,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   fal: ["fal"],
   fireflies: ["fireflies"],
   hubspot: ["hubspot"],
+  "hugging-face": ["hugging-face"],
   intercom: ["intercom"],
   atlassian: ["jira", "confluence"],
   linear: ["linear"],

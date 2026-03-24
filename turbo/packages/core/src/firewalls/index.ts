@@ -21,6 +21,7 @@ import { jiraFirewall } from "./jira.generated";
 import { notionFirewall } from "./notion.generated";
 import { slackFirewall } from "./slack.generated";
 import { vercelFirewall } from "./vercel.generated";
+import { zapsignFirewall } from "./zapsign.generated";
 import { zeptomailFirewall } from "./zeptomail.generated";
 
 export const builtinFirewalls: Record<string, FirewallConfig> = {
@@ -38,5 +39,6 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   notion: notionFirewall,
   slack: slackFirewall,
   vercel: vercelFirewall,
+  zapsign: zapsignFirewall,
   zeptomail: zeptomailFirewall,
 };

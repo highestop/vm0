@@ -129,6 +129,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   imgur: ["imgur"],
   intercom: ["intercom"],
   atlassian: ["jira", "confluence"],
+  jotform: ["jotform"],
   linear: ["linear"],
   loops: ["loops"],
   monday: ["monday"],

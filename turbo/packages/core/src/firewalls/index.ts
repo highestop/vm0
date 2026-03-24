@@ -46,6 +46,7 @@ import { huggingFaceFirewall } from "./hugging-face.generated";
 import { imgurFirewall } from "./imgur.generated";
 import { intercomFirewall } from "./intercom.generated";
 import { jiraFirewall } from "./jira.generated";
+import { jotformFirewall } from "./jotform.generated";
 import { linearFirewall } from "./linear.generated";
 import { loopsFirewall } from "./loops.generated";
 import { mondayFirewall } from "./monday.generated";
@@ -115,6 +116,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   imgur: imgurFirewall,
   intercom: intercomFirewall,
   jira: jiraFirewall,
+  jotform: jotformFirewall,
   linear: linearFirewall,
   loops: loopsFirewall,
   monday: mondayFirewall,

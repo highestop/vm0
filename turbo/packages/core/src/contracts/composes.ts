@@ -27,21 +27,22 @@ export const AGENT_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,62}[a-zA-Z0-9]$/;
  * Valid capability strings for experimental_capabilities.
  * Format: {resource}:{action}
  *
- * Aligned with the resource model (docs/resource-model.md):
- * - agent:*    → Agent Org static resources (compose + volumes)
- * - artifact:* → Runtime Org dynamic resources (artifacts + memories)
- * - agent-run:*, schedule:* → operational capabilities
+ * - agent:*       → Agent static resources (compose + volumes + storages)
+ * - agent-run:*   → Run lifecycle operations
+ * - schedule:*    → Schedule management
+ * - artifact:*    → Legacy; kept so existing sandbox tokens remain verifiable
+ * - integration-* → Third-party integrations
  */
 export const VALID_CAPABILITIES = [
   "agent:read",
   "agent:write",
-  "artifact:read",
-  "artifact:write",
   "agent-run:read",
   "agent-run:write",
   "schedule:read",
   "schedule:write",
   "integration-slack:write",
+  "artifact:read",
+  "artifact:write",
 ] as const;
 
 /** Inferred union type of all valid capability strings. */
@@ -61,14 +62,6 @@ export interface CapabilityMeta {
 export const CAPABILITY_META: Record<ValidCapability, CapabilityMeta> = {
   "agent:read": { group: "Agent Resources", label: "Read agents & volumes" },
   "agent:write": { group: "Agent Resources", label: "Write agents & volumes" },
-  "artifact:read": {
-    group: "Artifacts & Memories",
-    label: "Read artifacts & memories",
-  },
-  "artifact:write": {
-    group: "Artifacts & Memories",
-    label: "Write artifacts & memories",
-  },
   "agent-run:read": { group: "Operations", label: "View agent runs" },
   "agent-run:write": { group: "Operations", label: "Create & cancel runs" },
   "schedule:read": { group: "Operations", label: "View schedules" },
@@ -77,6 +70,8 @@ export const CAPABILITY_META: Record<ValidCapability, CapabilityMeta> = {
     group: "Integrations",
     label: "Send Slack messages via org bot",
   },
+  "artifact:read": { group: "Legacy", label: "Read artifacts (deprecated)" },
+  "artifact:write": { group: "Legacy", label: "Write artifacts (deprecated)" },
 };
 
 /**

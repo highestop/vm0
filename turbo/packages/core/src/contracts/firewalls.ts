@@ -135,6 +135,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   runway: ["runway"],
   sentry: ["sentry"],
   serpapi: ["serpapi"],
+  shortio: ["shortio"],
   stripe: ["stripe"],
   supabase: ["supabase"],
   tavily: ["tavily"],

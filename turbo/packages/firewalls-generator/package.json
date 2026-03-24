@@ -49,6 +49,7 @@
     "generate:runway": "tsx src/index.ts runway",
     "generate:sentry": "tsx src/index.ts sentry",
     "generate:serpapi": "tsx src/index.ts serpapi",
+    "generate:shortio": "tsx src/index.ts shortio",
     "generate:slack": "tsx src/index.ts slack",
     "generate:stripe": "tsx src/index.ts stripe",
     "generate:supabase": "tsx src/index.ts supabase",

@@ -106,6 +106,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   clickup: ["clickup"],
   close: ["close"],
   cloudflare: ["cloudflare"],
+  "customer-io": ["customer-io"],
   deepseek: ["deepseek"],
   devto: ["devto"],
   discord: ["discord"],

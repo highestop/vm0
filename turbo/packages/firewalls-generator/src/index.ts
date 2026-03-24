@@ -21,6 +21,7 @@ import { generate as generateClickup } from "./clickup";
 import { generate as generateClose } from "./close";
 import { generate as generateCloudflare } from "./cloudflare";
 import { generate as generateConfluence } from "./confluence";
+import { generate as generateCustomerIo } from "./customer-io";
 import { generate as generateDeepseek } from "./deepseek";
 import { generate as generateDevto } from "./devto";
 import { generate as generateDiscord } from "./discord";
@@ -79,6 +80,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   close: generateClose,
   cloudflare: generateCloudflare,
   confluence: generateConfluence,
+  "customer-io": generateCustomerIo,
   deepseek: generateDeepseek,
   devto: generateDevto,
   discord: generateDiscord,

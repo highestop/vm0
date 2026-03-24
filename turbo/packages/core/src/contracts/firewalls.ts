@@ -104,6 +104,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   "google-calendar": ["google-calendar"],
   atlassian: ["jira", "confluence"],
   jira: ["jira"],
+  linear: ["linear"],
   figma: ["figma"],
   notion: ["notion"],
   vercel: ["vercel"],

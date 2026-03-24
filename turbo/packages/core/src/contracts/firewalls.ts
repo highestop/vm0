@@ -99,6 +99,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   axiom: ["axiom"],
   discord: ["discord"],
   github: ["github"],
+  gitlab: ["gitlab"],
   slack: ["slack"],
   gmail: ["gmail"],
   "google-sheets": ["google-sheets"],

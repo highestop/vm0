@@ -29,6 +29,7 @@ import { jiraFirewall } from "./jira.generated";
 import { linearFirewall } from "./linear.generated";
 import { notionFirewall } from "./notion.generated";
 import { openaiFirewall } from "./openai.generated";
+import { resendFirewall } from "./resend.generated";
 import { slackFirewall } from "./slack.generated";
 import { stripeFirewall } from "./stripe.generated";
 import { vercelFirewall } from "./vercel.generated";
@@ -61,6 +62,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   linear: linearFirewall,
   notion: notionFirewall,
   openai: openaiFirewall,
+  resend: resendFirewall,
   slack: slackFirewall,
   stripe: stripeFirewall,
   vercel: vercelFirewall,

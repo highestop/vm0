@@ -1,7 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { env } from "../../env";
-import { orgMetadata } from "../../db/schema/org-metadata";
 import { agentComposes } from "../../db/schema/agent-compose";
+import { orgMetadata } from "../../db/schema/org-metadata";
 import { zeroAgents } from "../../db/schema/zero-agent";
 import { getOrgBySlug } from "../org/org-cache-service";
 import { logger } from "../logger";
@@ -11,8 +11,7 @@ const log = logger("zero:resolve-default-agent");
 /**
  * Resolve the default zero-layer agent ID for an org.
  *
- * Primary path: reads defaultAgentComposeId from org_metadata, then JOINs
- * agent_composes with zero_agents via (orgId, name) to get the agent ID.
+ * Primary path: reads defaultAgentId directly from org_metadata.
  *
  * Fallback path: parses VM0_DEFAULT_AGENT env var ("org-slug/agent-name"),
  * resolves the org, then queries zero_agents directly by (orgId, name).
@@ -22,34 +21,15 @@ const log = logger("zero:resolve-default-agent");
 export async function resolveDefaultAgentId(
   orgId: string,
 ): Promise<string | null> {
-  // 1. Look up default compose ID from org_metadata
   const [orgRow] = await globalThis.services.db
-    .select({ defaultAgentComposeId: orgMetadata.defaultAgentComposeId })
+    .select({ defaultAgentId: orgMetadata.defaultAgentId })
     .from(orgMetadata)
     .where(eq(orgMetadata.orgId, orgId))
     .limit(1);
 
-  const composeId = orgRow?.defaultAgentComposeId ?? null;
+  if (orgRow?.defaultAgentId) return orgRow.defaultAgentId;
 
-  if (composeId) {
-    // 2a. Primary path: resolve via compose → zero agent JOIN
-    const [row] = await globalThis.services.db
-      .select({ agentId: zeroAgents.id })
-      .from(agentComposes)
-      .innerJoin(
-        zeroAgents,
-        and(
-          eq(zeroAgents.orgId, agentComposes.orgId),
-          eq(zeroAgents.name, agentComposes.name),
-        ),
-      )
-      .where(eq(agentComposes.id, composeId))
-      .limit(1);
-
-    if (row) return row.agentId;
-  }
-
-  // 2b. Fallback: resolve via VM0_DEFAULT_AGENT env var → zero_agents directly
+  // Fallback: resolve via VM0_DEFAULT_AGENT env var → zero_agents directly
   return resolveDefaultAgentIdFromEnv();
 }
 
@@ -98,4 +78,28 @@ async function resolveDefaultAgentIdFromEnv(): Promise<string | null> {
   }
 
   return agent.id;
+}
+
+/**
+ * Reverse-resolve a zero agent UUID back to its compose UUID.
+ * JOINs zero_agents → agent_composes via (orgId, name).
+ * Returns the compose UUID or null if no matching compose exists.
+ */
+export async function resolveComposeIdFromAgentId(
+  agentId: string,
+): Promise<string | null> {
+  const [row] = await globalThis.services.db
+    .select({ composeId: agentComposes.id })
+    .from(zeroAgents)
+    .innerJoin(
+      agentComposes,
+      and(
+        eq(agentComposes.orgId, zeroAgents.orgId),
+        eq(agentComposes.name, zeroAgents.name),
+      ),
+    )
+    .where(eq(zeroAgents.id, agentId))
+    .limit(1);
+
+  return row?.composeId ?? null;
 }

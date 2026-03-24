@@ -7,6 +7,7 @@ import { zeroAgents } from "../../../db/schema/zero-agent";
 import { orgMetadata as orgTable } from "../../../db/schema/org-metadata";
 import { getAppUrl } from "../../url";
 import { resolveDefaultAgentComposeId } from "../../agent-compose/resolve-default";
+import { resolveComposeIdFromAgentId } from "../../zero/resolve-default-agent";
 import { ensureStorageExists } from "../../storage/storage-service";
 import {
   createSlackClient,
@@ -69,19 +70,22 @@ export async function resolveConnectionFromSlackUser(
 
 /**
  * Resolve default agent compose ID from org table.
+ * Reads the zero agent UUID from org_metadata.defaultAgentId, then resolves
+ * back to the compose UUID via zero_agents → agent_composes JOIN.
  * Falls back to VM0_DEFAULT_AGENT env var.
  */
 export async function resolveDefaultComposeId(
   orgId: string,
 ): Promise<string | null> {
   const [orgRow] = await globalThis.services.db
-    .select({ defaultAgentComposeId: orgTable.defaultAgentComposeId })
+    .select({ defaultAgentId: orgTable.defaultAgentId })
     .from(orgTable)
     .where(eq(orgTable.orgId, orgId))
     .limit(1);
 
-  if (orgRow?.defaultAgentComposeId) {
-    return orgRow.defaultAgentComposeId;
+  if (orgRow?.defaultAgentId) {
+    const composeId = await resolveComposeIdFromAgentId(orgRow.defaultAgentId);
+    if (composeId) return composeId;
   }
 
   return resolveDefaultAgentComposeId();

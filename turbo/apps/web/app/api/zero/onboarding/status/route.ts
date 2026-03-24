@@ -14,6 +14,7 @@ import {
 } from "../../../../../src/db/schema/agent-compose";
 import { zeroAgents } from "../../../../../src/db/schema/zero-agent";
 import { eq, and } from "drizzle-orm";
+import { resolveComposeIdFromAgentId } from "../../../../../src/lib/zero/resolve-default-agent";
 import { agentComposeApiContentSchema } from "@vm0/core";
 import { orgMembersMetadata } from "../../../../../src/db/schema/org-members-metadata";
 import { orgMetadata as orgTable } from "../../../../../src/db/schema/org-metadata";
@@ -126,19 +127,23 @@ const router = tsr.router(onboardingStatusContract, {
       resolvedOrgId = resolvedOrg.orgId;
       isAdmin = member.role === "admin";
 
-      // Read default agent compose ID from org table
+      // Read default agent ID (zero agent UUID) from org table
       const [orgRow] = await globalThis.services.db
-        .select({ defaultAgentComposeId: orgTable.defaultAgentComposeId })
+        .select({ defaultAgentId: orgTable.defaultAgentId })
         .from(orgTable)
         .where(eq(orgTable.orgId, resolvedOrg.orgId))
         .limit(1);
-      const defaultAgentComposeId = orgRow?.defaultAgentComposeId ?? null;
+      const defaultAgentId = orgRow?.defaultAgentId ?? null;
 
-      if (defaultAgentComposeId) {
-        defaultAgent = await resolveDefaultAgent(
-          resolvedOrg.orgId,
-          defaultAgentComposeId,
-        );
+      if (defaultAgentId) {
+        // Resolve zero agent UUID → compose UUID for backward-compatible response
+        const composeId = await resolveComposeIdFromAgentId(defaultAgentId);
+        if (composeId) {
+          defaultAgent = await resolveDefaultAgent(
+            resolvedOrg.orgId,
+            composeId,
+          );
+        }
       }
     } catch (error) {
       if (!isNotFound(error) && !isBadRequest(error)) {

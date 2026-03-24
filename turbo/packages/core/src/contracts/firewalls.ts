@@ -126,6 +126,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   heygen: ["heygen"],
   hubspot: ["hubspot"],
   "hugging-face": ["hugging-face"],
+  imgur: ["imgur"],
   intercom: ["intercom"],
   atlassian: ["jira", "confluence"],
   linear: ["linear"],

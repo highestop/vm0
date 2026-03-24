@@ -26,6 +26,7 @@ import {
   cn,
 } from "@vm0/ui";
 import { Skeleton } from "@vm0/ui/components/ui/skeleton";
+import { toast } from "@vm0/ui/components/ui/sonner";
 import {
   Popover,
   PopoverContent,
@@ -644,6 +645,7 @@ export function ZeroSchedulePage() {
   const [pendingDelete, setPendingDelete] = useState<CombinedEntry | null>(
     null,
   );
+  const [deleting, setDeleting] = useState(false);
 
   const combinedSchedule = buildCombinedSchedule(
     entries,
@@ -757,14 +759,27 @@ export function ZeroSchedulePage() {
     if (pendingDelete?.name === undefined) {
       return;
     }
+    setDeleting(true);
     detach(
       deleteSchedule({
         name: pendingDelete.name,
         agentId: pendingDelete.agentId,
-      }),
+      }).then(
+        () => {
+          setPendingDelete(null);
+          setDeleting(false);
+        },
+        (error: unknown) => {
+          setDeleting(false);
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Failed to delete schedule";
+          toast.error(message);
+        },
+      ),
       Reason.DomCallback,
     );
-    setPendingDelete(null);
   };
 
   return (
@@ -892,7 +907,7 @@ export function ZeroSchedulePage() {
       <Dialog
         open={pendingDelete !== null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!deleting && !open) {
             setPendingDelete(null);
           }
         }}
@@ -909,11 +924,19 @@ export function ZeroSchedulePage() {
             </p>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPendingDelete(null)}>
+            <Button
+              variant="outline"
+              onClick={() => setPendingDelete(null)}
+              disabled={deleting}
+            >
               Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmDelete}>
-              Delete
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

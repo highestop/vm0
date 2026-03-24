@@ -66,6 +66,7 @@ import { supabaseFirewall } from "./supabase.generated";
 import { tavilyFirewall } from "./tavily.generated";
 import { todoistFirewall } from "./todoist.generated";
 import { vercelFirewall } from "./vercel.generated";
+import { webflowFirewall } from "./webflow.generated";
 import { xFirewall } from "./x.generated";
 import { youtubeFirewall } from "./youtube.generated";
 import { zapierFirewall } from "./zapier.generated";
@@ -132,6 +133,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   tavily: tavilyFirewall,
   todoist: todoistFirewall,
   vercel: vercelFirewall,
+  webflow: webflowFirewall,
   x: xFirewall,
   youtube: youtubeFirewall,
   zapier: zapierFirewall,

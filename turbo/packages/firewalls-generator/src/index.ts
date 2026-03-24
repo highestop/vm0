@@ -60,6 +60,7 @@ import { generate as generateSupabase } from "./supabase";
 import { generate as generateTavily } from "./tavily";
 import { generate as generateTodoist } from "./todoist";
 import { generate as generateVercel } from "./vercel";
+import { generate as generateWebflow } from "./webflow";
 import { generate as generateX } from "./x";
 import { generate as generateYoutube } from "./youtube";
 import { generate as generateZapier } from "./zapier";
@@ -122,6 +123,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   tavily: generateTavily,
   todoist: generateTodoist,
   vercel: generateVercel,
+  webflow: generateWebflow,
   x: generateX,
   youtube: generateYoutube,
   zapier: generateZapier,

@@ -32,6 +32,7 @@
     "generate:resend": "tsx src/index.ts resend",
     "generate:slack": "tsx src/index.ts slack",
     "generate:stripe": "tsx src/index.ts stripe",
+    "generate:todoist": "tsx src/index.ts todoist",
     "generate:vercel": "tsx src/index.ts vercel",
     "generate:x": "tsx src/index.ts x",
     "generate:youtube": "tsx src/index.ts youtube",

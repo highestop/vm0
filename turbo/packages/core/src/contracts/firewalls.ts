@@ -110,6 +110,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   deepseek: ["deepseek"],
   devto: ["devto"],
   discord: ["discord"],
+  dropbox: ["dropbox"],
   github: ["github"],
   gitlab: ["gitlab"],
   slack: ["slack"],

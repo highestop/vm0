@@ -25,6 +25,7 @@ import { generate as generateCustomerIo } from "./customer-io";
 import { generate as generateDeepseek } from "./deepseek";
 import { generate as generateDevto } from "./devto";
 import { generate as generateDiscord } from "./discord";
+import { generate as generateDropbox } from "./dropbox";
 import { generate as generateElevenlabs } from "./elevenlabs";
 import { generate as generateFal } from "./fal";
 import { generate as generateFigma } from "./figma";
@@ -85,6 +86,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   deepseek: generateDeepseek,
   devto: generateDevto,
   discord: generateDiscord,
+  dropbox: generateDropbox,
   elevenlabs: generateElevenlabs,
   fal: generateFal,
   figma: generateFigma,

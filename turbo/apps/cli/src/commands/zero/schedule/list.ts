@@ -22,7 +22,7 @@ export const listCommand = new Command()
 
       const agentWidth = Math.max(
         5,
-        ...result.schedules.map((s) => s.agentName.length),
+        ...result.schedules.map((s) => s.agentId.length),
       );
       const scheduleWidth = Math.max(
         8,
@@ -60,7 +60,7 @@ export const listCommand = new Command()
           : "-";
 
         const row = [
-          schedule.agentName.padEnd(agentWidth),
+          schedule.agentId.padEnd(agentWidth),
           schedule.name.padEnd(scheduleWidth),
           trigger.padEnd(triggerWidth),
           status.padEnd(8 + (schedule.enabled ? 0 : 2)),

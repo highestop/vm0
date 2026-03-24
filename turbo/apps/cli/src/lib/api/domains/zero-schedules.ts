@@ -10,6 +10,7 @@ import type {
   ScheduleListResponse,
   DeployScheduleResponse,
 } from "@vm0/core";
+import { getComposeByName } from "./composes";
 
 /**
  * Deploy zero schedule (create or update)
@@ -127,7 +128,7 @@ export async function disableZeroSchedule(params: {
 
 /**
  * Resolve a zero schedule by agent name using the list API.
- * Searches across all user's schedules and finds by agentName.
+ * Searches across all user's schedules and finds by agentId.
  *
  * Returns the full ScheduleResponse so callers can access any field.
  * When an agent has multiple schedules, scheduleName is required for disambiguation.
@@ -139,9 +140,14 @@ export async function resolveZeroScheduleByAgent(
   agentName: string,
   scheduleName?: string,
 ): Promise<ScheduleResponse> {
+  const compose = await getComposeByName(agentName);
+  if (!compose) {
+    throw new Error(`Agent not found: ${agentName}`);
+  }
+
   const { schedules } = await listZeroSchedules();
 
-  const agentSchedules = schedules.filter((s) => s.agentName === agentName);
+  const agentSchedules = schedules.filter((s) => s.agentId === compose.id);
 
   if (agentSchedules.length === 0) {
     throw new Error(`No schedule found for agent "${agentName}"`);

@@ -43,7 +43,7 @@ function printRunConfiguration(schedule: ScheduleResponse): void {
   console.log(`${"Status:".padEnd(16)}${statusText}`);
 
   console.log(
-    `${"Agent:".padEnd(16)}${schedule.agentName} ${chalk.dim(`(${schedule.orgSlug})`)}`,
+    `${"Agent:".padEnd(16)}${schedule.agentId} ${chalk.dim(`(${schedule.orgSlug})`)}`,
   );
 
   const promptPreview =

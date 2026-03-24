@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { POST } from "../route";
-import { GET, PUT } from "../[name]/route";
+import { GET, PUT } from "../[id]/route";
 import {
   GET as getInstructions,
   PUT as putInstructions,
-} from "../[name]/instructions/route";
+} from "../[id]/instructions/route";
 import {
   createTestCliToken,
   createTestRequest,
@@ -120,7 +120,7 @@ describe("Sandbox capability enforcement on zero agent routes", () => {
       ]);
 
       const request = createTestRequest(
-        `http://localhost:3000/api/zero/agents/${created.name}?org=${cliOrgSlug}`,
+        `http://localhost:3000/api/zero/agents/${created.agentId}?org=${cliOrgSlug}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -185,7 +185,7 @@ describe("Sandbox capability enforcement on zero agent routes", () => {
       ]);
 
       const request = createTestRequest(
-        `http://localhost:3000/api/zero/agents/${created.name}?org=${cliOrgSlug}`,
+        `http://localhost:3000/api/zero/agents/${created.agentId}?org=${cliOrgSlug}`,
         {
           method: "PUT",
           headers: {
@@ -263,7 +263,7 @@ describe("Sandbox capability enforcement on zero agent routes", () => {
       ]);
 
       const request = createTestRequest(
-        `http://localhost:3000/api/zero/agents/${created.name}/instructions?org=${cliOrgSlug}`,
+        `http://localhost:3000/api/zero/agents/${created.agentId}/instructions?org=${cliOrgSlug}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -328,7 +328,7 @@ describe("Sandbox capability enforcement on zero agent routes", () => {
       ]);
 
       const request = createTestRequest(
-        `http://localhost:3000/api/zero/agents/${created.name}/instructions?org=${cliOrgSlug}`,
+        `http://localhost:3000/api/zero/agents/${created.agentId}/instructions?org=${cliOrgSlug}`,
         {
           method: "PUT",
           headers: {

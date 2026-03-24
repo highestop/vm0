@@ -15,9 +15,8 @@ export const apiOnboardingHandlers = [
       isAdmin: true,
       hasOrg: true,
       hasDefaultAgent: true,
-      defaultAgentName: "zero",
-      defaultAgentComposeId: "mock-compose-id",
-      defaultAgentMetadata: null,
+      defaultAgentId: "mock-compose-id",
+      defaultAgentMetadata: { displayName: "Zero" },
       defaultAgentSkills: [],
     });
   }),

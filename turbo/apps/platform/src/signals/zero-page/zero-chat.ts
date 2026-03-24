@@ -111,7 +111,7 @@ async function startAgentRun(
   modelProvider?: string | null,
 ): Promise<string> {
   const body: Record<string, string> = {
-    agentComposeId: composeId,
+    agentId: composeId,
     prompt: prompt.trim(),
   };
   if (sessionId) {
@@ -145,13 +145,13 @@ async function startAgentRun(
 
 async function createChatThread(
   fetchFn: typeof fetch,
-  agentComposeId: string,
+  agentId: string,
   title?: string,
 ): Promise<{ id: string; title: string | null }> {
   const response = await fetchFn("/api/zero/chat-threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentComposeId, title }),
+    body: JSON.stringify({ agentId, title }),
   });
   if (!response.ok) {
     throw new Error("Failed to create chat thread");
@@ -626,7 +626,7 @@ export const fetchZeroSessionList$ = command(async ({ get, set }) => {
   // Read the selected agent from localStorage; fall back to default agent
   const chatAgentId = get(zeroChatAgentId$);
   const composeId =
-    chatAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentComposeId;
+    chatAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
   if (!composeId) {
     set(internalSessionListLoading$, false);
     return;
@@ -634,7 +634,7 @@ export const fetchZeroSessionList$ = command(async ({ get, set }) => {
   try {
     const fetchFn = get(fetch$);
     const res = await fetchFn(
-      `/api/zero/chat-threads?agentComposeId=${encodeURIComponent(composeId)}`,
+      `/api/zero/chat-threads?agentId=${encodeURIComponent(composeId)}`,
     );
     if (!res.ok) {
       set(internalSessionListError$, `Failed to load chats: ${res.statusText}`);
@@ -664,17 +664,17 @@ export const switchActiveAgent$ = command(
   },
 );
 
-/** Resolve which agent to activate based on the thread's agentComposeId. */
+/** Resolve which agent to activate based on the thread's agentId. */
 async function syncAgentForThread(
   get: Parameters<Parameters<typeof command>[0]>[0]["get"],
   set: Parameters<Parameters<typeof command>[0]>[0]["set"],
-  agentComposeId: string | undefined,
+  agentId: string | undefined,
 ) {
-  if (agentComposeId) {
+  if (agentId) {
     const currentAgentId = get(zeroChatAgentId$);
     const status = await get(zeroOnboardingStatus$);
-    const isDefault = agentComposeId === status.defaultAgentComposeId;
-    const newAgentId = isDefault ? null : agentComposeId;
+    const isDefault = agentId === status.defaultAgentId;
+    const newAgentId = isDefault ? null : agentId;
     if (newAgentId !== currentAgentId) {
       const agentName =
         newAgentId && get(agentsList$).find((a) => a.id === newAgentId)?.name;
@@ -796,7 +796,7 @@ export const switchZeroSession$ = command(
         return;
       }
       const data = (await res.json()) as {
-        agentComposeId?: string;
+        agentId?: string;
         chatMessages?: {
           role: "user" | "assistant";
           content: string;
@@ -816,7 +816,7 @@ export const switchZeroSession$ = command(
 
       L.debug("loaded:", {
         isLegacySession,
-        agentComposeId: data.agentComposeId,
+        agentId: data.agentId,
         latestSessionId: data.latestSessionId,
         msgCount: data.chatMessages?.length,
       });
@@ -829,7 +829,7 @@ export const switchZeroSession$ = command(
       }
 
       // Switch agent if it changed, or fetch session list if empty (fresh load).
-      await syncAgentForThread(get, set, data.agentComposeId);
+      await syncAgentForThread(get, set, data.agentId);
 
       const messages: ZeroChatMessage[] = (data.chatMessages ?? []).map((m) => {
         const summaries =
@@ -933,14 +933,13 @@ export const zeroCreatingNewSession$ = computed((get) =>
 );
 
 export const createNewChatSession$ = command(
-  async ({ get, set }, agentComposeId: string | null) => {
+  async ({ get, set }, agentId: string | null) => {
     set(creatingNewSession$, true);
     try {
       set(startNewZeroSession$);
 
       const resolvedComposeId =
-        agentComposeId ??
-        (await get(zeroOnboardingStatus$)).defaultAgentComposeId;
+        agentId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
       if (!resolvedComposeId) {
         toast.error("No agent available for new chat session");
         return;
@@ -957,7 +956,7 @@ export const createNewChatSession$ = command(
           id: thread.id,
           title: thread.title,
           preview: null,
-          agentComposeId: resolvedComposeId,
+          agentId: resolvedComposeId,
           createdAt: now,
           updatedAt: now,
         },
@@ -1072,7 +1071,7 @@ async function ensureChatThread(
       id: thread.id,
       title: thread.title ?? title,
       preview: null,
-      agentComposeId: composeId,
+      agentId: composeId,
       createdAt: now,
       updatedAt: now,
     },
@@ -1094,7 +1093,7 @@ export const sendZeroChatMessage$ = command(
   ) => {
     const chatAgentId = get(zeroChatAgentId$);
     const composeId =
-      chatAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentComposeId;
+      chatAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
     if (!composeId || !prompt.trim()) {
       return;
     }

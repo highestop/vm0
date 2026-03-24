@@ -25,7 +25,6 @@ const log = logger("service:schedule");
 export interface ScheduleResponse {
   id: string;
   agentId: string;
-  agentName: string;
   orgSlug: string;
   userId: string;
   name: string;
@@ -142,7 +141,7 @@ export async function resolveComposeByAgentId(
  */
 function toResponse(
   schedule: typeof zeroAgentSchedules.$inferSelect,
-  agentName: string,
+  composeId: string,
   orgSlug: string,
 ): ScheduleResponse {
   // Extract secret names from encrypted secrets (values are never returned)
@@ -159,8 +158,7 @@ function toResponse(
 
   return {
     id: schedule.id,
-    agentId: schedule.agentId,
-    agentName,
+    agentId: composeId,
     orgSlug,
     userId: schedule.userId,
     name: schedule.name,
@@ -268,7 +266,7 @@ async function verifyScheduleOwnership(
   name: string,
 ): Promise<{
   schedule: typeof zeroAgentSchedules.$inferSelect;
-  agentName: string;
+  composeId: string;
   orgSlug: string;
 }> {
   const agent = await loadZeroAgent(agentId);
@@ -291,9 +289,15 @@ async function verifyScheduleOwnership(
     throw notFound(`Schedule '${name}' not found`);
   }
 
+  // Resolve compose ID from agent ID
+  const compose = await resolveComposeByAgentId(resolvedId);
+  if (!compose) {
+    throw notFound(`Agent compose not found for agent '${resolvedId}'`);
+  }
+
   const orgSlug = await getOrgSlug(orgId);
 
-  return { schedule, agentName: agent.name, orgSlug };
+  return { schedule, composeId: compose.id, orgSlug };
 }
 
 /**
@@ -489,6 +493,11 @@ export async function deploySchedule(
   const agent = await loadZeroAgent(request.agentId);
   // Normalize request to use the resolved agentId (handles composeId fallback from CLI)
   request = { ...request, agentId: agent.id };
+  const compose = await resolveComposeByAgentId(agent.id);
+  if (!compose) {
+    throw notFound(`Agent compose not found for agent '${agent.id}'`);
+  }
+  const resolvedComposeId = compose.id;
   const orgSlug = await getOrgSlug(orgId);
 
   // Validate timezone
@@ -533,7 +542,7 @@ export async function deploySchedule(
     );
     log.debug(`Updated schedule ${request.name} (${existing.id})`);
     return {
-      schedule: toResponse(updated, agent.name, orgSlug),
+      schedule: toResponse(updated, resolvedComposeId, orgSlug),
       created: false,
     };
   }
@@ -548,7 +557,7 @@ export async function deploySchedule(
   );
   log.debug(`Created schedule ${request.name} (${created.id})`);
   return {
-    schedule: toResponse(created, agent.name, orgSlug),
+    schedule: toResponse(created, resolvedComposeId, orgSlug),
     created: true,
   };
 }
@@ -579,13 +588,23 @@ export async function listSchedules(
     return [];
   }
 
-  // Load zero agent data for all schedules
+  // Load zero agent data and resolve compose IDs for all schedules
   const agentIds = [...new Set(userSchedules.map((s) => s.agentId))];
   const agentRows = await globalThis.services.db
-    .select()
+    .select({
+      agent: zeroAgents,
+      composeId: agentComposes.id,
+    })
     .from(zeroAgents)
+    .innerJoin(
+      agentComposes,
+      and(
+        eq(agentComposes.orgId, zeroAgents.orgId),
+        eq(agentComposes.name, zeroAgents.name),
+      ),
+    )
     .where(inArray(zeroAgents.id, agentIds));
-  const agentMap = new Map(agentRows.map((a) => [a.id, a]));
+  const agentMap = new Map(agentRows.map((r) => [r.agent.id, r]));
 
   // Load org slugs via org cache (by orgId from schedule records)
   const uniqueClerkOrgIds = [...new Set(userSchedules.map((s) => s.orgId))];
@@ -601,9 +620,9 @@ export async function listSchedules(
       return agentMap.has(schedule.agentId);
     })
     .map((schedule) => {
-      const agent = agentMap.get(schedule.agentId)!;
+      const row = agentMap.get(schedule.agentId)!;
       const orgSlug = orgDataMap.get(schedule.orgId)?.slug ?? "";
-      return toResponse(schedule, agent.name, orgSlug);
+      return toResponse(schedule, row.composeId, orgSlug);
     });
 }
 
@@ -618,14 +637,14 @@ export async function getScheduleByName(
 ): Promise<ScheduleResponse> {
   log.debug(`Getting schedule ${name} for agent ${agentId}`);
 
-  const { schedule, agentName, orgSlug } = await verifyScheduleOwnership(
+  const { schedule, composeId, orgSlug } = await verifyScheduleOwnership(
     userId,
     orgId,
     agentId,
     name,
   );
 
-  return toResponse(schedule, agentName, orgSlug);
+  return toResponse(schedule, composeId, orgSlug);
 }
 
 /**
@@ -708,7 +727,7 @@ export async function enableSchedule(
 ): Promise<ScheduleResponse> {
   log.debug(`Enabling schedule ${name} for agent ${agentId}`);
 
-  const { schedule, agentName, orgSlug } = await verifyScheduleOwnership(
+  const { schedule, composeId, orgSlug } = await verifyScheduleOwnership(
     userId,
     orgId,
     agentId,
@@ -752,7 +771,7 @@ export async function enableSchedule(
 
   log.debug(`Enabled schedule ${name}`);
 
-  return toResponse(updated, agentName, orgSlug);
+  return toResponse(updated, composeId, orgSlug);
 }
 
 /**
@@ -766,7 +785,7 @@ export async function disableSchedule(
 ): Promise<ScheduleResponse> {
   log.debug(`Disabling schedule ${name} for agent ${agentId}`);
 
-  const { schedule, agentName, orgSlug } = await verifyScheduleOwnership(
+  const { schedule, composeId, orgSlug } = await verifyScheduleOwnership(
     userId,
     orgId,
     agentId,
@@ -789,7 +808,7 @@ export async function disableSchedule(
 
   log.debug(`Disabled schedule ${name}`);
 
-  return toResponse(updated, agentName, orgSlug);
+  return toResponse(updated, composeId, orgSlug);
 }
 
 /**

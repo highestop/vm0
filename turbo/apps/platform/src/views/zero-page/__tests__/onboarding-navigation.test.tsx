@@ -16,8 +16,7 @@ function mockOnboardingNeededAdmin() {
         isAdmin: true,
         hasOrg: true,
         hasDefaultAgent: false,
-        defaultAgentName: null,
-        defaultAgentComposeId: null,
+        defaultAgentId: null,
         defaultAgentMetadata: null,
         defaultAgentSkills: [],
       });
@@ -26,7 +25,7 @@ function mockOnboardingNeededAdmin() {
     http.post("*/api/zero/agents", () => {
       return HttpResponse.json({
         name: "zero",
-        agentComposeId: "new-compose-id",
+        agentId: "new-compose-id",
       });
     }),
     // Mock instructions upload
@@ -56,9 +55,8 @@ function mockOnboardingNeededMember() {
         isAdmin: false,
         hasOrg: true,
         hasDefaultAgent: true,
-        defaultAgentName: "zero",
-        defaultAgentComposeId: "mock-compose-id",
-        defaultAgentMetadata: null,
+        defaultAgentId: "mock-compose-id",
+        defaultAgentMetadata: { displayName: "Zero" },
         defaultAgentSkills: [],
       });
     }),
@@ -141,8 +139,7 @@ describe("onboarding navigation", () => {
           isAdmin: true,
           hasOrg: true,
           hasDefaultAgent: true,
-          defaultAgentName: "zero",
-          defaultAgentComposeId: "new-compose-id",
+          defaultAgentId: "new-compose-id",
           defaultAgentMetadata: null,
           defaultAgentSkills: [],
         });
@@ -220,9 +217,8 @@ describe("onboarding navigation", () => {
           isAdmin: false,
           hasOrg: true,
           hasDefaultAgent: true,
-          defaultAgentName: "zero",
-          defaultAgentComposeId: "mock-compose-id",
-          defaultAgentMetadata: null,
+          defaultAgentId: "mock-compose-id",
+          defaultAgentMetadata: { displayName: "Zero" },
           defaultAgentSkills: [],
         });
       }),

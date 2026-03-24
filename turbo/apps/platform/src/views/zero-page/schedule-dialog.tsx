@@ -95,7 +95,7 @@ function getLoopMinuteOptions(current: number): readonly number[] {
 export interface ScheduleFormValues {
   prompt: string;
   description: string;
-  composeId: string;
+  agentId: string;
   freq: string;
   date: string;
   hour: number;
@@ -517,7 +517,7 @@ function buildDefaults(
   const defaults: ScheduleFormValues = {
     prompt: "",
     description: "",
-    composeId: agents?.[0]?.id ?? "",
+    agentId: agents?.[0]?.id ?? "",
     freq: "every_day",
     date: new Date().toISOString().slice(0, 10),
     hour: 9,
@@ -556,7 +556,7 @@ function checkDirty(
     current.notifyEmail !== init.notifyEmail ||
     current.notifySlack !== init.notifySlack ||
     current.slackChannelId !== init.slackChannelId ||
-    (opts.hasAgents && current.composeId !== init.composeId)
+    (opts.hasAgents && current.agentId !== init.agentId)
   );
 }
 
@@ -591,7 +591,7 @@ function ScheduleFormDialogInner({
 
   const [prompt, setPrompt] = useState(init.prompt);
   const [description, setDescription] = useState(init.description);
-  const [composeId, setComposeId] = useState(init.composeId);
+  const [agentId, setComposeId] = useState(init.agentId);
   const [freq, setFreq] = useState(init.freq);
   const [date, setDate] = useState(init.date);
   const [hour, setHour] = useState(init.hour);
@@ -608,7 +608,7 @@ function ScheduleFormDialogInner({
   const current: ScheduleFormValues = {
     prompt,
     description,
-    composeId,
+    agentId,
     freq,
     date,
     hour,
@@ -638,7 +638,7 @@ function ScheduleFormDialogInner({
     if (!prompt.trim()) {
       return;
     }
-    if (agents && !composeId) {
+    if (agents && !agentId) {
       return;
     }
     onSave(current);
@@ -683,7 +683,7 @@ function ScheduleFormDialogInner({
               >
                 Agent
               </label>
-              <Select value={composeId} onValueChange={setComposeId}>
+              <Select value={agentId} onValueChange={setComposeId}>
                 <SelectTrigger id="schedule-dialog-agent" className="h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -781,7 +781,7 @@ function ScheduleFormDialogInner({
           <Button
             type="button"
             onClick={handleSave}
-            disabled={!prompt.trim() || (agents ? !composeId : false) || saving}
+            disabled={!prompt.trim() || (agents ? !agentId : false) || saving}
           >
             {saveLabel}
           </Button>

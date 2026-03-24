@@ -33,14 +33,16 @@ pub struct ExecutionContext {
     pub prompt: String,
     #[serde(default)]
     pub append_system_prompt: Option<String>,
-    // Agent compose version ID (full SHA-256 content hash)
-    #[serde(default)]
-    pub agent_compose_version_id: Option<String>,
-    // Deserialized but not yet consumed by runner — vars are expanded at compose time
+    // Agent compose version ID (full SHA-256 content hash).
+    // Deserialized for forward compatibility but not consumed by runner.
+    #[serde(default, rename = "agentComposeVersionId")]
+    pub _agent_compose_version_id: Option<String>,
+    // Vars are expanded into environment at compose time via ${{ vars.XXX }} templates.
+    // Not read by runner — tested via environment field instead.
     #[allow(dead_code)]
     #[serde(default)]
     pub vars: Option<HashMap<String, String>>,
-    // Not yet used by runner — checkpoint resume not yet implemented
+    // Checkpoint resume not yet implemented
     #[allow(dead_code)]
     #[serde(default)]
     pub checkpoint_id: Option<Uuid>,
@@ -67,16 +69,10 @@ pub struct ExecutionContext {
     pub api_start_time: Option<f64>,
     #[serde(default)]
     pub user_timezone: Option<String>,
-    // Agent display name — injected as VM0_AGENT_NAME
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    // Stable agent compose ID — injected as VM0_AGENT_COMPOSE_ID
-    #[serde(default)]
-    pub agent_compose_id: Option<String>,
     // Org slug for agent — used for VM0_ACTIVE_ORG when capabilities are present
     #[serde(default)]
     pub agent_org_slug: Option<String>,
-    // Not yet used by runner — memory storage name for first-run init
+    // Memory storage name for first-run init — not yet consumed by runner
     #[allow(dead_code)]
     #[serde(default)]
     pub memory_name: Option<String>,
@@ -90,7 +86,7 @@ pub struct ExecutionContext {
     pub tools: Option<Vec<String>>,
     #[serde(default)]
     pub settings: Option<String>,
-    // Deserialized but not yet consumed by runner — profile selection is handled by api provider
+    // Profile selection — handled by api provider at discover time, not read on ExecutionContext
     #[allow(dead_code)]
     #[serde(default)]
     pub experimental_profile: Option<String>,

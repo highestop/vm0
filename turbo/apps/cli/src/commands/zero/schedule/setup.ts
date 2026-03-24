@@ -17,7 +17,7 @@ import {
   type ScheduleFrequency,
 } from "../../../lib/domain/schedule-utils";
 import {
-  getZeroAgent,
+  getComposeByName,
   deployZeroSchedule,
   listZeroSchedules,
   enableZeroSchedule,
@@ -143,7 +143,7 @@ interface ExistingScheduleDefaults {
 
 interface ScheduleListItem {
   name: string;
-  agentName: string;
+  agentId: string;
   triggerType?: "cron" | "once" | "loop";
   cronExpression?: string | null;
   atTime?: string | null;
@@ -485,12 +485,12 @@ async function gatherTiming(
 }
 
 async function findExistingSchedule(
-  agentName: string,
+  agentId: string,
   scheduleName: string,
 ): Promise<ScheduleListItem | undefined> {
   const { schedules } = await listZeroSchedules();
   return schedules.find(
-    (s) => s.agentName === agentName && s.name === scheduleName,
+    (s) => s.agentId === agentId && s.name === scheduleName,
   );
 }
 
@@ -686,14 +686,17 @@ export const setupCommand = new Command()
   .option("--no-notify-slack", "Disable Slack notifications")
   .action(
     withErrorHandler(async (agentName: string, options: SetupOptions) => {
-      // 1. Resolve agent to agentId (via agentComposeId — schedule service handles fallback)
-      const agent = await getZeroAgent(agentName);
-      const agentId = agent.agentComposeId;
+      // 1. Resolve agent name to compose ID
+      const compose = await getComposeByName(agentName);
+      if (!compose) {
+        throw new Error(`Agent not found: ${agentName}`);
+      }
+      const agentId = compose.id;
       const scheduleName = options.name || "default";
 
       // 2. Check for existing schedule
       const existingSchedule = await findExistingSchedule(
-        agentName,
+        agentId,
         scheduleName,
       );
 

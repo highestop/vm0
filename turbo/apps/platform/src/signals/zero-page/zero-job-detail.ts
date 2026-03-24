@@ -159,7 +159,7 @@ const fetchZeroJobInstructions$ = command(async ({ get, set }) => {
   try {
     const fetchFn = get(fetch$);
     const response = await fetchFn(
-      `/api/zero/agents/${encodeURIComponent(detail.name)}/instructions`,
+      `/api/zero/agents/${encodeURIComponent(detail.agentId)}/instructions`,
     );
     if (!response.ok) {
       throw new Error(`Failed to fetch instructions: ${response.statusText}`);
@@ -215,7 +215,7 @@ export const zeroJobBuildError$ = computed((get) => get(internalBuildError$));
 export const buildZeroJobInstructions$ = command(async ({ get, set }) => {
   const detail = get(zeroJobDetail$);
   const raw = get(editedContent$);
-  if (!detail?.name || raw === null) {
+  if (!detail?.agentId || raw === null) {
     return;
   }
   const edited = raw.trim();
@@ -227,7 +227,7 @@ export const buildZeroJobInstructions$ = command(async ({ get, set }) => {
     const fetchFn = get(fetch$);
 
     const resp = await fetchFn(
-      `/api/zero/agents/${encodeURIComponent(detail.name)}/instructions`,
+      `/api/zero/agents/${encodeURIComponent(detail.agentId)}/instructions`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -286,7 +286,7 @@ export const zeroJobUpdateSettings$ = command(
     try {
       const fetchFn = get(fetch$);
       const response = await fetchFn(
-        `/api/zero/agents/${encodeURIComponent(detail.name)}`,
+        `/api/zero/agents/${encodeURIComponent(detail.agentId)}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -366,7 +366,7 @@ export const discardZeroJobConnectors$ = command(({ set }) => {
 
 export const saveZeroJobConnectors$ = command(async ({ get, set }) => {
   const detail = get(zeroJobDetail$);
-  if (!detail?.name) {
+  if (!detail?.agentId) {
     throw new Error("No agent detail loaded");
   }
 
@@ -376,7 +376,7 @@ export const saveZeroJobConnectors$ = command(async ({ get, set }) => {
     const fetchFn = get(fetch$);
 
     const resp = await fetchFn(
-      `/api/zero/agents/${encodeURIComponent(detail.name)}`,
+      `/api/zero/agents/${encodeURIComponent(detail.agentId)}`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -459,7 +459,6 @@ const fetchZeroJobFirewallPolicies$ = command(async ({ get, set }) => {
 interface ScheduleItem {
   id: string;
   agentId: string;
-  agentName: string;
   name: string;
   enabled: boolean;
   notifyEmail: boolean;
@@ -580,8 +579,8 @@ export const zeroJobScheduleError$ = computed(
 );
 
 const fetchZeroJobSchedule$ = command(async ({ get, set }) => {
-  const name = get(internalAgentName$);
-  if (!name) {
+  const detail = get(zeroJobDetail$);
+  if (!detail) {
     return;
   }
 
@@ -595,7 +594,9 @@ const fetchZeroJobSchedule$ = command(async ({ get, set }) => {
     }
 
     const data = (await response.json()) as { schedules: ScheduleItem[] };
-    const agentSchedules = data.schedules.filter((s) => s.agentName === name);
+    const agentSchedules = data.schedules.filter(
+      (s) => s.agentId === detail.agentId,
+    );
     set(scheduleState$, { schedules: agentSchedules, error: null });
   } catch (error) {
     throwIfAbort(error);
@@ -637,7 +638,7 @@ export const saveZeroJobSchedule$ = command(
     const scheduleName = params.editName ?? `zero-${Date.now().toString(36)}`;
 
     const base = {
-      agentId: detail.agentComposeId,
+      agentId: detail.agentId,
       name: scheduleName,
       timezone: params.timezone,
       prompt: params.prompt.trim(),
@@ -718,7 +719,7 @@ export const toggleZeroJobScheduleEnabled$ = command(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId: detail.agentComposeId }),
+        body: JSON.stringify({ agentId: detail.agentId }),
       },
     );
 
@@ -746,7 +747,7 @@ export const deleteZeroJobSchedule$ = command(
 
     const fetchFn = get(fetch$);
     const response = await fetchFn(
-      `/api/zero/schedules/${encodeURIComponent(scheduleName)}?agentId=${encodeURIComponent(detail.agentComposeId)}`,
+      `/api/zero/schedules/${encodeURIComponent(scheduleName)}?agentId=${encodeURIComponent(detail.agentId)}`,
       { method: "DELETE" },
     );
 
@@ -776,7 +777,7 @@ export const deleteZeroJobAgent$ = command(async ({ get, set }) => {
 
   const fetchFn = get(fetch$);
   const response = await fetchFn(
-    `/api/zero/agents/${encodeURIComponent(detail.name)}`,
+    `/api/zero/agents/${encodeURIComponent(detail.agentId)}`,
     { method: "DELETE" },
   );
 

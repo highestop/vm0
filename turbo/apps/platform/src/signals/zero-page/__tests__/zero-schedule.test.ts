@@ -23,7 +23,6 @@ function createMockSchedules() {
     {
       id: "sched-1",
       agentId: "mock-compose-id",
-      agentName: "zero",
       orgSlug: "test",
       name: "morning-briefing",
       triggerType: "cron",
@@ -42,7 +41,6 @@ function createMockSchedules() {
     {
       id: "sched-2",
       agentId: "mock-compose-id",
-      agentName: "zero",
       orgSlug: "test",
       name: "check-inbox",
       triggerType: "loop",
@@ -61,7 +59,6 @@ function createMockSchedules() {
     {
       id: "sched-other",
       agentId: "other-compose-id",
-      agentName: "other-agent",
       orgSlug: "test",
       name: "other-schedule",
       triggerType: "cron",
@@ -381,7 +378,7 @@ describe("org schedule signals", () => {
   }
 
   describe("fetchAllOrgSchedules$ and allOrgScheduleEntries$", () => {
-    it("should map agentId and agentName fields from API response", async () => {
+    it("should map agentId field from API response", async () => {
       server.use(
         http.get("http://localhost:3000/api/zero/schedules", () => {
           return HttpResponse.json({ schedules: createMockSchedules() });
@@ -396,11 +393,9 @@ describe("org schedule signals", () => {
 
       const zeroEntry = entries.find((e) => e.name === "morning-briefing");
       expect(zeroEntry?.agentId).toBe("mock-compose-id");
-      expect(zeroEntry?.agentName).toBe("zero");
 
       const otherEntry = entries.find((e) => e.name === "other-schedule");
       expect(otherEntry?.agentId).toBe("other-compose-id");
-      expect(otherEntry?.agentName).toBe("other-agent");
     });
   });
 

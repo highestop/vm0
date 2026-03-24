@@ -13,10 +13,10 @@ export const viewCommand = new Command()
       async (name: string, options: { instructions?: boolean }) => {
         const agent = await getZeroAgent(name);
 
-        console.log(chalk.bold(agent.name));
+        console.log(chalk.bold(agent.agentId));
         if (agent.displayName) console.log(chalk.dim(agent.displayName));
         console.log();
-        console.log(`Compose ID:   ${agent.agentComposeId}`);
+        console.log(`Agent ID:     ${agent.agentId}`);
         console.log(`Connectors:   ${agent.connectors.join(", ") || "-"}`);
         if (agent.description)
           console.log(`Description:  ${agent.description}`);

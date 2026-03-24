@@ -235,21 +235,19 @@ describe("POST /api/runners/jobs/:id/claim", () => {
   });
 
   describe("Claim flow - Agent metadata", () => {
-    it("should return agentName and agentOrgSlug in claim response", async () => {
+    it("should return agentOrgSlug in claim response when set", async () => {
       // Create compose and look up org slug
       const { composeId, versionId } = await createTestCompose("test-agent");
       const composeInfo = await findTestComposeWithOrg(composeId);
       const orgSlug = composeInfo!.orgSlug;
 
-      // Create runner job with agent metadata in stored context
+      // Create runner job with agentOrgSlug in stored context
       const { runId } = await createTestRunnerJob(
         user.userId,
         versionId,
         `${orgSlug}/default`,
         {
-          agentName: "test-agent",
           agentOrgSlug: orgSlug,
-          agentComposeId: composeId,
         },
       );
 
@@ -271,46 +269,7 @@ describe("POST /api/runners/jobs/:id/claim", () => {
       expect(response.status).toBe(200);
 
       const data = await response.json();
-      expect(data.agentName).toBe("test-agent");
       expect(data.agentOrgSlug).toBe(orgSlug);
-      expect(data.agentComposeId).toBe(composeId);
-    });
-
-    it("should omit agentName and agentOrgSlug when not set in stored context", async () => {
-      // Create compose and look up org slug
-      const { composeId, versionId } =
-        await createTestCompose("test-agent-no-meta");
-      const composeInfo = await findTestComposeWithOrg(composeId);
-      const orgSlug = composeInfo!.orgSlug;
-
-      // Create runner job WITHOUT agent metadata
-      const { runId } = await createTestRunnerJob(
-        user.userId,
-        versionId,
-        `${orgSlug}/default`,
-      );
-
-      // Claim the job
-      const token = await createTestCliToken(user.userId);
-      const request = createTestRequest(
-        `http://localhost:3000/api/runners/jobs/${runId}/claim`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({}),
-        },
-      );
-
-      const response = await POST(request);
-      expect(response.status).toBe(200);
-
-      const data = await response.json();
-      expect(data.agentName).toBeUndefined();
-      expect(data.agentOrgSlug).toBeUndefined();
-      expect(data.agentComposeId).toBeUndefined();
     });
 
     it("should return appendSystemPrompt in claim response", async () => {

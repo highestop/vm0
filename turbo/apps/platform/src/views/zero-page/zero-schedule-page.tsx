@@ -90,7 +90,7 @@ function buildCombinedSchedule(
     agentLabel:
       e.agentId === defaultComposeId
         ? agentName
-        : (nameToDisplay.get(e.agentName) ?? e.agentName),
+        : (nameToDisplay.get(e.agentId) ?? "Unknown agent"),
     agentId: e.agentId,
     timezone: e.timezone,
   }));
@@ -421,7 +421,6 @@ function ScheduleCalendarView({
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 
@@ -614,7 +613,7 @@ export function ZeroSchedulePage() {
   const statusLoadable = useLoadable(zeroOnboardingStatus$);
   const defaultComposeId =
     statusLoadable.state === "hasData"
-      ? statusLoadable.data.defaultAgentComposeId
+      ? statusLoadable.data.defaultAgentId
       : null;
 
   const entriesLoadable = useLastLoadable(allOrgScheduleEntries$);
@@ -624,7 +623,7 @@ export function ZeroSchedulePage() {
   const agentsLoadable = useLoadable(agentsList$);
   const agents = agentsLoadable.state === "hasData" ? agentsLoadable.data : [];
   const nameToDisplay = new Map(
-    agents.filter((a) => a.displayName).map((a) => [a.name, a.displayName!]),
+    agents.filter((a) => a.displayName).map((a) => [a.id, a.displayName!]),
   );
   const loaded = useGet(allOrgSchedulesLoaded$);
   const isInitialLoading = !loaded;
@@ -678,7 +677,7 @@ export function ZeroSchedulePage() {
         minute: values.minute,
         timezone: values.timezone,
         intervalSeconds: values.loopMinutes * 60,
-        agentId: values.composeId,
+        agentId: values.agentId,
         notifyEmail: values.notifyEmail,
         notifySlack: values.notifySlack,
         slackChannelId: values.slackChannelId,
@@ -799,6 +798,7 @@ export function ZeroSchedulePage() {
               variant="outline"
               size="sm"
               className="zero-btn-morandi h-9 gap-2 shrink-0 rounded-lg border"
+              disabled={agents.length === 0}
               onClick={() => setCreateOpen(true)}
             >
               <IconPlus size={14} stroke={2} />
@@ -901,7 +901,7 @@ export function ZeroSchedulePage() {
         saveError={saveError}
         agents={agents}
         initialValues={{
-          composeId: defaultComposeId ?? agents[0]?.id ?? "",
+          agentId: defaultComposeId ?? agents[0]?.id ?? "",
         }}
       />
       <Dialog

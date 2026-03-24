@@ -2,12 +2,12 @@ import { computed } from "ccstate";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
 
 /**
- * Raw default agent name from onboarding status (lowercase identifier, e.g. "zero").
+ * Default agent compose ID from onboarding status.
  * Returns null if no default agent is set.
  */
-export const defaultAgentName$ = computed(async (get) => {
+export const defaultAgentId$ = computed(async (get) => {
   const status = await get(zeroOnboardingStatus$);
-  return status.defaultAgentName;
+  return status.defaultAgentId;
 });
 
 /**
@@ -20,15 +20,12 @@ export const defaultAgentMetadata$ = computed(async (get) => {
 
 /**
  * Display name for the default agent.
- * Reads metadata.displayName if available, otherwise capitalizes the agent name.
- * Falls back to "Zero" when no agent is set.
+ * Reads metadata.displayName if available, otherwise falls back to "Zero".
  */
 export const agentDisplayName$ = computed(async (get) => {
   const metadata = await get(defaultAgentMetadata$);
   if (metadata?.displayName) {
     return metadata.displayName;
   }
-  const raw = await get(defaultAgentName$);
-  const name = raw || "zero";
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  return "Zero";
 });

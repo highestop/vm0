@@ -2,7 +2,7 @@ import { command } from "ccstate";
 import { navigateTo$ } from "../route.ts";
 import { checkSettingsParam$ } from "./settings/org-manage-dialog.ts";
 import { logger } from "../log.ts";
-import { defaultAgentName$ } from "./zero-agent-name.ts";
+import { defaultAgentId$ } from "./zero-agent-name.ts";
 import { onboardGuard$ } from "./onboard-guard.ts";
 import { loadInitialData$ } from "./zero-page.ts";
 import { detach, Reason } from "../utils.ts";
@@ -21,7 +21,7 @@ export const setupChatPage$ = command(
     }
 
     // Redirect bare / to /talk/:defaultAgent
-    const rawName = await get(defaultAgentName$);
+    const rawName = await get(defaultAgentId$);
     signal.throwIfAborted();
     if (rawName) {
       L.info("redirecting to /talk/", rawName);

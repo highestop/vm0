@@ -13,21 +13,20 @@ import { server } from "../../../../mocks/server";
 import { setupCommand } from "../setup";
 import chalk from "chalk";
 
-const mockAgent = {
+const mockCompose = {
+  id: "comp_abc123",
   name: "my-agent",
-  agentComposeId: "comp_abc123",
-  displayName: "My Agent",
-  description: null,
-  sound: null,
-  connectors: ["github"],
+  headVersionId: "ver-001",
+  content: null,
+  createdAt: "2026-03-23T00:00:00Z",
+  updatedAt: "2026-03-23T00:00:00Z",
 };
 
 const mockDeployResponse = {
   created: true,
   schedule: {
     id: "sched-001",
-    agentId: "za-001",
-    agentName: "my-agent",
+    agentId: "my-agent",
     orgSlug: "my-org",
     userId: "user-001",
     name: "default",
@@ -80,8 +79,15 @@ describe("zero schedule setup command", () => {
   describe("successful setup (non-interactive)", () => {
     it("should create daily schedule with all flags", async () => {
       server.use(
-        http.get("http://localhost:3000/api/zero/agents/my-agent", () => {
-          return HttpResponse.json(mockAgent);
+        http.get("http://localhost:3000/api/agent/composes", ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get("name") !== "my-agent") {
+            return HttpResponse.json(
+              { error: { message: "Not found", code: "NOT_FOUND" } },
+              { status: 404 },
+            );
+          }
+          return HttpResponse.json(mockCompose);
         }),
         http.get("http://localhost:3000/api/zero/schedules", () => {
           return HttpResponse.json({ schedules: [] });
@@ -123,8 +129,15 @@ describe("zero schedule setup command", () => {
       };
 
       server.use(
-        http.get("http://localhost:3000/api/zero/agents/my-agent", () => {
-          return HttpResponse.json(mockAgent);
+        http.get("http://localhost:3000/api/agent/composes", ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get("name") !== "my-agent") {
+            return HttpResponse.json(
+              { error: { message: "Not found", code: "NOT_FOUND" } },
+              { status: 404 },
+            );
+          }
+          return HttpResponse.json(mockCompose);
         }),
         http.get("http://localhost:3000/api/zero/schedules", () => {
           return HttpResponse.json({ schedules: [] });
@@ -154,7 +167,7 @@ describe("zero schedule setup command", () => {
   describe("error handling", () => {
     it("should handle agent not found", async () => {
       server.use(
-        http.get("http://localhost:3000/api/zero/agents/missing", () => {
+        http.get("http://localhost:3000/api/agent/composes", () => {
           return HttpResponse.json(
             { error: { message: "Agent not found", code: "NOT_FOUND" } },
             { status: 404 },
@@ -181,8 +194,15 @@ describe("zero schedule setup command", () => {
 
     it("should require --frequency in non-interactive mode", async () => {
       server.use(
-        http.get("http://localhost:3000/api/zero/agents/my-agent", () => {
-          return HttpResponse.json(mockAgent);
+        http.get("http://localhost:3000/api/agent/composes", ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get("name") !== "my-agent") {
+            return HttpResponse.json(
+              { error: { message: "Not found", code: "NOT_FOUND" } },
+              { status: 404 },
+            );
+          }
+          return HttpResponse.json(mockCompose);
         }),
         http.get("http://localhost:3000/api/zero/schedules", () => {
           return HttpResponse.json({ schedules: [] });

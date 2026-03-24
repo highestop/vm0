@@ -86,8 +86,7 @@ const router = tsr.router(zeroAgentsMainContract, {
     return {
       status: 201 as const,
       body: {
-        name: result.composeName,
-        agentComposeId: result.composeId,
+        agentId: result.composeId,
         description: body.description ?? null,
         displayName: body.displayName ?? null,
         sound: body.sound ?? null,
@@ -110,8 +109,7 @@ const router = tsr.router(zeroAgentsMainContract, {
 
     const rows = await globalThis.services.db
       .select({
-        name: zeroAgents.name,
-        agentComposeId: agentComposes.id,
+        agentId: agentComposes.id,
         displayName: zeroAgents.displayName,
         description: zeroAgents.description,
         sound: zeroAgents.sound,
@@ -132,8 +130,7 @@ const router = tsr.router(zeroAgentsMainContract, {
     return {
       status: 200 as const,
       body: rows.map((row) => ({
-        name: row.name,
-        agentComposeId: row.agentComposeId,
+        agentId: row.agentId,
         displayName: row.displayName ?? null,
         description: row.description ?? null,
         sound: row.sound ?? null,

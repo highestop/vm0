@@ -117,6 +117,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   elevenlabs: ["elevenlabs"],
   fal: ["fal"],
   fireflies: ["fireflies"],
+  heygen: ["heygen"],
   hubspot: ["hubspot"],
   "hugging-face": ["hugging-face"],
   intercom: ["intercom"],

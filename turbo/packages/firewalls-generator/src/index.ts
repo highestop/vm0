@@ -24,6 +24,7 @@ import { generate as generateElevenlabs } from "./elevenlabs";
 import { generate as generateFal } from "./fal";
 import { generate as generateFigma } from "./figma";
 import { generate as generateFirecrawl } from "./firecrawl";
+import { generate as generateFireflies } from "./fireflies";
 import { generate as generateGitHub } from "./github";
 import { generate as generateGitlab } from "./gitlab";
 import { generate as generateHubspot } from "./hubspot";
@@ -71,6 +72,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   fal: generateFal,
   figma: generateFigma,
   firecrawl: generateFirecrawl,
+  fireflies: generateFireflies,
   github: generateGitHub,
   gitlab: generateGitlab,
   hubspot: generateHubspot,

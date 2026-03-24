@@ -23,6 +23,7 @@ import { linearFirewall } from "./linear.generated";
 import { notionFirewall } from "./notion.generated";
 import { slackFirewall } from "./slack.generated";
 import { vercelFirewall } from "./vercel.generated";
+import { zapierFirewall } from "./zapier.generated";
 import { zapsignFirewall } from "./zapsign.generated";
 import { zeptomailFirewall } from "./zeptomail.generated";
 
@@ -43,6 +44,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   notion: notionFirewall,
   slack: slackFirewall,
   vercel: vercelFirewall,
+  zapier: zapierFirewall,
   zapsign: zapsignFirewall,
   zeptomail: zeptomailFirewall,
 };

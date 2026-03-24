@@ -3,8 +3,8 @@ import { eq } from "drizzle-orm";
 import { initServices } from "../../../../../../src/lib/init-services";
 import { verifyCallback } from "../../../../../../src/lib/callback";
 import { agentRuns } from "../../../../../../src/db/schema/agent-run";
-import { zeroAgentSchedules } from "../../../../../../src/db/schema/zero-agent-schedule";
 import { getUserEmail } from "../../../../../../src/lib/auth/get-user-email";
+import { resolveComposeByZeroAgentId } from "../../../../../../src/lib/schedule/schedule-service";
 import { getRunOutputText } from "../../../../../../src/lib/run/extract-run-output";
 import { enqueueEmail } from "../../../../../../src/lib/email/outbox-service";
 import {
@@ -134,17 +134,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       headers: unsubscribeHeaders,
       threadAction: agentSessionId
         ? await (async () => {
-            // Load composeId from the schedule row (still needed for email thread sessions)
-            const [sched] = await globalThis.services.db
-              .select({ composeId: zeroAgentSchedules.composeId })
-              .from(zeroAgentSchedules)
-              .where(eq(zeroAgentSchedules.id, payload.scheduleId))
-              .limit(1);
-            if (!sched) return undefined;
+            const compose = await resolveComposeByZeroAgentId(
+              payload.zeroAgentId,
+            );
+            if (!compose) return undefined;
             return {
               action: "save_thread_session" as const,
               userId,
-              composeId: sched.composeId,
+              composeId: compose.id,
               agentSessionId,
               replyToToken: replyToken,
             };

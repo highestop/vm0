@@ -327,10 +327,14 @@ export async function fetchConversationContexts(
  * Resolve workspace agent from composeId.
  * Returns id, name, and displayName from the zero_agents table.
  */
-export async function getWorkspaceAgent(
-  composeId: string,
-): Promise<
-  { id: string; name: string; displayName: string | null } | undefined
+export async function getWorkspaceAgent(composeId: string): Promise<
+  | {
+      id: string;
+      name: string;
+      displayName: string | null;
+      zeroAgentId: string;
+    }
+  | undefined
 > {
   const db = globalThis.services.db;
   const [compose] = await db
@@ -346,7 +350,10 @@ export async function getWorkspaceAgent(
   if (!compose) return undefined;
 
   const [agent] = await db
-    .select({ displayName: zeroAgents.displayName })
+    .select({
+      zeroAgentId: zeroAgents.id,
+      displayName: zeroAgents.displayName,
+    })
     .from(zeroAgents)
     .where(
       and(
@@ -356,10 +363,13 @@ export async function getWorkspaceAgent(
     )
     .limit(1);
 
+  if (!agent) return undefined;
+
   return {
     id: compose.id,
     name: compose.name,
-    displayName: agent?.displayName ?? null,
+    displayName: agent.displayName,
+    zeroAgentId: agent.zeroAgentId,
   };
 }
 

@@ -1,3 +1,4 @@
+import { eq, and } from "drizzle-orm";
 import {
   createHandler,
   createSafeErrorHandler,
@@ -12,6 +13,8 @@ import {
 import { createZeroRun } from "../../../../src/lib/zero/zero-run-service";
 import { isApiError } from "../../../../src/lib/errors";
 import { isRunDispatchError } from "../../../../src/lib/run";
+import { agentComposes } from "../../../../src/db/schema/agent-compose";
+import { zeroAgents } from "../../../../src/db/schema/zero-agent";
 
 /**
  * Translate createZeroRun() errors into API response format.
@@ -54,10 +57,34 @@ const router = tsr.router(zeroRunsMainContract, {
     if (isAuthError(authCtx)) return authCtx;
 
     try {
+      // Resolve zeroAgentId from agentComposeId
+      const composeId = body.agentComposeId ?? "";
+      const [agent] = await globalThis.services.db
+        .select({ id: zeroAgents.id })
+        .from(agentComposes)
+        .innerJoin(
+          zeroAgents,
+          and(
+            eq(zeroAgents.orgId, agentComposes.orgId),
+            eq(zeroAgents.name, agentComposes.name),
+          ),
+        )
+        .where(eq(agentComposes.id, composeId))
+        .limit(1);
+
+      if (!agent) {
+        return {
+          status: 404 as const,
+          body: {
+            error: { message: "Agent not found", code: "NOT_FOUND" as const },
+          },
+        };
+      }
+
       const result = await createZeroRun({
         userId: authCtx.userId,
         prompt: body.prompt,
-        composeId: body.agentComposeId ?? "",
+        zeroAgentId: agent.id,
         sessionId: body.sessionId,
         appendSystemPrompt: body.appendSystemPrompt,
         modelProvider: body.modelProvider,

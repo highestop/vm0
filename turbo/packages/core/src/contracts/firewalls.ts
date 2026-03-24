@@ -114,6 +114,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   elevenlabs: ["elevenlabs"],
   fal: ["fal"],
   hubspot: ["hubspot"],
+  intercom: ["intercom"],
   atlassian: ["jira", "confluence"],
   linear: ["linear"],
   monday: ["monday"],

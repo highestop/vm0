@@ -19,6 +19,7 @@ import { generate as generateLinear } from "./linear";
 import { generate as generateNotion } from "./notion";
 import { generate as generateSlack } from "./slack";
 import { generate as generateVercel } from "./vercel";
+import { generate as generateYoutube } from "./youtube";
 import { generate as generateZapier } from "./zapier";
 import { generate as generateZapsign } from "./zapsign";
 import { generate as generateZeptomail } from "./zeptomail";
@@ -38,6 +39,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   notion: generateNotion,
   slack: generateSlack,
   vercel: generateVercel,
+  youtube: generateYoutube,
   zapier: generateZapier,
   zapsign: generateZapsign,
   zeptomail: generateZeptomail,

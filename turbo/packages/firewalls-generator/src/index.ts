@@ -32,6 +32,7 @@ import { generate as generatePerplexity } from "./perplexity";
 import { generate as generatePosthog } from "./posthog";
 import { generate as generateResend } from "./resend";
 import { generate as generateSentry } from "./sentry";
+import { generate as generateSerpapi } from "./serpapi";
 import { generate as generateSlack } from "./slack";
 import { generate as generateStripe } from "./stripe";
 import { generate as generateSupabase } from "./supabase";
@@ -72,6 +73,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   posthog: generatePosthog,
   resend: generateResend,
   sentry: generateSentry,
+  serpapi: generateSerpapi,
   slack: generateSlack,
   stripe: generateStripe,
   supabase: generateSupabase,

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { WebClient } from "@slack/web-api";
+import type { Block, KnownBlock } from "@slack/web-api";
 import { NextRequest } from "next/server";
 import { POST } from "../route";
 import {
@@ -161,8 +162,27 @@ describe("POST /api/internal/callbacks/slack/org/schedule", () => {
 
     const firstCall = postMessageMock.mock.calls[0]![0] as {
       channel: string;
+      blocks: (Block | KnownBlock)[];
     };
     expect(firstCall.channel).toBe("C-TARGET-CHANNEL");
+
+    // Verify blocks use markdown block type (from buildAgentResponseMessage)
+    const markdownBlock = firstCall.blocks.find((b) => b.type === "markdown");
+    expect(markdownBlock).toBeDefined();
+
+    // Verify header is included in the markdown content
+    const markdownText = (markdownBlock as { type: "markdown"; text: string })
+      .text;
+    expect(markdownText).toContain("Scheduled run for");
+    expect(markdownText).toContain("completed");
+
+    // Verify audit link is present as a context block
+    const contextBlock = firstCall.blocks.find((b) => b.type === "context");
+    expect(contextBlock).toBeDefined();
+    expect(contextBlock).toMatchObject({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: expect.stringContaining("Audit") }],
+    });
   });
 
   it("falls back to user DM when slackChannelId is not set", async () => {
@@ -255,8 +275,90 @@ describe("POST /api/internal/callbacks/slack/org/schedule", () => {
     const call = postMessageMock.mock.calls[0]![0] as {
       channel: string;
       text: string;
+      blocks: (Block | KnownBlock)[];
     };
     expect(call.channel).toBe("C-FAIL-CHANNEL");
     expect(call.text).toContain("failed");
+
+    // Verify failure message uses markdown block with error content
+    const markdownBlock = call.blocks.find((b) => b.type === "markdown");
+    expect(markdownBlock).toBeDefined();
+    const markdownText = (markdownBlock as { type: "markdown"; text: string })
+      .text;
+    expect(markdownText).toContain("failed");
+    expect(markdownText).toContain("Agent crashed");
+
+    // Verify audit link is present
+    const contextBlock = call.blocks.find((b) => b.type === "context");
+    expect(contextBlock).toBeDefined();
+    expect(contextBlock).toMatchObject({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: expect.stringContaining("Audit") }],
+    });
+  });
+
+  it("includes deep links when failure error contains connector keywords", async () => {
+    await setupSlackOrg(user);
+    mockClerk({ userId: user.userId });
+
+    const { composeId } = await createTestCompose(uniqueId("sched-agent"));
+    const schedule = await createTestSchedule(composeId, uniqueId("sched"));
+    const { runId } = await createTestRun(composeId, "Test prompt");
+    await linkRunToSchedule(runId, schedule.id);
+
+    const payload: OrgScheduleCallbackPayload = {
+      scheduleId: schedule.id,
+      agentId: composeId,
+      agentName: "sched-agent",
+      userId: user.userId,
+      orgId: user.orgId,
+      slackChannelId: "C-DEEP-LINK",
+    };
+
+    const { secret } = await createTestCallback({
+      runId,
+      url: "http://localhost/api/internal/callbacks/slack/org/schedule",
+      payload: { ...payload },
+    });
+
+    const request = createCallbackRequest(
+      {
+        runId,
+        status: "failed",
+        error: "MCP server connection failed: connector timeout",
+        payload,
+      },
+      secret,
+    );
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+
+    const mockClient = new WebClient();
+    const postMessageMock = mockClient.chat.postMessage as ReturnType<
+      typeof import("vitest").vi.fn
+    >;
+    expect(postMessageMock).toHaveBeenCalledOnce();
+
+    const call = postMessageMock.mock.calls[0]![0] as {
+      blocks: (Block | KnownBlock)[];
+    };
+
+    // Should have 3 blocks: markdown, deep link context, audit context
+    const contextBlocks = call.blocks.filter((b) => b.type === "context");
+    expect(contextBlocks.length).toBe(2);
+
+    // First context block should be the connector deep link
+    const deepLinkBlock = contextBlocks[0] as {
+      type: "context";
+      elements: Array<{ type: string; text: string }>;
+    };
+    expect(deepLinkBlock.elements[0]!.text).toContain("Configure connectors");
+
+    // Second context block should be the audit link
+    expect(contextBlocks[1]).toMatchObject({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: expect.stringContaining("Audit") }],
+    });
   });
 });

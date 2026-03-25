@@ -33,6 +33,7 @@ import { devtoFirewall } from "./devto.generated";
 import { discordFirewall } from "./discord.generated";
 import { dropboxFirewall } from "./dropbox.generated";
 import { elevenlabsFirewall } from "./elevenlabs.generated";
+import { exploriumFirewall } from "./explorium.generated";
 import { falFirewall } from "./fal.generated";
 import { figmaFirewall } from "./figma.generated";
 import { firecrawlFirewall } from "./firecrawl.generated";
@@ -119,6 +120,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   discord: discordFirewall,
   dropbox: dropboxFirewall,
   elevenlabs: elevenlabsFirewall,
+  explorium: exploriumFirewall,
   fal: falFirewall,
   figma: figmaFirewall,
   firecrawl: firecrawlFirewall,

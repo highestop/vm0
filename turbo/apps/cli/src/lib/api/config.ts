@@ -8,7 +8,6 @@ import { decodeZeroTokenPayload } from "./zero-token.js";
 interface CliConfig {
   token?: string;
   apiUrl?: string;
-  activeOrg?: string;
 }
 
 // Use functions for lazy evaluation (enables testing with mocked homedir)
@@ -80,26 +79,19 @@ export { decodeZeroTokenPayload };
 
 /**
  * Get the active organization for API requests.
- * Priority: ZERO_TOKEN JWT orgId > CLI JWT orgId > VM0_ACTIVE_ORG env var > activeOrg from config file
+ * Priority: ZERO_TOKEN JWT orgId > CLI JWT orgId
  */
 export async function getActiveOrg(): Promise<string | undefined> {
   // Prefer orgId decoded from ZERO_TOKEN JWT (zero agent runs)
   const zeroPayload = decodeZeroTokenPayload();
   if (zeroPayload) return zeroPayload.orgId;
 
-  // Try CLI JWT token (new format: vm0_sandbox_ with scope "cli")
+  // CLI JWT token carries orgId in payload
   const token = await getToken();
   const cliPayload = decodeCliTokenPayload(token);
   if (cliPayload) return cliPayload.orgId;
 
-  // Fall back to VM0_ACTIVE_ORG env var (legacy)
-  if (process.env.VM0_ACTIVE_ORG) {
-    return process.env.VM0_ACTIVE_ORG;
-  }
-
-  // Fall back to config file
-  const config = await loadConfig();
-  return config.activeOrg;
+  return undefined;
 }
 
 export async function clearConfig(): Promise<void> {

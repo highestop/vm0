@@ -3,7 +3,7 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../../mocks/server";
 import { listCommand } from "../list";
 import { mkdtempSync } from "fs";
-import { mkdir, writeFile, rm } from "fs/promises";
+import { mkdir, rm } from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import chalk from "chalk";
@@ -13,6 +13,15 @@ vi.mock("os", async (importOriginal) => {
   const original = await importOriginal<typeof import("os")>();
   return { ...original, homedir: () => TEST_HOME };
 });
+
+function buildFakeCliJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(
+    JSON.stringify({ alg: "HS256", typ: "JWT" }),
+  ).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = Buffer.from("fake-signature").toString("base64url");
+  return `vm0_sandbox_${header}.${body}.${sig}`;
+}
 
 describe("zero org list command", () => {
   const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {
@@ -26,14 +35,15 @@ describe("zero org list command", () => {
   beforeEach(async () => {
     chalk.level = 0;
     vi.stubEnv("VM0_API_URL", "http://localhost:3000");
-    vi.stubEnv("VM0_TOKEN", "test-token");
-    vi.stubEnv("VM0_ACTIVE_ORG", "my-org");
+    const cliJwt = buildFakeCliJwt({
+      scope: "cli",
+      orgId: "my-org",
+      userId: "user-1",
+      tokenId: "tok-1",
+    });
+    vi.stubEnv("VM0_TOKEN", cliJwt);
     const configDir = path.join(TEST_HOME, ".vm0");
     await mkdir(configDir, { recursive: true });
-    await writeFile(
-      path.join(configDir, "config.json"),
-      JSON.stringify({ activeOrg: "my-org" }),
-    );
   });
 
   afterEach(async () => {

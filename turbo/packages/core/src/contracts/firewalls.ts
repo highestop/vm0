@@ -111,6 +111,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   cloudflare: ["cloudflare"],
   "customer-io": ["customer-io"],
   deepseek: ["deepseek"],
+  deel: ["deel"],
   devto: ["devto"],
   discord: ["discord"],
   dropbox: ["dropbox"],

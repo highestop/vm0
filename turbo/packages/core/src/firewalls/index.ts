@@ -77,6 +77,7 @@ import { tavilyFirewall } from "./tavily.generated";
 import { todoistFirewall } from "./todoist.generated";
 import { vercelFirewall } from "./vercel.generated";
 import { webflowFirewall } from "./webflow.generated";
+import { wixFirewall } from "./wix.generated";
 import { xFirewall } from "./x.generated";
 import { xeroFirewall } from "./xero.generated";
 import { youtubeFirewall } from "./youtube.generated";
@@ -155,6 +156,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   todoist: todoistFirewall,
   vercel: vercelFirewall,
   webflow: webflowFirewall,
+  wix: wixFirewall,
   x: xFirewall,
   xero: xeroFirewall,
   youtube: youtubeFirewall,

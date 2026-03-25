@@ -104,6 +104,26 @@ full_snapshot() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: click the form's "Continue" button (not "Continue with Google")
+# ---------------------------------------------------------------------------
+click_continue() {
+  # The page has two buttons whose text contains "Continue":
+  #   - "Continue with Google" (OAuth, appears first in DOM)
+  #   - "Continue" (form submit)
+  # Use snapshot to find the exact form submit button ref.
+  local snap_i ref
+  snap_i=$(agent-browser snapshot -i 2>/dev/null || true)
+  ref=$(echo "$snap_i" | grep -E 'button "Continue" \[ref=' | grep -oE '\[ref=e[0-9]+\]' | head -1 | sed 's/\[ref=/@/; s/\]//')
+  if [[ -n "$ref" ]]; then
+    agent-browser scrollintoview "$ref" 2>/dev/null || true
+    agent-browser wait 300
+    agent-browser click "$ref"
+  else
+    agent-browser find text "Continue" click
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper: dismiss cookie consent banner if present
 # ---------------------------------------------------------------------------
 dismiss_cookie_banner() {
@@ -274,7 +294,7 @@ else
   echo "📧 Entering email: $EMAIL"
   agent-browser find label "Email address" fill "$EMAIL"
   agent-browser wait 500
-  agent-browser find text "Continue" click
+  click_continue
   agent-browser wait 5000
   step_screenshot "after-email-continue"
 
@@ -313,7 +333,7 @@ else
     agent-browser wait 500
     agent-browser find label "Password" fill "$SIGNUP_PASSWORD"
     agent-browser wait 500
-    agent-browser find text "Continue" click
+    click_continue
     agent-browser wait 5000
     step_screenshot "after-sign-up-continue"
 
@@ -403,7 +423,7 @@ fi
 echo ""
 echo "🔑 Phase 3: Entering device code on /cli-auth..."
 
-agent-browser open "$BASE_URL/cli-auth"
+agent-browser open "$BASE_URL/cli-auth" --ignore-https-errors
 agent-browser wait 3000
 
 # Wait for the code input fields to appear

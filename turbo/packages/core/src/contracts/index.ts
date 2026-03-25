@@ -447,8 +447,10 @@ export {
 } from "./org-members";
 export {
   onboardingStatusContract,
+  onboardingCompleteContract,
   onboardingStatusResponseSchema,
   type OnboardingStatusContract,
+  type OnboardingCompleteContract,
   type OnboardingStatusResponse,
 } from "./onboarding";
 export {
@@ -540,6 +542,8 @@ export {
   type ZeroSchedulesMainContract,
   type ZeroSchedulesByNameContract,
   type ZeroSchedulesEnableContract,
+  zeroScheduleRunContract,
+  type ZeroScheduleRunContract,
   type ScheduleResponse,
   type ScheduleListResponse,
   type DeployScheduleResponse,
@@ -604,3 +608,33 @@ export {
   type MemberUsage,
   type UsageMembersResponse,
 } from "./zero-usage";
+export {
+  zeroTeamContract,
+  teamComposeItemSchema,
+  type ZeroTeamContract,
+  type TeamComposeItem,
+} from "./zero-team";
+export {
+  zeroIntegrationsSlackContract,
+  slackOrgStatusSchema,
+  type ZeroIntegrationsSlackContract,
+  type SlackOrgStatus,
+} from "./zero-integrations-slack";
+export {
+  zeroSlackConnectContract,
+  type ZeroSlackConnectContract,
+} from "./zero-slack-connect";
+export {
+  zeroSlackChannelsContract,
+  slackChannelSchema,
+  type ZeroSlackChannelsContract,
+  type SlackChannel,
+} from "./zero-slack-channels";
+export {
+  zeroQueuePositionContract,
+  type ZeroQueuePositionContract,
+} from "./zero-queue-position";
+export {
+  zeroMemberCreditCapContract,
+  type ZeroMemberCreditCapContract,
+} from "./zero-member-credit-cap";

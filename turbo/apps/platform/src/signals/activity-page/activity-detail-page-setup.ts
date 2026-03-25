@@ -27,7 +27,7 @@ export const setupActivityDetailPage$ = command(
     }
 
     await Promise.all([
-      set(fetchAgentsList$),
+      set(fetchAgentsList$, signal),
       set(initZeroOnboarding$, signal),
     ]);
     signal.throwIfAborted();
@@ -36,6 +36,6 @@ export const setupActivityDetailPage$ = command(
       return;
     }
 
-    set(switchActiveAgent$, null);
+    await set(switchActiveAgent$, null, signal);
   },
 );

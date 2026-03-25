@@ -69,37 +69,42 @@ export const zeroAddedConnectors$ = computed(async (get) => {
 });
 
 /** Add a connector (local only, no compose job). */
-export const addZeroConnector$ = command(async ({ get, set }, name: string) => {
-  if (get(internalAddedConnectors$) === null) {
-    set(internalAddedConnectors$, await get(seededConnectors$));
-  }
-  set(internalAddedConnectors$, (prev) => [...(prev ?? []), name]);
-});
+export const addZeroConnector$ = command(
+  async ({ get, set }, name: string, _signal: AbortSignal) => {
+    if (get(internalAddedConnectors$) === null) {
+      set(internalAddedConnectors$, await get(seededConnectors$));
+    }
+    set(internalAddedConnectors$, (prev) => [...(prev ?? []), name]);
+  },
+);
 
 /** Save connector changes: trigger compose job and wait for completion. */
-export const saveZeroConnectors$ = command(async ({ get, set }) => {
-  set(internalSaving$, true);
-  try {
-    const newConnectors = get(internalAddedConnectors$) ?? [];
-    await set(syncConnectorsToCompose$, newConnectors);
-    // Reset to null so seeded picks up the new agent state
-    set(internalAddedConnectors$, null);
-    toast.success("Connectors saved");
-  } catch (error) {
-    throwIfAbort(error);
-    L.error("Failed to save connectors:", error);
-    toast.error(
-      error instanceof Error ? error.message : "Failed to save connectors",
-    );
-  } finally {
-    set(internalSaving$, false);
-  }
-});
+export const saveZeroConnectors$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    set(internalSaving$, true);
+    try {
+      const newConnectors = get(internalAddedConnectors$) ?? [];
+      await set(syncConnectorsToCompose$, newConnectors, signal);
+      // Reset to null so seeded picks up the new agent state
+      set(internalAddedConnectors$, null);
+      toast.success("Connectors saved");
+    } catch (error) {
+      throwIfAbort(error);
+      L.error("Failed to save connectors:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save connectors",
+      );
+    } finally {
+      set(internalSaving$, false);
+    }
+  },
+);
 
 /** Sync the connectors list via zero agents API. */
 const syncConnectorsToCompose$ = command(
-  async ({ get, set }, connectorValues: string[]) => {
+  async ({ get, set }, connectorValues: string[], signal: AbortSignal) => {
     const agent = await get(zeroAgent$);
+    signal.throwIfAborted();
     if (!agent) {
       throw new Error("No agent available");
     }
@@ -109,6 +114,7 @@ const syncConnectorsToCompose$ = command(
       params: { id: agent.agentId },
       body: { connectors: connectorValues },
     });
+    signal.throwIfAborted();
 
     if (result.status !== 200) {
       const detail =
@@ -123,6 +129,7 @@ const syncConnectorsToCompose$ = command(
     }
 
     await set(reloadOnboardingStatus$);
+    signal.throwIfAborted();
     set(internalComposeReload$, (x) => x + 1);
   },
 );

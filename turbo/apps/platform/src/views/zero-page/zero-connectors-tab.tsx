@@ -187,13 +187,21 @@ export function ZeroConnectorsTab({
                   }
                 }}
                 onDisconnect={() => {
-                  detach(disconnect(name as ConnectorType), Reason.DomCallback);
+                  detach(
+                    disconnect(name as ConnectorType, signal),
+                    Reason.DomCallback,
+                  );
                   const label =
                     connectorMap.get(name as ConnectorType)?.label ?? name;
                   toast.success(`${label} disconnected`);
                 }}
                 onRemove={() => handleRemoveConnector(name)}
-                onReviewScopes={() => setScopeReviewType(name as ConnectorType)}
+                onReviewScopes={() =>
+                  detach(
+                    setScopeReviewType(name as ConnectorType, signal),
+                    Reason.DomCallback,
+                  )
+                }
                 onManagePermissions={() =>
                   setFirewallType(name as ConnectorType)
                 }
@@ -226,9 +234,11 @@ export function ZeroConnectorsTab({
       {scopeReviewType && (
         <ScopeReviewModal
           connectorType={scopeReviewType}
-          onClose={() => setScopeReviewType(null)}
+          onClose={() =>
+            detach(setScopeReviewType(null, signal), Reason.DomCallback)
+          }
           onReconnect={(type) => {
-            setScopeReviewType(null);
+            detach(setScopeReviewType(null, signal), Reason.DomCallback);
             detach(connect(type, signal), Reason.DomCallback);
           }}
         />
@@ -240,7 +250,7 @@ export function ZeroConnectorsTab({
           displayName={displayName ?? agentId}
           initialPolicies={firewallPolicies ?? {}}
           onApply={async (policies) => {
-            const saved = await saveFirewallPol(agentId, policies);
+            const saved = await saveFirewallPol(agentId, policies, signal);
             if (saved !== undefined) {
               onFirewallPoliciesChange?.(saved);
             }

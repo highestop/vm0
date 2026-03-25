@@ -6,6 +6,7 @@ import {
   useGet,
   useSet,
 } from "ccstate-react";
+import { pageSignal$ } from "../../signals/page-signal.ts";
 import {
   IconChartBar,
   IconChartLine,
@@ -787,6 +788,7 @@ function nextTierInfo(tier: string): { label: string; img: string } | null {
 }
 
 function SidebarUpgradeCard() {
+  const pageSignal = useGet(pageSignal$);
   const billingLoadable = useLastLoadable(billingStatusAsync$);
   const billing =
     billingLoadable.state === "hasData" ? billingLoadable.data : null;
@@ -805,7 +807,7 @@ function SidebarUpgradeCard() {
   const handleClick = () => {
     setTab("billing");
     setSubPage(true);
-    detach(openManage(true), Reason.DomCallback);
+    detach(openManage(true, pageSignal), Reason.DomCallback);
   };
 
   return (
@@ -870,8 +872,9 @@ export function ZeroSidebar() {
   const recentSessionsError = useGet(zeroSessionListError$);
   const createNewChat = useSet(createNewChatSession$);
   const creatingNewSession = useGet(zeroCreatingNewSession$);
+  const pageSignal = useGet(pageSignal$);
   const onNewChat = (agentId: string | null) => {
-    detach(createNewChat(agentId), Reason.DomCallback);
+    detach(createNewChat(agentId, pageSignal), Reason.DomCallback);
   };
   const displayName = displayNameRaw || "Zero";
   const pinnedIdsLoadable = useLastLoadable(pinnedAgentIds$);
@@ -880,7 +883,7 @@ export function ZeroSidebar() {
   const savingPinned = useGet(savingPinnedAgents$);
   const savePinnedIds = useSet(updatePinnedAgentIds$);
   const setPinnedIds = (ids: string[]) => {
-    detach(savePinnedIds(ids), Reason.DomCallback);
+    detach(savePinnedIds(ids, pageSignal), Reason.DomCallback);
   };
   const managePinnedOpen = useGet(managePinnedDialogOpen$);
   const setManagePinnedOpen = useSet(setManagePinnedDialogOpen$);

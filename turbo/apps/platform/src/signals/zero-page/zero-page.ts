@@ -21,9 +21,9 @@ export const loadInitialData$ = command(
       return;
     }
     await Promise.all([
-      set(fetchAgentsList$),
+      set(fetchAgentsList$, signal),
       set(initZeroOnboarding$, signal),
-      set(initSlackOrg$),
+      set(initSlackOrg$, signal),
     ]);
     signal.throwIfAborted();
     set(initialDataLoaded$, true);
@@ -51,14 +51,14 @@ export const resolveAgentById$ = command(
       signal.throwIfAborted();
 
       if (agentId === rawDefaultName) {
-        set(switchActiveAgent$, null);
+        await set(switchActiveAgent$, null, signal);
       } else {
         const agent = subagents.find((a) => a.id === agentId);
         if (agent) {
-          set(switchActiveAgent$, agent.id);
+          await set(switchActiveAgent$, agent.id, signal);
         } else {
           // Unknown agent → redirect to default
-          set(switchActiveAgent$, null);
+          await set(switchActiveAgent$, null, signal);
           if (rawDefaultName) {
             set(navigateTo$, "/talk/:id", {
               pathParams: { id: rawDefaultName },
@@ -68,7 +68,7 @@ export const resolveAgentById$ = command(
         }
       }
     } else {
-      set(switchActiveAgent$, null);
+      await set(switchActiveAgent$, null, signal);
     }
   },
 );

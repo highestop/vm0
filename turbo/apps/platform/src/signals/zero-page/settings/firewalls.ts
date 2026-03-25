@@ -48,12 +48,14 @@ export const saveFirewallPolicies$ = command(
     { get },
     agentName: string,
     policies: FirewallPolicies,
+    signal: AbortSignal,
   ): Promise<FirewallPolicies | null> => {
     const client = get(zeroClient$)(zeroAgentFirewallPoliciesContract);
     const result = await client.update({
       body: { agentId: agentName, policies },
     });
 
+    signal.throwIfAborted();
     if (result.status !== 200) {
       const detail =
         result.status === 400 ||

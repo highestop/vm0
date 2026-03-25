@@ -27,15 +27,16 @@ export const zeroSubagents$ = computed(async (get) => {
  * Follows the same flow as onboarding: create agent → upload instructions.
  */
 export const createSubagent$ = command(
-  async ({ get, set }, displayName: string) => {
+  async ({ get, set }, displayName: string, signal: AbortSignal) => {
     const createClient = get(zeroClient$);
 
     await createZeroAgent(createClient, {
       connectors: [],
       displayName,
     });
+    signal.throwIfAborted();
 
     // Refresh the agents list so the new agent appears immediately
-    await set(fetchAgentsList$);
+    await set(fetchAgentsList$, signal);
   },
 );

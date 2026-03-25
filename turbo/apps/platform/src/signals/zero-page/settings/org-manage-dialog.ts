@@ -16,9 +16,9 @@ export const orgManageDialogOpen$ = computed((get) =>
 );
 
 export const setOrgManageDialogOpen$ = command(
-  async ({ set }, open: boolean) => {
+  async ({ set }, open: boolean, signal: AbortSignal) => {
     if (open) {
-      await set(initProfileName$);
+      await set(initProfileName$, signal);
       set(reloadBillingStatus$);
     }
     set(internalOrgManageDialogOpen$, open);
@@ -29,33 +29,35 @@ export const setOrgManageDialogOpen$ = command(
  * Check URL for `?settings=<tab>` param and auto-open the org manage dialog
  * on the specified tab. Strips the param from the URL after consuming it.
  */
-export const checkSettingsParam$ = command(async ({ get, set }) => {
-  const params = get(searchParams$);
-  const settingsValue = params.get("settings");
-  if (!settingsValue) {
-    return;
-  }
+export const checkSettingsParam$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    const params = get(searchParams$);
+    const settingsValue = params.get("settings");
+    if (!settingsValue) {
+      return;
+    }
 
-  const settingsTabMap: Record<string, OrgManageTab> = {
-    providers: "providers",
-    general: "general",
-    members: "members",
-    billing: "billing",
-    usage: "usage",
-    credits: "usage",
-    invoices: "invoices",
-  };
-  const tab = settingsTabMap[settingsValue];
-  if (tab) {
-    set(setActiveTab$, tab);
-    await set(setOrgManageDialogOpen$, true);
-  }
+    const settingsTabMap: Record<string, OrgManageTab> = {
+      providers: "providers",
+      general: "general",
+      members: "members",
+      billing: "billing",
+      usage: "usage",
+      credits: "usage",
+      invoices: "invoices",
+    };
+    const tab = settingsTabMap[settingsValue];
+    if (tab) {
+      set(setActiveTab$, tab);
+      await set(setOrgManageDialogOpen$, true, signal);
+    }
 
-  // Strip the param so it doesn't re-trigger on navigation
-  const next = new URLSearchParams(params);
-  next.delete("settings");
-  set(updateSearchParams$, next);
-});
+    // Strip the param so it doesn't re-trigger on navigation
+    const next = new URLSearchParams(params);
+    next.delete("settings");
+    set(updateSearchParams$, next);
+  },
+);
 
 const patchClerkOrgProfile$ = command(
   async ({ get, set }, _el: HTMLElement, signal: AbortSignal) => {
@@ -67,7 +69,7 @@ const patchClerkOrgProfile$ = command(
 
     const original = clerk.openOrganizationProfile.bind(clerk);
     clerk.openOrganizationProfile = () => {
-      detach(set(setOrgManageDialogOpen$, true), Reason.DomCallback);
+      detach(set(setOrgManageDialogOpen$, true, signal), Reason.DomCallback);
     };
     signal.addEventListener("abort", () => {
       clerk.openOrganizationProfile = original;

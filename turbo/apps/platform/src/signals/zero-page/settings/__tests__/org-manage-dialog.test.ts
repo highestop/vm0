@@ -17,7 +17,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "?settings=providers" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeTruthy();
     expect(store.get(activeTab$)).toBe("providers");
@@ -30,7 +30,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "?settings=billing" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeTruthy();
     expect(store.get(activeTab$)).toBe("billing");
@@ -41,7 +41,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "?settings=usage" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeTruthy();
     expect(store.get(activeTab$)).toBe("usage");
@@ -52,7 +52,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "?settings=credits" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeTruthy();
     expect(store.get(activeTab$)).toBe("usage");
@@ -63,7 +63,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeFalsy();
   });
@@ -73,7 +73,7 @@ describe("checkSettingsParam$", () => {
     createPushStateMock(signal);
     mockLocation({ pathname: "/", search: "?settings=unknown" }, signal);
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeFalsy();
     // The param should still be stripped
@@ -88,7 +88,7 @@ describe("checkSettingsParam$", () => {
       signal,
     );
 
-    await store.set(checkSettingsParam$);
+    await store.set(checkSettingsParam$, signal);
 
     expect(store.get(orgManageDialogOpen$)).toBeTruthy();
     const params = store.get(searchParams$);

@@ -17,9 +17,9 @@ export const setupWorksPage$ = command(async ({ set }, signal: AbortSignal) => {
   set(updatePage$, createElement(ZeroWorksPageWrapper));
   set(updateDocumentTitle$, "Works");
   await Promise.all([
-    set(fetchAgentsList$),
+    set(fetchAgentsList$, signal),
     set(initZeroOnboarding$, signal),
-    set(initSlackOrg$),
+    set(initSlackOrg$, signal),
   ]);
   signal.throwIfAborted();
   detach(set(pollSlackConnection$, signal), Reason.Entrance);
@@ -28,5 +28,5 @@ export const setupWorksPage$ = command(async ({ set }, signal: AbortSignal) => {
     return;
   }
 
-  set(switchActiveAgent$, null);
+  await set(switchActiveAgent$, null, signal);
 });

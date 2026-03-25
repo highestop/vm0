@@ -11,12 +11,15 @@ import { switchActiveAgent$ } from "../zero-page/zero-chat.ts";
 export const setupUsagePage$ = command(async ({ set }, signal: AbortSignal) => {
   set(updatePage$, createElement(ZeroUsagePageWrapper));
   set(updateDocumentTitle$, "Usage");
-  await Promise.all([set(fetchAgentsList$), set(initZeroOnboarding$, signal)]);
+  await Promise.all([
+    set(fetchAgentsList$, signal),
+    set(initZeroOnboarding$, signal),
+  ]);
   signal.throwIfAborted();
 
   if (await set(onboardGuard$, signal)) {
     return;
   }
 
-  set(switchActiveAgent$, null);
+  await set(switchActiveAgent$, null, signal);
 });

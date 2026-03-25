@@ -15,11 +15,11 @@ export const setupSchedulePage$ = command(
   async ({ set }, signal: AbortSignal) => {
     set(updatePage$, createElement(ZeroSchedulePageWrapper));
     set(updateDocumentTitle$, "Schedule");
-    detach(set(fetchAllOrgSchedules$), Reason.Entrance);
+    detach(set(fetchAllOrgSchedules$, signal), Reason.Entrance);
     await Promise.all([
-      set(fetchAgentsList$),
+      set(fetchAgentsList$, signal),
       set(initZeroOnboarding$, signal),
-      set(initSlackOrg$),
+      set(initSlackOrg$, signal),
     ]);
     signal.throwIfAborted();
 
@@ -27,6 +27,6 @@ export const setupSchedulePage$ = command(
       return;
     }
 
-    set(switchActiveAgent$, null);
+    await set(switchActiveAgent$, null, signal);
   },
 );

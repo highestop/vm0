@@ -67,6 +67,7 @@ export const setMemberCreditCap$ = command(
   async (
     { get, set },
     params: { userId: string; creditCap: number | null },
+    _signal: AbortSignal,
   ) => {
     const createClient = get(zeroClient$);
     const client = createClient(zeroMemberCreditCapContract);
@@ -87,8 +88,8 @@ interface MemberCapSetting {
   editMode$: State<boolean>;
   value$: State<string>;
   savingPromise$: Computed<Promise<unknown> | null>;
-  save$: Command<void, []>;
-  clearCap$: Command<void, []>;
+  save$: Command<Promise<void>, [AbortSignal]>;
+  clearCap$: Command<Promise<void>, [AbortSignal]>;
   enterEditMode$: Command<void, []>;
   exitEditMode$: Command<void, []>;
   setValue$: Command<void, [string]>;
@@ -103,7 +104,7 @@ function createMemberCapSetting(
   const internalSavingPromise$ = state<Promise<unknown> | null>(null);
   const savingPromise$ = computed((get) => get(internalSavingPromise$));
 
-  const save$ = command(async ({ get, set }) => {
+  const save$ = command(async ({ get, set }, _signal: AbortSignal) => {
     const rawValue = get(value$);
     const parsed =
       rawValue.trim() === "" ? null : Number.parseInt(rawValue, 10);
@@ -111,10 +112,11 @@ function createMemberCapSetting(
       return;
     }
 
-    const promise = set(setMemberCreditCap$, {
-      userId: member.userId,
-      creditCap: parsed,
-    });
+    const promise = set(
+      setMemberCreditCap$,
+      { userId: member.userId, creditCap: parsed },
+      _signal,
+    );
     set(internalSavingPromise$, promise);
 
     try {
@@ -128,11 +130,12 @@ function createMemberCapSetting(
     }
   });
 
-  const clearCap$ = command(async ({ set }) => {
-    const promise = set(setMemberCreditCap$, {
-      userId: member.userId,
-      creditCap: null,
-    });
+  const clearCap$ = command(async ({ set }, _signal: AbortSignal) => {
+    const promise = set(
+      setMemberCreditCap$,
+      { userId: member.userId, creditCap: null },
+      _signal,
+    );
     set(internalSavingPromise$, promise);
 
     try {

@@ -87,7 +87,7 @@ export const closeBillingDialog$ = command(({ set }) => {
 });
 
 export const startCheckout$ = command(
-  async ({ get, set }, tier: "pro" | "team") => {
+  async ({ get, set }, tier: "pro" | "team", _signal: AbortSignal) => {
     set(internalCheckoutLoading$, true);
 
     const currentUrl = window.location.href;
@@ -116,22 +116,24 @@ export const startCheckout$ = command(
   },
 );
 
-export const startDowngrade$ = command(async ({ get, set }) => {
-  set(internalPortalLoading$, true);
+export const startDowngrade$ = command(
+  async ({ get, set }, _signal: AbortSignal) => {
+    set(internalPortalLoading$, true);
 
-  const createClient = get(zeroClient$);
-  const client = createClient(zeroBillingPortalContract);
-  const result = await client.create({
-    body: { returnUrl: window.location.href },
-  });
+    const createClient = get(zeroClient$);
+    const client = createClient(zeroBillingPortalContract);
+    const result = await client.create({
+      body: { returnUrl: window.location.href },
+    });
 
-  if (result.status === 200) {
-    window.location.href = result.body.url;
-  } else {
-    log.error("Portal redirect failed", getErrorMessage(result.body));
-    set(internalPortalLoading$, false);
-  }
-});
+    if (result.status === 200) {
+      window.location.href = result.body.url;
+    } else {
+      log.error("Portal redirect failed", getErrorMessage(result.body));
+      set(internalPortalLoading$, false);
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Auto-recharge
@@ -141,6 +143,7 @@ export const saveAutoRecharge$ = command(
   async (
     { get, set },
     config: { enabled: boolean; threshold?: number; amount?: number },
+    _signal: AbortSignal,
   ) => {
     set(internalCheckoutLoading$, true);
 

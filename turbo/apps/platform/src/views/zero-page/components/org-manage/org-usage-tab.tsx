@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useLoadable, useSet } from "ccstate-react";
+import { useGet, useLoadable, useSet } from "ccstate-react";
 import type { OrgMember, MemberUsage } from "@vm0/core";
 import { IconUsers } from "@tabler/icons-react";
 import { Input, Popover, PopoverAnchor, PopoverContent } from "@vm0/ui";
 import { toast } from "@vm0/ui/components/ui/sonner";
+import { pageSignal$ } from "../../../../signals/page-signal.ts";
 import { usageMembersAsync$ } from "../../../../signals/usage-page/usage-signals.ts";
 import { orgMembers$ } from "../../../../signals/external/org-members.ts";
 import { isOrgAdmin$ } from "../../../../signals/org.ts";
@@ -252,6 +253,7 @@ function InlineCapInput({
   member: MemberUsage;
   onSaved: (cap: number | null) => void;
 }) {
+  const pageSignal = useGet(pageSignal$);
   const updateCap = useSet(setMemberCreditCap$);
   const [value, setValue] = useState(
     member.creditCap !== null ? String(member.creditCap) : "",
@@ -271,7 +273,7 @@ function InlineCapInput({
     setSaving(true);
     detach(
       (async () => {
-        await updateCap({ userId: member.userId, creditCap: cap });
+        await updateCap({ userId: member.userId, creditCap: cap }, pageSignal);
         onSaved(cap);
         setSaving(false);
       })().catch(() => {

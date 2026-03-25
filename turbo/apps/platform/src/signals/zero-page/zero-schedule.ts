@@ -160,34 +160,38 @@ export const zeroScheduleEntries$ = computed((get) => {
 // Fetch schedules for the default agent
 // ---------------------------------------------------------------------------
 
-export const fetchZeroSchedules$ = command(async ({ get, set }) => {
-  const status = await get(zeroOnboardingStatus$);
-  const composeId = status.defaultAgentId;
-  if (!composeId) {
-    set(internalSchedules$, []);
-    return;
-  }
-
-  try {
-    const client = get(zeroClient$)(zeroSchedulesMainContract);
-    const result = await client.list();
-
-    if (result.status !== 200) {
+export const fetchZeroSchedules$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    const status = await get(zeroOnboardingStatus$);
+    signal.throwIfAborted();
+    const composeId = status.defaultAgentId;
+    if (!composeId) {
       set(internalSchedules$, []);
       return;
     }
 
-    // Filter schedules for this agent's composeId
-    const agentSchedules = result.body.schedules.filter(
-      (s) => s.agentId === composeId,
-    );
-    set(internalSchedules$, agentSchedules);
-  } catch (error) {
-    throwIfAbort(error);
-    L.error("Failed to fetch zero schedules:", error);
-    set(internalSchedules$, []);
-  }
-});
+    try {
+      const client = get(zeroClient$)(zeroSchedulesMainContract);
+      const result = await client.list();
+      signal.throwIfAborted();
+
+      if (result.status !== 200) {
+        set(internalSchedules$, []);
+        return;
+      }
+
+      // Filter schedules for this agent's composeId
+      const agentSchedules = result.body.schedules.filter(
+        (s) => s.agentId === composeId,
+      );
+      set(internalSchedules$, agentSchedules);
+    } catch (error) {
+      throwIfAbort(error);
+      L.error("Failed to fetch zero schedules:", error);
+      set(internalSchedules$, []);
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Save schedule (create or update)
@@ -276,8 +280,9 @@ export interface ZeroScheduleSaveParams {
 }
 
 export const saveZeroSchedule$ = command(
-  async ({ get, set }, params: ZeroScheduleSaveParams) => {
+  async ({ get, set }, params: ZeroScheduleSaveParams, signal: AbortSignal) => {
     const status = await get(zeroOnboardingStatus$);
+    signal.throwIfAborted();
     const composeId = status.defaultAgentId;
     if (!composeId) {
       scheduleSaveFailure("No default agent configured");
@@ -287,6 +292,7 @@ export const saveZeroSchedule$ = command(
 
     const client = get(zeroClient$)(zeroSchedulesMainContract);
     const result = await client.deploy({ body });
+    signal.throwIfAborted();
 
     if (result.status !== 200 && result.status !== 201) {
       const message =
@@ -300,7 +306,7 @@ export const saveZeroSchedule$ = command(
     }
 
     toast.success(params.editName ? "Schedule updated" : "Schedule created");
-    await set(fetchZeroSchedules$);
+    await set(fetchZeroSchedules$, signal);
   },
 );
 
@@ -309,8 +315,13 @@ export const saveZeroSchedule$ = command(
 // ---------------------------------------------------------------------------
 
 export const toggleZeroScheduleEnabled$ = command(
-  async ({ get, set }, params: { name: string; enabled: boolean }) => {
+  async (
+    { get, set },
+    params: { name: string; enabled: boolean },
+    signal: AbortSignal,
+  ) => {
     const status = await get(zeroOnboardingStatus$);
+    signal.throwIfAborted();
     const composeId = status.defaultAgentId;
     if (!composeId) {
       scheduleSaveFailure("No default agent configured");
@@ -322,6 +333,7 @@ export const toggleZeroScheduleEnabled$ = command(
       params: { name: params.name },
       body: { agentId: composeId },
     });
+    signal.throwIfAborted();
 
     if (result.status !== 200) {
       const message = `Failed to ${action} schedule (${result.status})`;
@@ -329,7 +341,7 @@ export const toggleZeroScheduleEnabled$ = command(
       throw new Error(message);
     }
 
-    await set(fetchZeroSchedules$);
+    await set(fetchZeroSchedules$, signal);
   },
 );
 
@@ -338,8 +350,9 @@ export const toggleZeroScheduleEnabled$ = command(
 // ---------------------------------------------------------------------------
 
 export const deleteZeroSchedule$ = command(
-  async ({ get, set }, scheduleName: string) => {
+  async ({ get, set }, scheduleName: string, signal: AbortSignal) => {
     const status = await get(zeroOnboardingStatus$);
+    signal.throwIfAborted();
     const composeId = status.defaultAgentId;
     if (!composeId) {
       throw new Error("No default agent configured");
@@ -350,6 +363,7 @@ export const deleteZeroSchedule$ = command(
       params: { name: scheduleName },
       query: { agentId: composeId },
     });
+    signal.throwIfAborted();
 
     if (result.status !== 204) {
       const msg =
@@ -360,7 +374,7 @@ export const deleteZeroSchedule$ = command(
     }
 
     toast.success("Schedule deleted");
-    await set(fetchZeroSchedules$);
+    await set(fetchZeroSchedules$, signal);
   },
 );
 
@@ -418,33 +432,37 @@ export const allOrgScheduleEntries$ = computed((get) => {
     );
 });
 
-export const fetchAllOrgSchedules$ = command(async ({ get, set }) => {
-  try {
-    const client = get(zeroClient$)(zeroSchedulesMainContract);
-    const result = await client.list();
-    if (result.status !== 200) {
+export const fetchAllOrgSchedules$ = command(
+  async ({ get, set }, _signal: AbortSignal) => {
+    try {
+      const client = get(zeroClient$)(zeroSchedulesMainContract);
+      const result = await client.list();
+      if (result.status !== 200) {
+        set(internalAllSchedules$, []);
+        return;
+      }
+      set(internalAllSchedules$, result.body.schedules);
+    } catch (error) {
+      throwIfAbort(error);
+      L.error("Failed to fetch all org schedules:", error);
       set(internalAllSchedules$, []);
-      return;
+    } finally {
+      set(internalAllSchedulesLoaded$, true);
     }
-    set(internalAllSchedules$, result.body.schedules);
-  } catch (error) {
-    throwIfAbort(error);
-    L.error("Failed to fetch all org schedules:", error);
-    set(internalAllSchedules$, []);
-  } finally {
-    set(internalAllSchedulesLoaded$, true);
-  }
-});
+  },
+);
 
 export const saveOrgSchedule$ = command(
   async (
     { get, set },
     params: ZeroScheduleSaveParams & { agentId: string },
+    signal: AbortSignal,
   ) => {
     const body = buildScheduleBody(params.agentId, params);
 
     const client = get(zeroClient$)(zeroSchedulesMainContract);
     const result = await client.deploy({ body });
+    signal.throwIfAborted();
 
     if (result.status !== 200 && result.status !== 201) {
       const message =
@@ -460,7 +478,7 @@ export const saveOrgSchedule$ = command(
     const scheduleId = result.body.schedule.id;
 
     toast.success(params.editName ? "Schedule updated" : "Schedule created");
-    await set(fetchAllOrgSchedules$);
+    await set(fetchAllOrgSchedules$, signal);
 
     return scheduleId;
   },
@@ -470,6 +488,7 @@ export const toggleOrgScheduleEnabled$ = command(
   async (
     { get, set },
     params: { name: string; enabled: boolean; agentId: string },
+    signal: AbortSignal,
   ) => {
     const client = get(zeroClient$)(zeroSchedulesEnableContract);
     const action = params.enabled ? "enable" : "disable";
@@ -477,6 +496,7 @@ export const toggleOrgScheduleEnabled$ = command(
       params: { name: params.name },
       body: { agentId: params.agentId },
     });
+    signal.throwIfAborted();
 
     if (result.status !== 200) {
       const message = `Failed to ${action} schedule (${result.status})`;
@@ -484,17 +504,22 @@ export const toggleOrgScheduleEnabled$ = command(
       throw new Error(message);
     }
 
-    await set(fetchAllOrgSchedules$);
+    await set(fetchAllOrgSchedules$, signal);
   },
 );
 
 export const deleteOrgSchedule$ = command(
-  async ({ get, set }, params: { name: string; agentId: string }) => {
+  async (
+    { get, set },
+    params: { name: string; agentId: string },
+    signal: AbortSignal,
+  ) => {
     const client = get(zeroClient$)(zeroSchedulesByNameContract);
     const result = await client.delete({
       params: { name: params.name },
       query: { agentId: params.agentId },
     });
+    signal.throwIfAborted();
 
     if (result.status !== 204) {
       const msg =
@@ -505,7 +530,7 @@ export const deleteOrgSchedule$ = command(
     }
 
     toast.success("Schedule deleted");
-    await set(fetchAllOrgSchedules$);
+    await set(fetchAllOrgSchedules$, signal);
   },
 );
 
@@ -514,10 +539,11 @@ export const deleteOrgSchedule$ = command(
  * Returns the created run ID.
  */
 export const runScheduleNow$ = command(
-  async ({ get }, scheduleId: string): Promise<string> => {
+  async ({ get }, scheduleId: string, signal: AbortSignal): Promise<string> => {
     const toastId = toast.loading("Starting run…");
     const client = get(zeroClient$)(zeroScheduleRunContract);
     const result = await client.run({ body: { scheduleId } });
+    signal.throwIfAborted();
 
     if (result.status !== 201) {
       const message =

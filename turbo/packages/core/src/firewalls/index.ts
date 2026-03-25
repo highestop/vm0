@@ -75,6 +75,7 @@ import { redditFirewall } from "./reddit.generated";
 import { resendFirewall } from "./resend.generated";
 import { revenuecatFirewall } from "./revenuecat.generated";
 import { runwayFirewall } from "./runway.generated";
+import { scrapeninjaFirewall } from "./scrapeninja.generated";
 import { sentryFirewall } from "./sentry.generated";
 import { serpapiFirewall } from "./serpapi.generated";
 import { shortioFirewall } from "./shortio.generated";
@@ -167,6 +168,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   resend: resendFirewall,
   revenuecat: revenuecatFirewall,
   runway: runwayFirewall,
+  scrapeninja: scrapeninjaFirewall,
   sentry: sentryFirewall,
   serpapi: serpapiFirewall,
   shortio: shortioFirewall,

@@ -69,6 +69,7 @@ import { generate as generateReddit } from "./reddit";
 import { generate as generateResend } from "./resend";
 import { generate as generateRevenuecat } from "./revenuecat";
 import { generate as generateRunway } from "./runway";
+import { generate as generateScrapeninja } from "./scrapeninja";
 import { generate as generateSentry } from "./sentry";
 import { generate as generateSerpapi } from "./serpapi";
 import { generate as generateShortio } from "./shortio";
@@ -157,6 +158,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   resend: generateResend,
   revenuecat: generateRevenuecat,
   runway: generateRunway,
+  scrapeninja: generateScrapeninja,
   sentry: generateSentry,
   serpapi: generateSerpapi,
   shortio: generateShortio,

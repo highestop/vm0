@@ -160,6 +160,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   resend: ["resend"],
   revenuecat: ["revenuecat"],
   runway: ["runway"],
+  scrapeninja: ["scrapeninja"],
   sentry: ["sentry"],
   serpapi: ["serpapi"],
   shortio: ["shortio"],

@@ -68,6 +68,7 @@ import { openaiFirewall } from "./openai.generated";
 import { perplexityFirewall } from "./perplexity.generated";
 import { plausibleFirewall } from "./plausible.generated";
 import { posthogFirewall } from "./posthog.generated";
+import { pushinatorFirewall } from "./pushinator.generated";
 import { qiitaFirewall } from "./qiita.generated";
 import { redditFirewall } from "./reddit.generated";
 import { resendFirewall } from "./resend.generated";
@@ -155,6 +156,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   perplexity: perplexityFirewall,
   plausible: plausibleFirewall,
   posthog: posthogFirewall,
+  pushinator: pushinatorFirewall,
   qiita: qiitaFirewall,
   reddit: redditFirewall,
   resend: resendFirewall,

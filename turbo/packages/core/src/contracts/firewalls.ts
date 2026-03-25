@@ -159,6 +159,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   supabase: ["supabase"],
   supadata: ["supadata"],
   tavily: ["tavily"],
+  tldv: ["tldv"],
   todoist: ["todoist"],
   vercel: ["vercel"],
   webflow: ["webflow"],

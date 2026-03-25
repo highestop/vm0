@@ -75,6 +75,7 @@ import { stripeFirewall } from "./stripe.generated";
 import { supabaseFirewall } from "./supabase.generated";
 import { supadataFirewall } from "./supadata.generated";
 import { tavilyFirewall } from "./tavily.generated";
+import { tldvFirewall } from "./tldv.generated";
 import { todoistFirewall } from "./todoist.generated";
 import { vercelFirewall } from "./vercel.generated";
 import { webflowFirewall } from "./webflow.generated";
@@ -155,6 +156,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   supabase: supabaseFirewall,
   supadata: supadataFirewall,
   tavily: tavilyFirewall,
+  tldv: tldvFirewall,
   todoist: todoistFirewall,
   vercel: vercelFirewall,
   webflow: webflowFirewall,

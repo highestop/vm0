@@ -79,6 +79,7 @@ import { generate as generateSupadata } from "./supadata";
 import { generate as generateTavily } from "./tavily";
 import { generate as generateTldv } from "./tldv";
 import { generate as generateTodoist } from "./todoist";
+import { generate as generateV0 } from "./v0";
 import { generate as generateVercel } from "./vercel";
 import { generate as generateWebflow } from "./webflow";
 import { generate as generateWix } from "./wix";
@@ -164,6 +165,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   tavily: generateTavily,
   tldv: generateTldv,
   todoist: generateTodoist,
+  v0: generateV0,
   vercel: generateVercel,
   webflow: generateWebflow,
   wix: generateWix,

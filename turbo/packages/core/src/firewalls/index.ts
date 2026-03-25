@@ -59,6 +59,7 @@ import { larkFirewall } from "./lark.generated";
 import { lineFirewall } from "./line.generated";
 import { linearFirewall } from "./linear.generated";
 import { loopsFirewall } from "./loops.generated";
+import { mailsacFirewall } from "./mailsac.generated";
 import { mercuryFirewall } from "./mercury.generated";
 import { minimaxFirewall } from "./minimax.generated";
 import { mondayFirewall } from "./monday.generated";
@@ -152,6 +153,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   line: lineFirewall,
   linear: linearFirewall,
   loops: loopsFirewall,
+  mailsac: mailsacFirewall,
   mercury: mercuryFirewall,
   minimax: minimaxFirewall,
   monday: mondayFirewall,

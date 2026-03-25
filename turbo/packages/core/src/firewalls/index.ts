@@ -76,6 +76,7 @@ import { productlaneFirewall } from "./productlane.generated";
 import { pushinatorFirewall } from "./pushinator.generated";
 import { qiitaFirewall } from "./qiita.generated";
 import { redditFirewall } from "./reddit.generated";
+import { reporteiFirewall } from "./reportei.generated";
 import { resendFirewall } from "./resend.generated";
 import { revenuecatFirewall } from "./revenuecat.generated";
 import { runwayFirewall } from "./runway.generated";
@@ -173,6 +174,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   pushinator: pushinatorFirewall,
   qiita: qiitaFirewall,
   reddit: redditFirewall,
+  reportei: reporteiFirewall,
   resend: resendFirewall,
   revenuecat: revenuecatFirewall,
   runway: runwayFirewall,

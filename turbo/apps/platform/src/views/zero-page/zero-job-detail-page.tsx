@@ -282,8 +282,8 @@ function JobConnectorsTab({
       addedConnectorsLoading={false}
       connectorsDirty={connectorsDirty}
       connectorsSaving={connectorsSaving}
-      agentName={agentId}
-      agentDisplayName={agentDisplayName}
+      agentId={agentId}
+      displayName={agentDisplayName}
       firewallPolicies={firewallPolicies}
       onFirewallPoliciesChange={setFirewallPolicies}
       onAddConnector={addConnector}
@@ -295,7 +295,7 @@ function JobConnectorsTab({
   );
 }
 
-function JobScheduleTab({ agentId }: { agentId: string }) {
+function JobScheduleTab({ displayName }: { displayName: string }) {
   const entriesLoadable = useLoadable(zeroJobScheduleEntries$);
   const scheduleError = useGet(zeroJobScheduleError$);
   const saveSchedule = useSet(saveZeroJobSchedule$);
@@ -317,7 +317,7 @@ function JobScheduleTab({ agentId }: { agentId: string }) {
 
   return (
     <ZeroScheduleTab
-      agentName={agentId}
+      displayName={displayName}
       entries={entries}
       scheduleError={scheduleError}
       onSave={saveSchedule}
@@ -514,12 +514,14 @@ export function ZeroJobDetailPage({
           />
         )}
 
-        {activeTab === "schedule" && <JobScheduleTab agentId={displayName} />}
+        {activeTab === "schedule" && (
+          <JobScheduleTab displayName={displayName} />
+        )}
 
         {activeTab === "profile" && (
           <ZeroSettingsTab
             key={`${displayName}\0${description}\0${resolvedSound}`}
-            agentName={displayName}
+            displayName={displayName}
             description={description ?? ""}
             sound={resolvedSound}
             saving={saving}

@@ -76,6 +76,7 @@ import { runwayFirewall } from "./runway.generated";
 import { sentryFirewall } from "./sentry.generated";
 import { serpapiFirewall } from "./serpapi.generated";
 import { shortioFirewall } from "./shortio.generated";
+import { similarwebFirewall } from "./similarweb.generated";
 import { slackFirewall } from "./slack.generated";
 import { stravaFirewall } from "./strava.generated";
 import { stripeFirewall } from "./stripe.generated";
@@ -164,6 +165,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   sentry: sentryFirewall,
   serpapi: serpapiFirewall,
   shortio: shortioFirewall,
+  similarweb: similarwebFirewall,
   slack: slackFirewall,
   strava: stravaFirewall,
   stripe: stripeFirewall,

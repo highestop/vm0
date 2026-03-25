@@ -4,6 +4,7 @@ import type { OrgRole, ZeroCapability } from "@vm0/core";
 import { cliTokens } from "../../db/schema/cli-tokens";
 import {
   isSandboxToken,
+  isPatToken,
   verifySandboxToken,
   verifyZeroToken,
   verifyCliToken,
@@ -44,8 +45,35 @@ export async function getAuthContext(
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.substring(7); // Remove "Bearer "
 
+    // Check for PAT token (vm0_pat_ prefix — CLI personal access tokens)
+    if (isPatToken(token)) {
+      const cliAuth = verifyCliToken(token);
+      if (cliAuth) {
+        const resolved = await resolveCliTokenFromDb(cliAuth);
+        if (!resolved) return null;
+        if (resolved.orgId) {
+          const membership = await verifyMembershipCached(
+            resolved.orgId,
+            resolved.userId,
+          );
+          if (!membership) {
+            // User no longer a member — omit orgId to force resolveOrg rejection
+            return { userId: resolved.userId };
+          }
+          return {
+            userId: resolved.userId,
+            orgId: resolved.orgId,
+            orgRole: membership.role,
+          };
+        }
+        return { userId: resolved.userId, orgId: resolved.orgId };
+      }
+      return null;
+    }
+
     if (isSandboxToken(token)) {
-      // Try CLI JWT first (accepted on all endpoints, no capability gating)
+      // TODO: Remove vm0_sandbox_ CLI backward compat after transition (~June 2026)
+      // Try CLI JWT (backward compat: old vm0_sandbox_ prefix with scope "cli")
       const cliAuth = verifyCliToken(token);
       if (cliAuth) {
         const resolved = await resolveCliTokenFromDb(cliAuth);

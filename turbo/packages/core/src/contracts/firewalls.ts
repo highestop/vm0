@@ -131,6 +131,7 @@ const CONNECTOR_FIREWALL_REFS: Readonly<
   "hugging-face": ["hugging-face"],
   hume: ["hume"],
   imgur: ["imgur"],
+  instantly: ["instantly"],
   intercom: ["intercom"],
   atlassian: ["jira", "confluence"],
   jotform: ["jotform"],

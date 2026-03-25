@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useLoadable, useGet, useSet } from "ccstate-react";
 import { IconUpload } from "@tabler/icons-react";
 import {
@@ -27,6 +28,8 @@ import { detach, Reason } from "../../../../signals/utils.ts";
 import {
   profileName$,
   setProfileName$,
+  profileSlug$,
+  setProfileSlug$,
   profileSaving$,
   setProfileSaving$,
   profileLogoUrl$,
@@ -89,6 +92,9 @@ function ProfileSection({
   const name = useGet(profileName$);
   const setName = useSet(setProfileName$);
 
+  const slug = useGet(profileSlug$);
+  const setSlug = useSet(setProfileSlug$);
+
   const saving = useGet(profileSaving$);
   const setSaving = useSet(setProfileSaving$);
 
@@ -113,9 +119,12 @@ function ProfileSection({
   const logoLoaded = useGet(logoLoaded$);
   const setLogoLoaded = useSet(setLogoLoaded$);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const createClient = useGet(zeroClient$);
   const hasNameChange = name !== (org.name ?? "");
-  const hasChanges = hasNameChange || !!pendingLogoFile;
+  const hasSlugChange = slug !== (org.slug ?? "");
+  const hasChanges = hasNameChange || hasSlugChange || !!pendingLogoFile;
 
   const handleFileSelect = (file: File) => {
     setPendingLogoFile(file);
@@ -124,11 +133,13 @@ function ProfileSection({
 
   const handleDiscard = () => {
     setName(org.name ?? "");
+    setSlug(org.slug ?? "");
     if (pendingLogoPreview) {
       URL.revokeObjectURL(pendingLogoPreview);
     }
     setPendingLogoFile(null);
     setPendingLogoPreview(null);
+    setSaveError(null);
   };
 
   const handleSave = async () => {
@@ -136,6 +147,7 @@ function ProfileSection({
       return;
     }
     setSaving(true);
+    setSaveError(null);
     try {
       if (pendingLogoFile) {
         const result = await uploadLogo(fetchFn, pendingLogoFile);
@@ -146,13 +158,23 @@ function ProfileSection({
         setLogoUrl(result.logoUrl);
       }
 
-      if (hasNameChange) {
+      if (hasNameChange || hasSlugChange) {
         const client = createClient(zeroOrgContract);
-        const result = await client.update({ body: { name } });
+        const body: { name?: string; slug?: string; force?: boolean } = {};
+        if (hasNameChange) {
+          body.name = name;
+        }
+        if (hasSlugChange) {
+          body.slug = slug;
+          body.force = true;
+        }
+        const result = await client.update({ body });
         if (result.status !== 200) {
-          toast.error(
-            extractErrorMessage(result, `Failed to update (${result.status})`),
+          const message = extractErrorMessage(
+            result,
+            `Failed to update (${result.status})`,
           );
+          setSaveError(message);
           setSaving(false);
           return;
         }
@@ -274,27 +296,55 @@ function ProfileSection({
             </span>
           )}
         </div>
+        <div className="h-px bg-border/40 mx-5" />
+        {/* Slug row */}
+        <div className="flex items-center justify-between gap-4 px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">Slug</p>
+            <p className="text-[13px] text-muted-foreground mt-0.5">
+              URL-friendly identifier for the organization
+            </p>
+          </div>
+          {isAdmin ? (
+            <Input
+              id="org-slug"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              placeholder="organization-slug"
+              className="h-9 w-[220px] shrink-0 rounded-lg border-[0.7px] border-[hsl(var(--gray-400))]"
+            />
+          ) : (
+            <span className="text-sm text-foreground shrink-0">
+              {org.slug ?? ""}
+            </span>
+          )}
+        </div>
       </div>
 
       {hasChanges && isAdmin && (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            className="rounded-lg"
-            onClick={() => detach(handleSave(), Reason.DomCallback)}
-            disabled={saving}
-          >
-            {saving ? "Saving..." : "Save changes"}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="rounded-lg text-muted-foreground"
-            onClick={handleDiscard}
-            disabled={saving}
-          >
-            Discard
-          </Button>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="rounded-lg"
+              onClick={() => detach(handleSave(), Reason.DomCallback)}
+              disabled={saving}
+            >
+              {saving ? "Saving..." : "Save changes"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-lg text-muted-foreground"
+              onClick={handleDiscard}
+              disabled={saving}
+            >
+              Discard
+            </Button>
+          </div>
+          {saveError && (
+            <p className="text-[13px] text-destructive">{saveError}</p>
+          )}
         </div>
       )}
     </section>
@@ -529,6 +579,15 @@ function GeneralTabSkeleton() {
             <div className="min-w-0">
               <div className="h-4 w-10 rounded bg-muted/50 animate-pulse" />
               <div className="h-3 w-40 rounded bg-muted/30 animate-pulse mt-1.5" />
+            </div>
+            <div className="h-9 w-[220px] shrink-0 rounded-lg bg-muted/30 animate-pulse" />
+          </div>
+          <div className="h-px bg-border/40 mx-5" />
+          {/* Slug row */}
+          <div className="flex items-center justify-between gap-4 px-5 py-4">
+            <div className="min-w-0">
+              <div className="h-4 w-8 rounded bg-muted/50 animate-pulse" />
+              <div className="h-3 w-52 rounded bg-muted/30 animate-pulse mt-1.5" />
             </div>
             <div className="h-9 w-[220px] shrink-0 rounded-lg bg-muted/30 animate-pulse" />
           </div>

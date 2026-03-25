@@ -52,13 +52,13 @@ async function generateText(messages: ChatMessage[]): Promise<string | null> {
   }
 
   const data = (await response.json()) as OpenRouterResponse;
-  const content = data.choices[0]?.message?.content;
+  const content = data.choices[0]?.message?.content?.trim();
 
   if (!content) {
     throw new Error("OpenRouter returned empty content");
   }
 
-  return content.trim();
+  return content;
 }
 
 /**

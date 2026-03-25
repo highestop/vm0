@@ -73,6 +73,7 @@ import { pushinatorFirewall } from "./pushinator.generated";
 import { qiitaFirewall } from "./qiita.generated";
 import { redditFirewall } from "./reddit.generated";
 import { resendFirewall } from "./resend.generated";
+import { revenuecatFirewall } from "./revenuecat.generated";
 import { runwayFirewall } from "./runway.generated";
 import { sentryFirewall } from "./sentry.generated";
 import { serpapiFirewall } from "./serpapi.generated";
@@ -164,6 +165,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   qiita: qiitaFirewall,
   reddit: redditFirewall,
   resend: resendFirewall,
+  revenuecat: revenuecatFirewall,
   runway: runwayFirewall,
   sentry: sentryFirewall,
   serpapi: serpapiFirewall,

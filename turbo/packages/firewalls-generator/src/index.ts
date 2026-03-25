@@ -56,6 +56,7 @@ import { generate as generateOpenai } from "./openai";
 import { generate as generatePerplexity } from "./perplexity";
 import { generate as generatePlausible } from "./plausible";
 import { generate as generatePosthog } from "./posthog";
+import { generate as generateQiita } from "./qiita";
 import { generate as generateReddit } from "./reddit";
 import { generate as generateResend } from "./resend";
 import { generate as generateRunway } from "./runway";
@@ -129,6 +130,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   perplexity: generatePerplexity,
   plausible: generatePlausible,
   posthog: generatePosthog,
+  qiita: generateQiita,
   reddit: generateReddit,
   resend: generateResend,
   runway: generateRunway,

@@ -12,6 +12,7 @@ import { ahrefsFirewall } from "./ahrefs.generated";
 import { airtableFirewall } from "./airtable.generated";
 import { apifyFirewall } from "./apify.generated";
 import { asanaFirewall } from "./asana.generated";
+import { atlassianFirewall } from "./atlassian.generated";
 import { axiomFirewall } from "./axiom.generated";
 import { braveSearchFirewall } from "./brave-search.generated";
 import { brevoFirewall } from "./brevo.generated";
@@ -24,7 +25,6 @@ import { canvaFirewall } from "./canva.generated";
 import { clickupFirewall } from "./clickup.generated";
 import { closeFirewall } from "./close.generated";
 import { cloudflareFirewall } from "./cloudflare.generated";
-import { confluenceFirewall } from "./confluence.generated";
 import { cronlyticFirewall } from "./cronlytic.generated";
 import { customerIoFirewall } from "./customer-io.generated";
 import { deepseekFirewall } from "./deepseek.generated";
@@ -56,7 +56,6 @@ import { instagramFirewall } from "./instagram.generated";
 import { instantlyFirewall } from "./instantly.generated";
 import { intercomFirewall } from "./intercom.generated";
 import { intervalsIcuFirewall } from "./intervals-icu.generated";
-import { jiraFirewall } from "./jira.generated";
 import { jotformFirewall } from "./jotform.generated";
 import { larkFirewall } from "./lark.generated";
 import { lineFirewall } from "./line.generated";
@@ -118,6 +117,7 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   airtable: airtableFirewall,
   apify: apifyFirewall,
   asana: asanaFirewall,
+  atlassian: atlassianFirewall,
   axiom: axiomFirewall,
   "brave-search": braveSearchFirewall,
   brevo: brevoFirewall,
@@ -130,7 +130,6 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   clickup: clickupFirewall,
   close: closeFirewall,
   cloudflare: cloudflareFirewall,
-  confluence: confluenceFirewall,
   cronlytic: cronlyticFirewall,
   "customer-io": customerIoFirewall,
   deel: deelFirewall,
@@ -162,7 +161,6 @@ export const builtinFirewalls: Record<string, FirewallConfig> = {
   instantly: instantlyFirewall,
   intercom: intercomFirewall,
   "intervals-icu": intervalsIcuFirewall,
-  jira: jiraFirewall,
   jotform: jotformFirewall,
   lark: larkFirewall,
   line: lineFirewall,

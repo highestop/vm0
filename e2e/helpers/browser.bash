@@ -238,6 +238,32 @@ sign_in_via_token() {
 }
 
 # ---------------------------------------------------------------------------
+# url_is_on_app — Check if a URL's hostname matches the APP_URL hostname
+# Compares against the derived APP_URL rather than assuming "app." prefix,
+# so it works for all environments (app.vm7.ai, staging-app.vm6.ai, etc.)
+# Requires APP_URL to be set (call derive_app_url first).
+# ---------------------------------------------------------------------------
+url_is_on_app() {
+  local url="$1"
+  local url_host app_host
+  url_host=$(echo "$url" | sed -n 's|.*://\([^/:]*\).*|\1|p')
+  app_host=$(echo "$APP_URL" | sed -n 's|.*://\([^/:]*\).*|\1|p')
+  [[ "$url_host" == "$app_host" ]]
+}
+
+# ---------------------------------------------------------------------------
+# navigate_to_app_page — Navigate to a path on the platform app domain
+# Usage: navigate_to_app_page "/team"
+# ---------------------------------------------------------------------------
+navigate_to_app_page() {
+  local path="$1"
+  local app_url
+  app_url="$(derive_app_url)"
+  agent-browser open "${app_url}${path}" --ignore-https-errors
+  agent-browser wait 3000
+}
+
+# ---------------------------------------------------------------------------
 # wait_for_text — Wait for text to appear on page (case-insensitive)
 # Usage: wait_for_text "some text" [timeout_secs]
 # ---------------------------------------------------------------------------

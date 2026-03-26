@@ -11,7 +11,7 @@ import {
 } from "../utils.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { logger } from "../log.ts";
-import { setupPollingLoop$, type PageResult } from "./polling.ts";
+import { setupPollingLoop$, type PagedRunEvents } from "./polling.ts";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
 import {
   navigateToZeroSession$,
@@ -52,8 +52,8 @@ function isResultEventData(data: unknown): data is { result: string } {
 
 /** Scan telemetry event pages for the last "result" event content. */
 async function extractResultFromEvents(
-  pages: Computed<Promise<PageResult>>[],
-  get: (c: Computed<Promise<PageResult>>) => Promise<PageResult>,
+  pages: Computed<Promise<PagedRunEvents>>[],
+  get: (c: Computed<Promise<PagedRunEvents>>) => Promise<PagedRunEvents>,
 ): Promise<{ result: string; summaries: string[] }> {
   let result = "";
   const allEvents: AgentEvent[] = [];
@@ -227,7 +227,7 @@ export const zeroCurrentSessionId$ = computed((get) => get(internalSessionId$));
 const internalActiveRunId$ = state<string | null>(null);
 const internalRunStatus$ = state<LogStatus | null>(null);
 const internalRunError$ = state<string | null>(null);
-const internalRunEvents$ = state<Computed<Promise<PageResult>>[]>([]);
+const internalRunEvents$ = state<Computed<Promise<PagedRunEvents>>[]>([]);
 
 /** Whether the agent is currently busy (derived from loop promise). */
 export const zeroChatSending$ = computed(
@@ -966,13 +966,10 @@ export const loadSessionFromSnapshot$ = command(
     // so polling can mutate the assistant placeholder (snapshot is immutable).
     if (snapshot.activeRunId) {
       set(internalLocalMessages$, snapshot.activeRunMessages);
-      const resumeSignal = set(resetSending$);
-      set(startLoop$, { runId: snapshot.activeRunId }, resumeSignal).catch(
-        (error: unknown) => {
-          if (!isAbortError(error)) {
-            L.error("startLoop error during snapshot resume:", error);
-          }
-        },
+      const resumeSignal = set(resetSending$, signal);
+      detach(
+        set(startLoop$, { runId: snapshot.activeRunId }, resumeSignal),
+        Reason.Daemon,
       );
     }
   },

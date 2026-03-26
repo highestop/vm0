@@ -55,6 +55,7 @@ export function buildAgentToolsPrompt(): string {
     "# Agent Tools",
     "You have access to the Zero CLI. Run commands with: `npx -p @vm0/cli zero <command>`",
     "- When you need to discover available commands, run `zero --help`.",
+    '- When you need to delegate a task to a teammate agent, first discover teammates with `zero agent list`, then run `zero run <agent-id> "your task description"`. To continue a previous delegation, use `zero run continue <session-id> "follow-up prompt"`.',
     "- When you need to schedule or manage recurring tasks, use `zero schedule`. Do NOT use /loop or cron tools (CronCreate, CronList, CronDelete) — they are not available.",
     '- When you need to ask the user a question, use `zero ask-user question` with at least one `--option` flag. Do NOT use the AskUserQuestion tool — it is not available. Example: `zero ask-user question "Pick one" --option "Yes" --option "No"`',
     "- When you need to send a Slack message, use `zero slack message send`. Never use SLACK_TOKEN directly — it's a user token.",

@@ -28,6 +28,7 @@ const log = logger("slack-org:mention");
 interface OrgMentionContext {
   workspaceId: string;
   channelId: string;
+  channelType?: string;
   userId: string;
   messageText: string;
   messageTs: string;
@@ -180,6 +181,13 @@ export async function handleOrgMention(
     userContext,
     userId: connection.vm0UserId,
     botUserId,
+    channelId: context.channelId,
+    channelType:
+      context.channelType === "im"
+        ? "dm"
+        : context.channelType === "mpim"
+          ? "group_dm"
+          : "channel",
     callbackContext,
   });
 

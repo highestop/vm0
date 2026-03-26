@@ -32,7 +32,6 @@ import {
 } from "./schedule-dialog.tsx";
 import { ScheduleCalendarView } from "./schedule-calendar-view.tsx";
 import { ScheduleListView } from "./schedule-list-view.tsx";
-import { agentDisplayName$ } from "../../signals/zero-page/zero-agent-name.ts";
 import { agentsList$ } from "../../signals/zero-page/agents-list.ts";
 import { COMMON_TIMEZONES } from "../../signals/zero-page/cron.ts";
 import { detach, Reason } from "../../signals/utils.ts";
@@ -58,9 +57,6 @@ export type CombinedEntry = ScheduleEntry & {
 
 export function buildCombinedSchedule(
   entries: OrgScheduleEntry[],
-  agentName: string,
-  defaultComposeId: string | null,
-  nameToDisplay: Map<string, string>,
 ): CombinedEntry[] {
   return entries.map((e) => ({
     id: e.id,
@@ -73,10 +69,7 @@ export function buildCombinedSchedule(
     slackChannelId: e.slackChannelId,
     name: e.name,
     intervalSeconds: e.intervalSeconds,
-    agentLabel:
-      e.agentId === defaultComposeId
-        ? agentName
-        : (nameToDisplay.get(e.agentId) ?? e.agentId),
+    agentLabel: e.displayName ?? e.agentId,
     agentId: e.agentId,
     timezone: e.timezone,
     nextRunAt: e.nextRunAt,
@@ -398,10 +391,6 @@ function ScheduleCalendarSkeleton() {
 // ---------------------------------------------------------------------------
 
 export function ZeroSchedulePage() {
-  const displayNameLoadable = useLoadable(agentDisplayName$);
-  const displayName =
-    displayNameLoadable.state === "hasData" ? displayNameLoadable.data : "Zero";
-
   const statusLoadable = useLoadable(zeroOnboardingStatus$);
   const defaultComposeId =
     statusLoadable.state === "hasData"
@@ -414,9 +403,6 @@ export function ZeroSchedulePage() {
 
   const agentsLoadable = useLoadable(agentsList$);
   const agents = agentsLoadable.state === "hasData" ? agentsLoadable.data : [];
-  const nameToDisplay = new Map(
-    agents.filter((a) => a.displayName).map((a) => [a.id, a.displayName!]),
-  );
   const loaded = useGet(allOrgSchedulesLoaded$);
   const isInitialLoading = !loaded;
 
@@ -439,12 +425,7 @@ export function ZeroSchedulePage() {
     null,
   );
 
-  const combinedSchedule = buildCombinedSchedule(
-    entries,
-    displayName,
-    defaultComposeId,
-    nameToDisplay,
-  );
+  const combinedSchedule = buildCombinedSchedule(entries);
 
   const agentOrder = [
     ...new Set(combinedSchedule.map((e) => e.agentLabel)),

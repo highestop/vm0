@@ -396,6 +396,7 @@ export interface OrgScheduleEntry {
   timezone: string;
   intervalSeconds: number | null;
   agentId: string;
+  displayName: string | null;
   nextRunAt: string | null;
   lastRunAt: string | null;
 }
@@ -426,6 +427,7 @@ export const allOrgScheduleEntries$ = computed((get) => {
         timezone: s.timezone,
         intervalSeconds: s.intervalSeconds,
         agentId: s.agentId,
+        displayName: s.displayName,
         nextRunAt: s.nextRunAt,
         lastRunAt: s.lastRunAt,
       }),

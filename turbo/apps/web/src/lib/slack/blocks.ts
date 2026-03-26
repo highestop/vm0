@@ -419,11 +419,13 @@ function buildMarkdownMessage(content: string): (Block | KnownBlock)[] {
  *
  * @param content - The agent's response content
  * @param logsUrl - Optional URL to the run logs
+ * @param triggeredBy - Optional attribution text shown as a separate context block below a divider
  * @returns Block Kit blocks with response content
  */
 export function buildAgentResponseMessage(
   content: string,
   logsUrl?: string,
+  triggeredBy?: string,
 ): (Block | KnownBlock)[] {
   const blocks: (Block | KnownBlock)[] = [...buildMarkdownMessage(content)];
 
@@ -436,6 +438,19 @@ export function buildAgentResponseMessage(
         {
           type: "mrkdwn",
           text: `:clipboard: <${logsUrl}|Audit>`,
+        },
+      ],
+    });
+  }
+
+  if (triggeredBy) {
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: triggeredBy,
         },
       ],
     });

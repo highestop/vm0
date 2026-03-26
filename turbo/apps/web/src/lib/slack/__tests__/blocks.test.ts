@@ -169,6 +169,47 @@ describe("buildAgentResponseMessage", () => {
     ) as MarkdownBlock;
     expect(markdownBlock.text).toBe(content);
   });
+
+  it("should show triggeredBy as separate context block below audit with divider", () => {
+    const blocks = buildAgentResponseMessage(
+      "Response text",
+      "https://app.vm0.ai/activity/run-123",
+      'triggered by schedule "Send a greeting message daily at 9 AM"',
+    );
+
+    // Should have: markdown, audit context, divider, attribution context
+    const dividerBlocks = blocks.filter((b) => b.type === "divider");
+    expect(dividerBlocks).toHaveLength(1);
+
+    const contextBlocks = blocks.filter((b) => b.type === "context");
+    expect(contextBlocks).toHaveLength(2);
+
+    // First context: audit link only
+    const auditText = (contextBlocks[0] as { elements: { text: string }[] })
+      .elements[0]!.text;
+    expect(auditText).toContain("Audit");
+    expect(auditText).not.toContain("triggered by");
+
+    // Second context: attribution (after divider)
+    const attrText = (contextBlocks[1] as { elements: { text: string }[] })
+      .elements[0]!.text;
+    expect(attrText).toBe(
+      'triggered by schedule "Send a greeting message daily at 9 AM"',
+    );
+  });
+
+  it("should not add attribution block when triggeredBy is not provided", () => {
+    const blocks = buildAgentResponseMessage(
+      "Response text",
+      "https://app.vm0.ai/activity/run-123",
+    );
+
+    const contextBlocks = blocks.filter((b) => b.type === "context");
+    expect(contextBlocks).toHaveLength(1);
+    expect(
+      (contextBlocks[0] as { elements: { text: string }[] }).elements[0]!.text,
+    ).toContain("Audit");
+  });
 });
 
 describe("buildAppHomeView", () => {

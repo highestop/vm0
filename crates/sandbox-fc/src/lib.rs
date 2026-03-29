@@ -3,6 +3,7 @@ mod balloon;
 mod command;
 mod config;
 pub mod control;
+mod cow_pool;
 mod factory;
 mod network;
 mod paths;

@@ -161,6 +161,73 @@ impl CowDevice {
         })
     }
 
+    /// Create a COW device from a pre-attached loop device.
+    ///
+    /// Used by the COW pool which pre-warms loop devices in the background.
+    /// Only performs: `dmsetup create` + open holder fd.
+    ///
+    /// `id` is the caller-provided identifier (typically the sandbox ID)
+    /// used in the dm target name (`cow-{id}`).
+    /// `cow_loop` is the pre-attached loop device (with holder fd).
+    /// `cow_file` is the path to the COW file on disk.
+    /// `base_loop` is the shared read-only base loop device path.
+    /// `sectors` is the base image size in 512-byte sectors.
+    ///
+    /// On failure the loop device is detached (best-effort) since the
+    /// caller has given up ownership by passing it by value.
+    pub fn create_from_loop(
+        id: String,
+        mut cow_loop: LoopDevice,
+        cow_file: PathBuf,
+        base_loop: &Path,
+        sectors: u64,
+    ) -> Result<Self> {
+        let chunk_size = DEFAULT_CHUNK_SIZE;
+        let cow_name = format!("cow-{id}");
+
+        let base_loop_str = base_loop.to_string_lossy();
+        let cow_loop_str = cow_loop.path().to_string_lossy().into_owned();
+        let device_path = match dmsetup::create_snapshot(
+            &cow_name,
+            &base_loop_str,
+            &cow_loop_str,
+            sectors,
+            chunk_size,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = cow_loop.detach();
+                return Err(e);
+            }
+        };
+
+        let device_holder = match fs::File::open(&device_path) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = dmsetup::remove(&cow_name);
+                let _ = cow_loop.detach();
+                return Err(BlockCowError::Io(e));
+            }
+        };
+
+        info!(
+            device = %device_path.display(),
+            id,
+            sectors,
+            chunk_size,
+            "COW device created from pre-warmed loop"
+        );
+
+        Ok(Self {
+            id,
+            device_path,
+            cow_loop,
+            cow_file,
+            _device_holder: Some(device_holder),
+            active: true,
+        })
+    }
+
     /// Path to the block device (e.g. `/dev/mapper/cow-{id}`).
     ///
     /// Pass this to Firecracker as `path_on_host` for the rootfs drive.

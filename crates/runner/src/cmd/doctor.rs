@@ -964,8 +964,13 @@ async fn detect_block_cow_orphans(
             // Cow loop: orphaned if no corresponding dm target exists.
             // The dm target (`cow-{id}`) is created before the cow loop and
             // removed after it, so absence means the sandbox is fully torn down.
+            //
+            // Exception: pre-warmed CowPool slots have a loop device with no
+            // dm target yet but are actively managed by a running runner.
+            // If the owning runner process is still alive, the loop device
+            // is managed by its pool — not orphaned.
             let expected = format!("cow-{sandbox_id}");
-            !dm_targets.contains(expected.as_str())
+            !dm_targets.contains(expected.as_str()) && !runner_is_alive(&runner_name, reports)
         } else {
             // Base loop (rootfs.ext4): shared via BaseLoopCache, orphaned only
             // when every runner process on the host is dead.
@@ -1071,6 +1076,19 @@ fn find_runner_for_loop(backing: &str, reports: &[RunnerReport]) -> Option<Strin
             None
         }
     })
+}
+
+/// Check if the runner that owns a loop device is still alive.
+///
+/// Used to distinguish pre-warmed CowPool slots (owned by a living runner)
+/// from leaked loop devices (runner crashed or exited).
+fn runner_is_alive(runner_name: &Option<String>, reports: &[RunnerReport]) -> bool {
+    let Some(name) = runner_name else {
+        return false;
+    };
+    reports
+        .iter()
+        .any(|r| r.name.as_deref() == Some(name.as_str()) && pid_exists(r.pid))
 }
 
 /// Check if a loop device still exists.
@@ -1690,5 +1708,10 @@ Major, minor:      253, 0";
     #[test]
     fn extract_sandbox_id_returns_none_for_unrelated() {
         assert_eq!(extract_sandbox_id("/var/lib/snapd/snaps/foo.snap"), None);
+    }
+
+    #[test]
+    fn runner_is_alive_no_runner() {
+        assert!(!runner_is_alive(&None, &[]));
     }
 }

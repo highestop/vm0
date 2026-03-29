@@ -70,6 +70,10 @@ impl HomePaths {
         Self { root }
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn bin_dir(&self) -> PathBuf {
         self.root.join("bin")
     }
@@ -154,7 +158,7 @@ impl RootfsPaths {
     }
 
     pub fn rootfs(&self) -> PathBuf {
-        self.dir.join("rootfs.squashfs")
+        self.dir.join("rootfs.ext4")
     }
 
     /// All files that must exist for the build to be considered complete.

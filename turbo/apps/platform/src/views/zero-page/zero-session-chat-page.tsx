@@ -43,17 +43,15 @@ import {
 } from "../../signals/zero-page/zero-pinned-agents.ts";
 import {
   zeroChatMessages$,
-  zeroChatSending$,
+  allFinished$,
   zeroChatInput$,
   setZeroChatInput$,
   clearZeroChatInput$,
   sendZeroChatMessage$,
   type ZeroChatMessage,
-  zeroChatRunSummaries$,
-  zeroChatRunStatus$,
-  zeroChatQueuePosition$,
+  type UserChatMessage,
+  type AssistantChatMessage,
   cancelActiveRun$,
-  zeroChatThinkingMessage$,
 } from "../../signals/zero-page/zero-chat.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
 import { Link } from "../router/link.tsx";
@@ -89,7 +87,9 @@ export function ZeroSessionChatPage({
   const messagesLoadable = useLoadable(zeroChatMessages$);
   const messages =
     messagesLoadable.state === "hasData" ? messagesLoadable.data : [];
-  const sending = useGet(zeroChatSending$);
+  const allFinishedLoadable = useLastLoadable(allFinished$);
+  const sending =
+    allFinishedLoadable.state === "hasData" ? !allFinishedLoadable.data : false;
   const sessionError =
     messagesLoadable.state === "hasError"
       ? messagesLoadable.error instanceof Error
@@ -351,7 +351,7 @@ function isImageFilename(filename: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(filename);
 }
 
-function UserMessage({ message }: { message: ZeroChatMessage }) {
+function UserMessage({ message }: { message: UserChatMessage }) {
   const { cleanContent, parsed } = parseInlineAttachments(message.content);
   // Preserve user-entered line breaks: CommonMark collapses single newlines
   // into spaces, so convert each \n to a hard line break (two trailing spaces + \n).
@@ -437,16 +437,46 @@ function deduplicateSummaries(summaries: string[]): string[] {
   return result;
 }
 
-function RunActivityLine() {
-  const summariesLoadable = useLastLoadable(zeroChatRunSummaries$);
+/** Live run activity rendered from a message's own runLoop signals. */
+function MessageRunActivityLine({
+  message,
+}: {
+  message: AssistantChatMessage;
+}) {
+  const summariesLoadable = useLastLoadable(message.summaries$!);
   const rawSummaries =
     summariesLoadable.state === "hasData" ? summariesLoadable.data : [];
-  const runStatus = useGet(zeroChatRunStatus$);
-  const queuePosition = useGet(zeroChatQueuePosition$);
+  const detailLoadable = useLastLoadable(message.runLoop!.detail$);
+  const runStatus =
+    detailLoadable.state === "hasData" ? detailLoadable.data.status : null;
+  const queueLoadable = useLastLoadable(message.runLoop!.queuePosition$);
+  const queuePosition =
+    queueLoadable.state === "hasData" ? queueLoadable.data : 0;
   const isQueued = runStatus === "queued";
+  const thinkingMsg = useGet(message.runLoop!.thinkingMessage$);
+  return (
+    <RunActivityLineView
+      summaries={rawSummaries}
+      isQueued={isQueued}
+      queuePosition={queuePosition}
+      thinkingMsg={thinkingMsg}
+    />
+  );
+}
 
-  const thinkingMsg = useGet(zeroChatThinkingMessage$);
+/** Live run activity rendered from global signals (legacy path). */
 
+function RunActivityLineView({
+  summaries: rawSummaries,
+  isQueued,
+  queuePosition,
+  thinkingMsg,
+}: {
+  summaries: string[];
+  isQueued: boolean;
+  queuePosition: number;
+  thinkingMsg: string;
+}) {
   if (isQueued) {
     return (
       <div className="flex items-center gap-2 min-w-0">
@@ -610,11 +640,74 @@ function CollapsibleTimeline({
 }
 
 interface AssistantMessageProps {
-  message: ZeroChatMessage;
+  message: AssistantChatMessage;
   zeroAvatarSrc: string;
 }
 
 function AssistantMessage({ message, zeroAvatarSrc }: AssistantMessageProps) {
+  // Delegate to reactive variant when the message carries its own runLoop signals
+  if (message.result$) {
+    return (
+      <ReactiveAssistantMessage
+        message={message}
+        zeroAvatarSrc={zeroAvatarSrc}
+      />
+    );
+  }
+  return (
+    <StaticAssistantMessage message={message} zeroAvatarSrc={zeroAvatarSrc} />
+  );
+}
+
+/** Assistant message with reactive result$/summaries$/detail$ from runLoop. */
+function ReactiveAssistantMessage({
+  message,
+  zeroAvatarSrc,
+}: AssistantMessageProps) {
+  const resultLoadable = useLastLoadable(message.result$!);
+  const content = resultLoadable.state === "hasData" ? resultLoadable.data : "";
+  const summariesLoadable = useLastLoadable(message.summaries$!);
+  const summaries =
+    summariesLoadable.state === "hasData" ? summariesLoadable.data : [];
+  const detailLoadable = useLastLoadable(message.runLoop!.detail$);
+  const detail =
+    detailLoadable.state === "hasData" ? detailLoadable.data : null;
+  const isFailed =
+    detail?.status === "failed" ||
+    detail?.status === "timeout" ||
+    detail?.status === "cancelled";
+
+  // Build an enriched message with reactive content for the static renderer
+  const enrichedMessage: AssistantChatMessage = {
+    ...message,
+    content,
+    summaries: summaries.length > 0 ? summaries : message.summaries,
+    status: detail?.status ?? undefined,
+    error: isFailed
+      ? (detail?.error ??
+        (detail?.status === "timeout"
+          ? "Run timed out"
+          : detail?.status === "cancelled"
+            ? "Run cancelled."
+            : "Run failed"))
+      : undefined,
+  };
+  return (
+    <StaticAssistantMessage
+      message={enrichedMessage}
+      zeroAvatarSrc={zeroAvatarSrc}
+      renderActivityLine={
+        !isFailed ? <MessageRunActivityLine message={message} /> : undefined
+      }
+    />
+  );
+}
+
+function StaticAssistantMessage({
+  message,
+  zeroAvatarSrc,
+  renderActivityLine,
+}: AssistantMessageProps & { renderActivityLine?: React.ReactNode }) {
   const setOrgManageOpen = useSet(setOrgManageDialogOpen$);
   const setTab = useSet(setActiveTab$);
   const pageSignal = useGet(pageSignal$);
@@ -642,46 +735,49 @@ function AssistantMessage({ message, zeroAvatarSrc }: AssistantMessageProps) {
     detach(copyMessage(message.id, message.content), Reason.DomCallback);
   };
 
-  const logButton = message.runId ? (
-    <div className="flex py-2 -ml-1 gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-      <TooltipProvider delayDuration={300}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              pathname="/activity/:runId"
-              options={{ pathParams: { runId: message.runId } }}
-              className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
-              aria-label="View run logs"
-            >
-              <IconChartLine size={18} stroke={1.5} />
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">View activity logs</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      {message.content && (
+  const logButton = message.legacyRunId ? (
+    <div className="grid grid-cols-[28px_1fr] sm:grid-cols-[36px_1fr] gap-2.5">
+      <div />
+      <div className="flex py-2 gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleCopy}
+              <Link
+                pathname="/activity/:runId"
+                options={{ pathParams: { runId: message.legacyRunId } }}
                 className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
-                aria-label="Copy message"
+                aria-label="View run logs"
               >
-                {copied ? (
-                  <IconCheck size={18} stroke={1.5} />
-                ) : (
-                  <IconCopy size={18} stroke={1.5} />
-                )}
-              </button>
+                <IconChartLine size={18} stroke={1.5} />
+              </Link>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {copied ? "Copied!" : "Copy message"}
-            </TooltipContent>
+            <TooltipContent side="bottom">View activity logs</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-      )}
+        {message.content && (
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
+                  aria-label="Copy message"
+                >
+                  {copied ? (
+                    <IconCheck size={18} stroke={1.5} />
+                  ) : (
+                    <IconCopy size={18} stroke={1.5} />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {copied ? "Copied!" : "Copy message"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+      </div>
     </div>
   ) : null;
 
@@ -795,7 +891,15 @@ function AssistantMessage({ message, zeroAvatarSrc }: AssistantMessageProps) {
       <div className="grid grid-cols-[28px_1fr] sm:grid-cols-[36px_1fr] gap-2.5 -ml-[38px] sm:-ml-[46px] items-start">
         {avatar}
         <div className="zero-chat-bubble-assistant rounded-xl py-4 text-sm leading-relaxed min-w-0 overflow-hidden">
-          <RunActivityLine />
+          {renderActivityLine ?? (
+            <div className="flex items-center gap-2 min-w-0">
+              <IconLoader2
+                size={14}
+                className="animate-spin text-foreground/50 shrink-0"
+              />
+              <p className="zero-shimmer-text text-xs truncate">Thinking...</p>
+            </div>
+          )}
         </div>
       </div>
       {logButton}

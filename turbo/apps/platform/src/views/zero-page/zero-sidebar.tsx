@@ -46,13 +46,13 @@ import { clerk$, user$ } from "../../signals/auth.ts";
 import { detach, Reason } from "../../signals/utils.ts";
 import {
   zeroActiveId$,
-  zeroSessionId$,
+  chatThreadId$,
   zeroChatAgentId$,
   zeroSidebarCollapsed$,
   setZeroSidebarCollapsed$,
   handleZeroNavSelect$,
   handleZeroAccountAction$,
-  navigateToZeroSession$,
+  navigateToChat$,
 } from "../../signals/zero-page/zero-nav.ts";
 import {
   agentDisplayName$,
@@ -61,8 +61,6 @@ import {
 import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
 import {
   zeroSessionList$,
-  zeroSessionListLoading$,
-  zeroSessionListError$,
   createNewChatSession$,
   zeroCreatingNewSession$,
 } from "../../signals/zero-page/zero-chat.ts";
@@ -927,13 +925,22 @@ export function ZeroSidebar() {
   const setSidebarCollapsed = useSet(setZeroSidebarCollapsed$);
   const onCollapse = () => setSidebarCollapsed(!collapsed);
   const onSelect = useSet(handleZeroNavSelect$);
-  const navigateToSession = useSet(navigateToZeroSession$);
-  const onRecentSelect = (id: string) => navigateToSession(id);
-  const selectedRecentId = useGet(zeroSessionId$);
+  const navigateToChat = useSet(navigateToChat$);
+  const onRecentSelect = (chatThreadId: string) => navigateToChat(chatThreadId);
+  const selectedRecentId = useGet(chatThreadId$);
   const onAccountAction = useSet(handleZeroAccountAction$);
-  const recentSessions = useGet(zeroSessionList$);
-  const recentSessionsLoading = useGet(zeroSessionListLoading$);
-  const recentSessionsError = useGet(zeroSessionListError$);
+  const recentSessionsLoadable = useLastLoadable(zeroSessionList$);
+  const recentSessions =
+    recentSessionsLoadable.state === "hasData"
+      ? recentSessionsLoadable.data
+      : [];
+  const recentSessionsLoading = recentSessionsLoadable.state === "loading";
+  const recentSessionsError =
+    recentSessionsLoadable.state === "hasError"
+      ? recentSessionsLoadable.error instanceof Error
+        ? recentSessionsLoadable.error.message
+        : "Failed to load chats"
+      : null;
   const createNewChat = useSet(createNewChatSession$);
   const creatingNewSession = useGet(zeroCreatingNewSession$);
   const pageSignal = useGet(pageSignal$);

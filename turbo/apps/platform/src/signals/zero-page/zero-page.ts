@@ -1,5 +1,5 @@
 import { command, state } from "ccstate";
-import { navigateTo$ } from "../route.ts";
+import { detachedNavigateTo$ } from "../route.ts";
 import { defaultAgentId$ } from "./zero-agent-name.ts";
 import { zeroSubagents$ } from "./zero-agents.ts";
 import { switchActiveAgent$ } from "./zero-chat.ts";
@@ -57,7 +57,7 @@ export const resolveAgentById$ = command(
           // Unknown agent → redirect to default
           await set(switchActiveAgent$, null, signal);
           if (rawDefaultName) {
-            set(navigateTo$, "/talk/:agentId", {
+            set(detachedNavigateTo$, "/talk/:agentId", {
               pathParams: { agentId: rawDefaultName },
               replace: true,
             });

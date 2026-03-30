@@ -410,7 +410,7 @@ export {
 } from "./firewalls";
 
 export {
-  expandFirewallConfigs,
+  resolveFirewallSelections,
   collectAndValidatePermissions,
   validateRule,
   type FirewallSelection,

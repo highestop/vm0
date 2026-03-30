@@ -132,100 +132,80 @@ export function collectAndValidatePermissions(
 }
 
 /**
- * Expand experimental_firewalls from map format to ExpandedFirewallConfig[] in-place.
- * Validates permission names and filters api_entries to only include selected permissions.
- * Mutates the config object so the API receives pre-expanded firewall objects.
+ * Resolve a firewall selections map to expanded configs.
+ * Pure function: takes a map of firewall refs → permission selections and returns
+ * fully resolved ExpandedFirewallConfig[].
  *
- * Input (from vm0.yaml):  Record<ref, { permissions: string[] | "all" }>
- * Output (for API):       ExpandedFirewallConfig[]
+ * Input:  Record<ref, { permissions: string[] | "all" }>
+ * Output: ExpandedFirewallConfig[]
  *
- * The union type in the `as` cast covers both shapes since this function
- * transforms the field from one to the other. Already-expanded arrays are
- * skipped via the Array.isArray guard.
+ * Validates permission names, filters api_entries to only include selected permissions,
+ * and drops entries with no remaining APIs.
  *
- * Supports GitHub-hosted YAML configs (by bare name or full GitHub URL).
- *
- * @param config - Compose config object to mutate
+ * @param selections - Map of firewall refs to permission selections
  * @param fetchFn - Optional fetch function for HTTP requests (injectable for tests)
  */
-export async function expandFirewallConfigs(
-  config: unknown,
+export async function resolveFirewallSelections(
+  selections: Record<string, FirewallSelection>,
   fetchFn?: FetchFn,
-): Promise<void> {
-  const compose = config as {
-    agents?: Record<
-      string,
-      {
-        experimental_firewalls?:
-          | Record<string, FirewallSelection>
-          | ExpandedFirewallConfig[];
-      }
-    >;
-  };
-  if (!compose?.agents) return;
+): Promise<ExpandedFirewallConfig[]> {
+  const expanded: ExpandedFirewallConfig[] = [];
 
-  for (const agent of Object.values(compose.agents)) {
-    const configs = agent.experimental_firewalls;
-    if (!configs) continue;
-    // Skip if already expanded (array, not map)
-    if (Array.isArray(configs)) continue;
+  // Resolve all firewall configs in parallel
+  const entries = Object.entries(selections);
+  if (entries.length === 0) return expanded;
 
-    const expanded: ExpandedFirewallConfig[] = [];
+  const resolvedConfigs = await Promise.all(
+    entries.map(([ref]) => fetchFirewallConfig(ref, fetchFn)),
+  );
 
-    // Resolve all firewall configs in parallel
-    const entries = Object.entries(configs);
-    const resolvedConfigs = await Promise.all(
-      entries.map(([ref]) => fetchFirewallConfig(ref, fetchFn)),
+  for (let i = 0; i < entries.length; i++) {
+    const [ref, selection] = entries[i]!;
+    const serviceConfig = resolvedConfigs[i]!;
+    const availablePermissions = collectAndValidatePermissions(
+      ref,
+      serviceConfig,
     );
 
-    for (let i = 0; i < entries.length; i++) {
-      const [ref, selection] = entries[i]!;
-      const serviceConfig = resolvedConfigs[i]!;
-      const availablePermissions = collectAndValidatePermissions(
-        ref,
-        serviceConfig,
-      );
-
-      // Validate selected permissions exist
-      if (selection.permissions !== "all") {
-        for (const name of selection.permissions) {
-          if (!availablePermissions.has(name)) {
-            const available = [...availablePermissions].join(", ");
-            throw new Error(
-              `Permission "${name}" does not exist in firewall "${serviceConfig.name}" (ref "${ref}"). Available: ${available}`,
-            );
-          }
+    // Validate selected permissions exist
+    if (selection.permissions !== "all") {
+      for (const name of selection.permissions) {
+        if (!availablePermissions.has(name)) {
+          const available = [...availablePermissions].join(", ");
+          throw new Error(
+            `Permission "${name}" does not exist in firewall "${serviceConfig.name}" (ref "${ref}"). Available: ${available}`,
+          );
         }
       }
-
-      // Filter api_entries: keep only selected permissions, drop empty entries
-      const selectedSet =
-        selection.permissions === "all" ? null : new Set(selection.permissions);
-
-      const filteredApis = serviceConfig.apis
-        .map((api) => ({
-          ...api,
-          permissions: selectedSet
-            ? (api.permissions ?? []).filter((p) => selectedSet.has(p.name))
-            : api.permissions,
-        }))
-        .filter((api) => (api.permissions ?? []).length > 0);
-
-      // Drop firewall config entirely if no api_entries remain
-      if (filteredApis.length === 0) continue;
-
-      const entry: ExpandedFirewallConfig = {
-        name: serviceConfig.name,
-        ref,
-        apis: filteredApis,
-      };
-      if (serviceConfig.description !== undefined)
-        entry.description = serviceConfig.description;
-      if (serviceConfig.placeholders !== undefined)
-        entry.placeholders = serviceConfig.placeholders;
-      expanded.push(entry);
     }
 
-    agent.experimental_firewalls = expanded;
+    // Filter api_entries: keep only selected permissions, drop empty entries
+    const selectedSet =
+      selection.permissions === "all" ? null : new Set(selection.permissions);
+
+    const filteredApis = serviceConfig.apis
+      .map((api) => ({
+        ...api,
+        permissions: selectedSet
+          ? (api.permissions ?? []).filter((p) => selectedSet.has(p.name))
+          : api.permissions,
+      }))
+      .filter((api) => (api.permissions ?? []).length > 0);
+
+    // Drop firewall config entirely if no api_entries remain
+    if (filteredApis.length === 0) continue;
+
+    const entry: ExpandedFirewallConfig = {
+      name: serviceConfig.name,
+      ref,
+      apis: filteredApis,
+    };
+    if (serviceConfig.description !== undefined)
+      entry.description = serviceConfig.description;
+    if (serviceConfig.placeholders !== undefined)
+      entry.placeholders = serviceConfig.placeholders;
+    expanded.push(entry);
   }
+
+  return expanded;
 }

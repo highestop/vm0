@@ -25,7 +25,6 @@ import {
   resolveFirewallBaseUrlVars,
 } from "@vm0/core";
 import { agentComposeVersions } from "../../db/schema/agent-compose";
-import type { AgentComposeYaml } from "../../types/agent-compose";
 import { badRequest, notFound, providerIncompatible } from "../errors";
 import { getOrgData } from "../org/org-cache-service";
 import { logger } from "../logger";
@@ -795,9 +794,6 @@ async function resolveSecretsAndEnvironment(
     ? getModelProviderFirewall(modelProviderFirewallType)
     : undefined;
 
-  // Expand environment variables from compose config.
-  // Model provider env vars are passed as additionalEnvironment so they go through
-  // the same servicePlaceholders logic (secret-derived values use ${{ secrets.X }} templates).
   // Build connector firewall configs for placeholder injection.
   // connectorFirewalls configs carry `placeholders` (custom placeholder values),
   // which expandEnvironmentFromCompose needs to replace secrets with placeholders.
@@ -808,6 +804,9 @@ async function resolveSecretsAndEnvironment(
       ref: type,
     }));
 
+  // Expand environment variables from compose config.
+  // All firewalls (model provider, connector) are passed via the `firewalls` param
+  // for unified placeholder injection. Compose content no longer stores firewalls.
   const { environment } = expandEnvironmentFromCompose(
     agentCompose,
     mergedVars,
@@ -952,108 +951,23 @@ export function filterSecretConnectorMap(
 }
 
 /**
- * Check if a compose base URL covers an auto-generated base URL.
- * A compose URL covers an auto URL when the auto URL starts with the compose URL
- * (with a path-boundary check so "https://a.com/x" covers "https://a.com/x/y"
- * but not "https://a.com/xy").
- *
- * @internal Exported for testing.
- */
-export function baseUrlCoveredBy(
-  autoBase: string,
-  composeBase: string,
-): boolean {
-  // Strip trailing slashes for consistent comparison
-  const a = autoBase.replace(/\/+$/, "");
-  const c = composeBase.replace(/\/+$/, "");
-  if (a === c) return true;
-  return a.startsWith(c + "/");
-}
-
-/**
- * Drop auto-generated firewalls when ANY of their API base URLs overlap with
- * a compose-declared firewall. A single overlapping base URL means the user
- * is managing that service's firewall — the entire auto firewall is dropped.
- *
- * @internal Exported for testing.
- */
-export function deduplicateAutoFirewalls<
-  T extends { name: string; apis: { base: string }[] },
->(autoFirewalls: T[], composeFirewalls: { apis: { base: string }[] }[]): T[] {
-  if (composeFirewalls.length === 0) return autoFirewalls;
-
-  const composeBases = composeFirewalls.flatMap((fw) =>
-    fw.apis.map((api) => api.base),
-  );
-
-  return autoFirewalls.filter((autoFw) => {
-    const covered = autoFw.apis.some((api) =>
-      composeBases.some((cb) => baseUrlCoveredBy(api.base, cb)),
-    );
-    if (covered) {
-      log.debug(
-        `Skipping auto-generated firewall "${autoFw.name}" — base URL overlaps with compose firewalls`,
-      );
-    }
-    return !covered;
-  });
-}
-
-/**
- * Merge compose-declared, auto-generated, and policy-based firewalls into a
- * single manifest. Auto-generated and policy firewalls are deduplicated against
- * compose-declared ones (prefix match on base URL).
+ * Merge model provider and connector firewalls into a single manifest.
+ * Compose content no longer stores firewalls — all firewalls are runtime-injected.
  */
 function mergeFirewalls(
-  agentCompose: unknown,
   modelProviderFirewall: ExperimentalFirewalls[number] | null | undefined,
   connectorFirewalls: ExpandedFirewallConfig[],
   firewallPolicies?: FirewallPolicies,
   vars?: Record<string, string>,
 ): ExperimentalFirewalls | undefined {
-  const composeFirewalls = buildExperimentalFirewalls(agentCompose);
   const autoFirewalls = modelProviderFirewall ? [modelProviderFirewall] : [];
   const policyFirewalls = applyConnectorPolicies(
     connectorFirewalls,
     firewallPolicies,
   );
-  const allFirewalls = [
-    ...(composeFirewalls ?? []),
-    ...deduplicateAutoFirewalls(autoFirewalls, composeFirewalls ?? []),
-    ...deduplicateAutoFirewalls(policyFirewalls, composeFirewalls ?? []),
-  ];
+  const allFirewalls = [...autoFirewalls, ...policyFirewalls];
   if (allFirewalls.length === 0) return undefined;
   return resolveFirewallBaseUrlVars(allFirewalls, vars);
-}
-
-/**
- * Build ExperimentalFirewalls manifest from agent compose's expanded experimental_firewalls.
- * Returns null if no firewall configs are declared.
- *
- * Reads pre-expanded ExpandedFirewallConfig objects (resolved at compose time)
- * and maps them to a flat firewall entry array: [{ name, ref, apis }].
- *
- * Placeholder env var injection is handled by expandEnvironmentFromCompose.
- */
-function buildExperimentalFirewalls(
-  agentCompose: unknown,
-): ExperimentalFirewalls | null {
-  const compose = agentCompose as AgentComposeYaml | undefined;
-  if (!compose?.agents) return null;
-
-  const firstAgent = Object.values(compose.agents)[0];
-  const firewallConfigs = firstAgent?.experimental_firewalls;
-  if (!firewallConfigs || firewallConfigs.length === 0) return null;
-
-  return firewallConfigs.map((fw) => ({
-    name: fw.name,
-    ref: fw.ref,
-    apis: fw.apis.map((api) => ({
-      base: api.base,
-      auth: api.auth,
-      ...(api.permissions ? { permissions: api.permissions } : {}),
-    })),
-  }));
 }
 
 /** Unrestricted permission — allows all endpoints through the proxy. */
@@ -1252,7 +1166,6 @@ export async function buildExecutionContext(
 
   // Build experimental firewall manifest (base + auth entries for the runner).
   const experimentalFirewalls = mergeFirewalls(
-    agentCompose,
     modelProviderFirewall,
     connectorFirewalls,
     params.firewallPolicies,

@@ -12,6 +12,7 @@ mod process;
 mod runtime;
 mod sandbox;
 mod snapshot;
+mod snapshot_provider;
 
 pub use api::{ApiClient, ApiError, BalloonStatistics};
 pub use config::{FirecrackerConfig, SnapshotConfig};
@@ -22,4 +23,5 @@ pub use paths::{
 };
 pub use runtime::FirecrackerRuntime;
 pub use sandbox::FirecrackerSandbox;
-pub use snapshot::{SnapshotCreateConfig, SnapshotError, create_snapshot};
+pub use snapshot::{SnapshotError, create_snapshot};
+pub use snapshot_provider::FirecrackerSnapshotProvider;

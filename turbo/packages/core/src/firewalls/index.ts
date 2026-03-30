@@ -65,6 +65,7 @@ import { larkFirewall } from "./lark.generated";
 import { lineFirewall } from "./line.generated";
 import { linearFirewall } from "./linear.generated";
 import { loopsFirewall } from "./loops.generated";
+import { makeFirewall } from "./make.generated";
 import { mailsacFirewall } from "./mailsac.generated";
 import { mercuryFirewall } from "./mercury.generated";
 import { metaAdsFirewall } from "./meta-ads.generated";
@@ -174,6 +175,7 @@ const CONNECTOR_FIREWALLS = {
   line: lineFirewall,
   linear: linearFirewall,
   loops: loopsFirewall,
+  make: makeFirewall,
   mailsac: mailsacFirewall,
   mercury: mercuryFirewall,
   "meta-ads": metaAdsFirewall,
@@ -300,7 +302,6 @@ export type NonFirewallConnectorType =
   | "docusign" // region-specific
   | "jira" // {domain}.atlassian.net (API token auth)
   | "mailchimp" // datacenter-specific (usX.api.mailchimp.com)
-  | "make" // regional (eu1/eu2/us1/us2.make.com)
   | "metabase" // self-hosted
   | "minio" // self-hosted
   | "qdrant" // self-hosted / custom cluster URL

@@ -47,12 +47,12 @@ import { detach, Reason } from "../../signals/utils.ts";
 import {
   zeroActiveId$,
   chatThreadId$,
-  zeroChatAgentId$,
   zeroSidebarCollapsed$,
   setZeroSidebarCollapsed$,
   handleZeroNavSelect$,
   handleZeroAccountAction$,
   navigateToChat$,
+  sidebarChatAgentId$,
 } from "../../signals/zero-page/zero-nav.ts";
 import {
   agentDisplayName$,
@@ -967,7 +967,7 @@ export function ZeroSidebar() {
           displayName: a.displayName,
         }))
       : [];
-  const currentChatAgentId = useGet(zeroChatAgentId$);
+  const currentChatAgentId = useGet(sidebarChatAgentId$);
   const collapsed = useGet(zeroSidebarCollapsed$);
   const setSidebarCollapsed = useSet(setZeroSidebarCollapsed$);
   const onCollapse = () => setSidebarCollapsed(!collapsed);

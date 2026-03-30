@@ -72,14 +72,15 @@ import zeroAvatarImg from "./assets/avatar_0.png";
 interface ZeroSessionChatPageProps {
   zeroAvatarSrc?: string;
   onNavigateToSchedule?: () => void;
-  onAvatarClick?: () => void;
+  /** Agent ID used to build the avatar link to the team detail page. */
+  avatarAgentId?: string;
   chatAgentName?: string;
 }
 
 export function ZeroSessionChatPage({
   zeroAvatarSrc = zeroAvatarImg,
   onNavigateToSchedule,
-  onAvatarClick,
+  avatarAgentId,
   chatAgentName,
 }: ZeroSessionChatPageProps) {
   const defaultDisplayName = useResolved(agentDisplayName$) ?? "Zero";
@@ -139,28 +140,39 @@ export function ZeroSessionChatPage({
       <header className="shrink-0 bg-transparent px-4 sm:px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="relative shrink-0">
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={onAvatarClick}
-                    className="h-8 w-8 shrink-0 overflow-hidden rounded-xl transition-colors duration-150 hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    aria-label="View agent profile"
-                  >
-                    <img
-                      src={zeroAvatarSrc}
-                      alt=""
-                      role="presentation"
-                      className="h-8 w-8 rounded-full object-cover object-top"
-                    />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  <p className="text-xs">View agent profile</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            {avatarAgentId ? (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Link
+                      pathname="/team/:agentId"
+                      options={{ pathParams: { agentId: avatarAgentId } }}
+                      className="h-8 w-8 shrink-0 overflow-hidden rounded-xl transition-colors duration-150 hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      aria-label="View agent profile"
+                    >
+                      <img
+                        src={zeroAvatarSrc}
+                        alt=""
+                        role="presentation"
+                        className="h-8 w-8 rounded-full object-cover object-top"
+                      />
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p className="text-xs">View agent profile</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : (
+              <div className="h-8 w-8 shrink-0 overflow-hidden rounded-xl">
+                <img
+                  src={zeroAvatarSrc}
+                  alt=""
+                  role="presentation"
+                  className="h-8 w-8 rounded-full object-cover object-top"
+                />
+              </div>
+            )}
             {showPinPill && (
               <TooltipProvider delayDuration={200}>
                 <Tooltip>

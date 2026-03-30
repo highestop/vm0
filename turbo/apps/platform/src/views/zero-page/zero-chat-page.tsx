@@ -35,6 +35,7 @@ import {
 import { getRandomPrompts } from "./zero-ideation-page.tsx";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { detachedNavigateTo$ } from "../../signals/route.ts";
+import { Link } from "../router/link.tsx";
 import zeroAvatarImg from "./assets/avatar_0.png";
 
 function getTagline(
@@ -147,8 +148,8 @@ interface ZeroChatPageProps {
   zeroAvatarSrc?: string;
   /** Override agent name when chatting with a sub-agent. */
   chatAgentName?: string;
-  /** Navigate to agent team detail page when avatar is clicked. */
-  onAvatarClick?: () => void;
+  /** Agent ID used to build the avatar link to the team detail page. */
+  avatarAgentId?: string;
 }
 
 export function ZeroChatPage({
@@ -156,7 +157,7 @@ export function ZeroChatPage({
   onSendMessage,
   zeroAvatarSrc = zeroAvatarImg,
   chatAgentName,
-  onAvatarClick,
+  avatarAgentId,
 }: ZeroChatPageProps) {
   const displayNameLoadable = useLoadable(agentDisplayName$);
   const defaultDisplayName =
@@ -233,28 +234,39 @@ export function ZeroChatPage({
         <div className="mx-auto w-full max-w-[900px] flex flex-col items-stretch gap-8 -mt-24">
           <div className="flex items-center gap-4 w-full">
             <div className="relative shrink-0">
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      aria-label="View agent profile"
-                      className="h-14 w-14 shrink-0 sm:h-16 sm:w-16 flex items-center justify-center overflow-hidden rounded-xl transition-colors duration-150 hover:bg-accent cursor-pointer"
-                      onClick={onAvatarClick}
-                    >
-                      <img
-                        src={zeroAvatarSrc}
-                        alt=""
-                        role="presentation"
-                        className="h-14 w-14 rounded-full object-cover object-top sm:h-16 sm:w-16"
-                      />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    <p className="text-xs">View agent profile</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              {avatarAgentId ? (
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        pathname="/team/:agentId"
+                        options={{ pathParams: { agentId: avatarAgentId } }}
+                        aria-label="View agent profile"
+                        className="h-14 w-14 shrink-0 sm:h-16 sm:w-16 flex items-center justify-center overflow-hidden rounded-xl transition-colors duration-150 hover:bg-accent cursor-pointer"
+                      >
+                        <img
+                          src={zeroAvatarSrc}
+                          alt=""
+                          role="presentation"
+                          className="h-14 w-14 rounded-full object-cover object-top sm:h-16 sm:w-16"
+                        />
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      <p className="text-xs">View agent profile</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : (
+                <div className="h-14 w-14 shrink-0 sm:h-16 sm:w-16 flex items-center justify-center overflow-hidden rounded-xl">
+                  <img
+                    src={zeroAvatarSrc}
+                    alt=""
+                    role="presentation"
+                    className="h-14 w-14 rounded-full object-cover object-top sm:h-16 sm:w-16"
+                  />
+                </div>
+              )}
               {showPinPill && (
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>

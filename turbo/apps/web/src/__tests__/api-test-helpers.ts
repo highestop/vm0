@@ -4846,3 +4846,25 @@ export async function testExpireCredits(orgId: string): Promise<number> {
   });
   return result;
 }
+
+/**
+ * Bind an existing custom skill to an agent by updating its customSkills array.
+ * Used for testing multi-agent skill sharing.
+ */
+export async function bindCustomSkillToAgent(
+  agentId: string,
+  skillName: string,
+): Promise<void> {
+  initServices();
+  const [agent] = await globalThis.services.db
+    .select({ customSkills: zeroAgents.customSkills })
+    .from(zeroAgents)
+    .where(eq(zeroAgents.id, agentId))
+    .limit(1);
+  if (!agent) throw new Error(`Agent not found: ${agentId}`);
+  const updated = [...agent.customSkills, skillName];
+  await globalThis.services.db
+    .update(zeroAgents)
+    .set({ customSkills: updated })
+    .where(eq(zeroAgents.id, agentId));
+}

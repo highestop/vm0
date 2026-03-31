@@ -1,9 +1,11 @@
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import {
   resolveFirewallPolicies,
   orgTierSchema,
   type TriggerSource,
   type FirewallPolicies,
+  type ConnectorType,
+  connectorTypeSchema,
 } from "@vm0/core";
 import {
   createRunRecord,
@@ -25,6 +27,7 @@ import type { CallbackPayload } from "../callback/callback-payloads";
 import { zeroAgents } from "../../db/schema/zero-agent";
 import { zeroRuns } from "../../db/schema/zero-run";
 import { dispatchQueuedZeroRun } from "./zero-queue-service";
+import { userConnectors } from "../../db/schema/user-connector";
 
 /**
  * Parameters accepted by createZeroRun().
@@ -57,14 +60,16 @@ interface ZeroRunParams {
 export async function createZeroRun(
   params: ZeroRunParams,
 ): Promise<CreateRunResult> {
-  // Fetch agent metadata (displayName, description, sound, firewallPolicies)
-  const [row] = await globalThis.services.db
+  const db = globalThis.services.db;
+
+  // Fetch agent metadata (displayName, description, sound, firewallPolicies, orgId)
+  const [row] = await db
     .select({
       displayName: zeroAgents.displayName,
       description: zeroAgents.description,
       sound: zeroAgents.sound,
-      connectors: zeroAgents.connectors,
       firewallPolicies: zeroAgents.firewallPolicies,
+      orgId: zeroAgents.orgId,
     })
     .from(zeroAgents)
     .where(eq(zeroAgents.id, params.agentId))
@@ -74,23 +79,43 @@ export async function createZeroRun(
     displayName: string | null;
     description: string | null;
     sound: string | null;
-    firewallPolicies: FirewallPolicies | null;
+    rawFirewallPolicies: FirewallPolicies | null;
+    orgId: string | null;
   } = row
     ? {
         displayName: row.displayName,
         description: row.description,
         sound: row.sound,
-        firewallPolicies: resolveFirewallPolicies(
-          row.firewallPolicies ?? null,
-          row.connectors,
-        ),
+        rawFirewallPolicies: row.firewallPolicies ?? null,
+        orgId: row.orgId,
       }
     : {
         displayName: null,
         description: null,
         sound: null,
-        firewallPolicies: null,
+        rawFirewallPolicies: null,
+        orgId: null,
       };
+
+  // Fetch connector permissions for this user+agent from user_connectors table.
+  // Only connectors explicitly enabled by the user are injected at runtime.
+  let allowedConnectorTypes: ConnectorType[] | undefined;
+  if (agent.orgId) {
+    const permRows = await db
+      .select({ connectorType: userConnectors.connectorType })
+      .from(userConnectors)
+      .where(
+        and(
+          eq(userConnectors.orgId, agent.orgId),
+          eq(userConnectors.userId, params.userId),
+          eq(userConnectors.agentId, params.agentId),
+        ),
+      );
+    allowedConnectorTypes = permRows
+      .map((r) => connectorTypeSchema.safeParse(r.connectorType))
+      .filter((p) => p.success)
+      .map((p) => p.data);
+  }
 
   // Build agent system prompt: identity + tools first, then trigger context
   const agentParts: string[] = [];
@@ -104,6 +129,13 @@ export async function createZeroRun(
   appendSystemPrompt = appendSystemPrompt
     ? `${agentPrompt}\n\n${appendSystemPrompt}`
     : agentPrompt;
+
+  // Resolve firewall policies using the user's enabled connectors so that
+  // default policies are seeded for each allowed connector type.
+  const firewallPolicies = resolveFirewallPolicies(
+    agent.rawFirewallPolicies,
+    allowedConnectorTypes ?? [],
+  );
 
   // 1. Resolve compose version + org context
   const resolved = await resolveStartRunCompose({
@@ -128,7 +160,8 @@ export async function createZeroRun(
     memoryName: "memory",
     disallowedTools: [...DISALLOWED_TOOLS],
     vars: { ZERO_AGENT_ID: params.agentId },
-    firewallPolicies: agent.firewallPolicies ?? undefined,
+    firewallPolicies: firewallPolicies ?? undefined,
+    allowedConnectorTypes,
     agentName: resolved.agentName,
     orgId: resolved.orgId,
     orgTier,

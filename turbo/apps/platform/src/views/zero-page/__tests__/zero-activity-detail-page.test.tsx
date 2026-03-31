@@ -14,7 +14,7 @@ const context = testContext();
 
 function mockActivityDetailAPI() {
   const logDetail: LogDetail = {
-    id: "run_1",
+    id: "a0000000-0000-4000-a000-000000000001",
     sessionId: "session_1",
     agentId: "test-agent",
     displayName: "Test Agent",
@@ -47,10 +47,13 @@ function mockActivityDetailAPI() {
 
   server.use(
     http.get("*/api/zero/logs/:id", ({ params }) => {
-      if (params["id"] === "run_1") {
+      if (params["id"] === "a0000000-0000-4000-a000-000000000001") {
         return HttpResponse.json(logDetail);
       }
-      return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(
+        { error: { message: "Not found", code: "NOT_FOUND" } },
+        { status: 404 },
+      );
     }),
     http.get("*/api/zero/runs/:runId/telemetry/agent", () => {
       return HttpResponse.json(eventsResponse);
@@ -67,7 +70,7 @@ describe("zeroActivityDetailPage", () => {
 
     await setupPage({
       context,
-      path: "/activity/run_1",
+      path: "/activity/a0000000-0000-4000-a000-000000000001",
     });
 
     // The page should show the detail header card (not skeleton)
@@ -83,7 +86,7 @@ describe("zeroActivityDetailPage", () => {
 
   it("should render schedule source as a clickable link when scheduleId is present", async () => {
     const logDetail: LogDetail = {
-      id: "run_sched",
+      id: "a0000000-0000-4000-a000-000000000002",
       sessionId: "session_sched",
       agentId: "test-agent",
       displayName: "Scheduled Agent",
@@ -119,7 +122,7 @@ describe("zeroActivityDetailPage", () => {
 
     await setupPage({
       context,
-      path: "/activity/run_sched",
+      path: "/activity/a0000000-0000-4000-a000-000000000002",
     });
 
     await waitFor(() => {
@@ -136,7 +139,7 @@ describe("zeroActivityDetailPage", () => {
 
   it("should render schedule source as plain text when scheduleId is null", async () => {
     const logDetail: LogDetail = {
-      id: "run_sched_no_id",
+      id: "a0000000-0000-4000-a000-000000000003",
       sessionId: "session_sched_no_id",
       agentId: "test-agent",
       displayName: "Scheduled Agent No ID",
@@ -172,7 +175,7 @@ describe("zeroActivityDetailPage", () => {
 
     await setupPage({
       context,
-      path: "/activity/run_sched_no_id",
+      path: "/activity/a0000000-0000-4000-a000-000000000003",
     });
 
     await waitFor(() => {
@@ -191,7 +194,7 @@ describe("zeroActivityDetailPage", () => {
 
     await setupPage({
       context,
-      path: "/activity/run_1",
+      path: "/activity/a0000000-0000-4000-a000-000000000001",
     });
 
     await waitFor(() => {
@@ -207,7 +210,7 @@ describe("zeroActivityDetailPage", () => {
 
   it("should not truncate system prompt containing unknown HTML-like tags", async () => {
     const logDetail: LogDetail = {
-      id: "run_html_tag",
+      id: "a0000000-0000-4000-a000-000000000004",
       sessionId: "session_2",
       agentId: "test-agent",
       displayName: "Test Agent",
@@ -246,7 +249,7 @@ describe("zeroActivityDetailPage", () => {
 
     await setupPage({
       context,
-      path: "/activity/run_html_tag",
+      path: "/activity/a0000000-0000-4000-a000-000000000004",
       featureSwitches: { [FeatureSwitchKey.ShowSystemPrompt]: true },
     });
 

@@ -11,8 +11,8 @@ const context = testContext();
 function createMockSchedules() {
   return [
     {
-      id: "sched-1",
-      agentId: "mock-compose-id",
+      id: "f0000001-0000-4000-a000-000000000001",
+      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       orgSlug: "test",
       name: "morning-briefing",
@@ -30,10 +30,20 @@ function createMockSchedules() {
       lastRunAt: null,
       createdAt: "2026-03-01T00:00:00Z",
       updatedAt: "2026-03-01T00:00:00Z",
+      userId: "test-user-123",
+      appendSystemPrompt: null,
+      vars: null,
+      secretNames: null,
+      artifactName: null,
+      artifactVersion: null,
+      volumeVersions: null,
+      slackChannelId: null,
+      retryStartedAt: null,
+      consecutiveFailures: 0,
     },
     {
-      id: "sched-2",
-      agentId: "mock-compose-id",
+      id: "f0000001-0000-4000-a000-000000000002",
+      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       orgSlug: "test",
       name: "check-inbox",
@@ -51,10 +61,20 @@ function createMockSchedules() {
       lastRunAt: null,
       createdAt: "2026-03-02T00:00:00Z",
       updatedAt: "2026-03-02T00:00:00Z",
+      userId: "test-user-123",
+      appendSystemPrompt: null,
+      vars: null,
+      secretNames: null,
+      artifactName: null,
+      artifactVersion: null,
+      volumeVersions: null,
+      slackChannelId: null,
+      retryStartedAt: null,
+      consecutiveFailures: 0,
     },
     {
-      id: "sched-disabled",
-      agentId: "mock-compose-id",
+      id: "f0000001-0000-4000-a000-000000000003",
+      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       orgSlug: "test",
       name: "disabled-schedule",
@@ -72,6 +92,16 @@ function createMockSchedules() {
       lastRunAt: null,
       createdAt: "2026-02-28T00:00:00Z",
       updatedAt: "2026-02-28T00:00:00Z",
+      userId: "test-user-123",
+      appendSystemPrompt: null,
+      vars: null,
+      secretNames: null,
+      artifactName: null,
+      artifactVersion: null,
+      volumeVersions: null,
+      slackChannelId: null,
+      retryStartedAt: null,
+      consecutiveFailures: 0,
     },
   ];
 }
@@ -113,20 +143,42 @@ describe("zero schedule page - agent labels", () => {
       http.get("*/api/zero/team", () => {
         return HttpResponse.json([
           {
-            id: "mock-compose-id",
+            id: "c0000000-0000-4000-a000-000000000001",
             displayName: "Zero",
             description: null,
             sound: null,
+            avatarUrl: null,
             headVersionId: "v1",
             updatedAt: "2024-01-01T00:00:00Z",
+            userId: "test-user-123",
+            appendSystemPrompt: null,
+            vars: null,
+            secretNames: null,
+            artifactName: null,
+            artifactVersion: null,
+            volumeVersions: null,
+            slackChannelId: null,
+            retryStartedAt: null,
+            consecutiveFailures: 0,
           },
           {
-            id: "sub-agent-id",
+            id: "e0000000-0000-4000-a000-000000000002",
             displayName: "Research Agent",
             description: null,
             sound: null,
+            avatarUrl: null,
             headVersionId: "v2",
             updatedAt: "2024-01-02T00:00:00Z",
+            userId: "test-user-123",
+            appendSystemPrompt: null,
+            vars: null,
+            secretNames: null,
+            artifactName: null,
+            artifactVersion: null,
+            volumeVersions: null,
+            slackChannelId: null,
+            retryStartedAt: null,
+            consecutiveFailures: 0,
           },
         ]);
       }),
@@ -135,7 +187,7 @@ describe("zero schedule page - agent labels", () => {
           schedules: [
             {
               ...createMockSchedules()[0],
-              agentId: "sub-agent-id",
+              agentId: "e0000000-0000-4000-a000-000000000002",
               displayName: "Research Agent",
             },
           ],
@@ -158,20 +210,42 @@ describe("zero schedule page - agent labels", () => {
       http.get("*/api/zero/team", () => {
         return HttpResponse.json([
           {
-            id: "mock-compose-id",
+            id: "c0000000-0000-4000-a000-000000000001",
             displayName: null,
             description: null,
             sound: null,
+            avatarUrl: null,
             headVersionId: "v1",
             updatedAt: "2024-01-01T00:00:00Z",
+            userId: "test-user-123",
+            appendSystemPrompt: null,
+            vars: null,
+            secretNames: null,
+            artifactName: null,
+            artifactVersion: null,
+            volumeVersions: null,
+            slackChannelId: null,
+            retryStartedAt: null,
+            consecutiveFailures: 0,
           },
           {
-            id: "no-name-agent",
+            id: "e0000000-0000-4000-a000-000000000003",
             displayName: null,
             description: null,
             sound: null,
+            avatarUrl: null,
             headVersionId: "v2",
             updatedAt: "2024-01-02T00:00:00Z",
+            userId: "test-user-123",
+            appendSystemPrompt: null,
+            vars: null,
+            secretNames: null,
+            artifactName: null,
+            artifactVersion: null,
+            volumeVersions: null,
+            slackChannelId: null,
+            retryStartedAt: null,
+            consecutiveFailures: 0,
           },
         ]);
       }),
@@ -180,7 +254,7 @@ describe("zero schedule page - agent labels", () => {
           schedules: [
             {
               ...createMockSchedules()[0],
-              agentId: "no-name-agent",
+              agentId: "e0000000-0000-4000-a000-000000000003",
               displayName: null,
             },
           ],
@@ -194,7 +268,9 @@ describe("zero schedule page - agent labels", () => {
 
     // Falls back to raw agent id when displayName is null
     await waitFor(() => {
-      expect(screen.getByText("no-name-agent")).toBeInTheDocument();
+      expect(
+        screen.getByText("e0000000-0000-4000-a000-000000000003"),
+      ).toBeInTheDocument();
     });
   });
 });
@@ -396,7 +472,7 @@ describe("zero schedule page - toggle enabled", () => {
       }),
       http.post("*/api/zero/schedules/:name/:action", ({ params }) => {
         capturedAction = params["action"] as string;
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json(createMockSchedules()[0]);
       }),
       http.get("*/api/zero/chat-threads", () => {
         return HttpResponse.json({ threads: [] });
@@ -768,7 +844,12 @@ describe("zero schedule page - schedule dialog fields", () => {
       }),
       http.post("*/api/zero/schedules", () => {
         return HttpResponse.json(
-          { error: { message: "Schedule limit reached" } },
+          {
+            error: {
+              message: "Schedule limit reached",
+              code: "INTERNAL_SERVER_ERROR",
+            },
+          },
           { status: 400 },
         );
       }),

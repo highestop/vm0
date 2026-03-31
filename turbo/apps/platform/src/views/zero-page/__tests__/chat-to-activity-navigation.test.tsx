@@ -17,7 +17,7 @@ function mockChatWithActivityLink() {
       return HttpResponse.json({
         id: "thread-with-activity",
         title: null,
-        agentId: "mock-compose-id",
+        agentId: "c0000000-0000-4000-a000-000000000001",
         chatMessages: [
           {
             role: "user",
@@ -27,11 +27,12 @@ function mockChatWithActivityLink() {
           {
             role: "assistant",
             content: "Task completed successfully.",
-            runId: "run_activity_1",
+            runId: "a0000000-0000-4000-a000-000000000011",
             createdAt: "2026-03-10T00:00:05Z",
           },
         ],
         latestSessionId: null,
+        unsavedRuns: [],
         createdAt: "2026-03-10T00:00:00Z",
         updatedAt: "2026-03-10T00:00:05Z",
       });
@@ -44,7 +45,7 @@ function mockChatWithActivityLink() {
 
 function mockActivityDetailAPIs() {
   const logDetail: LogDetail = {
-    id: "run_activity_1",
+    id: "a0000000-0000-4000-a000-000000000011",
     sessionId: "session_1",
     agentId: "test-agent",
     displayName: "Test Agent",
@@ -80,14 +81,25 @@ function mockActivityDetailAPIs() {
   server.use(
     http.get("*/api/zero/composes/list", () => {
       return HttpResponse.json({
-        composes: [{ name: "test-agent", displayName: "Test Agent" }],
+        composes: [
+          {
+            id: "c0000000-0000-4000-a000-000000000001",
+            name: "test-agent",
+            displayName: "Test Agent",
+            headVersionId: "version_1",
+            updatedAt: "2024-01-01T00:00:00Z",
+          },
+        ],
       });
     }),
     http.get("*/api/zero/logs/:id", ({ params }) => {
-      if (params["id"] === "run_activity_1") {
+      if (params["id"] === "a0000000-0000-4000-a000-000000000011") {
         return HttpResponse.json(logDetail);
       }
-      return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(
+        { error: { message: "Not found", code: "NOT_FOUND" } },
+        { status: 404 },
+      );
     }),
     http.get("*/api/zero/runs/:runId/telemetry/agent", () => {
       return HttpResponse.json(eventsResponse);
@@ -112,7 +124,7 @@ describe("chat to activity navigation", () => {
       ).toBeInTheDocument();
     });
 
-    // Find and click the "View run logs" link that navigates to /activity/run_activity_1
+    // Find and click the "View run logs" link that navigates to /activity/a0000000-0000-4000-a000-000000000011
     const activityLink = screen.getByLabelText("View run logs");
     expect(activityLink).toBeInTheDocument();
     fireEvent.click(activityLink);

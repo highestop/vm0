@@ -16,7 +16,7 @@ function makeConnector(
   overrides: Partial<ConnectorResponse> & { type: ConnectorType },
 ): ConnectorResponse {
   return {
-    id: `conn-${overrides.type}`,
+    id: "a0000000-0000-4000-a000-000000000099",
     authMethod: "oauth",
     externalId: null,
     externalUsername: null,
@@ -50,7 +50,9 @@ async function renderTeamPage(connectors: string[]) {
         description: null,
         displayName: null,
         sound: null,
+        avatarUrl: null,
         connectors,
+        firewallPolicies: null,
       });
     }),
   );

@@ -34,7 +34,21 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -43,34 +57,40 @@ describe("completeZeroOnboarding$", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: capturedPayload.displayName ?? null,
             sound: capturedPayload.sound ?? null,
+            avatarUrl: null,
             connectors: capturedPayload.connectors,
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
       http.put(
-        "*/api/zero/agents/new-compose-id/instructions",
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
         async ({ request }) => {
           capturedInstructions = (await request.json()) as InstructionsPayload;
           return HttpResponse.json({
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: [],
+            firewallPolicies: null,
           });
         },
       ),
       http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
+        return HttpResponse.json({
+          agentId: "d0000000-0000-4000-a000-000000000001",
+        });
       }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -98,7 +118,21 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -107,30 +141,39 @@ describe("completeZeroOnboarding$", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: capturedPayload.connectors,
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
+      http.put("*/api/zero/default-agent", () => {
         return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
+          agentId: "d0000000-0000-4000-a000-000000000001",
         });
       }),
-      http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
-      }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -151,7 +194,21 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -159,31 +216,40 @@ describe("completeZeroOnboarding$", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: [],
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
-        return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
-        });
-      }),
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
       http.put("*/api/zero/default-agent", async ({ request }) => {
         defaultAgentBody = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json({ ok: true });
+        return HttpResponse.json({
+          agentId: "d0000000-0000-4000-a000-000000000001",
+        });
       }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -192,7 +258,7 @@ describe("completeZeroOnboarding$", () => {
     await context.store.set(completeZeroOnboarding$, context.signal);
 
     expect(defaultAgentBody).toStrictEqual({
-      agentId: "new-compose-id",
+      agentId: "d0000000-0000-4000-a000-000000000001",
     });
   });
 
@@ -200,7 +266,21 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -208,30 +288,39 @@ describe("completeZeroOnboarding$", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: [],
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
+      http.put("*/api/zero/default-agent", () => {
         return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
+          agentId: "d0000000-0000-4000-a000-000000000001",
         });
       }),
-      http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
-      }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -247,13 +336,32 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
       http.post("*/api/zero/agents", () => {
         return HttpResponse.json(
-          { error: { message: "Build failed: sandbox error" } },
+          {
+            error: {
+              message: "Build failed: sandbox error",
+              code: "INTERNAL_SERVER_ERROR",
+            },
+          },
           { status: 500 },
         );
       }),
@@ -279,13 +387,27 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
       http.post("*/api/zero/agents", () => {
         return HttpResponse.json(
-          { error: { message: "Build failed" } },
+          { error: { message: "Build failed", code: "INTERNAL_SERVER_ERROR" } },
           { status: 500 },
         );
       }),
@@ -301,7 +423,21 @@ describe("completeZeroOnboarding$", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -309,30 +445,39 @@ describe("completeZeroOnboarding$", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: [],
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
+      http.put("*/api/zero/default-agent", () => {
         return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
+          agentId: "d0000000-0000-4000-a000-000000000001",
         });
       }),
-      http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
-      }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -352,7 +497,21 @@ describe("completeZeroOnboarding$ avatar", () => {
     server.use(
       http.post("*/api/zero/model-providers", () => {
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -361,31 +520,39 @@ describe("completeZeroOnboarding$ avatar", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
             avatarUrl: capturedPayload.avatarUrl ?? null,
             connectors: [],
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
+      http.put("*/api/zero/default-agent", () => {
         return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
+          agentId: "d0000000-0000-4000-a000-000000000001",
         });
       }),
-      http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
-      }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 
@@ -409,7 +576,21 @@ describe("completeZeroOnboarding$ auto-init model provider", () => {
           unknown
         >;
         return HttpResponse.json(
-          { provider: { id: "mp-1", type: "vm0" }, created: true },
+          {
+            provider: {
+              id: "a0000000-0000-4000-a000-000000000099",
+              type: "vm0",
+              framework: "claude-code",
+              secretName: null,
+              authMethod: null,
+              secretNames: null,
+              isDefault: true,
+              selectedModel: null,
+              createdAt: "2026-03-01T00:00:00Z",
+              updatedAt: "2026-03-01T00:00:00Z",
+            },
+            created: true,
+          },
           { status: 201 },
         );
       }),
@@ -417,30 +598,39 @@ describe("completeZeroOnboarding$ auto-init model provider", () => {
         return HttpResponse.json(
           {
             name: "test-agent-uuid",
-            agentId: "new-compose-id",
+            agentId: "d0000000-0000-4000-a000-000000000001",
             description: null,
             displayName: null,
             sound: null,
+            avatarUrl: null,
             connectors: [],
+            firewallPolicies: null,
           },
           { status: 201 },
         );
       }),
-      http.put("*/api/zero/agents/new-compose-id/instructions", () => {
+      http.put(
+        "*/api/zero/agents/d0000000-0000-4000-a000-000000000001/instructions",
+        () => {
+          return HttpResponse.json({
+            name: "test-agent-uuid",
+            agentId: "d0000000-0000-4000-a000-000000000001",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            connectors: [],
+            firewallPolicies: null,
+          });
+        },
+      ),
+      http.put("*/api/zero/default-agent", () => {
         return HttpResponse.json({
-          name: "test-agent-uuid",
-          agentId: "new-compose-id",
-          description: null,
-          displayName: null,
-          sound: null,
-          connectors: [],
+          agentId: "d0000000-0000-4000-a000-000000000001",
         });
       }),
-      http.put("*/api/zero/default-agent", () => {
-        return HttpResponse.json({ ok: true });
-      }),
       http.post("*/api/zero/onboarding/complete", () => {
-        return HttpResponse.json({ success: true });
+        return HttpResponse.json({ ok: true });
       }),
     );
 

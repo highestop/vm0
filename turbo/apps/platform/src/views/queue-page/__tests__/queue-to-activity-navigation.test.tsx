@@ -18,7 +18,7 @@ function mockQueueWithActivityLinks() {
         concurrency: { tier: "free", limit: 2, active: 1, available: 1 },
         runningTasks: [
           {
-            runId: "run_nav_1",
+            runId: "a0000000-0000-4000-a000-000000000001",
             agentName: "running-agent",
             agentDisplayName: "Running Agent",
             userEmail: "me@test.com",
@@ -29,7 +29,7 @@ function mockQueueWithActivityLinks() {
         queue: [
           {
             position: 1,
-            runId: "run_nav_2",
+            runId: "a0000000-0000-4000-a000-000000000002",
             agentName: "queued-agent",
             agentDisplayName: "Queued Agent",
             userEmail: "me@test.com",
@@ -84,14 +84,25 @@ function mockActivityDetailAPIs(runId: string) {
   server.use(
     http.get("*/api/zero/composes/list", () => {
       return HttpResponse.json({
-        composes: [{ name: "test-agent", displayName: "Test Agent" }],
+        composes: [
+          {
+            id: "c0000000-0000-4000-a000-000000000001",
+            name: "test-agent",
+            displayName: "Test Agent",
+            headVersionId: "version_1",
+            updatedAt: "2024-01-01T00:00:00Z",
+          },
+        ],
       });
     }),
     http.get("*/api/zero/logs/:id", ({ params }) => {
       if (params["id"] === runId) {
         return HttpResponse.json(logDetail);
       }
-      return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(
+        { error: { message: "Not found", code: "NOT_FOUND" } },
+        { status: 404 },
+      );
     }),
     http.get("*/api/zero/runs/:runId/telemetry/agent", () => {
       return HttpResponse.json(eventsResponse);
@@ -102,7 +113,7 @@ function mockActivityDetailAPIs(runId: string) {
 describe("queue to activity navigation", () => {
   it("should initialize activity page when clicking View logs in running table", async () => {
     mockQueueWithActivityLinks();
-    mockActivityDetailAPIs("run_nav_1");
+    mockActivityDetailAPIs("a0000000-0000-4000-a000-000000000001");
 
     await setupPage({ context, path: "/queue" });
 
@@ -127,7 +138,7 @@ describe("queue to activity navigation", () => {
 
   it("should initialize activity page when clicking View logs in waiting table", async () => {
     mockQueueWithActivityLinks();
-    mockActivityDetailAPIs("run_nav_2");
+    mockActivityDetailAPIs("a0000000-0000-4000-a000-000000000002");
 
     await setupPage({ context, path: "/queue" });
 

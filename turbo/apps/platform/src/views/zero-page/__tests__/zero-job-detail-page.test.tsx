@@ -12,10 +12,12 @@ function mockAPIs() {
     http.get("*/api/zero/team", () => {
       return HttpResponse.json([
         {
-          id: "mock-compose-id",
+          id: "c0000000-0000-4000-a000-000000000001",
           name: "zero",
           displayName: null,
           description: null,
+          sound: null,
+          avatarUrl: null,
           headVersionId: "version_1",
           updatedAt: "2024-01-01T00:00:00Z",
         },
@@ -24,6 +26,8 @@ function mockAPIs() {
           name: "my-agent",
           displayName: "My Agent",
           description: "A helpful agent",
+          sound: null,
+          avatarUrl: null,
           headVersionId: "version_2",
           updatedAt: "2024-01-02T00:00:00Z",
         },
@@ -35,15 +39,17 @@ function mockAPIs() {
     http.get("*/api/zero/agents/my-agent", () => {
       return HttpResponse.json({
         name: "my-agent",
-        agentId: "agent-detail-id",
+        agentId: "e0000000-0000-4000-a000-000000000010",
         description: "A helpful agent",
         displayName: "My Agent",
         sound: null,
+        avatarUrl: null,
         connectors: [],
+        firewallPolicies: null,
       });
     }),
     http.get("*/api/zero/agents/:name/instructions", () => {
-      return HttpResponse.json({ instructions: null });
+      return HttpResponse.json({ content: null, filename: null });
     }),
     http.get("*/api/zero/schedules", () => {
       return HttpResponse.json({ schedules: [] });
@@ -100,10 +106,12 @@ describe("zero job detail page", () => {
       http.get("*/api/zero/team", () => {
         return HttpResponse.json([
           {
-            id: "mock-compose-id",
+            id: "c0000000-0000-4000-a000-000000000001",
             name: "zero",
             displayName: null,
             description: null,
+            sound: null,
+            avatarUrl: null,
             headVersionId: "version_1",
             updatedAt: "2024-01-01T00:00:00Z",
           },
@@ -113,7 +121,10 @@ describe("zero job detail page", () => {
         return HttpResponse.json({ threads: [] });
       }),
       http.get("*/api/zero/agents/:name", () => {
-        return HttpResponse.json({ error: "Not found" }, { status: 404 });
+        return HttpResponse.json(
+          { error: { message: "Not found", code: "INTERNAL_SERVER_ERROR" } },
+          { status: 404 },
+        );
       }),
     );
 
@@ -146,10 +157,12 @@ function mockAPIsWithSchedules() {
     http.get("*/api/zero/team", () => {
       return HttpResponse.json([
         {
-          id: "mock-compose-id",
+          id: "c0000000-0000-4000-a000-000000000001",
           name: "zero",
           displayName: null,
           description: null,
+          sound: null,
+          avatarUrl: null,
           headVersionId: "version_1",
           updatedAt: "2024-01-01T00:00:00Z",
         },
@@ -158,6 +171,8 @@ function mockAPIsWithSchedules() {
           name: "my-agent",
           displayName: "My Agent",
           description: "A helpful agent",
+          sound: null,
+          avatarUrl: null,
           headVersionId: "version_2",
           updatedAt: "2024-01-02T00:00:00Z",
         },
@@ -169,23 +184,25 @@ function mockAPIsWithSchedules() {
     http.get("*/api/zero/agents/my-agent", () => {
       return HttpResponse.json({
         name: "my-agent",
-        agentId: "agent-detail-id",
+        agentId: "e0000000-0000-4000-a000-000000000010",
         description: "A helpful agent",
         displayName: "My Agent",
         sound: null,
+        avatarUrl: null,
         connectors: [],
+        firewallPolicies: null,
       });
     }),
     http.get("*/api/zero/agents/:name/instructions", () => {
-      return HttpResponse.json({ instructions: null });
+      return HttpResponse.json({ content: null, filename: null });
     }),
     http.get("*/api/zero/schedules", () => {
       return HttpResponse.json({
         schedules: [
           {
-            id: "sched-1",
-            agentId: "agent-detail-id",
-            agentName: "my-agent",
+            id: "f0000002-0000-4000-a000-000000000001",
+            agentId: "e0000000-0000-4000-a000-000000000010",
+            displayName: null,
             orgSlug: "test",
             name: "morning-briefing",
             triggerType: "cron",
@@ -202,6 +219,16 @@ function mockAPIsWithSchedules() {
             lastRunAt: null,
             createdAt: "2026-03-01T00:00:00Z",
             updatedAt: "2026-03-01T00:00:00Z",
+            userId: "test-user-123",
+            appendSystemPrompt: null,
+            vars: null,
+            secretNames: null,
+            artifactName: null,
+            artifactVersion: null,
+            volumeVersions: null,
+            slackChannelId: null,
+            retryStartedAt: null,
+            consecutiveFailures: 0,
           },
         ],
       });

@@ -17,7 +17,7 @@ describe("chat session switch", () => {
           return HttpResponse.json({
             id: "thread-completed",
             title: null,
-            agentComposeId: "mock-compose-id",
+            agentId: "c0000000-0000-4000-a000-000000000001",
             chatMessages: [
               {
                 role: "user",
@@ -31,6 +31,7 @@ describe("chat session switch", () => {
               },
             ],
             latestSessionId: null,
+            unsavedRuns: [],
             createdAt: "2026-03-10T00:00:00Z",
             updatedAt: "2026-03-10T00:00:00Z",
           });
@@ -39,7 +40,7 @@ describe("chat session switch", () => {
         return HttpResponse.json({
           id: "thread-running",
           title: null,
-          agentComposeId: "mock-compose-id",
+          agentId: "c0000000-0000-4000-a000-000000000001",
           chatMessages: [
             {
               role: "user",
@@ -65,13 +66,14 @@ describe("chat session switch", () => {
       ),
       http.get("*/api/zero/logs/:id", () =>
         HttpResponse.json({
-          id: "run-active",
+          id: "a0000000-0000-4000-a000-000000000099",
           sessionId: "session-1",
           agentId: "zero",
           displayName: null,
           framework: "claude-code",
           modelProvider: null,
           triggerSource: "web",
+          scheduleId: null,
           status: "running",
           prompt: "Active task prompt",
           appendSystemPrompt: null,
@@ -126,7 +128,7 @@ describe("chat session switch", () => {
         return HttpResponse.json({
           id,
           title: null,
-          agentComposeId: "mock-compose-id",
+          agentId: "c0000000-0000-4000-a000-000000000001",
           chatMessages: [
             {
               role: "user",
@@ -140,6 +142,7 @@ describe("chat session switch", () => {
             },
           ],
           latestSessionId: null,
+          unsavedRuns: [],
           createdAt: "2026-03-10T00:00:00Z",
           updatedAt: "2026-03-10T00:00:00Z",
         });

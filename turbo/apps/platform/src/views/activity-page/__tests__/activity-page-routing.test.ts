@@ -14,7 +14,7 @@ const context = testContext();
 function mockActivityAPIs() {
   const logs = [
     {
-      id: "log-1",
+      id: "a0000000-0000-4000-a000-000000000001",
       sessionId: "session-1",
       agentId: "test-agent",
       displayName: "Test Agent",
@@ -22,6 +22,7 @@ function mockActivityAPIs() {
       framework: "claude-code",
       status: "completed",
       triggerSource: "web",
+      scheduleId: null,
       createdAt: "2026-03-10T14:56:00Z",
       startedAt: "2026-03-10T14:56:01Z",
       completedAt: "2026-03-10T14:56:04Z",
@@ -29,7 +30,7 @@ function mockActivityAPIs() {
   ];
 
   const logDetail: LogDetail = {
-    id: "log-1",
+    id: "a0000000-0000-4000-a000-000000000001",
     sessionId: "session-1",
     agentId: "test-agent",
     displayName: "Test Agent",
@@ -65,20 +66,32 @@ function mockActivityAPIs() {
   server.use(
     http.get("*/api/zero/composes/list", () => {
       return HttpResponse.json({
-        composes: [{ name: "test-agent", displayName: "Test Agent" }],
+        composes: [
+          {
+            id: "c0000000-0000-4000-a000-000000000001",
+            name: "test-agent",
+            displayName: "Test Agent",
+            headVersionId: "version_1",
+            updatedAt: "2024-01-01T00:00:00Z",
+          },
+        ],
       });
     }),
     http.get("*/api/zero/logs", () => {
       return HttpResponse.json({
         data: logs,
         pagination: { hasMore: false, nextCursor: null, totalPages: 1 },
+        filters: { statuses: [], sources: [], agents: [] },
       });
     }),
     http.get("*/api/zero/logs/:id", ({ params }) => {
-      if (params["id"] === "log-1") {
+      if (params["id"] === "a0000000-0000-4000-a000-000000000001") {
         return HttpResponse.json(logDetail);
       }
-      return new HttpResponse(null, { status: 404 });
+      return HttpResponse.json(
+        { error: { message: "Not found", code: "NOT_FOUND" } },
+        { status: 404 },
+      );
     }),
     http.get("*/api/zero/runs/:runId/telemetry/agent", () => {
       return HttpResponse.json(eventsResponse);
@@ -103,7 +116,7 @@ describe("activity page routing", () => {
       expect(screen.getByText("Test Agent")).toBeInTheDocument();
     });
 
-    // Click the activity row — this navigates to /activity/log-1
+    // Click the activity row — this navigates to /activity/a0000000-0000-4000-a000-000000000001
     const row = screen.getByText("Test Agent").closest("a");
     expect(row).not.toBeNull();
     fireEvent.click(row!);

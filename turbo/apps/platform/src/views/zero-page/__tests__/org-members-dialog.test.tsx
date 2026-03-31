@@ -42,8 +42,11 @@ function mockMembersAPI(members: OrgMember[] = [adminMember, regularMember]) {
   server.use(
     http.get("*/api/zero/org/members", () => {
       return HttpResponse.json({
+        slug: "user-12345678",
+        role: "admin",
         members,
         pendingInvitations: [],
+        createdAt: "2026-01-01T00:00:00Z",
       });
     }),
     http.get("*/api/zero/chat-threads", () => {
@@ -117,7 +120,12 @@ describe("org members - invite dialog loading state", () => {
     server.use(
       http.post("*/api/zero/org/invite", () => {
         return HttpResponse.json(
-          { error: { message: "Already a member" } },
+          {
+            error: {
+              message: "Already a member",
+              code: "INTERNAL_SERVER_ERROR",
+            },
+          },
           { status: 400 },
         );
       }),

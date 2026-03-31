@@ -14,7 +14,7 @@ function mockChatThread() {
       return HttpResponse.json({
         id: "thread-1",
         title: null,
-        agentId: "mock-compose-id",
+        agentId: "c0000000-0000-4000-a000-000000000001",
         chatMessages: [
           {
             role: "user",
@@ -28,6 +28,7 @@ function mockChatThread() {
           },
         ],
         latestSessionId: null,
+        unsavedRuns: [],
         createdAt: "2026-03-10T00:00:00Z",
         updatedAt: "2026-03-10T00:00:01Z",
       });

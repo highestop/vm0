@@ -48,7 +48,7 @@ import {
   zeroChatInput$,
   setZeroChatInput$,
   clearZeroChatInput$,
-  sendZeroChatMessage$,
+  sendExistingThreadMessage$,
   type ZeroChatMessage,
   type UserChatMessage,
   type AssistantChatMessage,
@@ -102,7 +102,7 @@ export function ZeroSessionChatPage({
   const input = useGet(zeroChatInput$);
   const setInput = useSet(setZeroChatInput$);
   const clearInput = useSet(clearZeroChatInput$);
-  const send = useSet(sendZeroChatMessage$);
+  const send = useSet(sendExistingThreadMessage$);
   const cancelRun = useSet(cancelActiveRun$);
   const pageSignal = useGet(pageSignal$);
 

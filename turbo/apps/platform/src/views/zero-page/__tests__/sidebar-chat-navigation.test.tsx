@@ -28,7 +28,6 @@ function mockAPIs() {
           {
             id: "thread-abc-123",
             title: "Test conversation",
-            preview: "Who are you and what can you do?",
             agentId: "c0000000-0000-4000-a000-000000000001",
             createdAt: "2026-03-10T00:00:00Z",
             updatedAt: "2026-03-10T00:00:00Z",
@@ -76,7 +75,7 @@ describe("sidebar chat navigation from /team", () => {
 
     // Find and click the chat thread in sidebar
     const chatLink = await waitFor(() => {
-      return screen.getByText("Who are you and what can you do?");
+      return screen.getByText("Test conversation");
     });
     const anchor = chatLink.closest("a");
     expect(anchor).not.toBeNull();

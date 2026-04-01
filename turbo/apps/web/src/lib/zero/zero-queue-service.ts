@@ -93,12 +93,15 @@ export async function dispatchQueuedZeroRun(
       context: contextResult.context,
       resolvedModelProvider: contextResult.resolvedModelProvider,
       selectedModel: contextResult.selectedModel,
-      buildContextTimings: contextResult.timings,
-      apiStartTime,
+      timings: {
+        apiStart: apiStartTime,
+        authorize: authorizeTime,
+        transaction: apiStartTime,
+        token: tokenTime,
+        resolveSourceDuration: contextResult.timings.resolveSourceAndOrg,
+        resolveSecretsDuration: contextResult.timings.resolveSecrets,
+      },
       orgId: params.orgId,
-      authorizeTime,
-      transactionTime: apiStartTime,
-      tokenTime,
       queueDispatcher: dispatchQueuedZeroRun,
     });
     return;

@@ -105,3 +105,17 @@ export interface ExecutionContext {
   // API start time for E2E timing metrics
   apiStartTime?: number;
 }
+
+/**
+ * Timing data collected during the dispatch pipeline.
+ * Timestamps (absolute) use no suffix; durations (pre-computed ms) use Duration suffix.
+ * Used solely for Axiom telemetry — no impact on execution.
+ */
+export interface DispatchTimings {
+  apiStart: number;
+  authorize: number;
+  transaction: number;
+  token: number;
+  resolveSourceDuration: number;
+  resolveSecretsDuration: number;
+}

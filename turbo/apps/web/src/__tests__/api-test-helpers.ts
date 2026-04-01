@@ -67,6 +67,7 @@ import { encryptSecretsMap } from "../lib/crypto/secrets-encryption";
 import {
   VOLUME_ORG_USER_ID,
   SYSTEM_ORG_ID,
+  getEligibleConnectorTypes,
   type StoredExecutionContext,
   type FirewallPolicies,
 } from "@vm0/core";
@@ -3561,21 +3562,15 @@ export async function seedTestSkill(
 /**
  * Seed all SEED_SKILLS plus GA connector type skills into the skills table so
  * that server-side compose succeeds when buildComposeContent injects them.
- * Feature-flagged connectors are excluded to match buildComposeContent behaviour.
+ * Feature-flagged OAuth-only connectors are excluded to match buildComposeContent behaviour.
  */
 export async function seedSeedSkills(): Promise<void> {
   const { SEED_SKILLS, buildSeedSkillValues } =
     await import("../lib/zero/seed-skills");
-  const { CONNECTOR_TYPES } = await import("@vm0/core");
   initServices();
-  const gaConnectorTypes = Object.entries(CONNECTOR_TYPES)
-    .filter(([, config]) => {
-      return !config.featureFlag;
-    })
-    .map(([type]) => {
-      return type;
-    });
-  const allNames = [...new Set([...SEED_SKILLS, ...gaConnectorTypes])];
+  const allNames = [
+    ...new Set([...SEED_SKILLS, ...getEligibleConnectorTypes()]),
+  ];
   const values = buildSeedSkillValues(allNames);
   await globalThis.services.db
     .insert(skills)
@@ -3593,15 +3588,9 @@ export async function seedSeedSkills(): Promise<void> {
  */
 export async function seedSeedSkillStorages(): Promise<void> {
   const { SEED_SKILLS } = await import("../lib/zero/seed-skills");
-  const { CONNECTOR_TYPES } = await import("@vm0/core");
-  const gaConnectorTypes = Object.entries(CONNECTOR_TYPES)
-    .filter(([, config]) => {
-      return !config.featureFlag;
-    })
-    .map(([type]) => {
-      return type;
-    });
-  const allNames = [...new Set([...SEED_SKILLS, ...gaConnectorTypes])];
+  const allNames = [
+    ...new Set([...SEED_SKILLS, ...getEligibleConnectorTypes()]),
+  ];
 
   initServices();
 

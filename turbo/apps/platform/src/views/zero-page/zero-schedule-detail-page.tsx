@@ -158,7 +158,7 @@ function ScheduleBreadcrumbLink() {
 function ScheduleDetailSkeleton() {
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-auto [scrollbar-gutter:stable]">
-      <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+      <nav className="hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
         <ScheduleBreadcrumbLink />
         <span className="text-muted-foreground/40 select-none">/</span>
         <div className="h-4 w-32 rounded bg-muted/50 animate-pulse" />
@@ -193,7 +193,7 @@ function ScheduleDetailSkeleton() {
 function ScheduleNotFound() {
   return (
     <div className="h-full flex flex-col min-h-0">
-      <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+      <nav className="hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
         <ScheduleBreadcrumbLink />
         <span className="text-muted-foreground/40 select-none">/</span>
         <span className="rounded-md px-1.5 py-0.5 text-foreground font-medium">
@@ -885,7 +885,7 @@ function ScheduleDetailView({
         }}
         className="flex flex-1 flex-col min-h-0"
       >
-        <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+        <nav className="hidden sm:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
           <ScheduleBreadcrumbLink />
           <span className="text-muted-foreground/40 select-none">/</span>
           <span className="rounded-md px-1.5 py-0.5 text-foreground font-medium truncate min-w-0">
@@ -893,16 +893,16 @@ function ScheduleDetailView({
           </span>
         </nav>
 
-        <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-6 pb-3">
+        <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-6 pb-0">
           <div className="mx-auto max-w-[900px]">
             <div
               className={cn(
-                "flex items-center justify-center gap-4 min-w-0",
+                "flex flex-col gap-2 min-w-0 sm:flex-row sm:items-center sm:gap-4",
                 dimmed && "opacity-90",
               )}
             >
               <div
-                className="h-[54px] w-[54px] shrink-0 sm:h-[54px] sm:w-[54px] flex items-center justify-center rounded-xl bg-muted/60 text-muted-foreground"
+                className="h-[54px] w-[54px] flex items-center justify-center rounded-xl bg-muted/60 text-muted-foreground"
                 aria-hidden
               >
                 <IconCalendar
@@ -911,15 +911,15 @@ function ScheduleDetailView({
                   className="shrink-0 opacity-90"
                 />
               </div>
-              <div className="min-w-0 flex-1 h-14 sm:h-16 flex flex-col justify-center gap-1.5 overflow-hidden">
+              <div className="min-w-0 flex-1 flex flex-col gap-1">
                 <h1 className="min-w-0 text-base sm:text-lg font-semibold tracking-tight text-foreground leading-tight truncate">
                   {summaryTitle}
                 </h1>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground leading-tight">
-                  <span className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground leading-tight">
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <span
                       className={cn(
-                        "h-2 w-2 shrink-0 rounded-full",
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
                         isActive ? "bg-emerald-500" : "bg-muted-foreground/50",
                       )}
                       aria-hidden
@@ -934,32 +934,57 @@ function ScheduleDetailView({
                     </span>
                   </span>
                   <span
-                    className="text-muted-foreground/50 select-none"
+                    className="text-muted-foreground/40 select-none"
                     aria-hidden
                   >
-                    |
+                    ·
                   </span>
-                  <span className="text-foreground/90">{entry.time}</span>
+                  <span className="text-foreground/80 whitespace-nowrap">
+                    {entry.time}
+                  </span>
                   <span
-                    className="text-muted-foreground/50 select-none"
+                    className="text-muted-foreground/40 select-none"
                     aria-hidden
                   >
-                    |
+                    ·
                   </span>
-                  <span>
-                    <span className="font-medium text-foreground/90">
+                  <span className="whitespace-nowrap">
+                    <span className="font-medium text-foreground/70">
                       Next run
                     </span>{" "}
-                    <span className="tabular-nums text-foreground/90">
-                      {nextRunLabel}
-                    </span>
+                    <span className="tabular-nums">{nextRunLabel}</span>
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="mt-6 flex h-9 items-center gap-2">
-              <TabsList className="zero-tabs h-9 w-full sm:w-auto gap-1 px-1 py-1 overflow-x-auto">
+            <div className="mt-4 flex flex-col gap-3 sm:mt-6 sm:flex-row sm:h-9 sm:items-center sm:justify-between">
+              {/* Mobile: Select dropdown */}
+              <div className="sm:hidden w-full">
+                <Select
+                  value={activeTab}
+                  onValueChange={(v) => {
+                    if (
+                      v === "settings" ||
+                      v === "instructions" ||
+                      v === "history"
+                    ) {
+                      setActiveTab(v);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="settings">Settings</SelectItem>
+                    <SelectItem value="instructions">Instructions</SelectItem>
+                    <SelectItem value="history">Run History</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {/* Desktop: tab list */}
+              <TabsList className="zero-tabs hidden sm:inline-flex h-9 gap-1 px-1 py-1">
                 <TabsTrigger
                   value="settings"
                   className={SCHEDULE_DETAIL_TAB_TRIGGER_CLASS}
@@ -986,7 +1011,7 @@ function ScheduleDetailView({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="zero-btn-morandi ml-auto h-9 shrink-0 gap-2 rounded-lg px-4 border text-sm font-medium transition-colors hover:bg-accent"
+                className="zero-btn-morandi h-9 shrink-0 gap-2 rounded-lg px-4 border text-sm font-medium transition-colors hover:bg-accent"
                 disabled={running || !entry.prompt.trim()}
                 onClick={() => {
                   onRunNow().catch(() => {});
@@ -1001,7 +1026,7 @@ function ScheduleDetailView({
 
         <main
           className={cn(
-            "shrink-0 flex-1 px-4 sm:px-6 pt-4 pb-16 transition-opacity",
+            "shrink-0 flex-1 px-4 sm:px-6 pt-4 sm:pt-6 pb-16 transition-opacity",
             dimmed && "opacity-90",
           )}
         >

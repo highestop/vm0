@@ -178,7 +178,7 @@ function SelectConnectorsContent({
           className="h-9 w-full pl-9 rounded-lg"
         />
       </div>
-      <div className="w-full grid grid-cols-3 gap-3">
+      <div className="w-full grid grid-cols-2 sm:grid-cols-3 gap-3">
         {filtered.map(([type, config]) => {
           return (
             <OnboardingConnectorCard
@@ -194,7 +194,7 @@ function SelectConnectorsContent({
           );
         })}
         {filtered.length === 0 && (
-          <p className="col-span-3 text-sm text-muted-foreground py-4">
+          <p className="col-span-2 sm:col-span-3 text-sm text-muted-foreground py-4">
             No connectors match your search.
           </p>
         )}
@@ -794,17 +794,17 @@ function OnboardingPage({
       <div className="flex flex-1 flex-col min-w-0 bg-background items-center">
         <div className="flex flex-col w-full max-w-[750px] flex-1 min-h-0">
           {/* Progress bar */}
-          <div className="shrink-0 px-10 pt-8 pb-4">
+          <div className="shrink-0 px-5 sm:px-10 pt-8 pb-4">
             <ProgressBar totalSteps={totalSteps} currentStep={currentStep} />
           </div>
 
           {/* Content */}
-          <main className="flex-1 min-h-0 overflow-y-auto px-10 pt-[12%] pb-6 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden">
+          <main className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-10 pt-[12%] pb-6 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden">
             {children}
           </main>
 
           {/* Footer */}
-          <div className="shrink-0 border-t border-border/40 flex items-center justify-between px-10 py-5">
+          <div className="shrink-0 border-t border-border/40 flex items-center justify-between px-5 sm:px-10 py-5">
             <div>
               {showBack && onBack && (
                 <Button

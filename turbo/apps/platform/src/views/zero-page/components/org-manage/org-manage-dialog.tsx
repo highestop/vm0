@@ -5,6 +5,11 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   cn,
 } from "@vm0/ui";
 import {
@@ -163,15 +168,50 @@ export function OrgManageDialog({ open, onOpenChange }: OrgManageDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="zero-app flex flex-col max-w-[960px] h-[85vh] p-0 gap-0 overflow-hidden zero-border rounded-xl bg-card">
+      <DialogContent className="zero-app flex flex-col w-full max-w-[960px] h-[92dvh] sm:h-[85vh] p-0 gap-0 overflow-hidden zero-border rounded-xl bg-card">
         <DialogTitle className="sr-only">Workspace settings</DialogTitle>
         <DialogDescription className="sr-only">
           Manage your workspace profile, members, integrations, and billing.
         </DialogDescription>
 
-        <div className="flex h-full">
-          {/* Sidebar nav — mirrors zero-sidebar.tsx styling */}
-          <nav className="w-52 shrink-0 p-3 pt-3 pb-4 flex flex-col gap-4 overflow-y-auto zero-border-r bg-[hsl(var(--gray-0))]">
+        <div className="flex flex-col sm:flex-row h-full min-h-0">
+          {/* Mobile: dropdown nav */}
+          <div
+            className={cn(
+              "sm:hidden shrink-0 px-4 pr-14 pt-4 pb-4 border-b border-border/50 bg-[hsl(var(--gray-0))]",
+              isBillingSubPage && "hidden",
+            )}
+          >
+            <Select
+              value={activeTab}
+              onValueChange={(v) => {
+                return setActiveTab(v as OrgManageTab);
+              }}
+            >
+              <SelectTrigger className="h-9 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sidebarGroups.flatMap((group) => {
+                  return group.items.map((item) => {
+                    return (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.label}
+                      </SelectItem>
+                    );
+                  });
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Desktop: sidebar nav */}
+          <nav
+            className={cn(
+              "hidden sm:flex sm:flex-col w-52 shrink-0 p-3 pt-3 pb-4 gap-4 overflow-y-auto zero-border-r bg-[hsl(var(--gray-0))]",
+              isBillingSubPage && "sm:hidden",
+            )}
+          >
             {sidebarGroups.map((group) => {
               return (
                 <div key={group.label} className="shrink-0">
@@ -222,12 +262,12 @@ export function OrgManageDialog({ open, onOpenChange }: OrgManageDialogProps) {
 
           {/* Content area */}
           <div
-            className="flex-1 min-w-0 flex flex-col overflow-hidden"
+            className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden"
             style={{ backgroundColor: "hsl(var(--background))" }}
           >
             {!hideHeader && (
-              <header className="shrink-0 px-10 pt-8 pb-1">
-                <h2 className="text-xl font-semibold tracking-tight text-foreground">
+              <header className="shrink-0 px-4 sm:px-10 pt-6 sm:pt-8 pb-1">
+                <h2 className="hidden sm:block text-xl font-semibold tracking-tight text-foreground">
                   {meta.title}
                 </h2>
                 <p className="text-sm text-muted-foreground mt-1">
@@ -237,8 +277,8 @@ export function OrgManageDialog({ open, onOpenChange }: OrgManageDialogProps) {
             )}
             <div
               className={cn(
-                "flex-1 overflow-y-auto px-10 pb-10 [scrollbar-gutter:stable]",
-                hideHeader ? "pt-8" : "pt-6",
+                "flex-1 overflow-y-auto px-4 sm:px-10 pb-10 [scrollbar-gutter:stable]",
+                hideHeader ? "pt-6 sm:pt-8" : "pt-4 sm:pt-6",
               )}
             >
               <TabContent tab={activeTab} />

@@ -126,7 +126,7 @@ function ActivityNotFound() {
   const features = useLastResolved(featureSwitch$);
   return (
     <div className="h-full flex flex-col min-h-0">
-      <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+      <nav className="hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
         {features?.[FeatureSwitchKey.ActivityLogList] && (
           <>
             <ActivityBreadcrumbLink />
@@ -187,16 +187,24 @@ function ActivityHeaderCard({
 }) {
   return (
     <div className="zero-card shrink-0 px-4 py-3">
-      <div className="flex items-center gap-y-2 overflow-hidden">
-        <h2 className="text-base font-semibold tracking-tight text-foreground truncate min-w-0 pr-3 shrink-0">
-          {displayName}
-        </h2>
-        <span
-          className="w-px h-3.5 shrink-0 bg-border self-center"
-          aria-hidden
-        />
-        <div className="flex items-center gap-x-0 text-sm min-w-0 overflow-hidden">
-          <div className="flex items-center gap-1.5 pl-3 pr-3">
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-semibold tracking-tight text-foreground truncate min-w-0 flex-1">
+            {displayName}
+          </h2>
+          {showContextLink && (
+            <Link
+              pathname="/activity/:runId/context"
+              options={{ pathParams: { runId: detail.id } }}
+              className="inline-flex items-center h-8 shrink-0 gap-1 rounded-lg px-3 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
+            >
+              <IconFileAnalytics size={14} stroke={1.5} />
+              Context
+            </Link>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-y-1 text-sm">
+          <div className="flex items-center gap-1.5 pr-3">
             <span className="text-muted-foreground shrink-0">Status</span>
             <StatusBadge status={status} zeroStyle />
           </div>
@@ -206,7 +214,7 @@ function ActivityHeaderCard({
           />
           {triggerSource && (
             <>
-              <div className="flex items-center gap-1.5 pl-3 pr-3">
+              <div className="flex items-center gap-1.5 px-3">
                 <span className="text-muted-foreground shrink-0">Source</span>
                 {triggerSource === "schedule" && detail.scheduleId ? (
                   <Link
@@ -232,7 +240,7 @@ function ActivityHeaderCard({
           )}
           {(detail.modelProvider || detail.framework) && (
             <>
-              <div className="flex items-center gap-1.5 pl-3 pr-3">
+              <div className="flex items-center gap-1.5 px-3">
                 <span className="text-muted-foreground shrink-0">Model</span>
                 {showModelDetail && detail.selectedModel ? (
                   <TooltipProvider>
@@ -268,7 +276,7 @@ function ActivityHeaderCard({
               />
             </>
           )}
-          <div className="flex items-center gap-1.5 pl-3 pr-3">
+          <div className="flex items-center gap-1.5 px-3">
             <span className="text-muted-foreground shrink-0">Duration</span>
             <span className="text-foreground whitespace-nowrap">
               {duration ?? "—"}
@@ -278,33 +286,30 @@ function ActivityHeaderCard({
             className="w-px h-3.5 shrink-0 bg-border self-center"
             aria-hidden
           />
-          <div className="flex items-center gap-1.5 pl-3 pr-3">
+          <div className="flex items-center gap-1.5 px-3">
             <span className="text-muted-foreground shrink-0">Time</span>
             <span className="text-foreground whitespace-nowrap">{time}</span>
           </div>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 ml-auto shrink-0 rounded-lg text-muted-foreground hover:text-foreground p-0"
+                  onClick={() => {
+                    return downloadCsv(events, detail.id);
+                  }}
+                >
+                  <IconDownload size={14} stroke={1.5} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                <p className="text-xs">Download raw data</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
-        <div className="flex-1 min-w-0" />
-        {showContextLink && (
-          <Link
-            pathname="/activity/:runId/context"
-            options={{ pathParams: { runId: detail.id } }}
-            className="inline-flex items-center h-8 shrink-0 gap-1 rounded-lg px-3 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-          >
-            <IconFileAnalytics size={14} stroke={1.5} />
-            Context
-          </Link>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 shrink-0 gap-1 rounded-lg text-sm text-muted-foreground hover:text-foreground ml-auto"
-          onClick={() => {
-            return downloadCsv(events, detail.id);
-          }}
-        >
-          <IconDownload size={14} stroke={1.5} />
-          Download
-        </Button>
       </div>
       {detail.error && status === "failed" && (
         <RunErrorBanner error={detail.error} />
@@ -397,7 +402,7 @@ export function ZeroActivityDetailPage() {
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <div className="flex-1 flex flex-col min-h-0 overflow-auto">
-        <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+        <nav className="hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
           {features?.[FeatureSwitchKey.ActivityLogList] && (
             <>
               <ActivityBreadcrumbLink />
@@ -471,7 +476,7 @@ function ActivitySkeleton() {
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <div className="flex-1 flex flex-col min-h-0 overflow-auto">
-        <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+        <nav className="hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
           {features?.[FeatureSwitchKey.ActivityLogList] && (
             <>
               <ActivityBreadcrumbLink />

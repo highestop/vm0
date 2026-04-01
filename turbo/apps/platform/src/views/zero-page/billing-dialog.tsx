@@ -417,7 +417,7 @@ export function BillingDialog() {
         return !v && close();
       }}
     >
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Choose your plan</DialogTitle>
           <DialogDescription>

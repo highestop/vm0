@@ -91,20 +91,20 @@ export function ZeroJobsPage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
-      <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-10 pb-3">
+      <header className="hidden md:block shrink-0 bg-transparent px-4 sm:px-6 pt-10 pb-3">
         <div className="mx-auto max-w-[900px]">
-          <h1 className="text-lg font-semibold tracking-tight text-foreground">
+          <h1 className="hidden md:block text-lg font-semibold tracking-tight text-foreground">
             Agents
           </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
+          <p className="hidden md:block mt-0.5 text-sm text-muted-foreground">
             {displayName} and sub-agents working together to run tailored
             workflows for you and your team.
           </p>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto px-4 sm:px-6 pt-4 pb-8">
-        <div className="mx-auto max-w-[900px] flex flex-col gap-6">
+      <main className="flex-1 overflow-auto px-4 sm:px-6 pt-3 pb-8">
+        <div className="mx-auto max-w-[900px] flex flex-col gap-4">
           {/* Zero — full width */}
           {rawAgentName ? (
             <Link
@@ -188,7 +188,7 @@ export function ZeroJobsPage() {
 
           {/* Sub-agents grid */}
           {loading && (!agents || agents.length === 0) && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1, 2, 3].map((i) => {
                 return (
                   <Card key={i} className="zero-card">
@@ -230,7 +230,7 @@ export function ZeroJobsPage() {
           )}
 
           {agents && agents.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <CreateTeammateButton
                 onClick={() => {
                   return setDialogOpen(true);
@@ -271,7 +271,7 @@ function CreateTeammateButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 rounded-xl border border-dashed border-[hsl(var(--gray-400))] px-4 py-4 transition-colors hover:bg-muted/30 group cursor-pointer text-left"
+      className="w-full h-full flex items-center gap-3 rounded-xl border border-dashed border-[hsl(var(--gray-400))] px-4 py-4 transition-colors hover:bg-muted/30 group cursor-pointer text-left"
     >
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
         <IconPlus
@@ -284,7 +284,7 @@ function CreateTeammateButton({ onClick }: { onClick: () => void }) {
         <p className="text-sm font-medium text-foreground/80 group-hover:text-foreground transition-colors">
           Create teammate
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
+        <p className="text-sm text-muted-foreground mt-0.5">
           Add a specialized agent to your team
         </p>
       </div>

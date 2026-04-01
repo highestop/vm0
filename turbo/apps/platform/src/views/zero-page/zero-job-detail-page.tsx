@@ -30,6 +30,11 @@ import {
   Card,
   CardContent,
   cn,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@vm0/ui";
 import { ZeroScheduleTab } from "./zero-schedule-tab.tsx";
 import { ZeroInstructionsTab } from "./zero-instructions-tab.tsx";
@@ -101,9 +106,17 @@ interface ZeroJobDetailPageProps {
   agentId: string;
 }
 
-function Breadcrumb({ currentName }: { currentName?: string }) {
+function Breadcrumb({
+  currentName,
+  className,
+}: {
+  currentName?: string;
+  className?: string;
+}) {
   return (
-    <nav className="shrink-0 flex items-center gap-1 px-4 pt-4 text-sm text-muted-foreground">
+    <nav
+      className={`hidden md:flex shrink-0 items-center gap-1 px-4 pt-4 text-sm text-muted-foreground${className ? ` ${className}` : ""}`}
+    >
       <Link
         pathname="/team"
         className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-muted hover:text-foreground transition-colors no-underline text-inherit"
@@ -226,7 +239,26 @@ function AgentTabNav({
       onValueChange={onTabChange}
       className="flex-1 min-w-0"
     >
-      <TabsList className="zero-tabs h-9 w-full sm:w-auto gap-1 px-1 py-1 overflow-x-auto">
+      {/* Mobile: Select dropdown */}
+      <div className="sm:hidden">
+        <Select value={activeTab} onValueChange={onTabChange}>
+          <SelectTrigger className="h-9 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="authorization">Authorization</SelectItem>
+            <SelectItem value="schedule">Scheduled</SelectItem>
+            {showProfileAndInstructions && (
+              <SelectItem value="profile">Profile</SelectItem>
+            )}
+            {showProfileAndInstructions && (
+              <SelectItem value="instructions">Instructions</SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+      {/* Desktop: tab list */}
+      <TabsList className="zero-tabs hidden sm:inline-flex h-9 gap-1 px-1 py-1">
         <TabsTrigger value="authorization" className={TAB_TRIGGER_CLASS}>
           <IconShield size={14} stroke={1.5} />
           Authorization
@@ -739,7 +771,7 @@ export function ZeroJobDetailPage({ agentId }: ZeroJobDetailPageProps) {
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-auto [scrollbar-gutter:stable]">
       <Breadcrumb currentName={displayName} />
-      <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-6 pb-3">
+      <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-6 pb-0">
         <div className="mx-auto max-w-[900px]">
           <div className="flex items-center gap-4">
             {currentAvatar ? (
@@ -755,16 +787,16 @@ export function ZeroJobDetailPage({ agentId }: ZeroJobDetailPageProps) {
               />
             )}
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl truncate">
                 {displayName}
               </h1>
-              <p className="text-sm text-muted-foreground mt-1.5 leading-tight">
+              <p className="text-sm text-muted-foreground mt-1.5 leading-tight line-clamp-2">
                 {description || "Your AI teammate, tuned to you"}
               </p>
             </div>
           </div>
 
-          <div className="mt-4 flex h-9 items-center gap-4">
+          <div className="mt-4 sm:mt-6 flex items-center gap-2">
             <AgentTabNav
               activeTab={activeTab}
               onTabChange={setActiveTab}
@@ -773,7 +805,7 @@ export function ZeroJobDetailPage({ agentId }: ZeroJobDetailPageProps) {
             <Button
               variant="outline"
               size="sm"
-              className="ml-auto zero-btn-morandi gap-1.5"
+              className="shrink-0 zero-btn-morandi gap-1.5"
               onClick={() => {
                 nav("/talk/:agentId", { pathParams: { agentId } });
               }}
@@ -786,7 +818,7 @@ export function ZeroJobDetailPage({ agentId }: ZeroJobDetailPageProps) {
         </div>
       </header>
 
-      <main className="shrink-0 px-4 sm:px-6 pt-4 pb-16">
+      <main className="shrink-0 px-4 sm:px-6 pt-4 sm:pt-6 pb-16">
         {activeTab === "authorization" && (
           <JobPermissionsTab agentId={agentId} displayName={displayName} />
         )}

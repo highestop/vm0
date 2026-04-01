@@ -71,6 +71,8 @@ enum Warning {
     OrphanNamespace { ns_name: String, pool_idx: u32 },
     /// An NBD device whose owning process has exited without disconnecting.
     OrphanNbdDevice { device_index: u32, pid: u32 },
+    /// The NBD orphan scan task panicked (bug in find_nbd_orphans).
+    NbdScanFailed,
 }
 
 impl fmt::Display for Warning {
@@ -114,6 +116,9 @@ impl fmt::Display for Warning {
                     f,
                     "orphan NBD device /dev/nbd{device_index} (owner PID {pid} no longer exists)"
                 )
+            }
+            Self::NbdScanFailed => {
+                write!(f, "NBD orphan scan failed (task panicked)")
             }
         }
     }
@@ -206,6 +211,12 @@ impl Warning {
                 })
                 .await
                 .unwrap_or(false)
+            }
+            Self::NbdScanFailed => {
+                // Retry the scan — persists if it panics again.
+                tokio::task::spawn_blocking(super::nbd::find_nbd_orphans)
+                    .await
+                    .is_err()
             }
         }
     }
@@ -308,9 +319,10 @@ pub async fn run_doctor(args: DoctorArgs) -> RunnerResult<ExitCode> {
         detect_global_orphans(&reports, &discovered.firecrackers, &discovered.mitmdumps).await
     } else {
         // Scoped detection: orphan firecracker for the named runner.
-        // Orphan mitmproxy, namespace, and NBD devices cannot be scoped
-        // (no runner-identifying info on orphaned processes / no persistent
-        // runner→pool_idx mapping / NBD devices lack per-runner attribution).
+        // Orphan mitmproxy and namespace cannot be scoped (no runner-identifying
+        // info on orphaned processes / no persistent runner→pool_idx mapping).
+        // NBD orphan detection always runs because devices lack per-runner
+        // attribution and the check is fast (<100ms).
         let mut warnings = Vec::new();
 
         // Orphan firecracker: scope by base_dir match.
@@ -325,6 +337,9 @@ pub async fn run_doctor(args: DoctorArgs) -> RunnerResult<ExitCode> {
                     .await,
             );
         }
+
+        // NBD orphan detection (host-wide, cannot scope to a single runner).
+        warnings.extend(detect_nbd_orphans().await);
 
         warnings
     };
@@ -807,9 +822,13 @@ async fn detect_orphan_namespaces() -> Vec<Warning> {
 
 /// Scan for NBD devices whose owning process has exited without disconnecting.
 async fn detect_nbd_orphans() -> Vec<Warning> {
-    let (_, orphans) = tokio::task::spawn_blocking(super::nbd::find_nbd_orphans)
-        .await
-        .unwrap_or_default();
+    let (_, orphans) = match tokio::task::spawn_blocking(super::nbd::find_nbd_orphans).await {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!("NBD orphan scan task failed: {e}");
+            return vec![Warning::NbdScanFailed];
+        }
+    };
 
     orphans
         .into_iter()
@@ -1235,6 +1254,9 @@ mod tests {
             w.to_string(),
             "orphan NBD device /dev/nbd3 (owner PID 12345 no longer exists)"
         );
+
+        let w = Warning::NbdScanFailed;
+        assert_eq!(w.to_string(), "NBD orphan scan failed (task panicked)");
     }
 
     #[test]

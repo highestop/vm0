@@ -8,12 +8,11 @@ import {
   zeroChatMessages$,
   allFinished$,
   zeroChatInput$,
-  zeroSessionList$,
-  zeroSessionListLoading$,
-  zeroSessionListError$,
+  chatThreads$,
   setZeroChatInput$,
   clearZeroChatInput$,
   startNewZeroSession$,
+  sendNewThreadMessage$,
   sendExistingThreadMessage$,
   loadSessionFromSnapshot$,
   zeroChatAttachments$,
@@ -72,12 +71,10 @@ describe("zero-chat signals", () => {
 
       await setup();
 
-      const threads = await context.store.get(zeroSessionList$);
+      const threads = await context.store.get(chatThreads$);
       expect(threads).toHaveLength(2);
       expect(threads[0]?.id).toBe("t1");
       expect(threads[1]?.title).toBe("World");
-      expect(context.store.get(zeroSessionListLoading$)).toBeFalsy();
-      expect(context.store.get(zeroSessionListError$)).toBeNull();
     });
 
     it("should pass agentId as query parameter", async () => {
@@ -91,7 +88,7 @@ describe("zero-chat signals", () => {
 
       await setup();
 
-      await context.store.get(zeroSessionList$);
+      await context.store.get(chatThreads$);
 
       const url = new URL(capturedUrl);
       expect(url.searchParams.get("agentId")).toBe(
@@ -312,6 +309,117 @@ describe("zero-chat signals", () => {
       // not duplicates from both server and local sources.
       expect(userMessages).toHaveLength(1);
       expect(assistantMessages).toHaveLength(1);
+    });
+  });
+
+  describe("sendNewThreadMessage$ error recovery", () => {
+    it("should clear optimistic messages when API returns 400", async () => {
+      server.use(
+        http.get("*/api/zero/chat-threads", () => {
+          return HttpResponse.json({ threads: [] });
+        }),
+        http.post("*/api/zero/chat/messages", () => {
+          return HttpResponse.json(
+            { error: { message: "Bad request", code: "BAD_REQUEST" } },
+            { status: 400 },
+          );
+        }),
+      );
+
+      await setup();
+
+      await expect(
+        context.store.set(
+          sendNewThreadMessage$,
+          "c0000000-0000-4000-a000-000000000001",
+          "Hello",
+          undefined,
+          context.signal,
+        ),
+      ).rejects.toThrow();
+
+      const messages = await context.store.get(zeroChatMessages$);
+      expect(messages).toHaveLength(0);
+    });
+
+    it("should clear optimistic messages when API returns 500", async () => {
+      server.use(
+        http.get("*/api/zero/chat-threads", () => {
+          return HttpResponse.json({ threads: [] });
+        }),
+        http.post("*/api/zero/chat/messages", () => {
+          return HttpResponse.json(
+            {
+              error: {
+                message: "Internal server error",
+                code: "INTERNAL_SERVER_ERROR",
+              },
+            },
+            { status: 500 },
+          );
+        }),
+      );
+
+      await setup();
+
+      await expect(
+        context.store.set(
+          sendNewThreadMessage$,
+          "c0000000-0000-4000-a000-000000000001",
+          "Hello",
+          undefined,
+          context.signal,
+        ),
+      ).rejects.toThrow();
+
+      const messages = await context.store.get(zeroChatMessages$);
+      expect(messages).toHaveLength(0);
+    });
+  });
+
+  describe("sendExistingThreadMessage$ error recovery", () => {
+    it("should clear optimistic messages when API returns 400", async () => {
+      server.use(
+        http.get("*/api/zero/chat-threads", () => {
+          return HttpResponse.json({ threads: [] });
+        }),
+        http.get("*/api/zero/chat-threads/:id", () => {
+          return HttpResponse.json({
+            id: "thread-err",
+            title: null,
+            agentId: "c0000000-0000-4000-a000-000000000001",
+            chatMessages: [],
+            latestSessionId: null,
+            unsavedRuns: [],
+            createdAt: "2026-03-10T00:00:00Z",
+            updatedAt: "2026-03-10T00:00:00Z",
+          });
+        }),
+        http.post("*/api/zero/chat/messages", () => {
+          return HttpResponse.json(
+            { error: { message: "Bad request", code: "BAD_REQUEST" } },
+            { status: 400 },
+          );
+        }),
+      );
+
+      await setupPage({
+        context,
+        path: "/chat/thread-err",
+        withoutRender: true,
+      });
+
+      await expect(
+        context.store.set(
+          sendExistingThreadMessage$,
+          "Hello",
+          undefined,
+          context.signal,
+        ),
+      ).rejects.toThrow();
+
+      const messages = await context.store.get(zeroChatMessages$);
+      expect(messages).toHaveLength(0);
     });
   });
 

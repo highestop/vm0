@@ -37,7 +37,7 @@ export async function setupPage(options: {
   // in tests we want to control the polling interval to make them faster and deterministic
   // if a test requires a specific interval to run, it indicates that the test is tightly coupled with real-world time. This is a very bad code smell.
   // So you should never try to modify this time interval here just to make a test pass. Instead, try your best to discover the underlying timing issues within the test.
-  options.context.store.set(setPollIntervalForTest$, 0);
+  options.context.store.set(setPollIntervalForTest$, 10);
   options.context.store.set(setValidateResponseForTest$, true);
 
   createPushStateMock(options.context.signal);
@@ -91,10 +91,9 @@ export async function setupPage(options: {
       options.context.signal,
     );
   } else {
-    // Bootstrap the app (like main.ts does).
-    // Note: intentionally not wrapped in act() — background polling loops with
-    // 0ms interval would cause act() to hang indefinitely waiting for them to
-    // settle. React "not wrapped in act" warnings are suppressed in setup.ts.
+    // Not wrapped in act() — background polling loops would cause act() to
+    // hang indefinitely waiting for them to settle. React "not wrapped in
+    // act" warnings are suppressed in setup.ts.
     await options.context.store.set(
       bootstrap$,
       () => {

@@ -88,8 +88,16 @@ function mockOnboardingNeededAdmin() {
       return HttpResponse.json({ threads: [] });
     }),
     // Mock chat send for the auto-intro message
-    http.post("*/api/zero/chat", () => {
-      return HttpResponse.json({ threadId: "new-thread-1" });
+    http.post("*/api/zero/chat/messages", () => {
+      return HttpResponse.json(
+        {
+          runId: "run-intro-1",
+          threadId: "new-thread-1",
+          status: "pending",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+        { status: 201 },
+      );
     }),
   );
 }
@@ -116,8 +124,16 @@ function mockOnboardingNeededMember() {
       return HttpResponse.json({ threads: [] });
     }),
     // Mock chat send for the auto-intro message
-    http.post("*/api/zero/chat", () => {
-      return HttpResponse.json({ threadId: "new-thread-1" });
+    http.post("*/api/zero/chat/messages", () => {
+      return HttpResponse.json(
+        {
+          runId: "run-intro-1",
+          threadId: "new-thread-1",
+          status: "pending",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+        { status: 201 },
+      );
     }),
   );
 }
@@ -137,7 +153,7 @@ describe("onboarding navigation", () => {
     await waitFor(() => {
       expect(screen.getByText(/Name your workspace/)).toBeInTheDocument();
     });
-  }, 15_000);
+  });
 
   it("should navigate to / after completing admin onboarding via web", async () => {
     const user = userEvent.setup();
@@ -200,7 +216,7 @@ describe("onboarding navigation", () => {
     await waitFor(() => {
       expect(pathname()).not.toBe("/onboarding");
     });
-  }, 15_000);
+  });
 
   it("should redirect to /onboarding when member needs onboarding", async () => {
     mockOnboardingNeededMember();
@@ -218,7 +234,7 @@ describe("onboarding navigation", () => {
         screen.getByText(/Where would you like to work with/),
       ).toBeInTheDocument();
     });
-  }, 15_000);
+  });
 
   it("should navigate to / after completing member onboarding via web", async () => {
     const user = userEvent.setup();
@@ -258,5 +274,5 @@ describe("onboarding navigation", () => {
     await waitFor(() => {
       expect(pathname()).not.toBe("/onboarding");
     });
-  }, 15_000);
+  });
 });

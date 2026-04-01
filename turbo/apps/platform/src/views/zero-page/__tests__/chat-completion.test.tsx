@@ -110,6 +110,15 @@ describe("chat completion", () => {
   it("should update sidebar title after completion", async () => {
     const user = userEvent.setup();
     const ctrl = mockChatLifecycle();
+    ctrl.setThreadList([
+      {
+        id: "thread-test-1",
+        title: "untitled",
+        agentId: "c0000000-0000-4000-a000-000000000001",
+        createdAt: "2026-03-10T00:00:00Z",
+        updatedAt: "2026-03-10T00:00:00Z",
+      },
+    ]);
 
     await setupPage({
       context,

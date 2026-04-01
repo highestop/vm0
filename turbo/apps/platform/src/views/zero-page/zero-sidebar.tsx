@@ -72,8 +72,8 @@ import {
 import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
 import { reloadAgents$ } from "../../signals/zero-page/agents-list.ts";
 import {
-  zeroSessionList$,
-  createNewChatSession$,
+  chatThreads$,
+  createNewChatThread$,
   creatingNewSession$,
   deleteChatThread$,
 } from "../../signals/zero-page/zero-chat.ts";
@@ -1158,7 +1158,7 @@ export function ZeroSidebar() {
   };
   const selectedRecentId = useGet(chatThreadId$);
   const onAccountAction = useSet(handleZeroAccountAction$);
-  const recentSessionsLoadable = useLastLoadable(zeroSessionList$);
+  const recentSessionsLoadable = useLastLoadable(chatThreads$);
   const recentSessions =
     recentSessionsLoadable.state === "hasData"
       ? recentSessionsLoadable.data
@@ -1170,7 +1170,7 @@ export function ZeroSidebar() {
         ? recentSessionsLoadable.error.message
         : "Failed to load chats"
       : null;
-  const createNewChat = useSet(createNewChatSession$);
+  const createNewChat = useSet(createNewChatThread$);
   const creatingNewSessionLoadable = useLoadable(creatingNewSession$);
   const creatingNewSession = creatingNewSessionLoadable.state === "loading";
   const pageSignal = useGet(pageSignal$);

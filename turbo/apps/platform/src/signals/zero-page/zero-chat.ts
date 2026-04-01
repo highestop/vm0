@@ -1,7 +1,6 @@
 import { command, computed, state, type Computed } from "ccstate";
-import { delay } from "signal-timers";
 import type { AgentEvent, LogStatus } from "./log-types.ts";
-import { throwIfAbort, resetSignal } from "../utils.ts";
+import { resetSignal, throwIfAbort } from "../utils.ts";
 import { detachedNavigateTo$ } from "../route.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { logger } from "../log.ts";
@@ -10,11 +9,7 @@ import {
   talkDraft$,
   type ZeroChatAttachment,
 } from "./chat-draft.ts";
-import {
-  createRunLoop,
-  poolInterval$,
-  type PagedRunEvents,
-} from "./polling.ts";
+import { createRunLoop, type PagedRunEvents } from "./polling.ts";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
 import {
   navigateToChat$,
@@ -31,7 +26,6 @@ import {
 } from "@vm0/core";
 import { zeroClient$, type ZeroClientFactory } from "../api-client.ts";
 
-// Re-export draft signals so existing imports from zero-chat.ts keep working
 export {
   zeroChatInput$,
   setZeroChatInput$,
@@ -46,18 +40,6 @@ export {
 
 const L = logger("ZeroChat");
 
-/**
- * Delay before refreshing sidebar/thread to pick up async title generation.
- * Title is generated server-side in a fire-and-forget manner, so the client
- * schedules a delayed refresh to fetch the updated title.
- */
-const TITLE_REFRESH_DELAY_MS = 3000;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Type guard for event data containing a result string. */
 function isResultEventData(data: unknown): data is { result: string } {
   return (
     typeof data === "object" &&
@@ -67,9 +49,6 @@ function isResultEventData(data: unknown): data is { result: string } {
   );
 }
 
-/** Scan telemetry event pages for the last "result" event content. */
-
-/** Create a chat thread via the threads API. Used by the "New chat" sidebar button. */
 async function createChatThread(
   createClient: ZeroClientFactory,
   agentId: string,
@@ -84,10 +63,6 @@ async function createChatThread(
   }
   return { id: result.body.id, title: result.body.title };
 }
-
-// ---------------------------------------------------------------------------
-// Chat message types
-// ---------------------------------------------------------------------------
 
 interface ZeroChatMessageAttachment {
   filename: string;
@@ -106,7 +81,6 @@ export interface UserChatMessage {
 export interface AssistantChatMessage {
   id: string;
   role: "assistant";
-  /** Reactive result content — always present. For static (historical) messages this resolves immediately. */
   result$: Computed<Promise<string>>;
   legacyRunId?: string;
   status?: LogStatus;
@@ -114,9 +88,7 @@ export interface AssistantChatMessage {
   cancelled?: boolean;
   summaries?: string[];
   runLoop?: ReturnType<typeof createRunLoop>;
-  /** Reactive summaries derived from runLoop events. */
   summaries$?: Computed<Promise<string[]>>;
-  /** Command to start the polling loop for this run. */
   beginLoop$?: ReturnType<typeof createRunLoop>["beginLoop$"];
 }
 
@@ -167,7 +139,6 @@ export const zeroChatMessages$ = computed(async (get) => {
   return [...serverMessages, ...filteredLocal];
 });
 
-/** Whether all runs have finished (no in-flight runs). */
 export const allFinished$ = computed(async (get) => {
   const messages = await get(zeroChatMessages$);
   return (
@@ -338,27 +309,16 @@ function summarizeEvent(event: AgentEvent, skipText: boolean): string | null {
  */
 export const resetTalkSendSignal$ = resetSignal();
 
-// ---------------------------------------------------------------------------
-// Promise signals — UI derives busy state from these via useLoadable
-// ---------------------------------------------------------------------------
+const internalReloadChatThreads$ = state(0);
 
-// Chat thread list — reload + computed pattern
-const reloadChatThreadList$ = state(0);
+export const reloadChatThreads$ = command(({ set }) => {
+  set(internalReloadChatThreads$, (n) => {
+    return n + 1;
+  });
+});
 
-export const fetchZeroSessionList$ = command(
-  ({ set }, _signal: AbortSignal) => {
-    set(reloadChatThreadList$, (n) => {
-      return n + 1;
-    });
-  },
-);
-
-// NOTE: The thread list in the sidebar reflects the *last visited* agent (sidebarChatAgentId$),
-// which persists across non-chat pages (e.g. /activity) so the user always sees the
-// threads for the agent they were talking to.  The send commands receive agentId explicitly
-// (or derive it from the thread) rather than reading sidebarChatAgentId$.
-const chatThreadListResponse$ = computed(async (get) => {
-  get(reloadChatThreadList$);
+export const chatThreads$ = computed(async (get) => {
+  get(internalReloadChatThreads$);
   const sidebarAgentId = get(sidebarChatAgentId$);
   const composeId =
     sidebarAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
@@ -370,22 +330,18 @@ const chatThreadListResponse$ = computed(async (get) => {
   if (result.status !== 200) {
     throw new Error(`Failed to load chats (${result.status})`);
   }
-  return result.body.threads;
+  const threads = result.body.threads;
+
+  const currentThread = await get(currentChatThread$);
+  return threads.map((t) => {
+    return {
+      ...t,
+      title:
+        t.id === currentThread?.id ? t.title || currentThread.title : t.title,
+    };
+  });
 });
 
-// Backward-compatible aliases (will be removed)
-export const zeroSessionList$ = computed(async (get) => {
-  return await get(chatThreadListResponse$);
-});
-
-export const zeroSessionListLoading$ = computed(() => {
-  return false;
-});
-export const zeroSessionListError$ = computed(() => {
-  return null as string | null;
-});
-
-/** Delete a chat thread and refresh the sidebar list. */
 export const deleteChatThread$ = command(
   async ({ get, set }, threadId: string, signal: AbortSignal) => {
     const client = get(zeroClient$)(chatThreadByIdContract);
@@ -404,24 +360,20 @@ export const deleteChatThread$ = command(
 
     toast.success("Chat deleted");
 
-    // Navigate away first so currentChatThread$ won't re-fetch the deleted thread
     if (get(chatThreadId$) === threadId) {
       set(detachedNavigateTo$, "/");
     }
 
-    set(reloadChatThreadList$, (n) => {
+    set(internalReloadChatThreads$, (n) => {
       return n + 1;
     });
   },
 );
 
-// ---------------------------------------------------------------------------
-// Session snapshot — async computed derived from URL
-// ---------------------------------------------------------------------------
-
-/** Raw thread/session data returned by the API. */
-interface ChatThreadData {
+interface ChatThread {
+  id: string;
   agentId?: string;
+  title: string | null;
   chatMessages: {
     role: "user" | "assistant";
     content: string;
@@ -440,7 +392,6 @@ interface ChatThreadData {
   isLegacySession: boolean;
 }
 
-/** Collect all events from paged event lists into a flat array. */
 async function collectAllEvents(
   pages: Computed<Promise<PagedRunEvents>>[],
   get: (c: Computed<Promise<PagedRunEvents>>) => Promise<PagedRunEvents>,
@@ -453,7 +404,6 @@ async function collectAllEvents(
   return allEvents;
 }
 
-/** Extract result content from a flat list of events. */
 function extractResult(events: AgentEvent[]): string {
   let result = "";
   for (const event of events) {
@@ -464,7 +414,6 @@ function extractResult(events: AgentEvent[]): string {
   return result;
 }
 
-/** Extract summary strings from a flat list of events. */
 function extractSummaries(events: AgentEvent[]): string[] {
   let lastTextIdx = -1;
   for (let i = events.length - 1; i >= 0; i--) {
@@ -483,11 +432,6 @@ function extractSummaries(events: AgentEvent[]): string[] {
   return summaries;
 }
 
-/**
- * Create a pair of messages (user + assistant) for an active run.
- * The assistant message carries reactive signals for result, summaries,
- * and polling control — no external state management needed.
- */
 function createActiveRunMessage(
   runId: string,
   prompt: string,
@@ -524,8 +468,7 @@ function createActiveRunMessage(
   };
 }
 
-/** Splits unsaved runs into completed (failed/cancelled) messages and active run messages. */
-function unsavedRunsToMessages(unsavedRuns: ChatThreadData["unsavedRuns"]): {
+function unsavedRunsToMessages(unsavedRuns: ChatThread["unsavedRuns"]): {
   messages: ZeroChatMessage[];
   activeRunMessages: ZeroChatMessage[];
   lastActiveRunId: string | null;
@@ -572,22 +515,16 @@ function unsavedRunsToMessages(unsavedRuns: ChatThreadData["unsavedRuns"]): {
 }
 
 interface ChatSessionSnapshotData {
-  /** Completed/failed messages — immutable, rendered directly from snapshot. */
   messages: ZeroChatMessage[];
-  /** Active run prompt + placeholder — copied to local state for mutable polling updates. */
   activeRunMessages: ZeroChatMessage[];
   agentId?: string;
   lastActiveRunId: string | null;
 }
 
-/**
- * Fetches raw thread/session data from the API whenever the URL thread ID changes.
- * Tries the new chat-thread endpoint first, falls back to the legacy session endpoint.
- */
 const reloadCurrentThread$ = state(0);
 
 export const currentChatThread$ = computed(
-  async (get): Promise<ChatThreadData | null> => {
+  async (get): Promise<ChatThread | null> => {
     get(reloadCurrentThread$);
     const threadId = get(chatThreadId$);
     if (!threadId) {
@@ -602,6 +539,8 @@ export const currentChatThread$ = computed(
     if (threadResult.status === 200) {
       const body = threadResult.body;
       return {
+        id: threadId,
+        title: body.title ?? null,
         agentId: body.agentId,
         chatMessages: body.chatMessages ?? [],
         latestSessionId: body.latestSessionId ?? null,
@@ -620,6 +559,8 @@ export const currentChatThread$ = computed(
     }
     const body = sessionResult.body;
     return {
+      id: threadId,
+      title: null,
       agentId: body.agentId,
       chatMessages: body.chatMessages ?? [],
       latestSessionId: threadId,
@@ -629,7 +570,6 @@ export const currentChatThread$ = computed(
   },
 );
 
-/** Transforms raw chat messages into display-ready ZeroChatMessage objects. */
 const currentChatMessages$ = computed(
   async (get): Promise<ZeroChatMessage[]> => {
     const messages = (await get(currentChatThread$))?.chatMessages ?? [];
@@ -674,10 +614,6 @@ const currentChatMessages$ = computed(
   },
 );
 
-/**
- * Composes the full session snapshot from thread data + transformed messages.
- * Loading/error states are derived automatically via `useLoadable` in the view.
- */
 const chatSessionSnapshot$ = computed(
   async (get): Promise<ChatSessionSnapshotData | null> => {
     const thread = await get(currentChatThread$);
@@ -700,67 +636,43 @@ const chatSessionSnapshot$ = computed(
   },
 );
 
-// Chat input and attachments are now managed per-draft in chat-draft.ts.
-// Convenience signals are re-exported at the top of this file.
-
-/**
- * Load session data from the snapshot computed and populate state.
- * The snapshot auto-fetches when URL changes — this command reads the result,
- * populates server messages, syncs agent, and resumes polling if needed.
- */
 export const loadSessionFromSnapshot$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     const snapshot = await get(chatSessionSnapshot$);
     signal.throwIfAborted();
-    if (!snapshot) {
+    if (!snapshot?.activeRunMessages.length) {
       return;
     }
 
-    // Resume polling for active runs: copy active run messages to local
-    // and start their polling loops via beginLoop$.
-    if (snapshot.activeRunMessages.length > 0) {
-      set(internalLocalMessages$, snapshot.activeRunMessages);
+    set(internalLocalMessages$, snapshot.activeRunMessages);
 
-      const assistantMessages = snapshot.activeRunMessages.filter(
-        (m): m is AssistantChatMessage => {
-          return m.role === "assistant" && !!m.beginLoop$;
-        },
-      );
+    const assistantMessages = snapshot.activeRunMessages.filter(
+      (m): m is AssistantChatMessage => {
+        return m.role === "assistant" && !!m.beginLoop$;
+      },
+    );
 
-      await Promise.all(
-        assistantMessages.map(async (message) => {
-          await set(message.beginLoop$!, signal);
-        }),
-      );
-      signal.throwIfAborted();
+    await Promise.all(
+      assistantMessages.map(async (message) => {
+        await set(message.beginLoop$!, signal);
+      }),
+    );
+    signal.throwIfAborted();
 
-      // Finalize each completed run (persist session ID, refresh sidebar)
-      await Promise.all(
-        assistantMessages
-          .filter((m) => {
-            return m.legacyRunId;
-          })
-          .map(() => {
-            return set(finalizeCompletedRun$, signal);
-          }),
-      );
-    }
+    set(internalReloadChatThreads$, (n) => {
+      return n + 1;
+    });
+    set(reloadCurrentThread$, (n) => {
+      return n + 1;
+    });
   },
 );
 
 export const startNewZeroSession$ = command(({ get, set }) => {
-  // Abort any in-flight send/polling from the previous session
   set(resetTalkSendSignal$);
-
   set(internalLocalMessages$, []);
-
-  // Clear the talk draft (input, attachments, model)
   set(get(talkDraft$).clear$);
 });
-
-// ---------------------------------------------------------------------------
-// Commands: create new chat session (from sidebar "New chat" button)
-// ---------------------------------------------------------------------------
 
 const internalCreatingPromise$ = state<Promise<void> | undefined>(undefined);
 
@@ -770,32 +682,32 @@ export const creatingNewSession$ = computed(async (get) => {
 
 const internalCreateNewChatSession$ = command(
   async ({ get, set }, agentComposeId: string | null, _signal: AbortSignal) => {
+    set(startNewZeroSession$);
+
+    const resolvedComposeId =
+      agentComposeId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
+
+    if (!resolvedComposeId) {
+      toast.error("No agent available for new chat session");
+      return;
+    }
+
+    const createClient = get(zeroClient$);
+    let thread;
     try {
-      set(startNewZeroSession$);
-
-      const resolvedComposeId =
-        agentComposeId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
-      if (!resolvedComposeId) {
-        toast.error("No agent available for new chat session");
-        return;
-      }
-
-      const createClient = get(zeroClient$);
-      const thread = await createChatThread(createClient, resolvedComposeId);
-
-      set(reloadChatThreadList$, (n) => {
-        return n + 1;
-      });
-      set(navigateToChat$, thread.id);
+      thread = await createChatThread(createClient, resolvedComposeId);
     } catch (error) {
       throwIfAbort(error);
-      L.error("Failed to create new chat session:", error);
       toast.error("Failed to create new chat session");
+      return;
     }
+
+    set(reloadChatThreads$);
+    set(navigateToChat$, thread.id);
   },
 );
 
-export const createNewChatSession$ = command(
+export const createNewChatThread$ = command(
   ({ set }, agentComposeId: string | null, signal: AbortSignal) => {
     const promise = set(internalCreateNewChatSession$, agentComposeId, signal);
     set(internalCreatingPromise$, promise);
@@ -803,17 +715,12 @@ export const createNewChatSession$ = command(
   },
 );
 
-// ---------------------------------------------------------------------------
-// Commands: send message
-// ---------------------------------------------------------------------------
-
 const prepareUserMessage$ = command(
   async (
     { get, set },
     prompt: string,
     signal: AbortSignal,
   ): Promise<{ fullPrompt: string }> => {
-    // Capture the current draft before any async work
     const draft = get(currentDraft$);
     const allAttachments = draft ? get(draft.attachments$) : [];
     const allInfos = await Promise.all(
@@ -823,7 +730,6 @@ const prepareUserMessage$ = command(
     );
     signal.throwIfAborted();
 
-    // Pair attachments with resolved file info, dropping any that failed or haven't started
     const ready = allAttachments
       .map((a, i) => {
         return { attachment: a, info: allInfos[i] };
@@ -876,28 +782,6 @@ const prepareUserMessage$ = command(
   },
 );
 
-/** Post-polling cleanup: refresh sidebar and current thread. Session is managed server-side via callback. */
-const finalizeCompletedRun$ = command(
-  async ({ get, set }, signal: AbortSignal) => {
-    // Refresh session list (messages are persisted server-side via webhook)
-    set(reloadChatThreadList$, (n) => {
-      return n + 1;
-    });
-    await delay(get(poolInterval$), { signal });
-    set(reloadChatThreadList$, (n) => {
-      return n + 1;
-    });
-    // Invalidate the current thread so latestSessionId and messages are fresh
-    set(reloadCurrentThread$, (n) => {
-      return n + 1;
-    });
-  },
-);
-
-// ---------------------------------------------------------------------------
-// Helpers: shared API call + error handling
-// ---------------------------------------------------------------------------
-
 function resolveModelProvider(
   modelProvider: string | undefined,
 ): string | undefined {
@@ -918,16 +802,6 @@ function handleSendError(result: {
   throw new Error(message);
 }
 
-// ---------------------------------------------------------------------------
-// Commands: send message (new thread)
-// ---------------------------------------------------------------------------
-
-/**
- * Send a message that creates a new chat thread.
- * Used by the talk page and onboarding flow.
- * After the API call, navigates to the new chat thread and refreshes the sidebar.
- * Polling is deferred to the chat page via `loadSessionFromSnapshot$`.
- */
 export const sendNewThreadMessage$ = command(
   async (
     { get, set },
@@ -965,39 +839,21 @@ export const sendNewThreadMessage$ = command(
         }
         throw new Error(`Failed to send message (${result.status})`);
       }
+      set(reloadChatThreads$);
 
       set(navigateToChat$, result.body.threadId);
-      set(reloadChatThreadList$, (n) => {
-        return n + 1;
-      });
-
-      // Title is generated async on the server — refresh after a short delay
-      delay(TITLE_REFRESH_DELAY_MS, { signal })
-        .then(() => {
-          set(reloadChatThreadList$, (n) => {
-            return n + 1;
-          });
-        })
-        .catch(() => {});
     } catch (error) {
       throwIfAbort(error);
-      L.error("Chat send error:", error);
-      // Clear the optimistic user message since the send failed.
-      // The user stays on /talk/ with their input preserved for retry.
+      // Clear optimistic messages so stale user input does not persist in the UI
       set(internalLocalMessages$, []);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send message",
+      );
+      throw error;
     }
   },
 );
 
-// ---------------------------------------------------------------------------
-// Commands: send message (existing thread)
-// ---------------------------------------------------------------------------
-
-/**
- * Send a message within an existing chat thread.
- * Used by the chat page. Reads agentId from the current thread.
- * Creates an assistant message with a polling runLoop and waits for completion.
- */
 export const sendExistingThreadMessage$ = command(
   async (
     { get, set },
@@ -1043,26 +899,13 @@ export const sendExistingThreadMessage$ = command(
 
       const { runId } = result.body;
 
-      // Refresh sidebar and current thread — title is generated async,
-      // so schedule a delayed refresh to pick it up
-      set(reloadChatThreadList$, (n) => {
+      set(internalReloadChatThreads$, (n) => {
         return n + 1;
       });
       set(reloadCurrentThread$, (n) => {
         return n + 1;
       });
-      delay(TITLE_REFRESH_DELAY_MS, { signal })
-        .then(() => {
-          set(reloadChatThreadList$, (n) => {
-            return n + 1;
-          });
-          set(reloadCurrentThread$, (n) => {
-            return n + 1;
-          });
-        })
-        .catch(() => {});
 
-      // Create reactive assistant message with its own runLoop
       const { assistantMessage } = createActiveRunMessage(runId, prompt);
       set(internalLocalMessages$, (prev) => {
         return [...prev, assistantMessage];
@@ -1074,20 +917,23 @@ export const sendExistingThreadMessage$ = command(
       }
 
       await set(runLoop.beginLoop$, signal);
-
-      await set(finalizeCompletedRun$, signal);
+      set(internalReloadChatThreads$, (n) => {
+        return n + 1;
+      });
+      set(reloadCurrentThread$, (n) => {
+        return n + 1;
+      });
     } catch (error) {
       throwIfAbort(error);
-      L.error("Chat send error:", error);
-      // Clear the optimistic user message since the send failed.
+      // Clear optimistic messages so stale user input does not persist in the UI
       set(internalLocalMessages$, []);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send message",
+      );
+      throw error;
     }
   },
 );
-
-// ---------------------------------------------------------------------------
-// Composite shell commands
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Composer local UI state
@@ -1095,12 +941,10 @@ export const sendExistingThreadMessage$ = command(
 
 const internalComposerFileInput$ = state<HTMLElement | null>(null);
 
-/** The file input element used by the composer attach button. */
 export const composerFileInput$ = computed((get) => {
   return get(internalComposerFileInput$);
 });
 
-/** Store a reference to the composer file input element. */
 export const setComposerFileInput$ = command(
   ({ set }, el: HTMLElement | null) => {
     set(internalComposerFileInput$, el);

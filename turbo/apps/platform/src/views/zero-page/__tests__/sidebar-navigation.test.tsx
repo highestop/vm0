@@ -121,7 +121,7 @@ describe("sidebar new chat navigation", () => {
     await waitFor(() => {
       expect(pathname()).toBe("/chat/new-thread-id");
     });
-  }, 15_000);
+  });
 
   it("should create thread and navigate to /chat/:threadId when clicking new chat for a subagent", async () => {
     const user = userEvent.setup();
@@ -140,7 +140,7 @@ describe("sidebar new chat navigation", () => {
     await waitFor(() => {
       expect(pathname()).toBe("/chat/new-thread-id");
     });
-  }, 15_000);
+  });
 
   it("should disable button during thread creation", async () => {
     const user = userEvent.setup();
@@ -264,12 +264,14 @@ describe("sidebar new chat navigation", () => {
       expect(pathname()).toBe("/chat/new-thread-id");
     });
 
-    // 2. Verify sidebar shows "New chat" entry
-    expect(screen.getByText("New chat")).toBeInTheDocument();
+    // 2. Verify sidebar shows "New chat" entry (thread has title: null)
+    await waitFor(() => {
+      expect(screen.getByText("New chat")).toBeInTheDocument();
+    });
 
     // 3. Verify textarea has focus (autoFocus triggers because chatMessages is empty)
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toHaveFocus();
     });
-  }, 15_000);
+  });
 });

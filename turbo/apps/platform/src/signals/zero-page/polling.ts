@@ -17,7 +17,7 @@ export const setPollIntervalForTest$ = command(({ set }, interval: number) => {
   set(internalPollInterval$, interval);
 });
 
-export const poolInterval$ = computed((get) => {
+const poolInterval$ = computed((get) => {
   return get(internalPollInterval$);
 });
 

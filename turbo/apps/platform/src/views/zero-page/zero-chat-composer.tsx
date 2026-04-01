@@ -2,14 +2,23 @@ import { useState, type ChangeEvent } from "react";
 import { useGet, useSet, useLastLoadable } from "ccstate-react";
 import {
   IconArrowUp,
+  IconLoader2,
   IconPaperclip,
   IconPlayerStop,
   IconPlug,
+  IconPlus,
 } from "@tabler/icons-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@vm0/ui/components/ui/dialog";
 import {
   Button,
   Card,
   CardContent,
+  Input,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -36,7 +45,7 @@ import { AttachmentChips } from "./zero-attachment-chips.tsx";
 import { useFileUploadHandlers } from "./use-file-upload-handlers.ts";
 import { useModelSelection } from "./zero-model-preference.ts";
 import { useSendKeyHandler } from "./zero-send-key.ts";
-import type { ConnectorType } from "@vm0/core";
+import { CONNECTOR_TYPES, type ConnectorType } from "@vm0/core";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { ProviderIcon } from "./components/settings/provider-icons.tsx";
 import { ConnectModal } from "./components/settings/add-connection-dialog.tsx";
@@ -45,7 +54,8 @@ import {
   selectedConnectorType$,
   setSelectedConnectorType$,
   justConnectedTypes$,
-  clearJustConnectedTypes$,
+  pollingConnectorType$,
+  type ConnectorTypeWithStatus,
 } from "../../signals/zero-page/settings/connectors.ts";
 import { LoadingSwitch } from "../components/loading-switch.tsx";
 import { pageSignal$ } from "../../signals/page-signal.ts";
@@ -54,9 +64,7 @@ import {
   zeroAddedConnectors$,
   addZeroConnector$,
   removeZeroConnector$,
-  saveZeroConnectors$,
 } from "../../signals/zero-page/zero-connectors.ts";
-import { detachedNavigateTo$ } from "../../signals/route.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 
 // ---------------------------------------------------------------------------
@@ -89,22 +97,6 @@ interface ComposerConnectorItem {
   label: string;
   connected: boolean;
   added: boolean;
-}
-
-function maybeClearOptimistic(
-  optimistic: Set<string>,
-  connectorMap: Map<ConnectorType, { connected: boolean }>,
-  clear: () => void,
-) {
-  if (optimistic.size === 0) {
-    return;
-  }
-  const allConfirmed = [...optimistic].every((t) => {
-    return connectorMap.get(t as ConnectorType)?.connected;
-  });
-  if (allConfirmed) {
-    clear();
-  }
 }
 
 function resolveConnectorLabel(
@@ -146,21 +138,137 @@ function ConnectorTriggerIcons({
   );
 }
 
+function AddConnectorsDialog({
+  unconnected,
+  pollingType,
+  onClose,
+  onSelect,
+}: {
+  unconnected: ConnectorTypeWithStatus[];
+  pollingType: string | null;
+  onClose: () => void;
+  onSelect: (type: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const filtered = search.trim()
+    ? unconnected.filter((item) => {
+        return item.label.toLowerCase().includes(search.toLowerCase());
+      })
+    : unconnected;
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        return !open && onClose();
+      }}
+    >
+      <DialogContent
+        className="max-w-2xl flex flex-col max-h-[80vh]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader className="shrink-0">
+          <DialogTitle>
+            Available connectors to connect ({unconnected.length})
+          </DialogTitle>
+        </DialogHeader>
+        <div className="shrink-0">
+          <Input
+            type="text"
+            placeholder="Search connectors..."
+            value={search}
+            onChange={(e) => {
+              return setSearch(e.target.value);
+            }}
+            autoFocus
+          />
+        </div>
+        <div className="overflow-y-auto -mx-6 px-6">
+          <div className="grid grid-cols-2 gap-3">
+            {filtered.map((item) => {
+              return (
+                <div
+                  key={item.type}
+                  className="rounded-lg bg-card overflow-hidden"
+                  style={{ border: "0.7px solid hsl(var(--gray-400))" }}
+                >
+                  <div className="flex items-center gap-2.5 px-4 pt-4 pb-1">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                      {item.type in CONNECTOR_TYPES ? (
+                        <ConnectorIcon
+                          type={item.type as ConnectorType}
+                          size={20}
+                        />
+                      ) : (
+                        <IconPlug
+                          size={18}
+                          stroke={1.5}
+                          className="text-muted-foreground"
+                        />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 text-sm font-medium text-foreground truncate">
+                      {item.label}
+                    </span>
+                    {pollingType === item.type ? (
+                      <IconLoader2
+                        size={16}
+                        stroke={1.5}
+                        className="shrink-0 text-muted-foreground animate-spin"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          return onSelect(item.type);
+                        }}
+                        className="shrink-0 flex h-7 w-7 items-center justify-center rounded-md border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                        aria-label={`Connect ${item.label}`}
+                      >
+                        <IconPlus size={14} stroke={1.5} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="px-4 pb-4 pt-1">
+                    <div className="text-xs text-muted-foreground line-clamp-2">
+                      {item.helpText ?? ""}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ConnectorsPopoverButton({
   agentConnectors,
   connectorsLoading,
   savingType,
   onOpenAddDialog,
   onToggle,
-  displayName,
 }: {
   agentConnectors: ComposerConnectorItem[];
   connectorsLoading: boolean;
   savingType: string | null;
   onOpenAddDialog: () => void;
   onToggle: (type: string, checked: boolean) => void;
-  displayName: string;
 }) {
+  const [search, setSearch] = useState("");
+  const showSearch = agentConnectors.length > 20;
+  const sorted = [...agentConnectors].sort((a, b) => {
+    return Number(b.added) - Number(a.added);
+  });
+  const visibleConnectors =
+    showSearch && search.trim()
+      ? sorted.filter((c) => {
+          return c.label.toLowerCase().includes(search.toLowerCase());
+        })
+      : sorted.slice(0, 20);
+
   return (
     <Popover>
       <TooltipProvider delayDuration={300}>
@@ -182,55 +290,66 @@ function ConnectorsPopoverButton({
         </Tooltip>
       </TooltipProvider>
       <PopoverContent side="top" align="start" className="w-72 p-0 rounded-lg">
-        <div className="py-1">
-          <div className="px-3 pt-2 pb-1">
-            <span className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">
-              Services for {displayName}
-            </span>
-          </div>
-          {connectorsLoading ? (
-            <div className="flex flex-col animate-pulse">
-              {Array.from({ length: 3 }, (_, i) => {
-                return (
-                  <div key={i} className="flex items-center gap-2 px-3 py-2">
-                    <span className="h-4 w-4 shrink-0 rounded bg-muted/50" />
-                    <span className="h-3.5 w-20 rounded bg-muted/50 flex-1" />
-                    <span className="h-3 w-6 rounded-full bg-muted/50" />
-                  </div>
-                );
-              })}
-            </div>
-          ) : agentConnectors.length > 0 ? (
-            <div className="flex flex-col">
-              {agentConnectors.map((item) => {
-                return (
-                  <div
-                    key={item.type}
-                    className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 transition-colors"
-                  >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      <ConnectorIcon
-                        type={item.type as ConnectorType}
-                        size={16}
+        {(agentConnectors.length > 0 || connectorsLoading) && (
+          <div className="py-1">
+            {showSearch && (
+              <div className="px-3 py-1 border-b border-border/50">
+                <input
+                  type="text"
+                  placeholder="Search connectors..."
+                  value={search}
+                  onChange={(e) => {
+                    return setSearch(e.target.value);
+                  }}
+                  className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+                />
+              </div>
+            )}
+            {connectorsLoading ? (
+              <div className="flex flex-col animate-pulse">
+                {Array.from({ length: 3 }, (_, i) => {
+                  return (
+                    <div key={i} className="flex items-center gap-2 px-3 py-2">
+                      <span className="h-4 w-4 shrink-0 rounded bg-muted/50" />
+                      <span className="h-3.5 w-20 rounded bg-muted/50 flex-1" />
+                      <span className="h-3 w-6 rounded-full bg-muted/50" />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col max-h-72 overflow-y-auto">
+                {visibleConnectors.map((item) => {
+                  return (
+                    <div
+                      key={item.type}
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 transition-colors"
+                    >
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                        <ConnectorIcon
+                          type={item.type as ConnectorType}
+                          size={16}
+                        />
+                      </span>
+                      <span className="text-sm flex-1 truncate text-foreground">
+                        {item.label}
+                      </span>
+                      <LoadingSwitch
+                        checked={item.added}
+                        onCheckedChange={(checked) => {
+                          onToggle(item.type, checked);
+                        }}
+                        loading={savingType === item.type}
+                        ariaLabel={`${item.added ? "Remove" : "Add"} ${item.label}`}
+                        size="sm"
                       />
-                    </span>
-                    <span className="text-sm flex-1 truncate text-foreground">
-                      {item.label}
-                    </span>
-                    <LoadingSwitch
-                      checked={item.added}
-                      onCheckedChange={(checked) => {
-                        onToggle(item.type, checked);
-                      }}
-                      loading={savingType === item.type}
-                      ariaLabel={`${item.added ? "Remove" : "Add"} ${item.label}`}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         <div
           className={cn(
             "p-1 flex flex-col",
@@ -250,7 +369,7 @@ function ConnectorsPopoverButton({
               stroke={1.5}
               className="shrink-0 text-muted-foreground"
             />
-            Manage connectors
+            Add connectors
           </button>
         </div>
       </PopoverContent>
@@ -272,6 +391,8 @@ export function ZeroChatComposer({
   className,
   autoFocus,
 }: ZeroChatComposerProps) {
+  const [showAddDialog, setShowAddDialog] = useState(false);
+
   // Attachments
   const attachments = useGet(zeroChatAttachments$);
   const uploadAttachment = useSet(uploadZeroAttachment$);
@@ -297,13 +418,14 @@ export function ZeroChatComposer({
   const addedConnectorsLoadable = useLastLoadable(zeroAddedConnectors$);
   const pageSignal = useGet(pageSignal$);
   const selectedConnType = useGet(selectedConnectorType$);
+  const [pendingConnectType, setPendingConnectType] = useState<string | null>(
+    null,
+  );
   const setSelectedConnType = useSet(setSelectedConnectorType$);
+  const pollingConnType = useGet(pollingConnectorType$);
   const addConnector = useSet(addZeroConnector$);
   const removeConnector = useSet(removeZeroConnector$);
-  const saveConnectors = useSet(saveZeroConnectors$);
   const optimisticConnected = useGet(justConnectedTypes$);
-  const clearOptimistic = useSet(clearJustConnectedTypes$);
-  const navigate = useSet(detachedNavigateTo$);
 
   const [savingType, setSavingType] = useState<string | null>(null);
 
@@ -318,12 +440,15 @@ export function ZeroChatComposer({
       return [c.type, c];
     }),
   );
-  maybeClearOptimistic(optimisticConnected, connectorMap, clearOptimistic);
   const addedConnectors =
     addedConnectorsLoadable.state === "hasData"
       ? addedConnectorsLoadable.data
       : [];
   const addedSet = new Set(addedConnectors);
+
+  const unconnectedConnectors = allConnectors.filter((c) => {
+    return !c.connected;
+  });
 
   // Show all org-connected services (so user can toggle them on/off for this agent)
   const connectedTypes = allConnectors.filter((c) => {
@@ -338,36 +463,37 @@ export function ZeroChatComposer({
     };
   });
 
-  const handleConnectSuccess = (type: string) => {
+  const handleConnectSuccess = async (type: string) => {
     const label = resolveConnectorLabel(type, connectorMap);
-    detach(
-      (async () => {
-        await addConnector(type, pageSignal);
-        try {
-          await saveConnectors(pageSignal);
-        } catch (error) {
-          throwIfAbort(error);
-          // May fail during onboarding when compose doesn't exist yet — ignore
-        }
-        toast.success(`${label} connected`);
-      })(),
-      Reason.DomCallback,
-    );
+    try {
+      await addConnector(type, pageSignal);
+      toast.success(`${label} connected and authorized for ${displayName}`, {
+        id: `connector-connected-${type}`,
+      });
+    } catch (error) {
+      throwIfAbort(error);
+      toast.error(`${label} was authorized but could not be saved`, {
+        id: `connector-save-error-${type}`,
+      });
+    }
   };
 
   const handleToggle = (type: string, checked: boolean) => {
+    const label = resolveConnectorLabel(type, connectorMap);
     setSavingType(type);
     detach(
       (async () => {
-        if (checked) {
-          await addConnector(type, pageSignal);
-        } else {
-          await removeConnector(type, pageSignal);
-        }
         try {
-          await saveConnectors(pageSignal);
+          if (checked) {
+            await addConnector(type, pageSignal);
+          } else {
+            await removeConnector(type, pageSignal);
+          }
         } catch (error) {
           throwIfAbort(error);
+          toast.error(`Failed to ${checked ? "add" : "remove"} ${label}`, {
+            id: `connector-toggle-error-${type}`,
+          });
         } finally {
           setSavingType(null);
         }
@@ -473,10 +599,9 @@ export function ZeroChatComposer({
                   connectorsLoading={connectorsLoading}
                   savingType={savingType}
                   onOpenAddDialog={() => {
-                    return navigate("/connectors");
+                    return setShowAddDialog(true);
                   }}
                   onToggle={handleToggle}
-                  displayName={displayName}
                 />
               </div>
               <div className="flex items-center gap-2">
@@ -526,7 +651,7 @@ export function ZeroChatComposer({
                   disabled={!input.trim() || !!sending}
                   aria-label="Send"
                 >
-                  <IconArrowUp size={16} stroke={2} />
+                  <IconArrowUp size={18} stroke={2} />
                 </Button>
               </div>
             </div>
@@ -538,10 +663,26 @@ export function ZeroChatComposer({
           onClose={() => {
             return setSelectedConnType(null);
           }}
-          onSuccess={() => {
-            if (selectedConnType && !addedSet.has(selectedConnType)) {
-              handleConnectSuccess(selectedConnType);
+          onSuccess={async () => {
+            const type = pendingConnectType ?? selectedConnType;
+            if (type && !addedSet.has(type)) {
+              await handleConnectSuccess(type);
             }
+            setPendingConnectType(null);
+            setShowAddDialog(false);
+          }}
+        />
+      )}
+      {showAddDialog && (
+        <AddConnectorsDialog
+          unconnected={unconnectedConnectors}
+          pollingType={pollingConnType}
+          onClose={() => {
+            return setShowAddDialog(false);
+          }}
+          onSelect={(type) => {
+            setPendingConnectType(type);
+            setSelectedConnType(type as ConnectorType);
           }}
         />
       )}

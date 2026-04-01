@@ -231,14 +231,12 @@ function useAccountSessions() {
   return { user, clerk, accounts };
 }
 
-export function AccountDropdown({
+function AccountDropdown({
   onAccountAction,
   collapsed = false,
-  hidePreferences = false,
 }: {
   onAccountAction?: (action: ZeroAccountAction) => void;
   collapsed?: boolean;
-  hidePreferences?: boolean;
 }) {
   const { user, clerk, accounts } = useAccountSessions();
   const features = useLastResolved(featureSwitch$);
@@ -290,7 +288,7 @@ export function AccountDropdown({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className={`rounded-lg transition-colors duration-200 focus:outline-none ${
+          className={`rounded-lg transition-colors duration-200 ${
             collapsed
               ? "inline-flex h-8 w-8 shrink-0 items-center justify-center p-0 hover:bg-sidebar-accent/50"
               : "flex w-full items-center gap-2 p-2 text-left hover:bg-sidebar-accent/50"
@@ -346,24 +344,20 @@ export function AccountDropdown({
         )}
 
         {/* Preferences (standalone) */}
-        {!hidePreferences && (
-          <>
-            <DropdownMenuItem
-              onClick={() => {
-                return handleAccountAction("preferences");
-              }}
-              className="gap-3 px-3 py-2.5 rounded-lg"
-            >
-              <IconAdjustmentsHorizontal
-                size={18}
-                stroke={1.5}
-                className="text-muted-foreground"
-              />
-              <span>Preferences</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
+        <DropdownMenuItem
+          onClick={() => {
+            return handleAccountAction("preferences");
+          }}
+          className="gap-3 px-3 py-2.5 rounded-lg"
+        >
+          <IconAdjustmentsHorizontal
+            size={18}
+            stroke={1.5}
+            className="text-muted-foreground"
+          />
+          <span>Preferences</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
 
         {/* Account management group */}
         {hasOthers ? (
@@ -1179,7 +1173,7 @@ export function ZeroSidebar() {
   };
   const displayName = displayNameRaw || "Zero";
   const pinnedIdsLoadable = useLastLoadable(pinnedAgentIds$);
-  const pinnedIds =
+  const pinnedIds: string[] =
     pinnedIdsLoadable.state === "hasData" ? pinnedIdsLoadable.data : [];
   const savingPinned = useGet(savingPinnedAgents$);
   const savePinnedIds = useSet(updatePinnedAgentIds$);
@@ -1217,7 +1211,7 @@ export function ZeroSidebar() {
         return a.id === id;
       });
     })
-    .filter((a): a is SubagentInfo => {
+    .filter((a: SubagentInfo | undefined): a is SubagentInfo => {
       return a !== undefined;
     });
 

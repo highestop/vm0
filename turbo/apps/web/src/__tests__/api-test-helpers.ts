@@ -859,7 +859,6 @@ export async function createTestRun(
     sessionId?: string;
     checkpointId?: string;
     modelProvider?: string;
-    checkEnv?: boolean;
     memoryName?: string;
     appendSystemPrompt?: string;
     firewallPolicies?: Record<string, Record<string, string>>;

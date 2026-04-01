@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Default block size: 4KB (matching dm-snapshot chunk size).
+/// Default block size: 4KB (matches typical filesystem block size and kernel page size).
 pub const BLOCK_SIZE: usize = 4096;
 
 /// Default number of connections per NBD device.
@@ -116,7 +116,7 @@ impl NbdCowDevice {
             };
 
             // Verify the device got the correct size via sysfs.
-            if netlink::verify_device_size(device_index, size) {
+            if netlink::verify_device_size(device_index, size).await {
                 let device_path = PathBuf::from(format!("/dev/nbd{device_index}"));
                 return Ok(Self {
                     device_index,
@@ -143,7 +143,7 @@ impl NbdCowDevice {
             last_err_idx = device_index;
 
             if attempt < MAX_CONNECT_RETRIES {
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
 
@@ -181,11 +181,11 @@ impl NbdCowDevice {
     ///
     /// Use as a last resort when netlink disconnect fails. Cancels tasks
     /// and marks the device as disconnected so Drop becomes a no-op.
-    /// The kernel will eventually timeout and release the device.
+    /// The device persists in the kernel until `runner gc` cleans it up.
     pub fn abandon(&mut self) {
         tracing::warn!(
             device_index = self.device_index,
-            "NBD device abandoned — relying on kernel timeout for cleanup"
+            "NBD device abandoned — requires `runner gc` for cleanup"
         );
         self.shutdown.cancel();
         for handle in self.server_handles.drain(..) {
@@ -230,11 +230,17 @@ impl NbdCowDevice {
             cow.save_bitmap(&self.bitmap_path())?;
         }
 
-        // Disconnect via netlink (after tasks are done)
-        if let Err(e) = netlink::disconnect(self.device_index) {
-            tracing::warn!("NBD disconnect failed for nbd{}: {e}", self.device_index);
+        // Disconnect via netlink — attempt exactly once.
+        //
+        // Why no retry: if the kernel processed the disconnect but the netlink
+        // ACK was lost (recv timeout), `self.device_index` may already have been
+        // recycled by another runner. A second disconnect would tear down the
+        // other runner's device. Setting `disconnected = true` first ensures
+        // neither this function (on re-entry) nor Drop attempts a second call.
+        if !self.disconnected {
+            self.disconnected = true;
+            netlink::disconnect(self.device_index)?;
         }
-        self.disconnected = true;
 
         // Wait for kernel to release the device (poll pid file)
         let pid_path = format!("/sys/block/nbd{}/pid", self.device_index);
@@ -271,8 +277,14 @@ impl Drop for NbdCowDevice {
         }
         // Only disconnect if shutdown_inner hasn't already done it,
         // to avoid disconnecting a device that was recycled by another runner.
-        if !self.disconnected {
-            let _ = netlink::disconnect(self.device_index);
+        if !self.disconnected
+            && let Err(e) = netlink::disconnect(self.device_index)
+        {
+            tracing::warn!(
+                device_index = self.device_index,
+                error = %e,
+                "NBD disconnect failed during drop"
+            );
         }
     }
 }

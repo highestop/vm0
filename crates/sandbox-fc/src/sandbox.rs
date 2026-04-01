@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 use tracing::{info, warn};
 use vsock_host::VsockHost;
 
-use block_cow::CowDevice;
+use nbd_cow::NbdCowDevice;
 
 use crate::api::ApiClient;
 use crate::balloon;
@@ -74,8 +74,8 @@ pub struct FirecrackerSandbox {
     pub(crate) sock_paths: SockPaths,
     /// Pooled network namespace (returned to pool on destroy).
     pub(crate) network: PooledNetns,
-    /// dm-snapshot COW device (torn down on destroy).
-    pub(crate) cow_device: CowDevice,
+    /// NBD COW device (torn down on destroy).
+    pub(crate) cow_device: NbdCowDevice,
     process: Option<tokio::process::Child>,
     /// Firecracker process PID, captured at spawn time before the process
     /// could exit and be reaped.  Used for host-side OOM detection.
@@ -103,7 +103,7 @@ impl FirecrackerSandbox {
         sandbox_paths: SandboxPaths,
         sock_paths: SockPaths,
         network: PooledNetns,
-        cow_device: CowDevice,
+        cow_device: NbdCowDevice,
     ) -> Self {
         let id = config.id.to_string();
         Self {
@@ -364,7 +364,7 @@ impl FirecrackerSandbox {
 
     /// Kill the process tree.
     ///
-    /// The process chain is `sudo -> ip netns exec -> sudo -> firecracker`.
+    /// The process chain is `unshare -> bash -> ip netns exec -> firecracker`.
     /// We must kill the entire tree to avoid orphan processes.
     async fn kill_process(&mut self) {
         let Some(ref mut child) = self.process else {
@@ -389,7 +389,7 @@ impl Drop for FirecrackerSandbox {
         }
         // If the process is still alive (e.g. owning task panicked before
         // explicit cleanup), kill the entire process group synchronously.
-        // `kill_on_drop(true)` only sends SIGKILL to the direct child (`sudo`);
+        // `kill_on_drop(true)` only sends SIGKILL to the direct child (`unshare`);
         // `killpg` ensures the entire tree (including firecracker) is cleaned up.
         if let Some(ref child) = self.process {
             kill_process_group(child);

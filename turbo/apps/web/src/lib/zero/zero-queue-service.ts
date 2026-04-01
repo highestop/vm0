@@ -36,6 +36,8 @@ import { buildInfraExecutionContext } from "../run/context/build-context";
 import { logger } from "../logger";
 import type { OrgTier, QueueResponse, TriggerSource } from "@vm0/core";
 
+const log = logger("zero:queue-service");
+
 /**
  * Zero-layer dispatch wrapper for queued runs.
  * For zero runs (ZERO_AGENT_ID in vars): generates tokens, builds zero context

@@ -21,6 +21,7 @@ export const zeroAgentCustomSkillNameSchema = z
  */
 export const zeroAgentResponseSchema = z.object({
   agentId: z.string(),
+  ownerId: z.string(),
   description: z.string().nullable(),
   displayName: z.string().nullable(),
   sound: z.string().nullable(),
@@ -184,7 +185,7 @@ export const zeroAgentFirewallPoliciesContract = c.router({
       403: apiErrorSchema,
       404: apiErrorSchema,
     },
-    summary: "Update zero agent firewall policies (admin only)",
+    summary: "Update zero agent firewall policies (owner only)",
   },
 });
 
@@ -445,7 +446,7 @@ export const firewallAccessRequestsResolveContract = c.router({
       403: apiErrorSchema,
       404: apiErrorSchema,
     },
-    summary: "Resolve (approve/reject) a firewall access request (admin only)",
+    summary: "Resolve (approve/reject) a firewall access request (owner only)",
   },
 });
 

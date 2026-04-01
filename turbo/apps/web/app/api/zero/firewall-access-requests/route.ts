@@ -186,14 +186,23 @@ const listRouter = tsr.router(firewallAccessRequestsListContract, {
 
     const { agentId, status } = query;
 
+    // Look up agent owner
+    const [agent] = await globalThis.services.db
+      .select({ owner: zeroAgents.owner })
+      .from(zeroAgents)
+      .where(and(eq(zeroAgents.orgId, org.orgId), eq(zeroAgents.id, agentId)))
+      .limit(1);
+
+    const isAgentOwner = agent?.owner === member.userId;
+
     // Build conditions
     const conditions = [
       eq(firewallAccessRequests.agentId, agentId),
       eq(firewallAccessRequests.orgId, org.orgId),
     ];
 
-    // Members see only own requests, admins see all
-    if (member.role !== "admin") {
+    // Agent owner sees all requests, others see only own
+    if (!isAgentOwner) {
       conditions.push(
         eq(firewallAccessRequests.requesterUserId, member.userId),
       );
@@ -236,23 +245,14 @@ const resolveRouter = tsr.router(firewallAccessRequestsResolveContract, {
     const orgSlug = new URL(request.url).searchParams.get("org");
     const { org, member } = await resolveOrg(authCtx, orgSlug);
 
-    // Admin-only
-    if (member.role !== "admin") {
-      return {
-        status: 403 as const,
-        body: {
-          error: {
-            message: "Only org admins can resolve firewall access requests",
-            code: "FORBIDDEN",
-          },
-        },
-      };
-    }
-
-    // Find the request
-    const [existing] = await globalThis.services.db
-      .select()
+    // Find the request and agent owner in a single query
+    const [row] = await globalThis.services.db
+      .select({
+        request: firewallAccessRequests,
+        agentOwner: zeroAgents.owner,
+      })
       .from(firewallAccessRequests)
+      .innerJoin(zeroAgents, eq(firewallAccessRequests.agentId, zeroAgents.id))
       .where(
         and(
           eq(firewallAccessRequests.id, body.requestId),
@@ -261,13 +261,29 @@ const resolveRouter = tsr.router(firewallAccessRequestsResolveContract, {
       )
       .limit(1);
 
-    if (!existing) {
+    if (!row) {
       return {
         status: 404 as const,
         body: {
           error: {
             message: `Access request not found: ${body.requestId}`,
             code: "NOT_FOUND",
+          },
+        },
+      };
+    }
+
+    const existing = row.request;
+
+    // Only agent owner can resolve requests
+    if (row.agentOwner !== member.userId) {
+      return {
+        status: 403 as const,
+        body: {
+          error: {
+            message:
+              "Only the agent owner can resolve firewall access requests",
+            code: "FORBIDDEN",
           },
         },
       };

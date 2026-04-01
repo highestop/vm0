@@ -389,6 +389,7 @@ export {
 } from "./connectors";
 
 export {
+  basicAuthTemplateRe,
   extractSecretNamesFromApis,
   firewallPermissionSchema,
   firewallApiSchema,

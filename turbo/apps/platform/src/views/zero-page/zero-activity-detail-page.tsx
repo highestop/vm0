@@ -9,12 +9,13 @@ import {
   IconLoader2,
   IconDownload,
   IconChartLine,
-  IconFileAnalytics,
-  IconWorldWww,
 } from "@tabler/icons-react";
 import {
   Button,
   Input,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -27,6 +28,9 @@ import {
   type ModelProviderType,
 } from "@vm0/core";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
+import { fetchDownloadExtra$ } from "../../signals/activity-page/activity-download.ts";
+import { pageSignal$ } from "../../signals/page-signal.ts";
+import { searchParams$, updateSearchParams$ } from "../../signals/route.ts";
 import { Link } from "../router/link.tsx";
 import {
   TRIGGER_SOURCE_LABELS,
@@ -34,6 +38,7 @@ import {
   type LogStatus,
   type TriggerSource,
   type AgentEvent,
+  type LogDetail,
 } from "../../signals/zero-page/log-types.ts";
 import { StatusBadge } from "./components/log-views/status-badge.tsx";
 import {
@@ -52,6 +57,10 @@ import {
 } from "./components/log-views/log-detail-utils.ts";
 import { GroupedMessageCard } from "./components/log-views/grouped-message-card.tsx";
 import { StatusDot } from "./components/log-views/status-dot.tsx";
+import { zeroActivityContext$ } from "../../signals/activity-page/activity-context-signals.ts";
+import { zeroActivityNetworkLogs$ } from "../../signals/activity-page/activity-network-signals.ts";
+import { ContextContent } from "./components/context-content.tsx";
+import { NetworkContent } from "./components/network-content.tsx";
 import { Markdown } from "../components/markdown.tsx";
 import { ZeroNoPermissionIllustration } from "./components/zero-no-permission-illustration.tsx";
 
@@ -98,7 +107,7 @@ function RunErrorBanner({ error }: { error: string }) {
  * Returns true if a grouped message should be shown (filters out text-only
  * assistant messages immediately before a result message).
  */
-function isVisibleMessage(
+export function isVisibleMessage(
   message: GroupedMessage,
   nextMessage: GroupedMessage | undefined,
 ): boolean {
@@ -156,18 +165,18 @@ function ActivityNotFound() {
   );
 }
 
-function ActivityHeaderCard({
+export function ActivityHeaderCard({
   displayName,
   status,
   triggerSource,
   triggerAgentName,
   detail,
+  logDetail,
   duration,
   time,
   events,
-  showContextLink,
-  showNetworkLink,
   showModelDetail,
+  onDownload,
 }: {
   displayName: string;
   status: LogStatus;
@@ -181,12 +190,12 @@ function ActivityHeaderCard({
     error?: string | null;
     scheduleId?: string | null;
   };
+  logDetail?: LogDetail;
   duration: string | null | undefined;
   time: string;
   events: AgentEvent[];
-  showContextLink?: boolean;
-  showNetworkLink?: boolean;
   showModelDetail: boolean;
+  onDownload?: () => void;
 }) {
   return (
     <div className="zero-card shrink-0 px-4 py-3">
@@ -195,26 +204,6 @@ function ActivityHeaderCard({
           <h2 className="text-base font-semibold tracking-tight text-foreground truncate min-w-0 flex-1">
             {displayName}
           </h2>
-          {showContextLink && (
-            <Link
-              pathname="/activities/:id/context"
-              options={{ pathParams: { id: detail.id } }}
-              className="inline-flex items-center h-8 shrink-0 gap-1 rounded-lg px-3 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-            >
-              <IconFileAnalytics size={14} stroke={1.5} />
-              Context
-            </Link>
-          )}
-          {showNetworkLink && (
-            <Link
-              pathname="/activities/:id/network"
-              options={{ pathParams: { id: detail.id } }}
-              className="inline-flex items-center h-8 shrink-0 gap-1 rounded-lg px-3 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-            >
-              <IconWorldWww size={14} stroke={1.5} />
-              Network
-            </Link>
-          )}
         </div>
         <div className="flex flex-wrap items-center gap-y-1 text-sm">
           <div className="flex items-center gap-1.5 pr-3">
@@ -303,25 +292,31 @@ function ActivityHeaderCard({
             <span className="text-muted-foreground shrink-0">Time</span>
             <span className="text-foreground whitespace-nowrap">{time}</span>
           </div>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-7 ml-auto shrink-0 rounded-lg text-muted-foreground hover:text-foreground p-0"
-                  onClick={() => {
-                    return downloadCsv(events, detail.id);
-                  }}
-                >
-                  <IconDownload size={14} stroke={1.5} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p className="text-xs">Download raw data</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          {(logDetail || onDownload) && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 ml-auto shrink-0 rounded-lg text-muted-foreground hover:text-foreground p-0"
+                    onClick={() => {
+                      if (onDownload) {
+                        onDownload();
+                      } else if (logDetail) {
+                        downloadJson(events, detail.id, logDetail);
+                      }
+                    }}
+                  >
+                    <IconDownload size={14} stroke={1.5} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  <p className="text-xs">Download raw data</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
         </div>
       </div>
       {detail.error && status === "failed" && (
@@ -372,46 +367,183 @@ function resolveDisplayName(
   return detail.displayName ?? detail.agentId ?? "Agent";
 }
 
-export function ZeroActivityDetailPage() {
-  const currentRunId = useGet(currentRunId$);
-  const detailLoadable = useLastLoadable(zeroActivityDetail$);
-  const eventsLoadable = useLastLoadable(zeroActivityEvents$);
-  // Resolve agent display name from the detail response
-  const detail =
-    detailLoadable.state === "hasData" ? detailLoadable.data : null;
-  // Detect stale detail from previous navigation (useLastLoadable keeps old data)
-  const isStale = detail !== null && detail.id !== currentRunId;
-  const displayName = resolveDisplayName(detail, isStale);
+type ActivityTab = "steps" | "context" | "network";
 
+function ActivityStepsContent({
+  detail,
+  eventsData,
+  features,
+}: {
+  detail: LogDetail;
+  eventsData: AgentEvent[];
+  features: Record<FeatureSwitchKey, boolean> | undefined;
+}) {
   const stepSearch = useGet(zeroActivityStepSearch$);
   const setStepSearch = useSet(setZeroActivityStepSearch$);
-  const features = useLastResolved(featureSwitch$);
-
-  // Skeleton until both detail and initial events are loaded.
-  // Events signal returns null when the run loop hasn't been set up yet;
-  // useLastLoadable would keep the stale null as "hasData" which correctly
-  // prevents the page from rendering with an empty steps list.
-  const eventsReady =
-    eventsLoadable.state === "hasData" && eventsLoadable.data !== null;
-  if (!detail || isStale || !eventsReady) {
-    if (detailLoadable.state === "hasError") {
-      return <ActivityNotFound />;
-    }
-    return <ActivitySkeleton />;
-  }
-
   const {
-    events,
     visibleMessages,
     messages,
-    showModelDetail,
     prompt,
     showSystemPrompt,
     appendSystemPrompt,
-  } = prepareRenderData(detail, eventsLoadable.data, stepSearch, features);
+  } = prepareRenderData(detail, eventsData, stepSearch, features);
+
+  return (
+    <div className="flex flex-col gap-4 pb-8 min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-base font-medium text-foreground whitespace-nowrap">
+            Steps
+          </span>
+          <span className="text-sm text-muted-foreground whitespace-nowrap">
+            {stepSearch.trim()
+              ? `(${messages.length}/${visibleMessages.length} matched)`
+              : `${visibleMessages.length} total`}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="relative flex-1 sm:flex-none sm:w-44">
+            <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search steps"
+              value={stepSearch}
+              onChange={(e) => {
+                return setStepSearch(e.target.value);
+              }}
+              className="pl-9"
+            />
+          </div>
+        </div>
+      </div>
+
+      <StepsList
+        prompt={prompt}
+        appendSystemPrompt={showSystemPrompt ? appendSystemPrompt : ""}
+        messages={messages}
+        stepSearch={stepSearch}
+        isLoading={false}
+      />
+    </div>
+  );
+}
+
+function ActivityContextTab() {
+  const contextLoadable = useLastLoadable(zeroActivityContext$);
+
+  if (
+    contextLoadable.state === "loading" ||
+    contextLoadable.state === "hasError"
+  ) {
+    return (
+      <div className="flex flex-col gap-2 py-4">
+        {["prompt", "system-prompt", "environment"].map((section) => {
+          return (
+            <div key={section} className="flex flex-col gap-2">
+              <div className="h-4 w-24 rounded bg-muted/50 animate-pulse" />
+              <div className="h-20 w-full rounded bg-muted/50 animate-pulse" />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const context = contextLoadable.data;
+  if (!context) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-12">
+        <h2 className="text-lg font-semibold text-foreground">
+          Context not available
+        </h2>
+        <p className="text-sm text-muted-foreground text-center max-w-sm">
+          Execution context is not available for this run. It may be an older
+          run created before context snapshots were enabled.
+        </p>
+      </div>
+    );
+  }
+
+  return <ContextContent context={context} />;
+}
+
+function ActivityNetworkTab() {
+  const logsLoadable = useLastLoadable(zeroActivityNetworkLogs$);
+
+  if (logsLoadable.state === "loading" || logsLoadable.state === "hasError") {
+    return (
+      <div className="flex flex-col gap-2 py-4">
+        {Array.from({ length: 5 }, (_, i) => {
+          return (
+            <div
+              key={i}
+              className="h-8 w-full rounded bg-muted/50 animate-pulse"
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
+  const data = logsLoadable.data;
+  if (!data || data.networkLogs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-12">
+        <h2 className="text-lg font-semibold text-foreground">
+          No network logs
+        </h2>
+        <p className="text-sm text-muted-foreground text-center max-w-sm">
+          No network traffic was recorded for this run.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <NetworkContent networkLogs={data.networkLogs} hasMore={data.hasMore} />
+  );
+}
+
+function ActivityDetailContent({
+  detail,
+  displayName,
+  eventsData,
+  features,
+}: {
+  detail: LogDetail;
+  displayName: string;
+  eventsData: AgentEvent[];
+  features: Record<FeatureSwitchKey, boolean> | undefined;
+}) {
+  const params = useGet(searchParams$);
+  const updateParams = useSet(updateSearchParams$);
+  const rawTab = params.get("tab");
+  const activeTab: ActivityTab =
+    rawTab === "context" || rawTab === "network" ? rawTab : "steps";
+  const setActiveTab = (tab: ActivityTab) => {
+    const next = new URLSearchParams(params);
+    if (tab === "steps") {
+      next.delete("tab");
+    } else {
+      next.set("tab", tab);
+    }
+    void updateParams(next);
+  };
+  const fetchExtra = useSet(fetchDownloadExtra$);
+  const pageSignal = useGet(pageSignal$);
+
+  const events: AgentEvent[] = eventsData;
+  const { showModelDetail } = prepareRenderData(
+    detail,
+    eventsData,
+    "",
+    features,
+  );
   const status: LogStatus = detail.status;
   const time = formatLogTime(detail.createdAt);
   const duration = formatDuration(detail.startedAt, detail.completedAt);
+
+  const showDebugTabs = features?.[FeatureSwitchKey.ZeroDebug] ?? false;
+
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <div className="flex-1 flex flex-col min-h-0 overflow-auto">
@@ -433,55 +565,88 @@ export function ZeroActivityDetailPage() {
             triggerSource={detail.triggerSource ?? null}
             triggerAgentName={detail.triggerAgentName ?? null}
             detail={detail}
+            logDetail={detail}
             duration={duration}
             time={time}
             events={events}
-            showContextLink={features?.[FeatureSwitchKey.RunContext]}
-            showNetworkLink={features?.[FeatureSwitchKey.RunNetwork]}
             showModelDetail={showModelDetail}
+            onDownload={() => {
+              void fetchExtra(detail.id, pageSignal).then(
+                (extra) => {
+                  downloadJson(events, detail.id, detail, extra);
+                },
+                () => {},
+              );
+            }}
           />
 
-          {/* Steps section */}
-          <div className="flex flex-col gap-4 flex-1 min-h-0 min-w-0 mt-6">
-            <div className="flex flex-col gap-4 pb-8 min-w-0">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-base font-medium text-foreground whitespace-nowrap">
-                    Steps
-                  </span>
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
-                    {stepSearch.trim()
-                      ? `(${messages.length}/${visibleMessages.length} matched)`
-                      : `${visibleMessages.length} total`}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <div className="relative flex-1 sm:flex-none sm:w-44">
-                    <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search steps"
-                      value={stepSearch}
-                      onChange={(e) => {
-                        return setStepSearch(e.target.value);
-                      }}
-                      className="pl-9"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <StepsList
-                prompt={prompt}
-                appendSystemPrompt={showSystemPrompt ? appendSystemPrompt : ""}
-                messages={messages}
-                stepSearch={stepSearch}
-                isLoading={false}
-              />
+          {showDebugTabs && (
+            <div className="mt-4">
+              <Tabs
+                value={activeTab}
+                onValueChange={(v) => {
+                  setActiveTab(v as ActivityTab);
+                }}
+              >
+                <TabsList>
+                  <TabsTrigger value="steps">Steps</TabsTrigger>
+                  <TabsTrigger value="context">Context</TabsTrigger>
+                  <TabsTrigger value="network">Network</TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
+          )}
+
+          <div className="mt-6">
+            {activeTab === "steps" && (
+              <ActivityStepsContent
+                detail={detail}
+                eventsData={eventsData}
+                features={features}
+              />
+            )}
+            {activeTab === "context" && <ActivityContextTab />}
+            {activeTab === "network" && <ActivityNetworkTab />}
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export function ZeroActivityDetailPage() {
+  const currentRunId = useGet(currentRunId$);
+  const detailLoadable = useLastLoadable(zeroActivityDetail$);
+  const eventsLoadable = useLastLoadable(zeroActivityEvents$);
+  // Resolve agent display name from the detail response
+  const detail =
+    detailLoadable.state === "hasData" ? detailLoadable.data : null;
+  // Detect stale detail from previous navigation (useLastLoadable keeps old data)
+  const isStale = detail !== null && detail.id !== currentRunId;
+  const displayName = resolveDisplayName(detail, isStale);
+
+  const features = useLastResolved(featureSwitch$);
+
+  // Skeleton until both detail and initial events are loaded.
+  // Events signal returns null when the run loop hasn't been set up yet;
+  // useLastLoadable would keep the stale null as "hasData" which correctly
+  // prevents the page from rendering with an empty steps list.
+  const eventsReady =
+    eventsLoadable.state === "hasData" && eventsLoadable.data !== null;
+  if (!detail || isStale || !eventsReady) {
+    if (detailLoadable.state === "hasError") {
+      return <ActivityNotFound />;
+    }
+    return <ActivitySkeleton />;
+  }
+
+  return (
+    <ActivityDetailContent
+      detail={detail}
+      displayName={displayName}
+      eventsData={eventsLoadable.data ?? []}
+      features={features}
+    />
   );
 }
 
@@ -545,7 +710,7 @@ function ActivitySkeleton() {
   );
 }
 
-function StepsList({
+export function StepsList({
   prompt,
   appendSystemPrompt,
   messages,
@@ -605,29 +770,46 @@ function StepsList({
   );
 }
 
-function escapeCsvField(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`;
+function downloadJson(
+  events: AgentEvent[],
+  logId: string,
+  detail: LogDetail,
+  extra?: { context?: unknown; networkLogs?: unknown },
+) {
+  const data: Record<string, unknown> = {
+    meta: {
+      id: detail.id,
+      displayName: detail.displayName,
+      status: detail.status,
+      triggerSource: detail.triggerSource,
+      triggerAgentName: detail.triggerAgentName,
+      modelProvider: detail.modelProvider,
+      selectedModel: detail.selectedModel,
+      framework: detail.framework,
+      prompt: detail.prompt,
+      appendSystemPrompt: detail.appendSystemPrompt,
+      error: detail.error,
+      createdAt: detail.createdAt,
+      startedAt: detail.startedAt,
+      completedAt: detail.completedAt,
+      agentId: detail.agentId,
+      sessionId: detail.sessionId,
+      scheduleId: detail.scheduleId,
+    },
+    events,
+  };
+  if (extra?.context) {
+    data.context = extra.context;
   }
-  return value;
-}
-
-function downloadCsv(events: AgentEvent[], logId: string) {
-  const header = "sequenceNumber,eventType,eventData,createdAt";
-  const rows = events.map((e) => {
-    return [
-      String(e.sequenceNumber),
-      escapeCsvField(e.eventType),
-      escapeCsvField(JSON.stringify(e.eventData)),
-      escapeCsvField(e.createdAt),
-    ].join(",");
-  });
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  if (extra?.networkLogs) {
+    data.networkLogs = extra.networkLogs;
+  }
+  const json = JSON.stringify(data);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${logId}-logs.csv`;
+  a.download = `${logId}-logs.json`;
   a.click();
   URL.revokeObjectURL(url);
 }

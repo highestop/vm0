@@ -18,8 +18,7 @@ import { setupSlackConnectPage$ } from "./zero-page/slack-connect-page.ts";
 import { setupQueuePage$ } from "./queue-page/queue-page-setup.ts";
 import { setupActivityPage$ } from "./activity-page/activity-page-setup.ts";
 import { setupActivityDetailPage$ } from "./activity-page/activity-detail-page-setup.ts";
-import { setupActivityContextPage$ } from "./activity-page/activity-context-page-setup.ts";
-import { setupActivityNetworkPage$ } from "./activity-page/activity-network-page-setup.ts";
+import { setupActivityInspectPage$ } from "./activity-page/activity-inspect-page-setup.ts";
 import { setupTeamPage$ } from "./team-page/team-page-setup.ts";
 import { setupTeamDetailPage$ } from "./team-page/team-detail-page-setup.ts";
 import { setupWorksPage$ } from "./works-page/works-page-setup.ts";
@@ -123,12 +122,8 @@ const ROUTE_CONFIG = [
     setup: setupAuthPageWrapper(setupQueuePage$),
   },
   {
-    path: ROUTES.activityNetwork,
-    setup: setupAuthPageWrapper(setupActivityNetworkPage$),
-  },
-  {
-    path: ROUTES.activityContext,
-    setup: setupAuthPageWrapper(setupActivityContextPage$),
+    path: ROUTES.activityInspect,
+    setup: setupAuthPageWrapper(setupActivityInspectPage$),
   },
   {
     path: ROUTES.activityDetail,
@@ -211,13 +206,13 @@ const ROUTE_CONFIG = [
   {
     path: "/activity/:id/context",
     setup: redirectWithParams((p) => {
-      return `/activities/${encodeURIComponent(String(p.id))}/context`;
+      return `/activities/${encodeURIComponent(String(p.id))}`;
     }),
   },
   {
     path: "/activity/:id/network",
     setup: redirectWithParams((p) => {
-      return `/activities/${encodeURIComponent(String(p.id))}/network`;
+      return `/activities/${encodeURIComponent(String(p.id))}`;
     }),
   },
   {

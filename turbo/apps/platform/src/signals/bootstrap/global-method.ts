@@ -6,6 +6,10 @@ import {
   featureSwitch$,
   overrideFeatureSwitch$,
 } from "../external/feature-switch";
+import { loadInspectLogFile$ } from "../activity-page/inspect-log-signals";
+import { detachedNavigateTo$ } from "../route";
+import { pathname } from "../location";
+import { ROUTES } from "../route-paths";
 
 const L = logger("GlobalMethod");
 
@@ -44,6 +48,37 @@ export const setupGlobalMethod$ = command(
         return result;
       },
       featureSwitches: {},
+      inspectLogs() {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json";
+        input.style.display = "none";
+        document.body.appendChild(input);
+
+        input.addEventListener("change", () => {
+          const file = input.files?.[0];
+          input.remove();
+          if (!file) {
+            return;
+          }
+          set(loadInspectLogFile$, file, signal)
+            .then(() => {
+              if (pathname() !== "/activities/inspect") {
+                set(detachedNavigateTo$, ROUTES.activityInspect);
+              }
+            })
+            .catch((error: unknown) => {
+              L.error("Failed to parse inspect log", error);
+            });
+        });
+
+        // Clean up if dialog is cancelled
+        input.addEventListener("cancel", () => {
+          input.remove();
+        });
+
+        input.click();
+      },
     };
 
     signal.addEventListener("abort", () => {

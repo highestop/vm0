@@ -415,6 +415,7 @@ def match_firewall_request(
                                 "permission": perm_name,
                                 "params": all_params,
                                 "rule": rule_str,
+                                "rel_path": rel_path,
                             },
                         )
 
@@ -431,11 +432,14 @@ def _fetch_firewall_headers_sync(
     sandbox_token: str,
     secret_connector_map: dict | None = None,
     vars_map: dict | None = None,
+    auth_base: str | None = None,
 ) -> dict:
     """Synchronous helper — runs in a thread to avoid blocking the event loop."""
     api_url = get_api_url()
     url = f"{api_url}/api/webhooks/agent/firewall/auth"
     body: dict = {"encryptedSecrets": encrypted_secrets, "authHeaders": auth_headers}
+    if auth_base:
+        body["authBase"] = auth_base
     if secret_connector_map:
         body["secretConnectorMap"] = secret_connector_map
     if vars_map:
@@ -462,6 +466,7 @@ async def fetch_firewall_headers(
     sandbox_token: str,
     secret_connector_map: dict | None = None,
     vars_map: dict | None = None,
+    auth_base: str | None = None,
 ) -> dict:
     """Resolve auth headers via server-side decryption.
 
@@ -477,7 +482,118 @@ async def fetch_firewall_headers(
         sandbox_token,
         secret_connector_map,
         vars_map,
+        auth_base,
     )
+
+
+def _build_rewrite_url(resolved_base: str, match_info: dict, orig_url: str) -> str:
+    """Build the final URL for auth.base URL rewriting.
+
+    Combines the resolved base URL (with credentials in path), the relative
+    path from the firewall match, and query strings from both base and
+    original request.
+    """
+    base_parsed = urllib.parse.urlparse(resolved_base)
+    orig_parsed = urllib.parse.urlparse(orig_url)
+
+    # Append rel_path to the base path portion
+    rel_path = match_info.get("rel_path", "/")
+    if rel_path != "/":
+        base_path = base_parsed.path.rstrip("/") + rel_path
+    else:
+        base_path = base_parsed.path
+
+    # Merge query strings: base qs + original request qs
+    qs_parts: list[str] = []
+    if base_parsed.query:
+        qs_parts.append(base_parsed.query)
+    if orig_parsed.query:
+        qs_parts.append(orig_parsed.query)
+    merged_qs = "&".join(qs_parts)
+
+    return urllib.parse.urlunparse(
+        (base_parsed.scheme, base_parsed.netloc, base_path, "", merged_qs, "")
+    )
+
+
+HOP_BY_HOP = frozenset(
+    (
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "transfer-encoding",
+        "te",
+        "trailer",
+        "upgrade",
+    )
+)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Disable automatic redirect following to prevent SSRF via open redirects."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def _filter_response_headers(raw: dict[str, str]) -> dict[str, str]:
+    """Strip hop-by-hop headers from an upstream response.
+
+    The response body is fully read (not chunked/compressed from our
+    perspective), so headers like transfer-encoding must not be forwarded.
+    """
+    return {k: v for k, v in raw.items() if k.lower() not in HOP_BY_HOP}
+
+
+def _forward_request_sync(
+    url: str,
+    method: str,
+    headers: dict[str, str],
+    body: bytes | None,
+) -> tuple[int, bytes, dict[str, str]]:
+    """Forward an HTTP request to the real URL and return (status, body, headers).
+
+    Used for auth.base URL rewriting: the addon makes the upstream request
+    itself instead of relying on mitmproxy's connection (which would go to
+    the placeholder IP in eager mode).
+
+    Security: redirects are disabled (_NoRedirect) to prevent SSRF via open
+    redirects, and only https/http schemes are allowed.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+    req = urllib.request.Request(url, data=body, method=method)
+    for k, v in headers.items():
+        if k.lower() in HOP_BY_HOP or k.lower() == "host":
+            continue
+        req.add_header(k, v)
+    try:
+        resp = _opener.open(req, timeout=30)
+        return resp.status, resp.read(), _filter_response_headers(dict(resp.headers))
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), _filter_response_headers(dict(e.headers))
+
+
+async def forward_request(
+    url: str,
+    method: str,
+    headers: dict[str, str],
+    body: bytes | None,
+) -> tuple[int, bytes, dict[str, str]]:
+    """Async wrapper for _forward_request_sync."""
+    return await asyncio.to_thread(_forward_request_sync, url, method, headers, body)
 
 
 def _build_cache_hit(cached: dict) -> dict | None:
@@ -487,9 +603,8 @@ def _build_cache_hit(cached: dict) -> dict | None:
         return {
             "headers": cached["headers"],
             "resolved_secrets": cached.get("resolvedSecrets", []),
-            "refreshed_connectors": [],
-            "refreshed_secrets": [],
             "cache_hit": True,
+            **({"base": cached["base"]} if "base" in cached else {}),
         }
     return None
 
@@ -502,6 +617,7 @@ async def get_firewall_headers(
     sandbox_token: str,
     secret_connector_map: dict | None = None,
     vars_map: dict | None = None,
+    auth_base: str | None = None,
 ) -> dict:
     """Get firewall auth headers with TTL-based caching.
 
@@ -533,22 +649,33 @@ async def get_firewall_headers(
                 return hit
 
         result = await fetch_firewall_headers(
-            encrypted_secrets, auth_headers, sandbox_token, secret_connector_map, vars_map
+            encrypted_secrets,
+            auth_headers,
+            sandbox_token,
+            secret_connector_map,
+            vars_map,
+            auth_base,
         )
         headers = result["headers"]
         resolved_secrets = result.get("resolvedSecrets", [])
-        _firewall_header_cache[cache_key] = {
+        cache_entry: dict = {
             "headers": headers,
             "expiresAt": result.get("expiresAt"),
             "resolvedSecrets": resolved_secrets,
         }
-        return {
+        if result.get("base"):
+            cache_entry["base"] = result["base"]
+        _firewall_header_cache[cache_key] = cache_entry
+        ret: dict = {
             "headers": headers,
             "resolved_secrets": resolved_secrets,
             "refreshed_connectors": result.get("refreshedConnectors", []),
             "refreshed_secrets": result.get("refreshedSecrets", []),
             "cache_hit": False,
         }
+        if result.get("base"):
+            ret["base"] = result["base"]
+        return ret
 
 
 async def handle_firewall_request(
@@ -561,6 +688,7 @@ async def handle_firewall_request(
     sandbox_token = vm_info.get("sandboxToken", "")
     encrypted_secrets = vm_info.get("encryptedSecrets")
     auth_headers = api_entry.get("auth", {}).get("headers", {})
+    auth_base = api_entry.get("auth", {}).get("base")
     secret_connector_map = vm_info.get("secretConnectorMap")
     vars_map = vm_info.get("vars")
 
@@ -600,6 +728,7 @@ async def handle_firewall_request(
             sandbox_token,
             secret_connector_map,
             vars_map,
+            auth_base,
         )
     except Exception as e:
         ctx.log.error(f"[{run_id}] Firewall header fetch failed: {e}")
@@ -621,14 +750,54 @@ async def handle_firewall_request(
 
     # Inject resolved auth headers into the request
     headers = token_meta["headers"]
-    for header_name, header_value in headers.items():
-        flow.request.headers[header_name] = header_value
+
+    # URL rewrite path: auth.base is present (webhook-url connectors).
+    # The addon forwards the request itself because mitmproxy's eager
+    # connection already connected to the placeholder IP — we can't redirect
+    # it. Setting flow.response bypasses the upstream connection entirely.
+    resolved_base = token_meta.get("base")
+    if resolved_base:
+        new_url = _build_rewrite_url(resolved_base, match_info, flow.request.pretty_url)
+
+        # Merge original request headers with resolved auth headers
+        req_headers = dict(flow.request.headers)
+        for header_name, header_value in headers.items():
+            req_headers[header_name] = header_value
+
+        try:
+            status, resp_body, resp_headers = await forward_request(
+                new_url,
+                flow.request.method,
+                req_headers,
+                flow.request.content if flow.request.method in ("POST", "PUT", "PATCH") else None,
+            )
+            flow.response = http.Response.make(status, resp_body, resp_headers)
+        except Exception as e:
+            ctx.log.error(f"[{run_id}] URL rewrite forward failed: {e}")
+            flow.response = http.Response.make(
+                502,
+                json.dumps(
+                    {
+                        "error": "url_rewrite_forward_failed",
+                        "message": "Failed to forward request to upstream",
+                        "firewall": match_info.get("ref", ""),
+                    }
+                ).encode(),
+                {"Content-Type": "application/json"},
+            )
+
+        flow.metadata["auth_url_rewrite"] = True
+        ctx.log.info(f"[{run_id}] Firewall URL rewrite: {firewall_base} -> [redacted]")
+    else:
+        # Standard header injection path
+        for header_name, header_value in headers.items():
+            flow.request.headers[header_name] = header_value
 
     flow.metadata["firewall_action"] = "ALLOW"
-    flow.metadata["token_resolved_secrets"] = token_meta.get("resolved_secrets", [])
-    flow.metadata["token_refreshed_connectors"] = token_meta.get("refreshed_connectors", [])
-    flow.metadata["token_refreshed_secrets"] = token_meta.get("refreshed_secrets", [])
-    flow.metadata["token_cache_hit"] = token_meta.get("cache_hit", False)
+    flow.metadata["auth_resolved_secrets"] = token_meta.get("resolved_secrets", [])
+    flow.metadata["auth_refreshed_connectors"] = token_meta.get("refreshed_connectors", [])
+    flow.metadata["auth_refreshed_secrets"] = token_meta.get("refreshed_secrets", [])
+    flow.metadata["auth_cache_hit"] = token_meta.get("cache_hit", False)
 
     ctx.log.info(f"[{run_id}] Firewall {firewall_base}: {flow.request.pretty_host}")
 
@@ -773,7 +942,8 @@ def responseheaders(flow: http.HTTPFlow) -> None:
 
 
 def _add_firewall_metadata(flow: http.HTTPFlow, log_entry: dict) -> None:
-    """Copy firewall and token replacement metadata from flow into a log entry."""
+    """Copy firewall and auth metadata from flow into a log entry."""
+    # [NETWORK_LOG_FIELDS] — keep in sync with all network log schemas
     meta = flow.metadata
     log_entry["firewall_base"] = meta.get("firewall_base", "")
     log_entry["firewall_name"] = meta.get("firewall_name", "")
@@ -784,10 +954,11 @@ def _add_firewall_metadata(flow: http.HTTPFlow, log_entry: dict) -> None:
     for key in (
         "firewall_params",
         "firewall_error",
-        "token_resolved_secrets",
-        "token_refreshed_connectors",
-        "token_refreshed_secrets",
-        "token_cache_hit",
+        "auth_resolved_secrets",
+        "auth_refreshed_connectors",
+        "auth_refreshed_secrets",
+        "auth_cache_hit",
+        "auth_url_rewrite",
     ):
         value = meta.get(key)
         if value is not None:
@@ -959,6 +1130,7 @@ def _log_tcp(flow: tcp.TCPFlow) -> None:
     host = server_addr[0] if server_addr else "unknown"
     port = server_addr[1] if server_addr else 0
 
+    # [NETWORK_LOG_FIELDS] — keep in sync with all network log schemas
     log_entry = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
         "type": "tcp",

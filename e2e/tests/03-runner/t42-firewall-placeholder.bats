@@ -23,6 +23,10 @@ setup_file() {
 
     setup_test_connector "github" "$CI_GITHUB_TOKEN"
     setup_test_connector "slack" "xoxb-multi-test-token"
+
+    # discord-webhook uses api-token auth (not OAuth), so store as user secret
+    # — same path as the frontend's "Add Connection" dialog.
+    set_user_secret "DISCORD_WEBHOOK_URL" "https://discord.com/api/webhooks/1234567890/fake-token-for-e2e"
 }
 
 setup() {
@@ -84,6 +88,44 @@ setup_test_connector() {
 
     if [[ "$http_code" != "200" ]]; then
         echo "Failed to set up test connector: HTTP $http_code"
+        echo "Response: $body"
+        return 1
+    fi
+}
+
+# Helper to set a user secret via the zero secrets API.
+# Uses the CLI auth token from ~/.vm0/config.json.
+# This mirrors the frontend's api-token connector flow.
+set_user_secret() {
+    local name="$1"
+    local value="$2"
+
+    # Read auth token from CLI config
+    local token
+    token=$(python3 -c "import json; print(json.load(open('$HOME/.vm0/config.json'))['token'])" 2>/dev/null)
+    if [[ -z "$token" ]]; then
+        echo "No authToken in ~/.vm0/config.json" >&2
+        return 1
+    fi
+
+    local curl_args=(-s -w "\n%{http_code}" -X POST)
+    curl_args+=(-H "Content-Type: application/json")
+    curl_args+=(-H "Authorization: Bearer $token")
+    if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+        curl_args+=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+    fi
+    curl_args+=(-d "{\"name\":\"${name}\",\"value\":\"${value}\"}")
+
+    local response
+    response=$(curl "${curl_args[@]}" "${VM0_API_URL}/api/zero/secrets")
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    local body
+    body=$(echo "$response" | head -n-1)
+
+    if [[ "$http_code" != "200" ]]; then
+        echo "Failed to set user secret ${name}: HTTP $http_code"
         echo "Response: $body"
         return 1
     fi
@@ -168,4 +210,54 @@ EOF
     }
 
     wait_for_log "$RUN_ID" --network -- "GITHUB_TOKEN"
+}
+
+@test "firewall: auth.base placeholder for webhook-url connector" {
+    # discord-webhook connector is set up in setup_file().
+    # Its firewall uses auth.base (URL rewriting) instead of auth.headers.
+    # The placeholder is a firewall-placeholder.vm3.ai URL, not a token string.
+    cat > "$TEST_DIR/vm0.yaml" <<EOF
+version: "1.0"
+
+agents:
+  ${AGENT_NAME}-webhook:
+    description: "Webhook URL placeholder test"
+    framework: claude-code
+    working_dir: /home/user/workspace
+    environment:
+      DISCORD_WEBHOOK_URL: \${{ secrets.DISCORD_WEBHOOK_URL }}
+EOF
+
+    create_artifact "$ARTIFACT_NAME-webhook"
+
+    run $VM0_CLI compose "$TEST_DIR/vm0.yaml"
+    assert_success
+
+    # Verify:
+    # 1. DISCORD_WEBHOOK_URL is set to the placeholder URL
+    # 2. curl to the placeholder URL triggers mitmproxy URL rewrite
+    # 3. Discord returns 404 (fake webhook ID) proving the request reached Discord
+    run $VM0_CLI run "${AGENT_NAME}-webhook" \
+        --artifact-name "$ARTIFACT_NAME-webhook" \
+        "echo \"DISCORD_WEBHOOK_URL=\$DISCORD_WEBHOOK_URL\" && curl -s -o /dev/null -w 'API_STATUS=%{http_code}\n' -X POST \"\$DISCORD_WEBHOOK_URL\" -H 'Content-Type: application/json' -d '{\"content\":\"e2e\"}'"
+
+    echo "$output"
+    assert_success
+    assert_output --partial "Run completed successfully"
+
+    # Placeholder is the firewall-placeholder.vm3.ai URL
+    assert_output --partial "DISCORD_WEBHOOK_URL=https://firewall-placeholder.vm3.ai/discord-webhook/hook"
+
+    # Discord returns 404 for the fake webhook — proves URL rewrite reached Discord
+    assert_output --partial "API_STATUS=404"
+
+    # Extract run ID
+    RUN_ID=$(echo "$output" | grep -oP 'Run ID:\s+\K[a-f0-9-]{36}' | head -1)
+    [ -n "$RUN_ID" ] || {
+        echo "# Failed to extract Run ID"
+        return 1
+    }
+
+    # Network logs prove mitmproxy matched the firewall and rewrote the URL
+    wait_for_log "$RUN_ID" --network -- "[discord-webhook]" "url-rewrite"
 }

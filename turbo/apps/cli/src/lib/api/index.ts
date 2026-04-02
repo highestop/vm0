@@ -150,6 +150,9 @@ export {
   getZeroRunAgentEvents,
 } from "./domains/zero-runs";
 
+// Domain modules - Zero Logs
+export { listZeroLogs, searchZeroLogs } from "./domains/zero-logs";
+
 // Domain modules - Logs
 export {
   getSystemLog,

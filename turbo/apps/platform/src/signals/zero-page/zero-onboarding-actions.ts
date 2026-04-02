@@ -298,7 +298,6 @@ export const onboardingContinueWeb$ = command(
       sendNewThreadMessage$,
       agentId,
       "Who are you and what can you do?",
-      undefined,
       signal,
     );
   },

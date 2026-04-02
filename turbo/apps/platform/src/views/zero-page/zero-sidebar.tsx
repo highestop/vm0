@@ -606,13 +606,62 @@ function ChatThreadItem({
   );
 }
 
+function RecentChatList({
+  loading,
+  error,
+  sessions,
+  searchTerm,
+  selectedRecentId,
+  onRecentSelect,
+}: {
+  loading: boolean;
+  error: string | null;
+  sessions: ChatThreadListItem[];
+  searchTerm: string;
+  selectedRecentId: string | null;
+  onRecentSelect?: (id: string) => void;
+}) {
+  if (loading && sessions.length === 0) {
+    return (
+      <>
+        {["w-3/4", "w-1/2", "w-2/3"].map((w) => {
+          return (
+            <div key={w} className="flex h-8 items-center rounded-lg p-2">
+              <Skeleton className={`h-4 ${w}`} />
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+  if (error) {
+    return <p className="px-2 py-2 text-xs text-destructive">{error}</p>;
+  }
+  if (sessions.length === 0) {
+    return (
+      <p className="px-2 py-2 text-xs text-muted-foreground/70 leading-relaxed">
+        {searchTerm.trim()
+          ? "No chats match your search"
+          : "Start a conversation and it'll show up here"}
+      </p>
+    );
+  }
+  return sessions.map((session) => {
+    return (
+      <ChatThreadItem
+        key={session.id}
+        session={session}
+        isSelected={selectedRecentId === session.id}
+        onSelect={onRecentSelect}
+      />
+    );
+  });
+}
+
 function RecentChatSection({
   currentChatAgentId,
   displayName,
   subagents,
-  recentSessions,
-  recentSessionsLoading,
-  recentSessionsError,
   selectedRecentId,
   onRecentSelect,
   onNewChat,
@@ -621,14 +670,23 @@ function RecentChatSection({
   currentChatAgentId: string | null;
   displayName: string;
   subagents: SubagentInfo[];
-  recentSessions: ChatThreadListItem[];
-  recentSessionsLoading: boolean;
-  recentSessionsError: string | null;
   selectedRecentId: string | null;
   onRecentSelect?: (id: string) => void;
   onNewChat?: (agentId: string | null) => void;
   newChatDisabled?: boolean;
 }) {
+  const recentSessionsLoadable = useLastLoadable(chatThreads$);
+  const recentSessions =
+    recentSessionsLoadable.state === "hasData"
+      ? recentSessionsLoadable.data
+      : [];
+  const recentSessionsLoading = recentSessionsLoadable.state === "loading";
+  const recentSessionsError =
+    recentSessionsLoadable.state === "hasError"
+      ? recentSessionsLoadable.error instanceof Error
+        ? recentSessionsLoadable.error.message
+        : "Failed to load chats"
+      : null;
   const searchOpen = useGet(sidebarSearchOpen$);
   const setSearchOpen = useSet(setSidebarSearchOpen$);
   const searchTerm = useGet(sidebarSearchTerm$);
@@ -649,14 +707,11 @@ function RecentChatSection({
         return !subagentIds.has(s.agentId);
       });
 
+  const matchedAgent = subagents.find((a) => {
+    return a.id === currentChatAgentId;
+  });
   const agentLabel = currentChatAgentId
-    ? (subagents.find((a) => {
-        return a.id === currentChatAgentId;
-      })?.displayName ??
-      subagents.find((a) => {
-        return a.id === currentChatAgentId;
-      })?.id ??
-      displayName)
+    ? (matchedAgent?.displayName ?? matchedAgent?.id ?? displayName)
     : displayName;
 
   const trimmedTerm = searchTerm.trim().toLowerCase();
@@ -778,41 +833,14 @@ function RecentChatSection({
       {!collapsed && (
         <div className="mt-1">
           <div className="flex flex-col gap-1">
-            {recentSessionsLoading && recentSessions.length === 0 ? (
-              <>
-                {["w-3/4", "w-1/2", "w-2/3"].map((w) => {
-                  return (
-                    <div
-                      key={w}
-                      className="flex h-8 items-center rounded-lg p-2"
-                    >
-                      <Skeleton className={`h-4 ${w}`} />
-                    </div>
-                  );
-                })}
-              </>
-            ) : recentSessionsError ? (
-              <p className="px-2 py-2 text-xs text-destructive">
-                {recentSessionsError}
-              </p>
-            ) : filteredSessions.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-muted-foreground/70 leading-relaxed">
-                {searchTerm.trim()
-                  ? "No chats match your search"
-                  : "Start a conversation and it'll show up here"}
-              </p>
-            ) : (
-              filteredSessions.map((session) => {
-                return (
-                  <ChatThreadItem
-                    key={session.id}
-                    session={session}
-                    isSelected={selectedRecentId === session.id}
-                    onSelect={onRecentSelect}
-                  />
-                );
-              })
-            )}
+            <RecentChatList
+              loading={recentSessionsLoading}
+              error={recentSessionsError}
+              sessions={filteredSessions}
+              searchTerm={searchTerm}
+              selectedRecentId={selectedRecentId}
+              onRecentSelect={onRecentSelect}
+            />
           </div>
         </div>
       )}
@@ -1181,18 +1209,7 @@ export function ZeroSidebar() {
   };
   const selectedRecentId = useGet(chatThreadId$);
   const onAccountAction = useSet(handleZeroAccountAction$);
-  const recentSessionsLoadable = useLastLoadable(chatThreads$);
-  const recentSessions =
-    recentSessionsLoadable.state === "hasData"
-      ? recentSessionsLoadable.data
-      : [];
-  const recentSessionsLoading = recentSessionsLoadable.state === "loading";
-  const recentSessionsError =
-    recentSessionsLoadable.state === "hasError"
-      ? recentSessionsLoadable.error instanceof Error
-        ? recentSessionsLoadable.error.message
-        : "Failed to load chats"
-      : null;
+  const recentSessions = useLastResolved(chatThreads$) ?? [];
   const createNewChat = useSet(createNewChatThread$);
   const creatingNewSessionLoadable = useLoadable(creatingNewSession$);
   const creatingNewSession = creatingNewSessionLoadable.state === "loading";
@@ -1476,12 +1493,10 @@ export function ZeroSidebar() {
 
             {/* Recent chat sessions */}
             <RecentChatSection
+              key={currentChatAgentId}
               currentChatAgentId={currentChatAgentId}
               displayName={displayName}
               subagents={subagents}
-              recentSessions={recentSessions}
-              recentSessionsLoading={recentSessionsLoading}
-              recentSessionsError={recentSessionsError}
               selectedRecentId={selectedRecentId}
               onRecentSelect={onRecentSelect}
               onNewChat={onNewChat}

@@ -644,6 +644,8 @@ const scheduleState$ = state<ZeroJobScheduleState>({
   error: null,
 });
 
+const scheduleLoaded$ = state(false);
+
 export const zeroJobScheduleEntries$ = computed((get) => {
   const items = get(scheduleState$).schedules;
   return [...items]
@@ -664,6 +666,10 @@ export const zeroJobScheduleEntries$ = computed((get) => {
     });
 });
 
+export const zeroJobScheduleLoading$ = computed((get) => {
+  return !get(scheduleLoaded$);
+});
+
 export const zeroJobScheduleError$ = computed((get) => {
   return get(scheduleState$).error;
 });
@@ -674,8 +680,6 @@ const fetchZeroJobSchedule$ = command(
     if (!detail) {
       return;
     }
-
-    set(scheduleState$, { schedules: [], error: null });
 
     try {
       const client = get(zeroClient$)(zeroSchedulesMainContract);
@@ -688,6 +692,7 @@ const fetchZeroJobSchedule$ = command(
         return s.agentId === detail.agentId;
       });
       set(scheduleState$, { schedules: agentSchedules, error: null });
+      set(scheduleLoaded$, true);
     } catch (error) {
       throwIfAbort(error);
       L.error("Failed to fetch schedules:", error);
@@ -696,6 +701,7 @@ const fetchZeroJobSchedule$ = command(
         error:
           error instanceof Error ? error.message : "Failed to load schedules",
       });
+      set(scheduleLoaded$, true);
     }
   },
 );
@@ -824,7 +830,14 @@ export const toggleZeroJobScheduleEnabled$ = command(
       throw new Error(message);
     }
 
-    await set(fetchZeroJobSchedule$, signal);
+    // Optimistic update: patch the local schedule state instead of refetching
+    const current = get(scheduleState$);
+    set(scheduleState$, {
+      ...current,
+      schedules: current.schedules.map((s) => {
+        return s.name === params.name ? { ...s, enabled: params.enabled } : s;
+      }),
+    });
   },
 );
 
@@ -897,6 +910,7 @@ export const fetchZeroJobData$ = command(
       error: null,
     });
     set(scheduleState$, { schedules: [], error: null });
+    set(scheduleLoaded$, false);
     set(editedContent$, null);
     set(internalAddedConnectors$, null);
     set(userConnectorPermissionsState$, {

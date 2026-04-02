@@ -1,6 +1,7 @@
 pub mod cow;
 pub mod error;
 pub mod netlink;
+pub mod pool;
 pub mod protocol;
 pub mod server;
 
@@ -8,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use error::Result;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -56,11 +57,24 @@ pub struct NbdCowDevice {
 impl NbdCowDevice {
     /// Create a new NBD COW device.
     ///
-    /// 1. Finds a free NBD device index
+    /// 1. Acquires a pre-validated device index from the pool
     /// 2. Creates socketpairs (NUM_CONNECTIONS connections)
     /// 3. Spawns dispatch tasks for each connection
-    /// 4. Connects via netlink
-    pub async fn create(base_image: &Path, cow_file: &Path, size: u64) -> Result<Self> {
+    /// 4. Connects via netlink to the specific device
+    ///
+    /// Two retry loops:
+    /// - **Inner (EBUSY):** If another process grabbed the device between pool
+    ///   validation and our connect, try a different device. This has its own
+    ///   budget (up to 16 retries) separate from the size-verification loop.
+    /// - **Outer (size-stuck-at-0):** If the kernel hasn't finished tearing down
+    ///   a previous connection, disconnect, release with cooldown, and retry
+    ///   with fresh sockets. Up to 5 retries with 200ms sleep between attempts.
+    pub async fn create(
+        base_image: &Path,
+        cow_file: &Path,
+        size: u64,
+        device_pool: &Mutex<pool::DevicePool>,
+    ) -> Result<Self> {
         // Create COW layer
         let cow_layer = cow::CowLayer::new(
             base_image,
@@ -71,58 +85,83 @@ impl NbdCowDevice {
         )?;
         let cow_layer = Arc::new(RwLock::new(cow_layer));
 
-        // Retry loop: if the kernel is still tearing down a previous connection
-        // on the assigned device, the netlink CONNECT succeeds but set_capacity
-        // may not take effect (device size = 0). When detected, disconnect,
-        // recreate socketpairs + tasks, and retry. The kernel auto-assigns a
-        // (likely different) free device on each attempt.
-        // Fresh sockets and tasks are needed because the kernel may have started
-        // the NBD protocol on the old sockets; after disconnect the dispatch
-        // tasks exit and drop their server-side fds, making reuse unsafe.
-        const MAX_CONNECT_RETRIES: u32 = 5;
+        // Outer retry loop: handles "size stuck at 0" (kernel teardown timing).
+        // Inner retry loop: handles EBUSY (device grabbed by another process).
+        const MAX_SIZE_RETRIES: u32 = 5;
+        const MAX_EBUSY_RETRIES: u32 = 16;
         let mut last_err_idx: u32 = 0;
 
-        for attempt in 0..=MAX_CONNECT_RETRIES {
-            // Fresh shutdown token and socketpairs for each attempt
-            let shutdown = CancellationToken::new();
-            let mut client_fds = Vec::with_capacity(NUM_CONNECTIONS);
-            let mut server_handles = Vec::with_capacity(NUM_CONNECTIONS);
+        for size_attempt in 0..=MAX_SIZE_RETRIES {
+            // Inner loop: acquire from pool and try to connect.
+            // EBUSY retries get a fresh device without consuming the outer budget.
+            let mut ebusy_count: u32 = 0;
+            let (device_index, shutdown, server_handles) = loop {
+                let device_index = device_pool.lock().await.acquire().await?;
 
-            let setup_err = (|| -> Result<()> {
-                for _ in 0..NUM_CONNECTIONS {
-                    let (client_fd, server_fd) = netlink::create_socketpair()?;
-                    client_fds.push(client_fd);
+                // Fresh shutdown token and socketpairs for each attempt
+                let shutdown = CancellationToken::new();
+                let mut client_fds = Vec::with_capacity(NUM_CONNECTIONS);
+                let mut server_handles = Vec::with_capacity(NUM_CONNECTIONS);
 
-                    let cow = cow_layer.clone();
-                    let token = shutdown.clone();
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = server::dispatch(server_fd, cow, token).await {
-                            tracing::error!("NBD dispatch error: {e}");
-                        }
-                    });
-                    server_handles.push(handle);
-                }
-                Ok(())
-            })();
-            if let Err(e) = setup_err {
-                shutdown.cancel();
-                for handle in server_handles {
-                    handle.abort();
-                }
-                return Err(e);
-            }
+                let setup_err = (|| -> Result<()> {
+                    for _ in 0..NUM_CONNECTIONS {
+                        let (client_fd, server_fd) = netlink::create_socketpair()?;
+                        client_fds.push(client_fd);
 
-            // Atomically find a free device and connect — retries on EBUSY so
-            // concurrent runners don't race for the same device index.
-            let device_index = match netlink::find_and_connect(&client_fds, size, BLOCK_SIZE as u64)
-            {
-                Ok(idx) => idx,
-                Err(e) => {
+                        let cow = cow_layer.clone();
+                        let token = shutdown.clone();
+                        let handle = tokio::spawn(async move {
+                            if let Err(e) = server::dispatch(server_fd, cow, token).await {
+                                tracing::error!("NBD dispatch error: {e}");
+                            }
+                        });
+                        server_handles.push(handle);
+                    }
+                    Ok(())
+                })();
+                if let Err(e) = setup_err {
                     shutdown.cancel();
                     for handle in server_handles {
                         handle.abort();
                     }
+                    // Release device back — connect was never attempted, device
+                    // is still free in kernel. No cooldown needed but release()
+                    // adds one defensively.
+                    device_pool.lock().await.release(device_index);
                     return Err(e);
+                }
+
+                match netlink::connect_device(device_index, &client_fds, size, BLOCK_SIZE as u64) {
+                    Ok(()) => break (device_index, shutdown, server_handles),
+                    Err(error::NbdCowError::NetlinkErrno { errno, .. }) if errno == libc::EBUSY => {
+                        ebusy_count += 1;
+                        tracing::debug!(
+                            device_index,
+                            ebusy_count,
+                            "EBUSY on connect, trying next device"
+                        );
+                        shutdown.cancel();
+                        for handle in server_handles {
+                            handle.abort();
+                        }
+                        if ebusy_count > MAX_EBUSY_RETRIES {
+                            return Err(error::NbdCowError::NoFreeDevice);
+                        }
+                        // Device is owned by another process — don't release
+                        // to pool. Background scan will rediscover if it frees.
+                        continue;
+                    }
+                    Err(e) => {
+                        shutdown.cancel();
+                        for handle in server_handles {
+                            handle.abort();
+                        }
+                        // Connect failed with non-EBUSY error. Device may be in
+                        // an unknown kernel state — release with cooldown so it
+                        // gets re-validated before reuse.
+                        device_pool.lock().await.release(device_index);
+                        return Err(e);
+                    }
                 }
             };
 
@@ -140,29 +179,35 @@ impl NbdCowDevice {
                 });
             }
 
-            // Size is wrong — disconnect, clean up tasks, and retry.
+            // Size is wrong — disconnect, release with cooldown, and retry.
             tracing::debug!(
                 device_index,
-                attempt = attempt + 1,
+                attempt = size_attempt + 1,
                 "device size 0 after connect, disconnecting and retrying"
             );
             let _ = netlink::disconnect(device_index);
+            device_pool.lock().await.release(device_index);
             shutdown.cancel();
             for handle in server_handles {
                 handle.abort();
             }
             last_err_idx = device_index;
 
-            if attempt < MAX_CONNECT_RETRIES {
+            if size_attempt < MAX_SIZE_RETRIES {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
 
         Err(error::NbdCowError::Io(std::io::Error::other(format!(
-            "device size stuck at 0 after {MAX_CONNECT_RETRIES} connect retries \
+            "device size stuck at 0 after {MAX_SIZE_RETRIES} connect retries \
              on nbd{last_err_idx} — kernel may not have finished releasing \
              the previous connection",
         ))))
+    }
+
+    /// NBD device index (N in `/dev/nbdN`).
+    pub fn device_index(&self) -> u32 {
+        self.device_index
     }
 
     /// Path to the block device (e.g., `/dev/nbd0`).
@@ -286,18 +331,19 @@ impl NbdCowDevice {
 
     /// Check if we still own the NBD device by comparing the sysfs PID.
     ///
-    /// The kernel records the connecting process's PID in `/sys/block/nbdN/pid`.
-    /// If another process recycled the device index, the PID will differ and
-    /// we must skip disconnect to avoid tearing down the other process's device.
+    /// The kernel records the connecting **thread's** TID (via `task_pid_nr`)
+    /// in `/sys/block/nbdN/pid`, not the process TGID. In multi-threaded
+    /// programs (tokio worker threads), TID ≠ TGID. We check ownership by
+    /// verifying the recorded TID belongs to our process via `/proc/self/task/`.
     fn device_ownership(&self) -> DeviceOwnership {
         let pid_path = format!("/sys/block/nbd{}/pid", self.device_index);
         match std::fs::read_to_string(&pid_path) {
             Ok(contents) => {
-                let pid: u32 = contents.trim().parse().unwrap_or(0);
-                if pid == std::process::id() {
+                let tid: u32 = contents.trim().parse().unwrap_or(0);
+                if is_our_thread(tid) {
                     DeviceOwnership::Ours
                 } else {
-                    DeviceOwnership::Foreign(pid)
+                    DeviceOwnership::Foreign(tid)
                 }
             }
             Err(e) => DeviceOwnership::Unknown(e),
@@ -307,6 +353,17 @@ impl NbdCowDevice {
     fn bitmap_path(&self) -> PathBuf {
         cow::bitmap_path_for(&self.cow_file)
     }
+}
+
+/// Check if a TID belongs to our process by probing `/proc/self/task/{tid}`.
+///
+/// The kernel NBD driver records the connecting thread's TID (not TGID) in
+/// sysfs. In a multi-threaded tokio runtime the connecting worker thread has
+/// a TID different from the process TGID returned by `std::process::id()`.
+/// This function handles both cases: TID == TGID (main thread) and
+/// TID != TGID (worker threads).
+fn is_our_thread(tid: u32) -> bool {
+    tid == std::process::id() || std::path::Path::new(&format!("/proc/self/task/{tid}")).exists()
 }
 
 /// Best-effort cleanup on drop: cancel tasks and disconnect the NBD device.
@@ -338,5 +395,52 @@ impl Drop for NbdCowDevice {
                 "NBD disconnect failed during drop"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify is_our_thread correctly identifies the main thread (TID == TGID).
+    #[test]
+    fn is_our_thread_main_thread() {
+        assert!(is_our_thread(std::process::id()));
+    }
+
+    /// Verify is_our_thread identifies a spawned thread's TID as ours.
+    /// This exercises the /proc/self/task/{tid} path used by tokio workers.
+    #[test]
+    fn is_our_thread_worker_thread() {
+        // Use a running thread to ensure /proc/self/task/{tid} exists.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let tid = unsafe { libc::gettid() } as u32;
+            tx.send(tid).unwrap();
+            // Keep thread alive until main reads the TID and checks it.
+            std::thread::park();
+            tid
+        });
+        let worker_tid = rx.recv().unwrap();
+        assert_ne!(
+            worker_tid,
+            std::process::id(),
+            "worker TID should differ from TGID"
+        );
+        assert!(
+            is_our_thread(worker_tid),
+            "worker thread TID should be recognized as ours"
+        );
+        handle.thread().unpark();
+        handle.join().unwrap();
+    }
+
+    /// Verify is_our_thread rejects a TID that doesn't belong to our process.
+    #[test]
+    fn is_our_thread_foreign_tid() {
+        // PID 1 (init) is never one of our threads.
+        assert!(!is_our_thread(1));
+        // A very large TID that doesn't exist.
+        assert!(!is_our_thread(u32::MAX));
     }
 }

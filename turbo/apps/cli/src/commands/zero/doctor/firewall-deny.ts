@@ -63,9 +63,7 @@ Notes:
           urlParams.set("permission", permissions[0]!);
         }
 
-        const pagePath = agentId
-          ? `/firewall-allow/${agentId}`
-          : "/firewall-allow";
+        const pagePath = agentId ? `/agents/${agentId}/permissions` : "/agents";
         const url = `${platformOrigin}${pagePath}?${urlParams.toString()}`;
 
         console.log(

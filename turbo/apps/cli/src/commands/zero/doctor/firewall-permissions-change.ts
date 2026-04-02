@@ -82,9 +82,7 @@ Notes:
           permission: opts.permission,
         });
 
-        const pagePath = agentId
-          ? `/firewall-allow/${agentId}`
-          : "/firewall-allow";
+        const pagePath = agentId ? `/agents/${agentId}/permissions` : "/agents";
         const url = `${platformOrigin}${pagePath}?${urlParams.toString()}`;
 
         const role = agentId ? await resolveRole() : "unknown";

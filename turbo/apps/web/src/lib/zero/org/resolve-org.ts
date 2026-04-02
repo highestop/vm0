@@ -10,7 +10,7 @@ import { getOrgData } from "./org-cache-service";
 import { getOrgMetadata } from "./org-metadata-service";
 import { orgMetadata } from "../../../db/schema/org-metadata";
 import { orgCache } from "../../../db/schema/org-cache";
-import { verifyMembershipCached } from "./org-membership-cache";
+import { verifyMembershipCached } from "../../auth/org-membership-cache";
 import type { AuthContext } from "../../auth/get-auth-context";
 
 import type { OrgRole } from "@vm0/core";

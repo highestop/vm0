@@ -39,12 +39,9 @@ import {
   type Firewalls,
   type FirewallPolicies,
   type ConnectorType,
-  orgTierSchema,
 } from "@vm0/core";
-import { getOrgData } from "../org/org-cache-service";
 import { agentRunQueue } from "../../db/schema/agent-run-queue";
 import { publishCancelNotification } from "../realtime/client";
-import { processOrgCredits } from "../credit/credit-service";
 
 const log = logger("service:run");
 
@@ -381,6 +378,9 @@ export interface StartRunParams {
   firewalls?: Firewalls;
   resumeSession?: ResumeSession;
   resumeArtifact?: ArtifactSnapshot;
+
+  // --- Pre-resolved org tier (callers resolve via getOrgData + orgTierSchema) ---
+  orgTier: OrgTier;
 
   // --- Pre-resolved timing data (passed through to dispatch timings) ---
   resolveSourceDuration?: number;
@@ -736,9 +736,14 @@ async function resolveByComposeId(
  * 3. agentComposeVersionId → use directly, look up compose metadata
  * 4. composeId → load compose → use headVersionId
  */
-export async function resolveStartRunCompose(
-  params: StartRunParams,
-): Promise<ResolvedStartRunCompose> {
+export async function resolveStartRunCompose(params: {
+  userId: string;
+  prompt?: string;
+  composeId?: string;
+  agentComposeVersionId?: string;
+  checkpointId?: string;
+  sessionId?: string;
+}): Promise<ResolvedStartRunCompose> {
   // Validate mutual exclusivity before resolution
   if (params.checkpointId && params.sessionId) {
     throw badRequest(
@@ -819,8 +824,6 @@ export async function startRun(
 
   // 3. Resolve org context (use callerOrgId for authorization when available)
   const authOrgId = params.callerOrgId ?? resolved.orgId;
-  const orgData = await getOrgData(authOrgId);
-  const orgTier = orgTierSchema.parse(orgData.tier);
 
   // 4. Create run record — ConcurrentRunLimitError propagates to API route (returns 429)
   const record = await createRunRecord({
@@ -849,7 +852,7 @@ export async function startRun(
     firewallPolicies: params.firewallPolicies,
     allowedConnectorTypes: params.allowedConnectorTypes,
     orgId: authOrgId,
-    orgTier,
+    orgTier: params.orgTier,
   });
 
   // 5. Generate sandbox token
@@ -1142,13 +1145,16 @@ export async function cancelRun(
 }
 
 /**
- * Dispatch post-cancellation side effects (Ably notification, callbacks, queue drain, credits).
+ * Dispatch post-cancellation side effects (Ably notification, callbacks, queue drain).
  * Designed to be called inside `after()` so it runs after the response is sent.
+ *
+ * Returns `true` when the cancelled run was previously active (running/pending),
+ * indicating the caller should also process org credits.
  */
 export async function dispatchCancelSideEffects(
   result: CancelRunResult,
   queueDispatcher: (runId: string, params: CreateRunParams) => Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
   const log = logger("service:run:cancel");
 
   if (result.previousStatus === "running" && result.runnerGroup) {
@@ -1177,7 +1183,5 @@ export async function dispatchCancelSideEffects(
       : undefined,
   );
 
-  if (shouldDrain) {
-    await processOrgCredits(result.orgId);
-  }
+  return shouldDrain;
 }

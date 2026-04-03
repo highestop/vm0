@@ -1,5 +1,4 @@
 import { command, state } from "ccstate";
-import { detach, Reason } from "../utils.ts";
 import { detachedNavigateTo$ } from "../route.ts";
 import { defaultAgentId$ } from "./zero-agent-name.ts";
 import { zeroSubagents$ } from "./zero-agents.ts";
@@ -22,8 +21,8 @@ export const loadInitialData$ = command(
     }
     await set(initZeroOnboarding$, signal);
     signal.throwIfAborted();
-    // eslint-disable-next-line ccstate/no-detach-in-signals -- TODO: move to views layer
-    detach(set(initSlackOrg$, signal), Reason.Entrance);
+    await set(initSlackOrg$, signal);
+    signal.throwIfAborted();
     set(initialDataLoaded$, true);
     set(initSidebarCollapsed$);
   },

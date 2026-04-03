@@ -5,7 +5,7 @@ import { clerk$, needsOrgSelection$ } from "./auth.ts";
 import { pathname, pushState, replaceState, search } from "./location.ts";
 import { setPageSignal$ } from "./page-signal.ts";
 import { rootSignal$ } from "./root-signal.ts";
-import { detach, onDomEventFn, Reason, resetSignal } from "./utils.ts";
+import { onDomEventFn, resetSignal } from "./utils.ts";
 import { logger } from "./log.ts";
 
 const L = logger("Route");
@@ -167,16 +167,17 @@ export const detachedNavigateTo$ = command(
   ) => {
     const signal = get(rootSignal$).signal;
 
-    // eslint-disable-next-line ccstate/no-detach-in-signals -- TODO: move to views layer
-    detach(
-      set(
-        navigate$,
-        generateRouterPath(pathname, options?.pathParams),
-        options ?? {},
-        signal,
-      ),
-      Reason.DomCallback,
-    );
+    set(
+      navigate$,
+      generateRouterPath(pathname, options?.pathParams),
+      options ?? {},
+      signal,
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+      L.error("Navigation failed", error);
+    });
   },
 );
 

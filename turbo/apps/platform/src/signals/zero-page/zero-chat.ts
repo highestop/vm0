@@ -743,19 +743,40 @@ export const loadSessionFromSnapshot$ = command(
       },
     );
 
-    await Promise.all(
-      assistantMessages.map(async (message) => {
-        await set(message.beginLoop$!, signal);
-      }),
-    );
-    signal.throwIfAborted();
+    if (assistantMessages.length === 0) {
+      set(internalReloadChatThreads$, (n) => {
+        return n + 1;
+      });
+      set(reloadCurrentThread$, (n) => {
+        return n + 1;
+      });
+      return;
+    }
 
-    set(internalReloadChatThreads$, (n) => {
-      return n + 1;
-    });
-    set(reloadCurrentThread$, (n) => {
-      return n + 1;
-    });
+    // Start daemon polling loops for each running assistant message.
+    // These loops run until the run completes or the signal is aborted.
+    // When all loops finish, trigger a final reload to pick up completed state.
+    void Promise.all(
+      assistantMessages.map((message) => {
+        return set(message.beginLoop$!, signal);
+      }),
+    )
+      .then(() => {
+        set(internalReloadChatThreads$, (n) => {
+          return n + 1;
+        });
+        set(reloadCurrentThread$, (n) => {
+          return n + 1;
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+        // Log instead of re-throw: this promise is fire-and-forget (void),
+        // so a re-throw would become an unhandled promise rejection.
+        L.error("Session polling loop failed", error);
+      });
   },
 );
 

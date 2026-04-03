@@ -12,7 +12,7 @@ import {
 import { chatThreadId$, setSidebarChatAgent$ } from "./zero-nav.ts";
 import { onboardGuard$ } from "./onboard-guard.ts";
 import { loadInitialData$ } from "./zero-page.ts";
-import { detach, Reason } from "../utils.ts";
+
 import { zeroChatAgentId$ } from "./zero-active-agent.ts";
 import { currentDraft$, ensureDraft$ } from "./chat-draft.ts";
 import { hideAppSkeleton$ } from "../app-skeleton.ts";
@@ -64,7 +64,6 @@ export const setupChatSessionPage$ = command(
 
     // chatSessionSnapshot$ auto-fetches from URL. loadSessionFromSnapshot$
     // awaits it, populates server messages, syncs agent, resumes polling.
-    // eslint-disable-next-line ccstate/no-detach-in-signals -- TODO: move to views layer
-    detach(set(loadSessionFromSnapshot$, signal), Reason.Entrance);
+    await set(loadSessionFromSnapshot$, signal);
   },
 );

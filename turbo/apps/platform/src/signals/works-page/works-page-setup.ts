@@ -4,7 +4,8 @@ import { SidebarLayout } from "../../views/zero-page/sidebar-layout.tsx";
 import { ZeroWorksPage } from "../../views/zero-page/zero-works-page.tsx";
 import { updateDocumentTitle$ } from "../document-title.ts";
 import { updatePage$ } from "../react-router.ts";
-import { detach, Reason } from "../utils.ts";
+import { logger } from "../log.ts";
+
 import { onboardGuard$ } from "../zero-page/onboard-guard.ts";
 import { initZeroOnboarding$ } from "../zero-page/zero-onboarding.ts";
 import { reloadChatThreads$ } from "../zero-page/zero-chat.ts";
@@ -13,6 +14,8 @@ import {
   pollSlackConnection$,
 } from "../zero-page/zero-slack.ts";
 import { hideAppSkeleton$ } from "../app-skeleton.ts";
+
+const L = logger("WorksPage");
 
 export const setupWorksPage$ = command(async ({ set }, signal: AbortSignal) => {
   set(
@@ -26,8 +29,14 @@ export const setupWorksPage$ = command(async ({ set }, signal: AbortSignal) => {
   ]);
   signal.throwIfAborted();
   await set(hideAppSkeleton$, signal);
-  // eslint-disable-next-line ccstate/no-detach-in-signals -- TODO: move to views layer
-  detach(set(pollSlackConnection$, signal), Reason.Entrance);
+  // pollSlackConnection$ is a long-running daemon loop — fire-and-forget so
+  // the setup completes and the page renders.
+  set(pollSlackConnection$, signal).catch((error: unknown) => {
+    if (error instanceof Error && error.name === "AbortError") {
+      return;
+    }
+    L.error("Slack polling failed", error);
+  });
 
   if (await set(onboardGuard$, signal)) {
     return;

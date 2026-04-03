@@ -1,6 +1,6 @@
 import { computed } from "ccstate";
 import { clerk$ } from "./auth.ts";
-import { detach, Reason } from "./utils.ts";
+import { logger } from "./log.ts";
 
 function getConfiguredApiUrl(): string {
   const url = import.meta.env.VITE_API_URL as string | undefined;
@@ -9,6 +9,8 @@ function getConfiguredApiUrl(): string {
   }
   return url;
 }
+
+const L = logger("Fetch");
 
 const CONFIGURED_API_URL = getConfiguredApiUrl();
 
@@ -202,8 +204,17 @@ export const fetch$ = computed((get) => {
     const response = await fetch(finalUrl, finalInit);
 
     if (response.status === 401) {
-      // eslint-disable-next-line ccstate/no-detach-in-signals -- TODO: move to views layer
-      detach(clerk.redirectToSignIn(), Reason.DomCallback);
+      // Fire-and-forget: the redirect navigates the page away so the promise
+      // may never settle. We must not await — callers need the 401 response.
+      const redirectResult = clerk.redirectToSignIn();
+      if (redirectResult instanceof Promise) {
+        redirectResult.catch((error: unknown) => {
+          if (error instanceof Error && error.name === "AbortError") {
+            return;
+          }
+          L.error("Sign-in redirect failed", error);
+        });
+      }
     }
 
     return response;

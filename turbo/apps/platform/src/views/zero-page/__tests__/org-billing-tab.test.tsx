@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -533,6 +533,158 @@ describe("org billing tab - cancellation pending", () => {
     ).toBeInTheDocument();
 
     expect(screen.queryByText(/has been cancelled/)).not.toBeInTheDocument();
+  });
+});
+
+describe("org billing tab - plan card details", () => {
+  it("should show plan cards with upgrade buttons on pricing page", async () => {
+    const user = userEvent.setup();
+    mockAPIs();
+    setMockBillingStatus({ tier: "free", credits: 10_000 });
+
+    await openBillingTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Free plan")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("Compare all plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Compare plans")).toBeInTheDocument();
+    });
+
+    // Plan cards are rendered for each tier
+    expect(
+      screen.getByRole("button", { name: /Upgrade to Pro/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Upgrade to Team/i }),
+    ).toBeInTheDocument();
+
+    // Current plan card shows "Current plan" label
+    expect(
+      screen.getByRole("button", { name: /Current plan/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("org billing tab - renewal date display", () => {
+  it("should show renewal date when subscription is active and not cancelling", async () => {
+    mockAPIs();
+    const futureDate = new Date(Date.now() + 30 * 86_400 * 1000).toISOString();
+    setMockBillingStatus({
+      tier: "pro",
+      credits: 20_000,
+      subscriptionStatus: "active",
+      currentPeriodEnd: futureDate,
+      cancelAtPeriodEnd: false,
+      hasSubscription: true,
+    });
+
+    await openBillingTab();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Renews/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe("org billing tab - billing states", () => {
+  it("should show error state when billing status fails to load", async () => {
+    server.use(
+      http.get("*/api/zero/billing/status", () => {
+        return HttpResponse.json({}, { status: 500 });
+      }),
+    );
+    mockAPIs();
+
+    await openBillingTab();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Could not load billing status."),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
+  });
+});
+
+describe("org billing tab - plan card actions", () => {
+  it("should call checkout API when clicking upgrade button on plan card", async () => {
+    const user = userEvent.setup();
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("*/api/zero/billing/checkout", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          url: "https://checkout.stripe.com/test?tier=pro",
+        });
+      }),
+    );
+
+    mockAPIs();
+    setMockBillingStatus({ tier: "free", credits: 10_000 });
+
+    await openBillingTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Free plan")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("Compare all plans"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Compare plans")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /Upgrade to Pro/i }));
+
+    await waitFor(() => {
+      expect(capturedBody).toMatchObject({ tier: "pro" });
+    });
+  });
+});
+
+describe("org billing tab - stripe portal", () => {
+  afterEach(() => {
+    if (!window.location.href.startsWith("http://localhost")) {
+      window.location.href = "http://localhost/";
+    }
+  });
+
+  it("should redirect to Stripe portal URL when Manage button is clicked", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("*/api/zero/billing/portal", () => {
+        return HttpResponse.json({
+          url: "https://billing.stripe.com/test-portal",
+        });
+      }),
+    );
+
+    mockAPIs();
+    setMockBillingStatus({
+      tier: "pro",
+      credits: 20_000,
+      subscriptionStatus: "active",
+      hasSubscription: true,
+    });
+
+    await openBillingTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Pro plan")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /Manage/i }));
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(
+        "https://billing.stripe.com/test-portal",
+      );
+    });
   });
 });
 

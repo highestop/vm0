@@ -39,6 +39,7 @@ export default [
       "ccstate/no-direct-local-storage": "error",
       "ccstate/no-detach-in-signals": "error",
       "ccstate/no-direct-fetch": "error",
+      "ccstate/no-empty-promise-catch": "error",
     },
   },
   // Type-aware rules (only for TypeScript files)

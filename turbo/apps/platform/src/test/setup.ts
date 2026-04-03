@@ -26,7 +26,7 @@ beforeAll(() => {
   //   (render() runs inside act, then route setup updates page$ outside act).
   //   Silently ignored.
   // - Everything else: thrown so real problems surface early.
-  console.error = (...message: unknown[]) => {
+  vi.spyOn(console, "error").mockImplementation((...message: unknown[]) => {
     const str = message.map(String).join(" ");
     if (str.includes("NotSupportedError") || str.includes("AbortError")) {
       return;
@@ -34,8 +34,9 @@ beforeAll(() => {
     if (str.includes("not wrapped in act(")) {
       return;
     }
-    throw message[0] as Error;
-  };
+    const err = message[0];
+    throw err instanceof Error ? err : new Error(String(err));
+  });
 });
 
 // Reset handlers after each test

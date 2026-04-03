@@ -233,19 +233,155 @@ describe("POST /api/zero/developer-support", () => {
     expect(data.error.code).toBe("INVALID_CONSENT_CODE");
   });
 
-  it("returns 400 when run has no session", async () => {
-    const { token } = await setupRunContext(user, {
+  it("falls back to current runId when run has no session", async () => {
+    const { token, runId } = await setupRunContext(user, {
       continuedFromSessionId: null,
     });
 
-    const response = await postDeveloperSupport(
+    // Step 1: Get consent code (uses runId as HMAC seed)
+    const step1 = await postDeveloperSupport(
       { title: "Bug", description: "Desc" },
       token,
     );
+    expect(step1.status).toBe(200);
+    const { consentCode } = await step1.json();
+    expect(consentCode).toBeDefined();
 
-    expect(response.status).toBe(400);
-    const data = await response.json();
-    expect(data.error.code).toBe("SESSION_REQUIRED");
+    // Step 2: Submit with consent code — should query Axiom with just current runId
+    context.mocks.axiom.queryAxiom.mockResolvedValueOnce([]);
+
+    const step2 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc", consentCode },
+      token,
+    );
+    expect(step2.status).toBe(200);
+    expect((await step2.json()).reference).toBeDefined();
+
+    // Verify Axiom was queried with the current runId only
+    const aplQuery = context.mocks.axiom.queryAxiom.mock.calls[0]![0] as string;
+    expect(aplQuery).toContain(runId);
+  });
+
+  it("queries Axiom for agent events from session runs", async () => {
+    const { token } = await setupRunContext(user);
+
+    // Step 1: Get consent code
+    const step1 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc" },
+      token,
+    );
+    const { consentCode } = await step1.json();
+
+    // Mock Axiom to return test events
+    context.mocks.axiom.queryAxiom.mockResolvedValueOnce([
+      {
+        eventType: "assistant",
+        eventData: { message: "hello" },
+        _time: "2024-01-01T00:00:00Z",
+        sequenceNumber: 1,
+      },
+    ]);
+
+    // Step 2: Submit with consent code
+    const step2 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc", consentCode },
+      token,
+    );
+    expect(step2.status).toBe(200);
+
+    // Verify Axiom was queried
+    expect(context.mocks.axiom.queryAxiom).toHaveBeenCalledTimes(1);
+    const aplQuery = context.mocks.axiom.queryAxiom.mock.calls[0]![0] as string;
+    expect(aplQuery).toContain("agent-run-events");
+    expect(aplQuery).toContain("limit 2000");
+  });
+
+  it("collects events from all runs in session including first run", async () => {
+    const sessionId = crypto.randomUUID();
+
+    // Create first run (completed, has result.agentSessionId)
+    const { composeId: composeId1 } = await createTestCompose(
+      uniqueId("agent"),
+    );
+    const { runId: firstRunId } = await createTestRunInDb(
+      user.userId,
+      composeId1,
+      {
+        status: "completed",
+        result: {
+          agentSessionId: sessionId,
+          checkpointId: "cp-1",
+          conversationId: "cv-1",
+        },
+      },
+    );
+
+    // Create continuation run (the current run)
+    const { composeId: composeId2 } = await createTestCompose(
+      uniqueId("agent"),
+    );
+    const { runId: currentRunId } = await createTestRunInDb(
+      user.userId,
+      composeId2,
+      {
+        status: "running",
+        continuedFromSessionId: sessionId,
+      },
+    );
+
+    await insertOrgMembersCacheEntry({
+      orgId: user.orgId,
+      userId: user.userId,
+      role: "admin",
+    });
+    mockClerk({ userId: null });
+    const token = await generateZeroToken(
+      user.userId,
+      currentRunId,
+      user.orgId,
+    );
+
+    // Get consent code and submit
+    const step1 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc" },
+      token,
+    );
+    const { consentCode } = await step1.json();
+
+    context.mocks.axiom.queryAxiom.mockResolvedValueOnce([
+      { eventType: "assistant", eventData: {}, sequenceNumber: 1 },
+    ]);
+
+    await postDeveloperSupport(
+      { title: "Bug", description: "Desc", consentCode },
+      token,
+    );
+
+    // Verify APL contains both run IDs
+    const aplQuery = context.mocks.axiom.queryAxiom.mock.calls[0]![0] as string;
+    expect(aplQuery).toContain(firstRunId);
+    expect(aplQuery).toContain(currentRunId);
+  });
+
+  it("creates bundle with empty events when Axiom query fails", async () => {
+    const { token } = await setupRunContext(user);
+
+    const step1 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc" },
+      token,
+    );
+    const { consentCode } = await step1.json();
+
+    context.mocks.axiom.queryAxiom.mockRejectedValueOnce(
+      new Error("Axiom down"),
+    );
+
+    const step2 = await postDeveloperSupport(
+      { title: "Bug", description: "Desc", consentCode },
+      token,
+    );
+    expect(step2.status).toBe(200);
+    expect((await step2.json()).reference).toBeDefined();
   });
 
   it("returns 401 when no auth header is provided", async () => {

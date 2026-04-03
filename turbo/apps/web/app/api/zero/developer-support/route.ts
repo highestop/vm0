@@ -13,8 +13,12 @@ import {
   agentComposeVersions,
 } from "../../../../src/db/schema/agent-compose";
 import { zeroAgents } from "../../../../src/db/schema/zero-agent";
-import { eq } from "drizzle-orm";
-import { getSessionChatMessages } from "../../../../src/lib/zero/zero-session-service";
+import { eq, or, sql } from "drizzle-orm";
+import {
+  queryAxiom,
+  getDatasetName,
+  DATASETS,
+} from "../../../../src/lib/shared/axiom";
 import { listConnectors } from "../../../../src/lib/zero/connector/connector-service";
 import {
   uploadS3Buffer,
@@ -83,6 +87,9 @@ const router = tsr.router(zeroDeveloperSupportContract, {
   submit: async ({ body, headers }) => {
     initServices();
 
+    // acceptAnySandboxCapability: developer-support can be invoked from any
+    // sandbox capability (cli, web, scheduled, etc.) — there is no dedicated
+    // capability for this endpoint.
     const authCtx = await requireAuth(headers.authorization, {
       acceptAnySandboxCapability: true,
     });
@@ -129,22 +136,13 @@ const router = tsr.router(zeroDeveloperSupportContract, {
     }
 
     const sessionId = run.continuedFromSessionId;
-    if (!sessionId) {
-      return {
-        status: 400 as const,
-        body: {
-          error: {
-            message:
-              "Developer support requires an active session. This command is only available in multi-turn conversations.",
-            code: "SESSION_REQUIRED",
-          },
-        },
-      };
-    }
+    // Use sessionId for consent HMAC when available, fall back to runId for
+    // first-run (no session yet) so developer-support works in single-turn too.
+    const consentSeed = sessionId ?? runId;
 
     // Step 1: Generate consent code if none provided
     if (!body.consentCode) {
-      const consentCode = generateConsentCode(sessionId);
+      const consentCode = generateConsentCode(consentSeed);
       return {
         status: 200 as const,
         body: { consentCode },
@@ -152,7 +150,7 @@ const router = tsr.router(zeroDeveloperSupportContract, {
     }
 
     // Step 2: Validate consent code
-    const expectedCode = generateConsentCode(sessionId);
+    const expectedCode = generateConsentCode(consentSeed);
     if (body.consentCode !== expectedCode) {
       return {
         status: 400 as const,
@@ -204,8 +202,51 @@ const router = tsr.router(zeroDeveloperSupportContract, {
       }
     }
 
-    // Collect session messages
-    const conversation = await getSessionChatMessages(sessionId);
+    // Collect all run IDs for agent events.
+    // With a session: find continuation runs + first run (via result->>'agentSessionId').
+    // Without a session (first run): fall back to just the current runId.
+    const sessionRunIds: string[] = sessionId
+      ? (
+          await db
+            .select({ id: agentRuns.id })
+            .from(agentRuns)
+            .where(
+              or(
+                eq(agentRuns.continuedFromSessionId, sessionId),
+                sql`${agentRuns.result}->>'agentSessionId' = ${sessionId}`,
+              ),
+            )
+        ).map((r) => {
+          return r.id;
+        })
+      : [runId];
+
+    // Query Axiom for agent events from all session runs
+    const agentEvents = await (async () => {
+      if (sessionRunIds.length === 0) return [];
+      const runIdList = sessionRunIds
+        .map((id) => {
+          return `"${id}"`;
+        })
+        .join(", ");
+      const dataset = getDatasetName(DATASETS.AGENT_RUN_EVENTS);
+      const apl = `['${dataset}']
+| where runId in (${runIdList})
+| order by _time asc, sequenceNumber asc
+| limit 2000`;
+      return queryAxiom(apl);
+    })().catch((err) => {
+      log.warn("Failed to collect agent events from Axiom", {
+        error: String(err),
+      });
+      return [];
+    });
+
+    log.info("Collected agent events for diagnostic bundle", {
+      reference,
+      runCount: sessionRunIds.length,
+      eventCount: agentEvents.length,
+    });
 
     // Safe connector subset (no tokens)
     const safeConnectors = connectors.map((c) => {
@@ -239,8 +280,12 @@ const router = tsr.router(zeroDeveloperSupportContract, {
         content: `# ${body.title}\n\n${body.description}`,
       },
       {
-        path: "conversation.json",
-        content: JSON.stringify(conversation, null, 2),
+        path: "agent-events.jsonl",
+        content: agentEvents
+          .map((e) => {
+            return JSON.stringify(e);
+          })
+          .join("\n"),
       },
       {
         path: "environment.json",

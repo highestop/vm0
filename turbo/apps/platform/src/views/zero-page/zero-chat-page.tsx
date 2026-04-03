@@ -340,10 +340,7 @@ export function ZeroChatPage() {
               )}
             </div>
             <div className="flex-1 min-w-0 flex flex-col justify-center">
-              <h2
-                className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground"
-                data-tagline={tagline}
-              >
+              <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
                 <TypewriterText text={tagline} />
               </h2>
             </div>

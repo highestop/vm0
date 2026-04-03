@@ -54,7 +54,7 @@ import {
 } from "@vm0/ui/components/ui/dialog";
 import { Skeleton } from "@vm0/ui/components/ui/skeleton";
 import slackIcon from "./components/settings/icons/slack.svg";
-import { clerk$, user$ } from "../../signals/auth.ts";
+import { clerk$, user$, resolveWebOrigin } from "../../signals/auth.ts";
 import { detach, Reason } from "../../signals/utils.ts";
 import {
   activeRoute$,
@@ -300,7 +300,11 @@ export function AccountDropdown({
   const handleAccountAction = (action: ZeroAccountAction) => {
     if (action === "signout") {
       const sessionId = clerk?.session?.id;
-      detach(clerk?.signOut({ sessionId }), Reason.DomCallback);
+      const signInUrl = `${resolveWebOrigin()}/sign-in?redirect_url=${encodeURIComponent(location.href)}`;
+      detach(
+        clerk?.signOut({ sessionId, redirectUrl: signInUrl }),
+        Reason.DomCallback,
+      );
       return;
     }
     if (action === "manage") {

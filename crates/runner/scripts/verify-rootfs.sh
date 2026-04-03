@@ -121,6 +121,41 @@ else
   errors+=("gh CLI not found at /usr/bin/gh")
 fi
 
+# Check language runtimes
+# Some binaries use update-alternatives symlinks or versioned names (e.g.
+# php8.3 instead of php, javac under /usr/lib/jvm/). Use glob patterns
+# and ls to handle both exact paths and wildcards.
+check_bin() {
+  local pattern="$1" name="$2"
+  # shellcheck disable=SC2086
+  if ls ${MOUNT_DIR}${pattern} &>/dev/null; then
+    echo "  ${name}: found"
+  else
+    errors+=("${name} not found (pattern: ${pattern})")
+  fi
+}
+
+check_bin "/usr/bin/ruby"                      "ruby"
+check_bin "/usr/bin/php*"                      "php"
+check_bin "/usr/lib/jvm/java-*/bin/javac"      "javac"
+check_bin "/usr/local/go/bin/go"               "go"
+check_bin "/usr/local/cargo/bin/rustc"         "rustc"
+check_bin "/usr/bin/gcc"                       "gcc"
+check_bin "/usr/bin/clang"                     "clang"
+
+# Check databases
+if [[ -f "${MOUNT_DIR}/usr/bin/psql" ]]; then
+  echo "  psql: found"
+else
+  errors+=("psql not found at /usr/bin/psql")
+fi
+
+if [[ -f "${MOUNT_DIR}/usr/bin/redis-server" ]]; then
+  echo "  redis-server: found"
+else
+  errors+=("redis-server not found at /usr/bin/redis-server")
+fi
+
 # Check proxy CA certificate file
 ca_path="${MOUNT_DIR}/${CA_ROOTFS_DEST}"
 if [[ -f "$ca_path" ]]; then

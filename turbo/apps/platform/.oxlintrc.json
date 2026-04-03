@@ -114,7 +114,7 @@
       }
     },
     {
-      "files": ["src/signals/log.ts"],
+      "files": ["src/signals/log.ts", "src/test/setup.ts"],
       "rules": {
         "no-console": "allow"
       }

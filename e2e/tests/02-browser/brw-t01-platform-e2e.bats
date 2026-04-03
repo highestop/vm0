@@ -349,26 +349,24 @@ teardown_file() {
   wait_for_text "Agents" 20
   step_screenshot "team-page-loaded"
 
-  local snap
-  snap=$(full_snapshot)
+  echo "# Waiting for default agent (async load)..." >&3
+  wait_for_text "Your core agent" 20
+  step_screenshot "team-page-agent-loaded"
 
-  echo "# Verifying lead agent badge..." >&3
-  contains "$snap" "Lead"
-
-  echo "# Verifying Create teammate button..." >&3
-  contains "$snap" "Create teammate"
+  echo "# Waiting for New agent button..." >&3
+  wait_for_text "New agent" 10
 
   echo "# Team page verified!" >&3
 }
 
 @test "create new agent via dialog" {
-  echo "# Clicking Create teammate..." >&3
-  agent-browser find text "Create teammate" click
+  echo "# Clicking New agent..." >&3
+  agent-browser find role button click --name "New agent"
   agent-browser wait 1000
   step_screenshot "create-dialog-opened"
 
   echo "# Waiting for dialog content..." >&3
-  wait_for_text "Create a new teammate" 10
+  wait_for_text "Create a new agent" 10
 
   echo "# Filling agent name: $AGENT_NAME" >&3
   agent-browser find placeholder "e.g. Research Assistant" fill "$AGENT_NAME"
@@ -376,15 +374,7 @@ teardown_file() {
   step_screenshot "create-dialog-filled"
 
   echo "# Clicking Create button in dialog..." >&3
-  local snap_i
-  snap_i=$(agent-browser snapshot -i 2>/dev/null || true)
-  local create_ref
-  create_ref=$(echo "$snap_i" | grep -E 'button "Create"' | grep -v 'teammate' | grep -oE '\[ref=e[0-9]+\]' | head -1 | sed 's/\[ref=/@/; s/\]//')
-  if [[ -n "$create_ref" ]]; then
-    agent-browser click "$create_ref"
-  else
-    agent-browser find text "Create" click
-  fi
+  agent-browser find role button click --name "Create"
 
   echo "# Waiting for agent creation to complete..." >&3
   local create_complete=false

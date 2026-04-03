@@ -177,6 +177,13 @@ extract_and_inject() {
   sudo rm -f "$resolv_path"
   echo -n "$RESOLV_CONF" | sudo tee "$resolv_path" > /dev/null
 
+  # Write /etc/hosts — the VM has no mDNS and resolv.conf only lists
+  # external nameservers, so "localhost" would fail to resolve without this.
+  printf '%s\n' \
+    "127.0.0.1 localhost" \
+    "::1 localhost" \
+    | sudo tee "${EXTRACT_DIR}/etc/hosts" > /dev/null
+
   # Install guest binaries
   local -a bins=(
     "${GUEST_AGENT}:/usr/local/bin/guest-agent"

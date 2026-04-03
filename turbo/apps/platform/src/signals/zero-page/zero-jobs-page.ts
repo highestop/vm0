@@ -27,9 +27,6 @@ const internalAvatarUrl$ = state(randomPresetAvatar());
 export const jobsAvatarUrl$ = computed((get) => {
   return get(internalAvatarUrl$);
 });
-export const setJobsAvatarUrl$ = command(({ set }, url: string) => {
-  set(internalAvatarUrl$, url);
-});
 export const resetJobsAvatarUrl$ = command(({ set }) => {
   set(internalAvatarUrl$, randomPresetAvatar());
 });
@@ -46,25 +43,31 @@ export const setJobsFileInputEl$ = command(
   },
 );
 
-// -- Avatar upload loading --------------------------------------------------
+// -- Upload avatar command --------------------------------------------------
 
-const internalUploading$ = state(false);
-export const jobsUploading$ = computed((get) => {
-  return get(internalUploading$);
-});
-export const setJobsUploading$ = command(({ set }, uploading: boolean) => {
-  set(internalUploading$, uploading);
-});
-
-// -- Create loading ---------------------------------------------------------
-
-const internalCreating$ = state(false);
-export const jobsCreating$ = computed((get) => {
-  return get(internalCreating$);
-});
-export const setJobsCreating$ = command(({ set }, creating: boolean) => {
-  set(internalCreating$, creating);
-});
+export const uploadJobsAvatar$ = command(
+  async (
+    { set },
+    file: File,
+    fetchFn: (
+      url: string | URL | Request,
+      options?: RequestInit,
+    ) => Promise<Response>,
+    _signal: AbortSignal,
+  ): Promise<void> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetchFn("/api/zero/uploads", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      throw new Error(`Upload failed (${res.status})`);
+    }
+    const data: { url: string } = await res.json();
+    set(internalAvatarUrl$, data.url);
+  },
+);
 
 // -- Reset dialog state on close --------------------------------------------
 

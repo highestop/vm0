@@ -932,6 +932,7 @@ function TalkToSection({
     <div className="shrink-0">
       <div
         className="group flex h-8 cursor-pointer items-center justify-between rounded-lg pl-2 pr-0 hover:bg-sidebar-accent/50 transition-colors"
+        data-testid="pinned-section-header"
         onClick={() => {
           return setCollapsed(!collapsed);
         }}
@@ -1019,7 +1020,11 @@ function TalkToSection({
               currentChatAgentId === agent.id;
             const isFromChat = selectedAgentIdFromChat === agent.id;
             return (
-              <div key={agent.id} className="group relative">
+              <div
+                key={agent.id}
+                className="group relative"
+                data-testid="pinned-agent-card"
+              >
                 <Link
                   pathname="/agents/:id/chat"
                   options={{ pathParams: { id: agent.id } }}

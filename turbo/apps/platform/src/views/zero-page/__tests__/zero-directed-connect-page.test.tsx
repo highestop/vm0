@@ -60,7 +60,7 @@ describe("directed connect page", () => {
     expect(
       screen.getByText(CONNECTOR_TYPES.gmail.helpText),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(screen.getByText("Connect")).toBeInTheDocument();
   });
 
   it("shows connected state when connector is already connected", async () => {
@@ -72,9 +72,7 @@ describe("directed connect page", () => {
       expect(screen.getByText("GitHub connected")).toBeInTheDocument();
     });
     expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Connect" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Connect")).not.toBeInTheDocument();
   });
 
   it("normalizes uppercase type in URL to match connector key", async () => {
@@ -96,9 +94,7 @@ describe("directed connect page", () => {
         screen.queryByText(/Zero needs .* to proceed/),
       ).not.toBeInTheDocument();
     });
-    expect(
-      screen.queryByRole("button", { name: "Connect" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Connect")).not.toBeInTheDocument();
   });
 
   it("opens api-token dialog for a connector without oauth", async () => {
@@ -130,7 +126,7 @@ describe("directed connect page", () => {
       ).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await user.click(screen.getByText("Connect"));
 
     // Dialog should open with the connector label as title
     await waitFor(() => {
@@ -169,18 +165,28 @@ describe("directed connect page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Connect" }),
-      ).toBeInTheDocument();
+        screen.getAllByRole("button").find((el) => {
+          return el.textContent?.trim() === "Connect";
+        }),
+      ).toBeDefined();
     });
 
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    const connectBtn1 = screen.getAllByRole("button").find((el) => {
+      return el.textContent?.trim() === "Connect";
+    });
+    expect(connectBtn1).toBeDefined();
+    await user.click(connectBtn1!);
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("xaat-...")).toBeInTheDocument();
     });
 
     await user.type(screen.getByPlaceholderText("xaat-..."), "bad-token");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    const saveBtn1 = screen.getAllByRole("button").find((el) => {
+      return el.textContent?.trim() === "Save";
+    });
+    expect(saveBtn1).toBeDefined();
+    await user.click(saveBtn1!);
 
     await waitFor(() => {
       expect(screen.getByText("Invalid API token")).toBeInTheDocument();
@@ -197,11 +203,17 @@ describe("directed connect page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Connect" }),
-      ).toBeInTheDocument();
+        screen.getAllByRole("button").find((el) => {
+          return el.textContent?.trim() === "Connect";
+        }),
+      ).toBeDefined();
     });
 
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    const connectBtn2 = screen.getAllByRole("button").find((el) => {
+      return el.textContent?.trim() === "Connect";
+    });
+    expect(connectBtn2).toBeDefined();
+    await user.click(connectBtn2!);
 
     expect(openSpy).toHaveBeenCalledWith(
       expect.stringContaining("/api/zero/connectors/gmail/authorize"),
@@ -238,11 +250,17 @@ describe("directed connect page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Connect" }),
-      ).toBeInTheDocument();
+        screen.getAllByRole("button").find((el) => {
+          return el.textContent?.trim() === "Connect";
+        }),
+      ).toBeDefined();
     });
 
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    const connectBtn3 = screen.getAllByRole("button").find((el) => {
+      return el.textContent?.trim() === "Connect";
+    });
+    expect(connectBtn3).toBeDefined();
+    await user.click(connectBtn3!);
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("xaat-...")).toBeInTheDocument();
@@ -252,7 +270,11 @@ describe("directed connect page", () => {
       screen.getByPlaceholderText("xaat-..."),
       "test-token-value",
     );
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    const saveBtn2 = screen.getAllByRole("button").find((el) => {
+      return el.textContent?.trim() === "Save";
+    });
+    expect(saveBtn2).toBeDefined();
+    await user.click(saveBtn2!);
 
     await waitFor(() => {
       expect(capturedBody).toBeDefined();

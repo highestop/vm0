@@ -377,7 +377,10 @@ function MemberRow({
             <span className="flex items-center gap-1.5 text-sm font-medium text-foreground truncate">
               {name}
               {isCurrentUser && (
-                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium bg-muted text-muted-foreground leading-none">
+                <span
+                  data-testid="current-user-indicator"
+                  className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium bg-muted text-muted-foreground leading-none"
+                >
                   You
                 </span>
               )}
@@ -435,7 +438,10 @@ function SelfDemoteAction({ email }: { email: string }) {
     >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors">
+          <button
+            aria-label={`Actions for ${email}`}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors"
+          >
             <IconDots size={15} stroke={1.5} />
           </button>
         </DropdownMenuTrigger>
@@ -504,7 +510,10 @@ function MemberActions({ member }: { member: OrgMember }) {
     >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors">
+          <button
+            aria-label={`Actions for ${member.email}`}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors"
+          >
             <IconDots size={15} stroke={1.5} />
           </button>
         </DropdownMenuTrigger>
@@ -610,7 +619,10 @@ function PendingInvitationRow({
           >
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors">
+                <button
+                  aria-label={`Actions for ${invitation.email}`}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 transition-colors"
+                >
                   <IconDots size={15} stroke={1.5} />
                 </button>
               </DropdownMenuTrigger>

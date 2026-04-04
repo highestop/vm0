@@ -10,6 +10,7 @@ import {
   getRandomPort,
   startDesktopServer,
 } from "../../../lib/computer-use/desktop-server";
+import { isCliclickInstalled } from "../../../lib/computer-use/cliclick";
 import {
   startDesktopTunnel,
   stopDesktopTunnel,
@@ -38,6 +39,16 @@ export const hostStartCommand = new Command()
           "Computer-use host requires macOS\n\n" +
             "The host daemon uses macOS-specific commands (screencapture, system_profiler).",
         );
+      }
+
+      if (!(await isCliclickInstalled())) {
+        console.log(
+          chalk.yellow(
+            "⚠ cliclick not found. Mouse and keyboard operations will not be available.\n" +
+              "  Install with: brew install cliclick",
+          ),
+        );
+        console.log();
       }
 
       console.log(chalk.cyan("Registering computer-use host..."));

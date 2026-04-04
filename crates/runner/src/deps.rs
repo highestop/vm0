@@ -66,3 +66,43 @@ pub fn mitmdump_url(arch: &str) -> String {
         "https://downloads.mitmproxy.org/{MITMPROXY_VERSION}/mitmproxy-{MITMPROXY_VERSION}-linux-{arch}.tar.gz"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_patch_version() {
+        assert_eq!(FIRECRACKER_MINOR, "v1.14");
+    }
+
+    #[test]
+    fn url_functions_include_arch() {
+        // Verify arch substitution works (not just substring presence)
+        assert_ne!(firecracker_url("x86_64"), firecracker_url("aarch64"));
+        assert_ne!(kernel_url("x86_64"), kernel_url("aarch64"));
+        assert_ne!(mitmdump_url("x86_64"), mitmdump_url("aarch64"));
+        assert_ne!(
+            firecracker_tar_entry("x86_64"),
+            firecracker_tar_entry("aarch64")
+        );
+    }
+
+    #[test]
+    fn sha256_checksums_are_valid_hex() {
+        for sha in [
+            FIRECRACKER_SHA256_X86_64,
+            FIRECRACKER_SHA256_AARCH64,
+            KERNEL_SHA256_X86_64,
+            KERNEL_SHA256_AARCH64,
+            MITMDUMP_SHA256_X86_64,
+            MITMDUMP_SHA256_AARCH64,
+        ] {
+            assert_eq!(sha.len(), 64, "SHA256 hex should be 64 chars: {sha}");
+            assert!(
+                sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "SHA256 should be valid hex: {sha}"
+            );
+        }
+    }
+}

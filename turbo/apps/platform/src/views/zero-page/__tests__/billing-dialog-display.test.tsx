@@ -4,43 +4,26 @@
  * Covers AutoRechargeSection (dialog variant) and BillingDialog display rendering.
  * Entry point: setupPage({ path: "/" }) + context.store.set(setBillingDialogOpen$, true)
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { setupPage } from "../../../__tests__/page-helper.ts";
-import { setMockBillingStatus } from "../../../mocks/handlers/api-billing.ts";
+import {
+  resetMockBilling,
+  setMockBillingStatus,
+} from "../../../mocks/handlers/api-billing.ts";
 import { setBillingDialogOpen$ } from "../../../signals/zero-page/billing.ts";
 import { setSelectedPlanTier$ } from "../../../signals/zero-page/billing-dialog-state.ts";
+import { mockBillingPageAPIs } from "./billing-dialog-test-helpers.ts";
 
 const context = testContext();
 
-function mockAPIs() {
-  server.use(
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([
-        {
-          id: "c0000000-0000-4000-a000-000000000001",
-          name: "zero",
-          displayName: null,
-          description: null,
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_1",
-          updatedAt: "2024-01-01T00:00:00Z",
-        },
-      ]);
-    }),
-    http.get("*/api/zero/org/logo", () => {
-      return HttpResponse.json({ logoUrl: null });
-    }),
-  );
-}
+beforeEach(() => {
+  resetMockBilling();
+});
 
 async function openBillingDialogAndWait() {
   context.store.set(setBillingDialogOpen$, true);
@@ -51,7 +34,7 @@ async function openBillingDialogAndWait() {
 
 describe("chat-d-067: AutoRechargeSection renders threshold value", () => {
   it("displays the threshold value in the threshold input", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -71,7 +54,7 @@ describe("chat-d-067: AutoRechargeSection renders threshold value", () => {
 
 describe("chat-d-068: AutoRechargeSection renders amount value in credits", () => {
   it("displays the recharge amount in the credits input", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -91,7 +74,7 @@ describe("chat-d-068: AutoRechargeSection renders amount value in credits", () =
 
 describe("chat-d-069: AutoRechargeSection renders dollarAmount calculated from amount / CREDITS_PER_DOLLAR", () => {
   it("displays the dollar equivalent calculated as amount / 1000", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -131,7 +114,7 @@ describe("chat-s-070: Loading state disables Save button during save", () => {
     );
 
     const user = userEvent.setup();
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -162,7 +145,7 @@ describe("chat-s-070: Loading state disables Save button during save", () => {
 
 describe("chat-c-071: AutoRechargeSection fields render conditionally based on displayEnabled", () => {
   it("hides threshold and amount inputs when enabled is false", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -184,7 +167,7 @@ describe("chat-c-071: AutoRechargeSection fields render conditionally based on d
   });
 
   it("shows threshold and amount inputs when enabled is true", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -204,7 +187,7 @@ describe("chat-c-071: AutoRechargeSection fields render conditionally based on d
 
 describe("chat-d-072-073: BillingDialog renders status.tier and credit count", () => {
   it("displays the current plan tier and locale-formatted credits in the description", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -231,7 +214,7 @@ describe("chat-d-072-073: BillingDialog renders status.tier and credit count", (
 
 describe("chat-d-075: Selected plan ring highlight renders on chosen PlanCard", () => {
   it("renders aria-pressed on the selected PlanCard", async () => {
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -252,7 +235,7 @@ describe("chat-d-075: Selected plan ring highlight renders on chosen PlanCard", 
 describe("chat-c-076: Button text changes based on isUpgrade/isDowngrade determination", () => {
   it("shows Upgrade to Team when team is selected and pro is current", async () => {
     const user = userEvent.setup();
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -279,7 +262,7 @@ describe("chat-c-076: Button text changes based on isUpgrade/isDowngrade determi
 
   it("shows Downgrade when free is selected and pro is current", async () => {
     const user = userEvent.setup();
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,
@@ -323,7 +306,7 @@ describe("chat-c-077: Action button is disabled during redirect", () => {
     );
 
     const user = userEvent.setup();
-    mockAPIs();
+    mockBillingPageAPIs();
     setMockBillingStatus({
       tier: "pro",
       credits: 20_000,

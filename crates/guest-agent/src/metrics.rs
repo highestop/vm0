@@ -174,4 +174,67 @@ mod tests {
         assert_eq!(parse_meminfo_value("  0 kB"), 0);
         assert_eq!(parse_meminfo_value(""), 0);
     }
+
+    #[test]
+    fn parse_meminfo_value_large_values() {
+        assert_eq!(parse_meminfo_value("  16384000 kB"), 16384000);
+        assert_eq!(parse_meminfo_value("1 kB"), 1);
+    }
+
+    #[test]
+    fn parse_meminfo_value_non_numeric() {
+        assert_eq!(parse_meminfo_value("  abc kB"), 0);
+    }
+
+    #[test]
+    fn cpu_tracker_multiple_reads_are_consistent() {
+        let mut tracker = CpuTracker::new();
+        for i in 0..5 {
+            let pct = tracker.get_cpu_percent();
+            assert!(
+                (0.0..=100.0).contains(&pct),
+                "read {i}: pct={pct} out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn get_memory_info_returns_valid_values() {
+        let (used, total) = get_memory_info();
+        // On Linux with /proc, total > 0
+        if std::path::Path::new("/proc/meminfo").exists() {
+            assert!(total > 0, "total memory should be > 0");
+            assert!(used <= total, "used should be <= total");
+        }
+    }
+
+    #[test]
+    fn get_disk_info_returns_valid_values() {
+        let (used, total) = get_disk_info();
+        assert!(total > 0, "total disk should be > 0");
+        assert!(used <= total, "used should be <= total");
+    }
+
+    #[test]
+    fn collect_metrics_returns_complete_entry() {
+        let mut tracker = CpuTracker::new();
+        let entry = collect_metrics(&mut tracker);
+        assert!(!entry.ts.is_empty());
+        assert!((0.0..=100.0).contains(&entry.cpu));
+        assert!(entry.mem_total > 0);
+        assert!(entry.disk_total > 0);
+    }
+
+    #[test]
+    fn collect_metrics_serializes_to_valid_jsonl() {
+        let mut tracker = CpuTracker::new();
+        let entry = collect_metrics(&mut tracker);
+        let json = serde_json::to_string(&entry).unwrap();
+        // Verify it round-trips through the same path metrics_loop uses.
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["ts"].is_string());
+        assert!(parsed["cpu"].is_f64());
+        assert!(parsed["mem_total"].is_u64());
+        assert!(parsed["disk_total"].is_u64());
+    }
 }

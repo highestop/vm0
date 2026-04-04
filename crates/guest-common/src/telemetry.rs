@@ -59,3 +59,36 @@ pub fn record_sandbox_op(
 
     let _ = writeln!(file, "{json}");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn record_sandbox_op_writes_and_appends_jsonl() {
+        // Single test because all calls share the same static log path.
+        let log_path = sandbox_ops_log();
+        let _ = std::fs::remove_file(log_path);
+
+        record_sandbox_op("op_a", Duration::from_millis(10), true, None);
+        record_sandbox_op("op_b", Duration::from_millis(20), false, Some("fail"));
+
+        let content = std::fs::read_to_string(log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let a: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(a["action_type"], "op_a");
+        assert_eq!(a["duration_ms"], 10);
+        assert!(a["success"].as_bool().unwrap());
+        assert!(a["ts"].is_string());
+
+        let b: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(b["action_type"], "op_b");
+        assert_eq!(b["error"], "fail");
+        assert!(!b["success"].as_bool().unwrap());
+
+        let _ = std::fs::remove_file(log_path);
+    }
+}

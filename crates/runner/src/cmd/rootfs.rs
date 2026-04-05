@@ -374,4 +374,53 @@ mod tests {
             assert_eq!(human_bytes(input), expected, "human_bytes({input})");
         }
     }
+
+    #[tokio::test]
+    async fn compute_input_hash_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("agent");
+        tokio::fs::write(&bin, b"binary-content").await.unwrap();
+        let bins: &[(&Path, &str)] = &[(&bin, "/usr/local/bin/guest-agent")];
+
+        let h1 = compute_input_hash(bins, 16384).await.unwrap();
+        let h2 = compute_input_hash(bins, 16384).await.unwrap();
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64); // SHA-256 hex
+    }
+
+    #[tokio::test]
+    async fn compute_input_hash_sensitive_to_all_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_a = dir.path().join("agent-a");
+        let bin_b = dir.path().join("agent-b");
+        tokio::fs::write(&bin_a, b"content-a").await.unwrap();
+        tokio::fs::write(&bin_b, b"content-b").await.unwrap();
+
+        let base = compute_input_hash(&[(&bin_a, "/usr/local/bin/guest-agent")], 16384)
+            .await
+            .unwrap();
+
+        // Different binary content
+        let different_content =
+            compute_input_hash(&[(&bin_b, "/usr/local/bin/guest-agent")], 16384)
+                .await
+                .unwrap();
+        assert_ne!(
+            base, different_content,
+            "hash must change with binary content"
+        );
+
+        // Different disk_mb
+        let different_disk = compute_input_hash(&[(&bin_a, "/usr/local/bin/guest-agent")], 32768)
+            .await
+            .unwrap();
+        assert_ne!(base, different_disk, "hash must change with disk_mb");
+
+        // Different dest path
+        let different_dest =
+            compute_input_hash(&[(&bin_a, "/usr/local/bin/guest-download")], 16384)
+                .await
+                .unwrap();
+        assert_ne!(base, different_dest, "hash must change with dest path");
+    }
 }

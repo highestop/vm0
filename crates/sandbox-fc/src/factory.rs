@@ -463,3 +463,53 @@ impl SandboxFactory for FirecrackerFactory {
         info!("factory shutdown complete");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_hash_is_deterministic() {
+        let h1 = config_hash();
+        let h2 = config_hash();
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64); // SHA-256 hex
+    }
+
+    #[test]
+    fn invariant_config_has_all_expected_fields() {
+        let config = InvariantConfig::new();
+        let json = serde_json::to_value(&config).unwrap();
+        let obj = json.as_object().unwrap();
+
+        // Guard against accidental field additions/removals that would
+        // silently change the config hash and invalidate all snapshots.
+        let expected_fields = [
+            "boot_args",
+            "guest_mac",
+            "tap_name",
+            "tap_mac",
+            "iface_id",
+            "guest_cid",
+            "balloon",
+            "prewarm_script",
+            "drive_layout",
+        ];
+        for field in &expected_fields {
+            assert!(obj.contains_key(*field), "missing field: {field}");
+        }
+        assert_eq!(
+            obj.len(),
+            expected_fields.len(),
+            "unexpected field count — adding/removing fields changes the config hash"
+        );
+    }
+
+    #[test]
+    fn config_hash_matches_snapshot_provider_trait() {
+        let provider = crate::FirecrackerSnapshotProvider;
+        let trait_hash = sandbox::SnapshotProvider::config_hash(&provider);
+        let direct_hash = config_hash();
+        assert_eq!(trait_hash, direct_hash);
+    }
+}

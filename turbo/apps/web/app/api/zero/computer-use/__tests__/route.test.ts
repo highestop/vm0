@@ -60,6 +60,7 @@ function setupNgrokMocks() {
     deleteEndpoint: [] as string[],
     createReservedDomain: [] as string[],
     deleteReservedDomain: [] as string[],
+    deleteBotUser: [] as string[],
   };
 
   server.use(
@@ -129,6 +130,10 @@ function setupNgrokMocks() {
       calls.deleteEndpoint.push(params.id as string);
       return new HttpResponse(null, { status: 204 });
     }),
+    http.delete("https://api.ngrok.com/bot_users/:id", ({ params }) => {
+      calls.deleteBotUser.push(params.id as string);
+      return new HttpResponse(null, { status: 204 });
+    }),
   );
 
   return calls;
@@ -183,6 +188,27 @@ describe("POST /api/zero/computer-use/register", () => {
     expect(ngrokCalls.createCredential.length).toBe(1);
     expect(ngrokCalls.createReservedDomain.length).toBe(1);
     expect(ngrokCalls.createEndpoint.length).toBe(1);
+  });
+
+  it("should clean up resources when endpoint creation fails", async () => {
+    const userId = uniqueId("zcu-fail");
+    await setupOrg(userId);
+    const ngrokCalls = setupNgrokMocks();
+
+    // Override endpoint creation to fail
+    server.use(
+      http.post("https://api.ngrok.com/endpoints", () => {
+        return HttpResponse.json({ error: "internal error" }, { status: 500 });
+      }),
+    );
+
+    const response = await POST(createPostRequest());
+    expect(response.status).toBe(500);
+
+    // Verify all previously-created resources were cleaned up
+    expect(ngrokCalls.deleteBotUser).toEqual(["bot_test_cu_123"]);
+    expect(ngrokCalls.deleteCredential).toEqual(["cr_test_cu_456"]);
+    expect(ngrokCalls.deleteReservedDomain).toEqual(["rd_test_cu_abc"]);
   });
 
   it("should return 200 on re-registration (idempotent)", async () => {
@@ -299,6 +325,7 @@ describe("DELETE /api/zero/computer-use/unregister", () => {
     expect(ngrokCalls.deleteCredential).toEqual(["cr_test_cu_456"]);
     expect(ngrokCalls.deleteEndpoint).toEqual(["ep_test_cu_789"]);
     expect(ngrokCalls.deleteReservedDomain).toEqual(["rd_test_cu_abc"]);
+    expect(ngrokCalls.deleteBotUser).toEqual(["bot_test_cu_123"]);
 
     // Verify GET returns 404 after unregister
     const getResponse = await GET(createTestRequest(hostUrl()));

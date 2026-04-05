@@ -1083,6 +1083,98 @@ mod tests {
         let _ = handle.join();
     }
 
+    #[test]
+    fn truncate_preview_short_string() {
+        let s = "echo hello";
+        assert_eq!(truncate_preview(s), "echo hello");
+    }
+
+    #[test]
+    fn truncate_preview_exact_limit() {
+        let s = "x".repeat(COMMAND_PREVIEW_MAX_LEN);
+        assert_eq!(truncate_preview(&s), s);
+    }
+
+    #[test]
+    fn truncate_preview_over_limit() {
+        let s = "y".repeat(COMMAND_PREVIEW_MAX_LEN + 50);
+        let result = truncate_preview(&s);
+        // Single-byte ASCII: truncates to exactly COMMAND_PREVIEW_MAX_LEN + "..."
+        assert_eq!(
+            result,
+            format!("{}{}", "y".repeat(COMMAND_PREVIEW_MAX_LEN), "...")
+        );
+    }
+
+    #[test]
+    fn truncate_preview_multibyte_utf8() {
+        // Each '🔥' is 4 bytes. Fill to just over the limit.
+        let emoji = "🔥".repeat(COMMAND_PREVIEW_MAX_LEN / 4 + 5);
+        let result = truncate_preview(&emoji);
+        assert!(result.ends_with("..."));
+        // Must not panic from slicing in the middle of a UTF-8 sequence
+        assert!(result.is_char_boundary(result.len() - 3));
+    }
+
+    #[test]
+    fn build_exec_command_normal() {
+        let cmd = build_exec_command("echo hello", false);
+        let prog = cmd.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
+        // In debug builds: sh -c "echo hello"
+        // In release builds: su - user -c "echo hello"
+        assert!(
+            (prog == "sh" && args == ["-c", "echo hello"])
+                || (prog == "su" && args == ["-", "user", "-c", "echo hello"]),
+            "unexpected command: {prog} {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_exec_command_sudo() {
+        let cmd = build_exec_command("reboot", true);
+        let prog = cmd.get_program().to_string_lossy().to_string();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
+        // In debug builds: sudo sh -c "reboot"
+        // In release builds: sh -c "reboot"
+        assert!(
+            (prog == "sudo" && args == ["sh", "-c", "reboot"])
+                || (prog == "sh" && args == ["-c", "reboot"]),
+            "unexpected sudo command: {prog} {args:?}"
+        );
+    }
+
+    #[test]
+    fn extract_exit_code_success() {
+        let status = Command::new("true").status().unwrap();
+        assert_eq!(extract_exit_code(status), 0);
+    }
+
+    #[test]
+    fn extract_exit_code_failure() {
+        let status = Command::new("false").status().unwrap();
+        assert_eq!(extract_exit_code(status), 1);
+    }
+
+    #[test]
+    fn extract_exit_code_specific() {
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("exit 42")
+            .status()
+            .unwrap();
+        assert_eq!(extract_exit_code(status), 42);
+    }
+
+    #[test]
+    fn extract_exit_code_signal_kill() {
+        // Kill a process with SIGKILL and verify 128 + 9 = 137
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
+        unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
+        let status = child.wait().unwrap();
+        assert_eq!(extract_exit_code(status), 137);
+    }
+
     /// Verify that a normal exec still returns correct results.
     #[test]
     fn exec_returns_correct_result() {

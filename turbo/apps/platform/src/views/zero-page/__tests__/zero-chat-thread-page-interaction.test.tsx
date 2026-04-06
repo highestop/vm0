@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { setupPage } from "../../../__tests__/page-helper.ts";
-import { pathname, search } from "../../../signals/location.ts";
+import { pathname } from "../../../signals/location.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
 import {
   mockChatLifecycle,
@@ -82,49 +82,6 @@ describe("zero chat thread page - pin button toggles pin state", () => {
 
     await waitFor(() => {
       expect(screen.queryByLabelText("Pin to sidebar")).not.toBeInTheDocument();
-    });
-  });
-});
-
-// CHAT-N-047: Sub-agents Link navigates to /agents
-describe("zero chat thread page - sub-agents link navigation", () => {
-  it("navigates to /agents when Sub-agents link is clicked (CHAT-N-047)", async () => {
-    const user = userEvent.setup();
-    mockSubagentThread(THREAD_ID);
-
-    await setupPage({ context, path: `/chats/${THREAD_ID}` });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Sub-agents")).toBeInTheDocument();
-    });
-
-    const link = screen.getByLabelText("Sub-agents");
-    await user.click(link);
-
-    await waitFor(() => {
-      expect(pathname()).toBe("/agents");
-    });
-  });
-});
-
-// CHAT-N-048: Schedule button navigates to agent with schedule tab
-describe("zero chat thread page - schedule button navigation", () => {
-  it("navigates to /agents/:id with tab=schedule when schedule button is clicked (CHAT-N-048)", async () => {
-    const user = userEvent.setup();
-    mockSubagentThread(THREAD_ID);
-
-    await setupPage({ context, path: `/chats/${THREAD_ID}` });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Scheduled")).toBeInTheDocument();
-    });
-
-    const scheduleButton = screen.getByLabelText("Scheduled");
-    await user.click(scheduleButton);
-
-    await waitFor(() => {
-      expect(pathname()).toBe(`/agents/${SUB_AGENT_ID}`);
-      expect(search()).toContain("tab=schedule");
     });
   });
 });

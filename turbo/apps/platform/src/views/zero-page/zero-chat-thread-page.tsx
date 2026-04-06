@@ -56,6 +56,7 @@ import {
   type UserChatMessage,
   type AssistantChatMessage,
   cancelActiveRun$,
+  thinkingMessage$,
 } from "../../signals/zero-page/zero-chat.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
 import { Link } from "../router/link.tsx";
@@ -70,6 +71,62 @@ import {
 import { useAgentAvatar } from "./zero-sidebar-shared.tsx";
 import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
 import { detachedNavigateTo$ } from "../../signals/route.ts";
+import { useLayoutEffect } from "react";
+
+function scrollToLatestMessage() {
+  const scrollEl = document.querySelector<HTMLElement>(
+    "[data-scroll-container]",
+  );
+  const container = document.querySelector<HTMLElement>(
+    "[data-message-container]",
+  );
+  if (!scrollEl || !container) {
+    return;
+  }
+
+  const children = container.children;
+  if (children.length === 0) {
+    return;
+  }
+
+  let lastUser: HTMLElement | null = null;
+  let lastAssistant: HTMLElement | null = null;
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i] as HTMLElement;
+    const role = child.dataset.role;
+    if (!lastAssistant && role === "assistant") {
+      lastAssistant = child;
+    }
+    if (!lastUser && role === "user") {
+      lastUser = child;
+    }
+    if (lastUser && lastAssistant) {
+      break;
+    }
+  }
+
+  if (!lastUser) {
+    return;
+  }
+
+  const visibleHeight = scrollEl.clientHeight;
+  const userTop = lastUser.offsetTop - container.offsetTop;
+
+  if (lastAssistant && lastAssistant.offsetTop > lastUser.offsetTop) {
+    const assistantBottom =
+      lastAssistant.offsetTop -
+      container.offsetTop +
+      lastAssistant.offsetHeight;
+    if (assistantBottom - userTop <= visibleHeight) {
+      scrollEl.scrollTop = userTop;
+    } else {
+      scrollEl.scrollTop = assistantBottom - visibleHeight;
+    }
+  } else {
+    scrollEl.scrollTop = userTop;
+  }
+}
+
 function AvatarOrPlaceholder({
   src,
   className,
@@ -263,21 +320,20 @@ export function ZeroChatThreadPage() {
       : null;
   const messagesLoading = messagesLoadable.state === "loading";
 
-  // Auto-scroll when messages change — ref callback runs at commit time
-  const scrollAnchorRef = (el: HTMLDivElement | null) => {
-    if (el && messages.length > 0) {
-      el.scrollIntoView({ behavior: "instant" });
-    }
-  };
-
   return (
     <div className="flex flex-1 flex-col min-h-0 bg-transparent">
       <ChatThreadHeader />
 
       {/* Scrollable area — messages + sticky composer share the same scroll context */}
-      <div className="flex-1 overflow-auto flex flex-col min-h-0">
+      <div
+        data-scroll-container
+        className="flex-1 overflow-auto flex flex-col min-h-0"
+      >
         <main className="flex-1 px-4 sm:px-6 py-4 items-center @container">
-          <div className="w-full max-w-[900px] mx-auto flex flex-1 flex-col gap-6 pb-4 overflow-visible">
+          <div
+            data-message-container
+            className="w-full max-w-[900px] mx-auto flex flex-1 flex-col gap-6 pb-4 overflow-visible"
+          >
             {sessionError && (
               <div className="flex-1 flex items-center justify-center py-16">
                 <div className="flex items-center gap-2 text-destructive">
@@ -299,7 +355,6 @@ export function ZeroChatThreadPage() {
             {messages.map((msg) => {
               return <ChatMessageRow key={msg.id} message={msg} />;
             })}
-            <div ref={scrollAnchorRef} />
           </div>
         </main>
 
@@ -393,10 +448,15 @@ function ChatSkeleton() {
 // ---------------------------------------------------------------------------
 
 function ChatMessageRow({ message }: { message: ZeroChatMessage }) {
-  if (message.role === "user") {
-    return <UserMessage message={message} />;
-  }
-  return <AssistantMessage message={message} />;
+  return (
+    <div data-role={message.role}>
+      {message.role === "user" ? (
+        <UserMessage message={message} />
+      ) : (
+        <AssistantMessage message={message} />
+      )}
+    </div>
+  );
 }
 
 /**
@@ -456,7 +516,7 @@ function UserMessage({ message }: { message: UserChatMessage }) {
   ];
 
   return (
-    <>
+    <div data-role="user">
       <div className="flex flex-col items-end min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300 @[900px]:grid @[900px]:grid-cols-[36px_1fr] @[900px]:gap-2.5 @[900px]:-ml-[46px] @[900px]:items-start">
         <div className="hidden @[900px]:block @[900px]:w-9 @[900px]:h-9 @[900px]:shrink-0" />
         <div className="flex flex-col items-end w-full">
@@ -502,7 +562,7 @@ function UserMessage({ message }: { message: UserChatMessage }) {
         </div>
       </div>
       {lightboxUrl && <ImageLightbox url={lightboxUrl} />}
-    </>
+    </div>
   );
 }
 
@@ -532,7 +592,7 @@ function MessageRunActivityLine({
   const queuePosition =
     queueLoadable.state === "hasData" ? queueLoadable.data : 0;
   const isQueued = runStatus === "queued";
-  const thinkingMsg = useGet(message.runLoop!.thinkingMessage$);
+  const thinkingMsg = useGet(thinkingMessage$);
   return (
     <RunActivityLineView
       summaries={rawSummaries}
@@ -798,6 +858,9 @@ function StaticAssistantMessage({
   const setTab = useSet(setActiveTab$);
   const pageSignal = useGet(pageSignal$);
   const content = useLastResolved(message.result$) ?? "";
+  useLayoutEffect(() => {
+    scrollToLatestMessage();
+  }, [content]);
   const avatar = (
     <div className="h-7 w-7 @[900px]:h-9 @[900px]:w-9 shrink-0 mt-0.5 overflow-hidden rounded-xl">
       <AvatarOrPlaceholder
@@ -883,7 +946,10 @@ function StaticAssistantMessage({
       message.error.includes("Cannot continue session") ||
       message.error.includes("Invalid signature in thinking block");
     return (
-      <div className="group flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div
+        data-role="assistant"
+        className="group flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300"
+      >
         <div className="flex flex-col gap-2 @[900px]:grid @[900px]:grid-cols-[36px_1fr] @[900px]:gap-2.5 @[900px]:-ml-[46px] @[900px]:items-start">
           {avatar}
           <div className="zero-chat-bubble-assistant px-0 @[900px]:pt-1.5 text-sm leading-relaxed min-w-0 break-words">
@@ -977,7 +1043,10 @@ function StaticAssistantMessage({
 
   // Thinking / loading state — show live run activity
   return (
-    <div className="flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300">
+    <div
+      data-role="assistant"
+      className="flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-300"
+    >
       <div className="flex flex-col gap-2 @[900px]:grid @[900px]:grid-cols-[36px_1fr] @[900px]:gap-2.5 @[900px]:-ml-[46px] @[900px]:items-start">
         {avatar}
         <div className="zero-chat-bubble-assistant rounded-xl py-4 text-sm leading-relaxed min-w-0 overflow-hidden">

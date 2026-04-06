@@ -27,6 +27,7 @@ import { setFeatureSwitchLocalStorage$ } from "../signals/external/feature-switc
 import { setDebugLoggerLocalStorage$ } from "../signals/bootstrap/loggers";
 import { setPollIntervalForTest$ } from "../signals/zero-page/polling";
 import { setValidateResponseForTest$ } from "../signals/api-client";
+import { detach, Reason } from "../signals/utils";
 
 export async function setupPage(options: {
   context: TestContext;
@@ -123,6 +124,25 @@ export async function setupPage(options: {
       options.context.signal,
     );
   }
+}
+
+/**
+ * Fire-and-forget variant of `setupPage` for tests where the page setup
+ * initiates a long-running polling loop that never resolves on its own
+ * (e.g. an active run that stays in "pending" state during the test).
+ *
+ * Use `await setupPage(...)` when the full initialization is expected to
+ * complete within the test (e.g. static threads, finished runs). Use
+ * `detachedSetupPage` only when the setup intentionally runs for the
+ * duration of the test — in that case pair it with `await waitFor(...)` to
+ * assert the desired rendered state rather than awaiting setup completion.
+ *
+ * Note: because setup runs concurrently with the test body, teardown (signal
+ * abort) may race with in-flight async operations. Ensure test assertions do
+ * not depend on the setup promise having fully settled.
+ */
+export function detachedSetupPage(options: Parameters<typeof setupPage>[0]) {
+  detach(setupPage(options), Reason.Entrance, "test");
 }
 
 /**

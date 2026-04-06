@@ -9,7 +9,11 @@ import {
   talkDraft$,
   type ZeroChatAttachment,
 } from "./chat-draft.ts";
-import { createRunLoop, type PagedRunEvents } from "./polling.ts";
+import {
+  createRunLoop,
+  pollInterval$,
+  type PagedRunEvents,
+} from "./polling.ts";
 import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
 import {
   navigateToChat$,
@@ -26,6 +30,7 @@ import {
 } from "@vm0/core";
 import { accept, ApiError } from "../../lib/accept.ts";
 import { zeroClient$, type ZeroClientFactory } from "../api-client.ts";
+import { delay } from "signal-timers";
 
 export {
   zeroChatInput$,
@@ -89,7 +94,6 @@ export interface AssistantChatMessage {
   summaries?: string[];
   runLoop?: ReturnType<typeof createRunLoop>;
   summaries$?: Computed<Promise<string[]>>;
-  beginLoop$?: ReturnType<typeof createRunLoop>["beginLoop$"];
   createdAt?: string;
 }
 
@@ -141,17 +145,16 @@ function createPlaceholderAssistantMessage(
     createdAt: new Date().toISOString(),
     runLoop: {
       pagedEventsList$: neverResolve$,
-      beginLoop$: noopAsyncCommand$,
       cancel$: noopAsyncCommand$,
       detail$: neverResolve$,
       queuePosition$: neverResolve$,
       finished$: neverResolve$,
-      thinkingMessage$: computed(() => {
-        return "Thinking hard..." as const;
+      checkFinished$: command(async ({ get }, _signal: AbortSignal) => {
+        await get(neverResolve$);
+        return false;
       }),
     },
     summaries$: neverResolve$,
-    beginLoop$: noopAsyncCommand$,
   };
 }
 
@@ -276,6 +279,27 @@ function domainFromUrl(url: string): string {
   }
   return new URL(url).hostname.replace(/^www\./, "");
 }
+
+const THINKING_MESSAGES = [
+  "On it, grab a coffee",
+  "Thinking hard...",
+  "Cooking up something good...",
+  "Give me a sec...",
+  "Working my magic...",
+  "Hang tight...",
+  "Let me figure this out...",
+  "Brewing ideas...",
+  "Crunching the numbers...",
+  "Just a moment...",
+] as const;
+
+const reloadThinkingMessage$ = state(0);
+export const thinkingMessage$ = computed((get) => {
+  get(reloadThinkingMessage$);
+  return THINKING_MESSAGES[
+    Math.floor(Math.random() * THINKING_MESSAGES.length)
+  ];
+});
 
 const TOOL_LABELS: Readonly<
   Record<string, (input: Record<string, unknown> | undefined) => string>
@@ -535,7 +559,6 @@ function createActiveRunMessage(
       runLoop,
       result$,
       summaries$,
-      beginLoop$: runLoop.beginLoop$,
     },
   };
 }
@@ -729,6 +752,7 @@ const chatSessionSnapshot$ = computed(
 
 export const loadSessionFromSnapshot$ = command(
   async ({ get, set }, signal: AbortSignal) => {
+    L.debug("Loading session from snapshot");
     const snapshot = await get(chatSessionSnapshot$);
     signal.throwIfAborted();
     if (!snapshot?.activeRunMessages.length) {
@@ -739,7 +763,7 @@ export const loadSessionFromSnapshot$ = command(
 
     const assistantMessages = snapshot.activeRunMessages.filter(
       (m): m is AssistantChatMessage => {
-        return m.role === "assistant" && !!m.beginLoop$;
+        return m.role === "assistant";
       },
     );
 
@@ -753,30 +777,32 @@ export const loadSessionFromSnapshot$ = command(
       return;
     }
 
-    // Start daemon polling loops for each running assistant message.
-    // These loops run until the run completes or the signal is aborted.
-    // When all loops finish, trigger a final reload to pick up completed state.
-    void Promise.all(
-      assistantMessages.map((message) => {
-        return set(message.beginLoop$!, signal);
-      }),
-    )
-      .then(() => {
-        set(internalReloadChatThreads$, (n) => {
-          return n + 1;
+    await Promise.all(
+      assistantMessages.map(async (message) => {
+        if (!message.runLoop?.checkFinished$) {
+          return;
+        }
+
+        while (true) {
+          const finished = await set(message.runLoop.checkFinished$, signal);
+          if (finished) {
+            break;
+          }
+          await delay(get(pollInterval$), { signal });
+          set(reloadThinkingMessage$, (x) => {
+            return x + 1;
+          });
+        }
+
+        set(internalReloadChatThreads$, (x) => {
+          return x + 1;
         });
         set(reloadCurrentThread$, (n) => {
           return n + 1;
         });
-      })
-      .catch((error: unknown) => {
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
-        // Log instead of re-throw: this promise is fire-and-forget (void),
-        // so a re-throw would become an unhandled promise rejection.
-        L.error("Session polling loop failed", error);
-      });
+      }),
+    );
+    signal.throwIfAborted();
   },
 );
 
@@ -1023,13 +1049,20 @@ export const sendExistingThreadMessage$ = command(
       return;
     }
 
-    await set(runLoop.beginLoop$, signal);
-    set(internalReloadChatThreads$, (n) => {
-      return n + 1;
-    });
-    set(reloadCurrentThread$, (n) => {
-      return n + 1;
-    });
+    while (true) {
+      const finished = await set(runLoop.checkFinished$, signal);
+      if (finished) {
+        break;
+      }
+
+      await delay(get(pollInterval$), { signal });
+      set(internalReloadChatThreads$, (n) => {
+        return n + 1;
+      });
+      set(reloadCurrentThread$, (n) => {
+        return n + 1;
+      });
+    }
   },
 );
 

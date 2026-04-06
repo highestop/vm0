@@ -17,7 +17,8 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { setupPage } from "../../../__tests__/page-helper.ts";
-import { pathname } from "../../../signals/location.ts";
+import { pathname, search } from "../../../signals/location.ts";
+import { setSidebarExpanded$ } from "../../../signals/zero-page/zero-nav.ts";
 
 const context = testContext();
 
@@ -135,8 +136,8 @@ describe("sidebar layout - invite button hidden for non-admins (SIDEBAR-D-049)",
   });
 });
 
-describe("sidebar layout - menu toggle opens sidebar (SIDEBAR-D-050)", () => {
-  it("shows the sidebar overlay when the menu toggle button is clicked", async () => {
+describe("sidebar layout - menu toggle navigates to chat list (SIDEBAR-D-050)", () => {
+  it("navigates to the chat list page when the menu toggle button is clicked", async () => {
     const user = userEvent.setup();
     mockBaseAPIs();
     await setupPage({ context, path: "/" });
@@ -145,7 +146,14 @@ describe("sidebar layout - menu toggle opens sidebar (SIDEBAR-D-050)", () => {
     await user.click(menuButton);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+      expect(pathname()).toBe("/chats");
+    });
+
+    // Wait for the chat list page to fully render after navigation
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /Chats with/ }),
+      ).toBeInTheDocument();
     });
   });
 });
@@ -232,18 +240,60 @@ describe("sidebar layout - invite button opens member dialog (SIDEBAR-D-052)", (
   });
 });
 
-describe("sidebar layout - overlay click collapses sidebar (SIDEBAR-D-053)", () => {
+describe("sidebar layout - menu toggle passes agent ID to chat list (SIDEBAR-D-053)", () => {
+  it("navigates to /chats with agentId query param when a chat agent is active", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("*/api/zero/team", () => {
+        return HttpResponse.json([
+          {
+            id: DEFAULT_AGENT_ID,
+            displayName: "My Agent",
+            description: null,
+            sound: null,
+            avatarUrl: null,
+            headVersionId: "version_1",
+            updatedAt: "2024-01-01T00:00:00Z",
+          },
+        ]);
+      }),
+      http.get("*/api/zero/chat-threads", () => {
+        return HttpResponse.json({ threads: [] });
+      }),
+    );
+    await setupPage({ context, path: "/" });
+
+    const menuButton = screen.getByLabelText("Open menu");
+    await user.click(menuButton);
+
+    await waitFor(() => {
+      // Navigates to /chats with agentId search param for the default agent
+      expect(pathname()).toBe("/chats");
+      expect(new URLSearchParams(search()).get("agentId")).toBe(
+        DEFAULT_AGENT_ID,
+      );
+    });
+
+    // Wait for the chat list page to fully render after navigation
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: /Chats with/ }),
+      ).toBeInTheDocument();
+    });
+  });
+});
+
+describe("sidebar layout - overlay click collapses sidebar (SIDEBAR-D-054)", () => {
   it("hides the sidebar overlay when the overlay is clicked", async () => {
     const user = userEvent.setup();
     mockBaseAPIs();
     await setupPage({ context, path: "/" });
 
-    // Open the sidebar via user interaction
-    const menuButton = screen.getByLabelText("Open menu");
-    await user.click(menuButton);
+    // Expand the sidebar via signal to show the overlay
+    context.store.set(setSidebarExpanded$, true);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
+      expect(screen.getByLabelText("Sidebar overlay")).toBeInTheDocument();
     });
 
     const overlay = screen.getByLabelText("Sidebar overlay");

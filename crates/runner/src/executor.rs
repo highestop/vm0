@@ -911,6 +911,7 @@ fn build_env_json(context: &ExecutionContext, api_url: &str) -> HashMap<String, 
 mod tests {
     use super::*;
     use crate::types::{ArtifactEntry, ResumeSession, StorageEntry, StorageManifest};
+    use sandbox_mock::MockSandboxFactory;
     use uuid::Uuid;
 
     fn minimal_context() -> ExecutionContext {
@@ -1846,5 +1847,182 @@ mod tests {
         sandbox.push_exec_result(Err(SandboxError::ExecFailed("vsock down".into())));
         let err = restore_session(&sandbox, &ctx, &session).await.unwrap_err();
         assert!(err.to_string().contains("vsock down"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_inner integration tests (MockSandboxFactory + real filesystem)
+    // -----------------------------------------------------------------------
+
+    /// Build a real `ExecutorConfig` backed by tempdir files.
+    async fn test_executor_config(dir: &std::path::Path) -> ExecutorConfig {
+        let registry_path = dir.join("proxy-registry.json");
+        let lock_path = dir.join("proxy-registry.json.lock");
+        tokio::fs::write(&registry_path, r#"{"vms":{},"updated_at":0}"#)
+            .await
+            .unwrap();
+        let log_dir = dir.join("logs");
+        tokio::fs::create_dir_all(&log_dir).await.unwrap();
+
+        ExecutorConfig {
+            api_url: "http://localhost:9999".into(),
+            registry: proxy::ProxyRegistryHandle::new(registry_path, lock_path),
+            http: crate::http::HttpClient::new("http://localhost:9999".into()).unwrap(),
+            log_paths: LogPaths::new(log_dir),
+            ip_log_map: kmsg_log::new_ip_log_map(),
+        }
+    }
+
+    fn default_params() -> JobParams {
+        JobParams {
+            vcpu: 2,
+            memory_mb: 2048,
+            use_snapshot: false,
+        }
+    }
+
+    fn test_telemetry(config: &ExecutorConfig, ctx: &ExecutionContext) -> JobTelemetry {
+        crate::telemetry::JobTelemetry::new(
+            config.http.clone(),
+            ctx.run_id,
+            ctx.sandbox_token.clone(),
+        )
+    }
+
+    async fn run_execute_inner(
+        factory: &MockSandboxFactory,
+        ctx: &ExecutionContext,
+        config: &ExecutorConfig,
+        params: &JobParams,
+    ) -> RunnerResult<(i32, Option<String>)> {
+        let mut telemetry = test_telemetry(config, ctx);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        execute_inner(factory, ctx, config, params, &mut telemetry, cancel).await
+    }
+
+    #[tokio::test]
+    async fn execute_inner_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+
+        let (exit_code, error_msg) =
+            run_execute_inner(&factory, &minimal_context(), &config, &default_params())
+                .await
+                .unwrap();
+        assert_eq!(exit_code, 0);
+        assert!(error_msg.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_inner_with_snapshot_runs_clock_fix_and_reseed() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+
+        let params = JobParams {
+            use_snapshot: true,
+            ..default_params()
+        };
+        let (exit_code, _) = run_execute_inner(&factory, &minimal_context(), &config, &params)
+            .await
+            .unwrap();
+        assert_eq!(exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_inner_with_storage_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+
+        let mut ctx = minimal_context();
+        ctx.storage_manifest = Some(StorageManifest {
+            storages: vec![StorageEntry {
+                mount_path: "/data".into(),
+                archive_url: Some("https://example.com/data.tar.gz".into()),
+            }],
+            artifact: None,
+            memory: None,
+        });
+        let (exit_code, _) = run_execute_inner(&factory, &ctx, &config, &default_params())
+            .await
+            .unwrap();
+        assert_eq!(exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_inner_with_resume_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+
+        let mut ctx = minimal_context();
+        ctx.resume_session = Some(ResumeSession {
+            session_id: "sess-abc-123".into(),
+            session_history: r#"{"type":"init"}"#.into(),
+        });
+        let (exit_code, _) = run_execute_inner(&factory, &ctx, &config, &default_params())
+            .await
+            .unwrap();
+        assert_eq!(exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_inner_create_failure_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+        factory.push_create_result(Err(SandboxError::CreationFailed("no free devices".into())));
+
+        let err = run_execute_inner(&factory, &minimal_context(), &config, &default_params())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no free devices"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn execute_job_wraps_execute_inner() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (exit_code, error_msg) = execute_job(
+            &factory,
+            minimal_context(),
+            &config,
+            &default_params(),
+            cancel,
+        )
+        .await;
+        assert_eq!(exit_code, 0);
+        assert!(error_msg.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_job_create_failure_returns_exit_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let mut factory = MockSandboxFactory::new();
+        factory.startup().await.unwrap();
+        factory.push_create_result(Err(SandboxError::CreationFailed("boom".into())));
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (exit_code, error_msg) = execute_job(
+            &factory,
+            minimal_context(),
+            &config,
+            &default_params(),
+            cancel,
+        )
+        .await;
+        assert_eq!(exit_code, 1);
+        assert!(error_msg.unwrap().contains("boom"));
     }
 }

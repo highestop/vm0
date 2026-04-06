@@ -34,8 +34,8 @@ const internalDialogOpen$ = state(false);
 const billingReload$ = state(0);
 const internalDowngradeDialogOpen$ = state(false);
 const internalPendingEnabled$ = state<boolean | null>(null);
-const internalFormThreshold$ = state("");
-const internalFormAmount$ = state("");
+const internalFormThresholdOverride$ = state<string | null>(null);
+const internalFormAmountOverride$ = state<string | null>(null);
 
 // ---------------------------------------------------------------------------
 // Selectors
@@ -54,27 +54,6 @@ export const pendingEnabled$ = computed((get) => {
 export const setPendingEnabled$ = command(({ set }, value: boolean | null) => {
   set(internalPendingEnabled$, value);
 });
-
-export const formThreshold$ = computed((get) => {
-  return get(internalFormThreshold$);
-});
-export const formAmount$ = computed((get) => {
-  return get(internalFormAmount$);
-});
-
-export const setFormThreshold$ = command(({ set }, value: string) => {
-  set(internalFormThreshold$, value);
-});
-export const setFormAmount$ = command(({ set }, value: string) => {
-  set(internalFormAmount$, value);
-});
-
-export const syncFormFromConfig$ = command(
-  ({ set }, config: { threshold: string; amount: string }) => {
-    set(internalFormThreshold$, config.threshold);
-    set(internalFormAmount$, config.amount);
-  },
-);
 
 /**
  * Async computed signal that fetches billing status on first access.
@@ -185,6 +164,34 @@ export const autoRechargeConfig$ = computed(async (get) => {
 });
 
 // ---------------------------------------------------------------------------
+// Form override signals — derive from autoRechargeConfig$ when no override set
+// ---------------------------------------------------------------------------
+
+export const formThreshold$ = computed(async (get) => {
+  const override = get(internalFormThresholdOverride$);
+  if (override !== null) {
+    return override;
+  }
+  const config = await get(autoRechargeConfig$);
+  return config.threshold;
+});
+export const formAmount$ = computed(async (get) => {
+  const override = get(internalFormAmountOverride$);
+  if (override !== null) {
+    return override;
+  }
+  const config = await get(autoRechargeConfig$);
+  return config.amount;
+});
+
+export const setFormThreshold$ = command(({ set }, value: string) => {
+  set(internalFormThresholdOverride$, value);
+});
+export const setFormAmount$ = command(({ set }, value: string) => {
+  set(internalFormAmountOverride$, value);
+});
+
+// ---------------------------------------------------------------------------
 // Auto-recharge save
 // ---------------------------------------------------------------------------
 
@@ -197,6 +204,9 @@ export const saveAutoRecharge$ = command(
     const createClient = get(zeroClient$);
     const client = createClient(zeroBillingAutoRechargeContract);
     await accept(client.update({ body: config }), [200]);
+    // Clear form overrides so fields fall back to fresh server values
+    set(internalFormThresholdOverride$, null);
+    set(internalFormAmountOverride$, null);
     // Reload billing status — autoRechargeConfig$ re-derives automatically
     set(billingReload$, (x) => {
       return x + 1;

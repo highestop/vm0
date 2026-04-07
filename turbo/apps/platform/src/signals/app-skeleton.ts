@@ -1,5 +1,7 @@
 import { command, computed, state } from "ccstate";
-import { delay } from "signal-timers";
+import { currentChatAgent$ } from "./agent-chat.ts";
+import { resolveAvatarUrl } from "../views/zero-page/avatar-utils.ts";
+import { throwIfAbort } from "./utils.ts";
 
 const internalVisible$ = state(true);
 
@@ -12,8 +14,22 @@ export const showAppSkeleton$ = command(({ set }) => {
 });
 
 export const hideAppSkeleton$ = command(
-  async ({ set }, signal: AbortSignal) => {
-    await delay(0, { signal });
+  async ({ get, set }, signal: AbortSignal) => {
+    // Avatar prefetch is a best-effort cache warm-up: a missing or
+    // unavailable agent should not prevent the skeleton from hiding.
+    try {
+      const currentChatAgent = await get(currentChatAgent$);
+      signal.throwIfAborted();
+      if (currentChatAgent) {
+        const src = resolveAvatarUrl(currentChatAgent.avatarUrl);
+        if (src) {
+          await fetch(src, { signal });
+        }
+      }
+    } catch (error) {
+      throwIfAbort(error);
+      // non-fatal prefetch failure — skeleton hides regardless
+    }
     set(internalVisible$, false);
   },
 );

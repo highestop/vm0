@@ -5,7 +5,6 @@ import { FirewallAllowPage } from "../../views/firewall-allow/firewall-allow-pag
 import { updateDocumentTitle$ } from "../document-title.ts";
 import { updatePage$ } from "../react-router.ts";
 import { onboardGuard$ } from "../zero-page/onboard-guard.ts";
-import { initZeroOnboarding$ } from "../zero-page/zero-onboarding.ts";
 import { reloadChatThreads$ } from "../chat-page/chat-message.ts";
 import { isOrgAdmin$ } from "../org.ts";
 import {
@@ -20,6 +19,7 @@ import {
   setReason$,
 } from "./firewall-allow-signals.ts";
 import { hideAppSkeleton$ } from "../app-skeleton.ts";
+import { throwIfAbort } from "../utils.ts";
 
 export const setupFirewallAllowPage$ = command(
   async ({ get, set }, signal: AbortSignal) => {
@@ -34,8 +34,6 @@ export const setupFirewallAllowPage$ = command(
     set(updateDocumentTitle$, "Firewall Permissions");
     set(resetFocusedState$);
 
-    await set(initZeroOnboarding$, signal);
-    signal.throwIfAborted();
     await set(hideAppSkeleton$, signal);
 
     if (await set(onboardGuard$, signal)) {
@@ -44,7 +42,15 @@ export const setupFirewallAllowPage$ = command(
 
     set(reloadChatThreads$);
 
-    const agent = await get(firewallAllowAgent$);
+    // Agent load errors are displayed by the component via useLastLoadable —
+    // only re-throw abort errors; other failures render an error state in-page.
+    let agent;
+    try {
+      agent = await get(firewallAllowAgent$);
+    } catch (error) {
+      throwIfAbort(error);
+      return;
+    }
     signal.throwIfAborted();
     const ref = get(firewallAllowRef$);
 

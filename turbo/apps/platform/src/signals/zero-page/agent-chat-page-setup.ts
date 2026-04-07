@@ -1,12 +1,15 @@
 import { command } from "ccstate";
 import { createElement } from "react";
 import { SidebarLayout } from "../../views/zero-page/sidebar-layout.tsx";
-import { ZeroChatPage } from "../../views/zero-page/zero-chat-page.tsx";
+import { AgentChatPage } from "../../views/zero-page/agent-chat-page.tsx";
 import { updateDocumentTitle$ } from "../document-title.ts";
 import { updatePage$ } from "../react-router.ts";
-import { searchParams$, updateSearchParams$ } from "../route.ts";
+import {
+  searchParams$,
+  updateSearchParams$,
+  detachedNavigateTo$,
+} from "../route.ts";
 import { onboardGuard$ } from "./onboard-guard.ts";
-import { loadInitialData$, resolveAgentById$ } from "./zero-page.ts";
 import { currentAgentId$, defaultAgentId$, subagents$ } from "../agent.ts";
 import {
   setChatAgentId$,
@@ -14,14 +17,16 @@ import {
 } from "../agent-chat.ts";
 import { talkDraft$ } from "./chat-draft.ts";
 import { hideAppSkeleton$ } from "../app-skeleton.ts";
+import { reloadTagline$ } from "./zero-chat-page.ts";
 
-export const setupTalkPage$ = command(
+export const setupAgentChatPage$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     set(
       updatePage$,
-      createElement(SidebarLayout, null, createElement(ZeroChatPage)),
+      createElement(SidebarLayout, null, createElement(AgentChatPage)),
     );
     set(updateDocumentTitle$, "Chat");
+    set(reloadTagline$);
 
     // Reset the talk draft on entrance
     set(get(talkDraft$).clear$);
@@ -33,7 +38,6 @@ export const setupTalkPage$ = command(
       set(setChatAgentId$, agentId);
     }
 
-    await set(loadInitialData$, signal);
     await set(hideAppSkeleton$, signal);
 
     if (await set(onboardGuard$, signal)) {
@@ -44,14 +48,26 @@ export const setupTalkPage$ = command(
       throw new Error("Talk page requires an active agent, but none found");
     }
 
-    // Validate agent exists; redirect to default if unknown.
-    await set(resolveAgentById$, agentId, signal);
-    signal.throwIfAborted();
-
     // Get display name from already-loaded data to avoid a separate
     // /api/zero/agents/:id round-trip on every navigation.
     const defaultId = await get(defaultAgentId$);
     signal.throwIfAborted();
+
+    // Validate agent exists; redirect to default if unknown.
+    if (agentId !== defaultId) {
+      const subagentList = await get(subagents$);
+      signal.throwIfAborted();
+      const agentExists = subagentList.some((a) => {
+        return a.id === agentId;
+      });
+      if (!agentExists && defaultId) {
+        set(detachedNavigateTo$, "/agents/:id/chat", {
+          pathParams: { id: defaultId },
+          replace: true,
+        });
+        return;
+      }
+    }
 
     let agentName: string;
     if (agentId === defaultId) {

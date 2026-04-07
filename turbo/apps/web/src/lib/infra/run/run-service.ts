@@ -117,6 +117,7 @@ export interface CreateRunParams {
   agentName?: string;
   modelProvider?: string;
   debugNoMockClaude?: boolean;
+  captureNetworkBodies?: boolean;
   // Caller-resolved org context for variable/storage resolution.
   orgId: string;
   // Caller-resolved org tier for concurrency limit derivation.
@@ -171,6 +172,7 @@ export interface StartRunParams {
   volumeVersions?: Record<string, string>;
   callbacks?: Array<{ url: string; secret: string; payload: unknown }>;
   debugNoMockClaude?: boolean;
+  captureNetworkBodies?: boolean;
   firewallPolicies?: FirewallPolicies;
   allowedConnectorTypes?: ConnectorType[];
 
@@ -489,6 +491,7 @@ export async function startRun(
     resumedFromCheckpointId: params.checkpointId,
     agentName: resolved.agentName,
     debugNoMockClaude: params.debugNoMockClaude,
+    captureNetworkBodies: params.captureNetworkBodies,
     firewallPolicies: params.firewallPolicies,
     allowedConnectorTypes: params.allowedConnectorTypes,
     orgId: authOrgId,
@@ -534,6 +537,7 @@ export async function startRun(
       resumedFromCheckpointId: params.checkpointId,
       continuedFromSessionId: params.sessionId,
       debugNoMockClaude: params.debugNoMockClaude,
+      captureNetworkBodies: params.captureNetworkBodies,
     });
 
     // 8. Dispatch

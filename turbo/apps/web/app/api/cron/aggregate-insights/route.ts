@@ -214,6 +214,7 @@ interface UserNetworkData {
     string,
     {
       label: string;
+      connectorType: string;
       allowed: number;
       denied: number;
       agentNames: Set<string>;
@@ -255,16 +256,20 @@ function aggregateNetworkDataPerUser(
     svc.agentNames.add(info.agentName);
     userData.serviceMap.set(connectorKey, svc);
 
-    if (row.firewall_permission) {
+    if (row.firewall_permission || row.action === "DENY") {
+      const hasPerm = !!row.firewall_permission;
       const isUnrestricted = row.firewall_permission === "unrestricted";
-      const permKey = isUnrestricted
-        ? row.firewall_ref
-        : `${row.firewall_ref}:${row.firewall_permission}`;
-      const label = isUnrestricted
-        ? row.firewall_ref
-        : getPermissionLabel(row.firewall_ref, row.firewall_permission);
+      const permKey =
+        !hasPerm || isUnrestricted
+          ? row.firewall_ref
+          : `${row.firewall_ref}:${row.firewall_permission}`;
+      const label =
+        !hasPerm || isUnrestricted
+          ? row.firewall_ref
+          : getPermissionLabel(row.firewall_ref, row.firewall_permission);
       const perm = userData.permMap.get(permKey) ?? {
         label,
+        connectorType: row.firewall_ref,
         allowed: 0,
         denied: 0,
         agentNames: new Set<string>(),
@@ -303,13 +308,13 @@ interface InsightData {
   }[];
   topTask: { name: string; count: number } | null;
   services: {
-    name: string;
     domain: string;
     calls: number;
     agentNames: string[];
   }[];
   permissions: {
     label: string;
+    connectorType: string;
     allowed: number;
     denied: number;
     agentNames: string[];
@@ -333,11 +338,7 @@ function buildUserInsight(
   const services = networkData
     ? [...networkData.serviceMap.entries()]
         .map(([connectorKey, svc]) => {
-          const config = isFirewallConnectorType(connectorKey)
-            ? getConnectorFirewall(connectorKey)
-            : null;
           return {
-            name: config?.name ?? connectorKey,
             domain: connectorKey,
             calls: svc.calls,
             agentNames: [...svc.agentNames],
@@ -353,6 +354,7 @@ function buildUserInsight(
         .map((p) => {
           return {
             label: p.label,
+            connectorType: p.connectorType,
             allowed: p.allowed,
             denied: p.denied,
             agentNames: [...p.agentNames],

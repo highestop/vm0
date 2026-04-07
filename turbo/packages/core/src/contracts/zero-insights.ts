@@ -12,7 +12,6 @@ const insightAgentSchema = z.object({
 });
 
 const insightServiceSchema = z.object({
-  name: z.string(),
   domain: z.string(),
   calls: z.number(),
   agentNames: z.array(z.string()),
@@ -20,6 +19,7 @@ const insightServiceSchema = z.object({
 
 const insightPermissionSchema = z.object({
   label: z.string(),
+  connectorType: z.string().optional(),
   allowed: z.number(),
   denied: z.number(),
   agentNames: z.array(z.string()),

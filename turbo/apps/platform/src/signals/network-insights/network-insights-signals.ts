@@ -14,7 +14,6 @@ export interface AgentUsage {
 }
 
 export interface ServiceUsage {
-  name: string;
   domain: string;
   calls: number;
   /** Which agents used this service */
@@ -23,6 +22,7 @@ export interface ServiceUsage {
 
 export interface PermissionEntry {
   label: string;
+  connectorType?: string;
   allowed: number;
   denied: number;
   /** Which agents triggered this permission */

@@ -1,3 +1,4 @@
+import { IconLoader2 } from "@tabler/icons-react";
 import { useGet, useSet } from "ccstate-react";
 import {
   Table,
@@ -367,18 +368,16 @@ function NetworkLogRow({
 export function NetworkContent({
   networkLogs,
   hasMore,
+  loading,
+  onLoadMore,
 }: {
   networkLogs: NetworkLogEntry[];
   hasMore?: boolean;
+  loading?: boolean;
+  onLoadMore?: () => void;
 }) {
   return (
     <div className="pb-8">
-      {hasMore && (
-        <p className="text-xs text-muted-foreground mb-3">
-          Showing first {networkLogs.length} entries. Some entries may be
-          truncated.
-        </p>
-      )}
       <Table>
         <TableHeader>
           <TableRow>
@@ -398,6 +397,21 @@ export function NetworkContent({
           })}
         </TableBody>
       </Table>
+      {hasMore && onLoadMore && (
+        <div className="flex justify-center py-4">
+          {loading ? (
+            <IconLoader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          ) : (
+            <button
+              type="button"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              onClick={onLoadMore}
+            >
+              Load more
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

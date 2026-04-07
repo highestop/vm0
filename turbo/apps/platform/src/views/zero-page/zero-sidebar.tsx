@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import {
-  useLoadable,
   useLastLoadable,
   useLastResolved,
   useGet,
   useSet,
+  useResolved,
 } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
 import { pageSignal$ } from "../../signals/page-signal.ts";
@@ -31,33 +31,22 @@ import {
 import slackIcon from "./components/settings/icons/slack.svg";
 import { detach, Reason } from "../../signals/utils.ts";
 import {
-  activeRoute$,
-  chatThreadId$,
   sidebarOff$,
   toggleSidebarOff$,
   sidebarExpanded$,
   setSidebarExpanded$,
   handleZeroNavSelect$,
   handleZeroAccountAction$,
-  navigateToChat$,
-  sidebarChatAgentId$,
   type SidebarNavId,
 } from "../../signals/zero-page/zero-nav.ts";
+import { activeRoute$ } from "../../signals/active-route.ts";
 import type { RouteKey } from "../../signals/route-paths.ts";
+import { subagents$ } from "../../signals/agent.ts";
 import {
-  agentDisplayName$,
-  defaultAgentId$,
-} from "../../signals/zero-page/zero-agent-name.ts";
-import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
-import {
-  chatThreads$,
-  createNewChatThread$,
-  creatingNewSession$,
-} from "../../signals/zero-page/zero-chat.ts";
-import {
-  pinnedAgentIds$,
-  updatePinnedAgentIds$,
-} from "../../signals/zero-page/zero-pinned-agents.ts";
+  currentChatAgentDisplayName$,
+  currentChatAgentId$,
+} from "../../signals/agent-chat.ts";
+import { updatePinnedAgentIds$ } from "../../signals/zero-page/zero-pinned-agents.ts";
 import {
   managePinnedDialogOpen$,
   setManagePinnedDialogOpen$,
@@ -68,7 +57,6 @@ import {
 } from "../../signals/zero-page/zero-sidebar-state.ts";
 import { VM0ClerkProvider } from "../clerk/clerk-provider.tsx";
 import { ZeroOrgSwitcher } from "./zero-org-switcher.tsx";
-import { useAgentAvatar, type SubagentInfo } from "./zero-sidebar-shared.tsx";
 import { Link } from "../router/link.tsx";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import { slackOrgScopeMismatch$ } from "../../signals/zero-page/zero-slack.ts";
@@ -76,8 +64,8 @@ import { BillingDialog } from "./billing-dialog.tsx";
 import { ManagePinnedAgentsDialog } from "./zero-sidebar-dialogs.tsx";
 
 import { AccountDropdown } from "./zero-sidebar-account.tsx";
-import { RecentChatSection } from "./zero-sidebar-chat-list.tsx";
-import { TalkToSection } from "./zero-sidebar-pinned.tsx";
+import { ChatThreadsSection } from "./sidebar-threads.tsx";
+import { PinnedAgentListSection } from "./zero-sidebar-pinned.tsx";
 import { OverlayScrollArea } from "./zero-sidebar-scroll.tsx";
 import { SidebarUpgradeCard } from "./zero-sidebar-upgrade.tsx";
 
@@ -174,26 +162,13 @@ export function ZeroSidebar() {
 
   // Read all data from signals directly
   const activeId = useGet(activeRoute$);
-  const displayNameLoadable = useLastLoadable(agentDisplayName$);
+  const displayNameLoadable = useLastLoadable(currentChatAgentDisplayName$);
   const displayNameRaw =
     displayNameLoadable.state === "hasData" ? displayNameLoadable.data : null;
-  const defaultAgentIdLoadable = useLastLoadable(defaultAgentId$);
-  const defaultAgentRawName =
-    defaultAgentIdLoadable.state === "hasData"
-      ? defaultAgentIdLoadable.data
-      : null;
-  const zeroAvatarSrc = useAgentAvatar(defaultAgentRawName ?? "");
-  const subagentsLoadable = useLastLoadable(zeroSubagents$);
-  const subagents: SubagentInfo[] =
-    subagentsLoadable.state === "hasData"
-      ? subagentsLoadable.data.map((a) => {
-          return {
-            id: a.id,
-            displayName: a.displayName,
-          };
-        })
-      : [];
-  const currentChatAgentId = useGet(sidebarChatAgentId$);
+
+  const subagentsLoadable = useLastLoadable(subagents$);
+  const subagents =
+    subagentsLoadable.state === "hasData" ? subagentsLoadable.data : [];
   const off = useGet(sidebarOff$);
   const toggleOff = useSet(toggleSidebarOff$);
   const expanded = useGet(sidebarExpanded$);
@@ -206,26 +181,9 @@ export function ZeroSidebar() {
     rawOnSelect(id);
     setExpanded(false);
   };
-  const navigateToChat = useSet(navigateToChat$);
-  const onRecentSelect = (chatThreadId: string) => {
-    navigateToChat(chatThreadId);
-    setExpanded(false);
-  };
-  const selectedRecentId = useGet(chatThreadId$);
   const onAccountAction = useSet(handleZeroAccountAction$);
-  const recentSessions = useLastResolved(chatThreads$) ?? [];
-  const createNewChat = useSet(createNewChatThread$);
-  const creatingNewSessionLoadable = useLoadable(creatingNewSession$);
-  const creatingNewSession = creatingNewSessionLoadable.state === "loading";
   const pageSignal = useGet(pageSignal$);
-  const onNewChat = (agentId: string | null) => {
-    detach(createNewChat(agentId, pageSignal), Reason.DomCallback);
-    setExpanded(false);
-  };
   const displayName = displayNameRaw || "Zero";
-  const pinnedIdsLoadable = useLastLoadable(pinnedAgentIds$);
-  const pinnedIds: string[] =
-    pinnedIdsLoadable.state === "hasData" ? pinnedIdsLoadable.data : [];
   const [pinLoadable, savePinnedIds] = useLoadableSet(updatePinnedAgentIds$);
   const savingPinned = pinLoadable.state === "loading";
   const setPinnedIds = (ids: string[]) => {
@@ -236,35 +194,7 @@ export function ZeroSidebar() {
   // Feature gates
   const features = useLastResolved(featureSwitch$);
   const slackScopeMismatch = useLastResolved(slackOrgScopeMismatch$) ?? false;
-
-  // Compute selectedAgentIdFromChat for grey highlight
-  const subagentIds = new Set(
-    subagents.map((a) => {
-      return a.id;
-    }),
-  );
-  const selectedAgentIdFromChat: string | null | undefined = selectedRecentId
-    ? (() => {
-        const thread = recentSessions.find((s) => {
-          return s.id === selectedRecentId;
-        });
-        if (!thread) {
-          return undefined;
-        }
-        return subagentIds.has(thread.agentId) ? thread.agentId : null;
-      })()
-    : undefined;
-
-  // Pinned agents resolved from IDs
-  const pinnedAgents = pinnedIds
-    .map((id) => {
-      return subagents.find((a) => {
-        return a.id === id;
-      });
-    })
-    .filter((a: SubagentInfo | undefined): a is SubagentInfo => {
-      return a !== undefined;
-    });
+  const currentChatAgentId = useResolved(currentChatAgentId$);
 
   const manageNav = MANAGE_NAV.filter((item) => {
     return (
@@ -353,7 +283,6 @@ export function ZeroSidebar() {
                             e.preventDefault();
                             if (id === "chat") {
                               onSelect("chat");
-                              onNewChat?.(null);
                             } else {
                               onSelect(id);
                             }
@@ -525,33 +454,8 @@ export function ZeroSidebar() {
                 : "none",
             }}
           >
-            {/* Chat section */}
-            <TalkToSection
-              activeId={activeId}
-              currentChatAgentId={currentChatAgentId}
-              selectedRecentId={selectedRecentId}
-              selectedAgentIdFromChat={selectedAgentIdFromChat}
-              displayName={displayName}
-              defaultAgentRawName={defaultAgentRawName}
-              zeroAvatarSrc={zeroAvatarSrc}
-              pinnedAgents={pinnedAgents}
-              pinnedIds={pinnedIds}
-              subagents={subagents}
-              onPinnedIdsChange={setPinnedIds}
-              onNewChat={onNewChat}
-            />
-
-            {/* Recent chat sessions */}
-            <RecentChatSection
-              key={currentChatAgentId}
-              currentChatAgentId={currentChatAgentId}
-              displayName={displayName}
-              subagents={subagents}
-              selectedRecentId={selectedRecentId}
-              onRecentSelect={onRecentSelect}
-              onNewChat={onNewChat}
-              newChatDisabled={creatingNewSession}
-            />
+            <PinnedAgentListSection />
+            <ChatThreadsSection key={currentChatAgentId} />
           </OverlayScrollArea>
         </nav>
 
@@ -655,7 +559,6 @@ export function ZeroSidebar() {
       <ManagePinnedAgentsDialog
         open={managePinnedOpen}
         onOpenChange={setManagePinnedOpen}
-        zeroAvatarSrc={zeroAvatarSrc}
         displayName={displayName}
         subagents={subagents}
         onPinnedIdsChange={setPinnedIds}

@@ -1,7 +1,6 @@
 import { command, state } from "ccstate";
 import { detachedNavigateTo$ } from "../route.ts";
-import { defaultAgentId$ } from "./zero-agent-name.ts";
-import { zeroSubagents$ } from "./zero-agents.ts";
+import { defaultAgentId$, subagents$ } from "../agent.ts";
 import { initZeroOnboarding$ } from "./zero-onboarding.ts";
 import { initSlackOrg$ } from "./zero-slack.ts";
 
@@ -30,7 +29,7 @@ export const loadInitialData$ = command(
  *
  * - If agentId is found among subagents or matches default, no action needed.
  * - If agentId is unknown, redirects to default agent.
- * - Agent identity is now derived via zeroChatAgentId$ computed signal.
+ * - Agent identity is now derived via sidebarAgentId$ computed signal.
  *
  * Used by setupTalkPage$ to handle unknown agent redirects.
  */
@@ -40,7 +39,7 @@ export const resolveAgentById$ = command(
       return;
     }
 
-    const subagents = await get(zeroSubagents$);
+    const subagents = await get(subagents$);
     signal.throwIfAborted();
     const rawDefaultName = await get(defaultAgentId$);
     signal.throwIfAborted();

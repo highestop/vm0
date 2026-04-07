@@ -3,10 +3,12 @@ import type { RoutePath } from "../../types/route.ts";
 import { ROUTES } from "../route-paths.ts";
 import { pathParams$ } from "../route.ts";
 import { activeRoute$ } from "../active-route.ts";
-import { chatThreadId$ } from "./zero-nav.ts";
-import { agents$ } from "./agents-list.ts";
-import { agentDisplayName$, defaultAgentId$ } from "./zero-agent-name.ts";
-import { zeroChatAgentId$ } from "./zero-active-agent.ts";
+import { agents$, defaultAgentId$ } from "../agent.ts";
+import {
+  currentChatAgentId$,
+  currentChatThreadId$,
+  currentChatAgentDisplayName$,
+} from "../agent-chat.ts";
 import { allOrgScheduleEntries$ } from "./zero-schedule.ts";
 import { zeroActivityDetail$ } from "../../signals/activity-page/activity-signals.ts";
 import { featureSwitch$ } from "../external/feature-switch.ts";
@@ -137,20 +139,20 @@ const scheduleBreadcrumb$ = computed((get): MobileBreadcrumb => {
 
 const chatBreadcrumb$ = computed(async (get): Promise<MobileBreadcrumb> => {
   const params = get(pathParams$) as Params;
-  const displayName = await get(agentDisplayName$);
+  const displayName = await get(currentChatAgentDisplayName$);
   const defaultId = await get(defaultAgentId$);
-  const threadId = get(chatThreadId$);
+  const threadId = get(currentChatThreadId$);
   const urlAgentId = getStringParam(params, "id");
 
   if (threadId !== null || urlAgentId !== null) {
-    const subagentId = await get(zeroChatAgentId$);
+    const subagentId = await get(currentChatAgentId$);
     if (subagentId) {
       const agentsList = await get(agents$);
       const subagent = agentsList.find((a) => {
         return a.id === subagentId;
       });
       return {
-        section: subagent?.displayName ?? displayName,
+        section: subagent?.displayName ?? displayName ?? "Zero",
         sectionPath: CHAT_PATH,
         avatarAgentId: subagentId,
       };
@@ -158,7 +160,7 @@ const chatBreadcrumb$ = computed(async (get): Promise<MobileBreadcrumb> => {
   }
 
   return {
-    section: displayName,
+    section: displayName ?? "Zero",
     sectionPath: CHAT_PATH,
     avatarAgentId: defaultId ?? undefined,
   };

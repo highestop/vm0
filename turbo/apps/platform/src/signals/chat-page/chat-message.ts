@@ -1,5 +1,5 @@
 import { command, computed, state, type Computed } from "ccstate";
-import type { AgentEvent, LogStatus } from "./log-types.ts";
+import type { AgentEvent, LogStatus } from "../zero-page/log-types.ts";
 import { resetSignal, throwIfAbort } from "../utils.ts";
 import { detachedNavigateTo$ } from "../route.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
@@ -8,30 +8,38 @@ import {
   currentDraft$,
   talkDraft$,
   type ZeroChatAttachment,
-} from "./chat-draft.ts";
+} from "../zero-page/chat-draft.ts";
 import {
   createRunLoop,
   fibDelays$,
   pollInterval$,
   setLoop,
   type PagedRunEvents,
-} from "./polling.ts";
-import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
+} from "../zero-page/polling.ts";
+import { zeroOnboardingStatus$ } from "../zero-page/zero-onboarding.ts";
+import { navigateToChat$ } from "../zero-page/zero-nav.ts";
 import {
-  navigateToChat$,
-  chatThreadId$,
-  sidebarChatAgentId$,
-} from "./zero-nav.ts";
+  currentChatThreadId$,
+  chatThreads$,
+  currentChatThread$,
+  reloadChatThreads$,
+  reloadCurrentChatThread$,
+  type ChatThread,
+} from "../agent-chat.ts";
 import {
   RUN_ERROR_GUIDANCE,
   chatMessagesContract,
   chatThreadsContract,
   chatThreadByIdContract,
-  zeroSessionsByIdContract,
-  type SummaryEntry,
 } from "@vm0/core";
 import { accept, ApiError } from "../../lib/accept.ts";
 import { zeroClient$, type ZeroClientFactory } from "../api-client.ts";
+
+export {
+  chatThreads$,
+  currentChatThread$,
+  reloadChatThreads$,
+} from "../agent-chat.ts";
 
 export {
   zeroChatInput$,
@@ -43,9 +51,9 @@ export {
   zeroDragOver$,
   setZeroDragOver$,
   type ZeroChatAttachment,
-} from "./chat-draft.ts";
+} from "../zero-page/chat-draft.ts";
 
-const L = logger("ZeroChat");
+const L = logger("ChatMessage");
 
 function isResultEventData(data: unknown): data is { result: string } {
   return (
@@ -160,8 +168,8 @@ function createPlaceholderAssistantMessage(
 }
 
 export const zeroChatMessages$ = computed(async (get) => {
-  const snapshot = await get(chatSessionSnapshot$);
-  const serverMessages = snapshot?.messages ?? [];
+  const messages = await get(chatMessages$);
+  const serverMessages = messages?.messages ?? [];
   const localMessages = get(internalLocalMessages$);
 
   // Deduplicate: if the server already has a message for a given runId,
@@ -400,43 +408,9 @@ function summarizeEvent(event: AgentEvent, skipText: boolean): string | null {
  */
 export const resetTalkSendSignal$ = resetSignal();
 
-const internalReloadChatThreads$ = state(0);
-
-export const reloadChatThreads$ = command(({ set }) => {
-  set(internalReloadChatThreads$, (n) => {
-    return n + 1;
-  });
-});
-
-export const chatThreads$ = computed(async (get) => {
-  get(internalReloadChatThreads$);
-  const sidebarAgentId = get(sidebarChatAgentId$);
-  const composeId =
-    sidebarAgentId ?? (await get(zeroOnboardingStatus$)).defaultAgentId;
-  if (!composeId) {
-    return [];
-  }
-  const client = get(zeroClient$)(chatThreadsContract);
-  const result = await accept(
-    client.list({ query: { agentId: composeId } }),
-    [200],
-    { toast: false },
-  );
-  const threads = result.body.threads;
-
-  const currentThread = await get(currentChatThread$);
-  return threads.map((t) => {
-    return {
-      ...t,
-      title:
-        t.id === currentThread?.id ? t.title || currentThread.title : t.title,
-    };
-  });
-});
-
 export const deleteChatThread$ = command(
   async ({ get, set }, threadId: string, signal: AbortSignal) => {
-    const threadSnapshot = await get(chatThreads$);
+    const threads = await get(chatThreads$);
     signal.throwIfAborted();
 
     const client = get(zeroClient$)(chatThreadByIdContract);
@@ -445,11 +419,11 @@ export const deleteChatThread$ = command(
 
     toast.success("Chat deleted");
 
-    if (get(chatThreadId$) === threadId) {
-      const idx = threadSnapshot.findIndex((t) => {
+    if (get(currentChatThreadId$) === threadId) {
+      const idx = threads.findIndex((t) => {
         return t.id === threadId;
       });
-      const remaining = threadSnapshot.filter((t) => {
+      const remaining = threads.filter((t) => {
         return t.id !== threadId;
       });
       if (remaining.length === 0) {
@@ -460,34 +434,9 @@ export const deleteChatThread$ = command(
       }
     }
 
-    set(internalReloadChatThreads$, (n) => {
-      return n + 1;
-    });
+    set(reloadChatThreads$);
   },
 );
-
-interface ChatThread {
-  id: string;
-  agentId?: string;
-  title: string | null;
-  chatMessages: {
-    role: "user" | "assistant";
-    content: string;
-    runId?: string;
-    error?: string;
-    summaries?: SummaryEntry[];
-    createdAt: string;
-  }[];
-  latestSessionId: string | null;
-  unsavedRuns: {
-    runId: string;
-    status: string;
-    prompt: string;
-    error: string | null;
-    createdAt: string;
-  }[];
-  isLegacySession: boolean;
-}
 
 async function collectAllEvents(
   pages: Computed<Promise<PagedRunEvents>>[],
@@ -612,69 +561,12 @@ function unsavedRunsToMessages(unsavedRuns: ChatThread["unsavedRuns"]): {
   return { messages, activeRunMessages, lastActiveRunId };
 }
 
-interface ChatSessionSnapshotData {
+interface ChatMessages {
   messages: ZeroChatMessage[];
   activeRunMessages: ZeroChatMessage[];
   agentId?: string;
   lastActiveRunId: string | null;
 }
-
-const reloadCurrentThread$ = state(0);
-
-export const currentChatThread$ = computed(
-  async (get): Promise<ChatThread | null> => {
-    get(reloadCurrentThread$);
-    const threadId = get(chatThreadId$);
-    if (!threadId) {
-      return null;
-    }
-
-    const threadClient = get(zeroClient$)(chatThreadByIdContract);
-    try {
-      const threadResult = await accept(
-        threadClient.get({ params: { id: threadId } }),
-        [200],
-        { toast: false },
-      );
-      const body = threadResult.body;
-      return {
-        id: threadId,
-        title: body.title ?? null,
-        agentId: body.agentId,
-        chatMessages: body.chatMessages ?? [],
-        latestSessionId: body.latestSessionId ?? null,
-        unsavedRuns: body.unsavedRuns ?? [],
-        isLegacySession: false,
-      };
-    } catch (error) {
-      throwIfAbort(error);
-      // not a thread; try session lookup below
-    }
-
-    const sessionClient = get(zeroClient$)(zeroSessionsByIdContract);
-    try {
-      const sessionResult = await accept(
-        sessionClient.getById({ params: { id: threadId } }),
-        [200],
-        { toast: false },
-      );
-      const body = sessionResult.body;
-      return {
-        id: threadId,
-        title: null,
-        agentId: body.agentId,
-        chatMessages: body.chatMessages ?? [],
-        latestSessionId: threadId,
-        unsavedRuns: [],
-        isLegacySession: true,
-      };
-    } catch (error) {
-      throwIfAbort(error);
-      L.warn("Failed to load chat");
-      return null;
-    }
-  },
-);
 
 const currentChatMessages$ = computed(
   async (get): Promise<ZeroChatMessage[]> => {
@@ -722,59 +614,53 @@ const currentChatMessages$ = computed(
   },
 );
 
-const chatSessionSnapshot$ = computed(
-  async (get): Promise<ChatSessionSnapshotData | null> => {
-    const thread = await get(currentChatThread$);
-    if (!thread) {
-      return null;
-    }
+const chatMessages$ = computed(async (get): Promise<ChatMessages | null> => {
+  const thread = await get(currentChatThread$);
+  if (!thread) {
+    return null;
+  }
 
-    const {
-      messages: runMessages,
-      activeRunMessages,
-      lastActiveRunId: legacyLastActiveRunId,
-    } = unsavedRunsToMessages(thread.unsavedRuns);
+  const {
+    messages: runMessages,
+    activeRunMessages,
+    lastActiveRunId: legacyLastActiveRunId,
+  } = unsavedRunsToMessages(thread.unsavedRuns);
 
-    const allMessages = [...(await get(currentChatMessages$)), ...runMessages];
-    allMessages.sort((a, b) => {
-      const aTime = a.createdAt ?? "";
-      const bTime = b.createdAt ?? "";
-      return aTime.localeCompare(bTime);
-    });
+  const allMessages = [...(await get(currentChatMessages$)), ...runMessages];
+  allMessages.sort((a, b) => {
+    const aTime = a.createdAt ?? "";
+    const bTime = b.createdAt ?? "";
+    return aTime.localeCompare(bTime);
+  });
 
-    return {
-      messages: allMessages,
-      activeRunMessages,
-      agentId: thread.agentId,
-      lastActiveRunId: legacyLastActiveRunId,
-    };
-  },
-);
+  return {
+    messages: allMessages,
+    activeRunMessages,
+    agentId: thread.agentId,
+    lastActiveRunId: legacyLastActiveRunId,
+  };
+});
 
-export const loadSessionFromSnapshot$ = command(
+export const loadChatMessages$ = command(
   async ({ get, set }, signal: AbortSignal) => {
-    L.debug("Loading session from snapshot");
-    const snapshot = await get(chatSessionSnapshot$);
+    L.debug("Loading messages");
+    const messages = await get(chatMessages$);
     signal.throwIfAborted();
-    if (!snapshot?.activeRunMessages.length) {
+    if (!messages?.activeRunMessages.length) {
       return;
     }
 
-    set(internalLocalMessages$, snapshot.activeRunMessages);
+    set(internalLocalMessages$, messages.activeRunMessages);
 
-    const assistantMessages = snapshot.activeRunMessages.filter(
+    const assistantMessages = messages.activeRunMessages.filter(
       (m): m is AssistantChatMessage => {
         return m.role === "assistant";
       },
     );
 
     if (assistantMessages.length === 0) {
-      set(internalReloadChatThreads$, (n) => {
-        return n + 1;
-      });
-      set(reloadCurrentThread$, (n) => {
-        return n + 1;
-      });
+      set(reloadChatThreads$);
+      set(reloadCurrentChatThread$);
       return;
     }
 
@@ -800,12 +686,8 @@ export const loadSessionFromSnapshot$ = command(
           get(fibDelays$),
         );
 
-        set(internalReloadChatThreads$, (x) => {
-          return x + 1;
-        });
-        set(reloadCurrentThread$, (n) => {
-          return n + 1;
-        });
+        set(reloadChatThreads$);
+        set(reloadCurrentChatThread$);
       }),
     );
     signal.throwIfAborted();
@@ -1016,7 +898,7 @@ export const sendNewThreadMessage$ = command(
 
 export const sendExistingThreadMessage$ = command(
   async ({ get, set }, prompt: string, signal: AbortSignal) => {
-    const threadId = get(chatThreadId$);
+    const threadId = get(currentChatThreadId$);
     const thread = await get(currentChatThread$);
     signal.throwIfAborted();
     const agentId = thread?.agentId;
@@ -1039,12 +921,8 @@ export const sendExistingThreadMessage$ = command(
       signal,
     );
 
-    set(internalReloadChatThreads$, (n) => {
-      return n + 1;
-    });
-    set(reloadCurrentThread$, (n) => {
-      return n + 1;
-    });
+    set(reloadChatThreads$);
+    set(reloadCurrentChatThread$);
 
     const { assistantMessage } = createActiveRunMessage(runId, prompt);
     set(internalLocalMessages$, (prev) => {
@@ -1060,12 +938,8 @@ export const sendExistingThreadMessage$ = command(
       async (sig) => {
         const finished = await set(runLoop.checkFinished$, sig);
         if (!finished) {
-          set(internalReloadChatThreads$, (n) => {
-            return n + 1;
-          });
-          set(reloadCurrentThread$, (n) => {
-            return n + 1;
-          });
+          set(reloadChatThreads$);
+          set(reloadCurrentChatThread$);
         }
         return finished;
       },

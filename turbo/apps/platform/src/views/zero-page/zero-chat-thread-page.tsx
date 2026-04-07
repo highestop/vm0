@@ -33,15 +33,19 @@ import {
   lightboxUrl$ as attachmentLightboxUrl$,
   setLightboxUrl$ as setAttachmentLightboxUrl$,
 } from "../../signals/zero-page/zero-attachment-chips.ts";
+import { subagents$ } from "../../signals/agent.ts";
 import {
-  agentDisplayName$,
-  defaultAgentId$,
-} from "../../signals/zero-page/zero-agent-name.ts";
-import { zeroChatAgentId$ } from "../../signals/zero-page/zero-active-agent.ts";
+  currentChatAgentId$,
+  currentChatAgent$,
+  currentChatAgentDisplayName$,
+} from "../../signals/agent-chat.ts";
+import { resolveAvatarUrl } from "./avatar-utils.ts";
+import avatar1Img from "./assets/avatar_1.webp";
 import {
   pinnedAgentIds$,
   updatePinnedAgentIds$,
 } from "../../signals/zero-page/zero-pinned-agents.ts";
+
 import {
   zeroChatMessages$,
   allFinished$,
@@ -54,7 +58,7 @@ import {
   type AssistantChatMessage,
   cancelActiveRun$,
   thinkingMessage$,
-} from "../../signals/zero-page/zero-chat.ts";
+} from "../../signals/chat-page/chat-message.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
 import { Link } from "../router/link.tsx";
 import { setOrgManageDialogOpen$ } from "../../signals/zero-page/settings/org-manage-dialog.ts";
@@ -65,8 +69,6 @@ import {
   copiedMessageIdValue$,
   copyMessageContent$,
 } from "../../signals/zero-page/zero-session-chat-ui.ts";
-import { useAgentAvatar } from "./zero-sidebar-shared.tsx";
-import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
 function scrollToLatestMessage() {
   const scrollEl = document.querySelector<HTMLElement>(
     "[data-scroll-container]",
@@ -141,10 +143,10 @@ function AvatarOrPlaceholder({
 // ---------------------------------------------------------------------------
 
 function useChatAgentIdentity() {
-  const chatAgentLoadable = useLastLoadable(zeroChatAgentId$);
+  const chatAgentLoadable = useLastLoadable(currentChatAgentId$);
   const currentChatAgentId =
     chatAgentLoadable.state === "hasData" ? chatAgentLoadable.data : null;
-  const subagentsLoadable = useLastLoadable(zeroSubagents$);
+  const subagentsLoadable = useLastLoadable(subagents$);
   const subagents =
     subagentsLoadable.state === "hasData" ? subagentsLoadable.data : [];
   const selectedSubagent = currentChatAgentId
@@ -152,18 +154,22 @@ function useChatAgentIdentity() {
         return a.id === currentChatAgentId;
       })
     : null;
-  const defaultAgentIdLoadable = useLastLoadable(defaultAgentId$);
-  const defaultRawName =
-    defaultAgentIdLoadable.state === "hasData"
-      ? defaultAgentIdLoadable.data
+  const sidebarAgentIdLoadable = useLastLoadable(currentChatAgentId$);
+  const sidebarAgentIdResolved =
+    sidebarAgentIdLoadable.state === "hasData"
+      ? sidebarAgentIdLoadable.data
       : null;
-  const resolvedAgentId = selectedSubagent?.id ?? defaultRawName;
+  const resolvedAgentId = selectedSubagent?.id ?? sidebarAgentIdResolved;
 
-  const defaultDisplayName = useResolved(agentDisplayName$) ?? "Zero";
+  const defaultDisplayName =
+    useResolved(currentChatAgentDisplayName$) ?? "Zero";
   const displayName = selectedSubagent
     ? (selectedSubagent.displayName ?? selectedSubagent.id)
     : defaultDisplayName;
-  const avatarSrc = useAgentAvatar(resolvedAgentId ?? "");
+  const sidebarAgent = useLastResolved(currentChatAgent$);
+  const avatarSrc = sidebarAgent
+    ? (resolveAvatarUrl(sidebarAgent.avatarUrl) ?? avatar1Img)
+    : null;
 
   return { currentChatAgentId, resolvedAgentId, displayName, avatarSrc };
 }
@@ -179,11 +185,15 @@ function ChatThreadHeader() {
 
   // Pin pill
   const pinnedLoadable = useLastLoadable(pinnedAgentIds$);
-  const pinnedIds =
-    pinnedLoadable.state === "hasData" ? pinnedLoadable.data : [];
+  const pinnedIds = (
+    pinnedLoadable.state === "hasData" ? pinnedLoadable.data : []
+  ).filter((id): id is string => {
+    return id !== null;
+  });
   const savePinnedIds = useSet(updatePinnedAgentIds$);
   const showPinPill =
-    currentChatAgentId !== null && !pinnedIds.includes(currentChatAgentId);
+    typeof currentChatAgentId === "string" &&
+    !pinnedIds.includes(currentChatAgentId);
   const handlePin = () => {
     if (currentChatAgentId) {
       detach(

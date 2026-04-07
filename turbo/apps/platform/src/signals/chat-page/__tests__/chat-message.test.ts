@@ -13,13 +13,13 @@ import {
   clearZeroChatInput$,
   startNewZeroSession$,
   sendExistingThreadMessage$,
-  loadSessionFromSnapshot$,
+  loadChatMessages$,
   zeroChatAttachments$,
   uploadZeroAttachment$,
   removeZeroAttachment$,
   createNewChatThread$,
-} from "../zero-chat.ts";
-import { chatThreadId$ } from "../zero-nav.ts";
+} from "../chat-message.ts";
+import { currentChatThreadId$ } from "../../agent-chat.ts";
 
 const context = testContext();
 
@@ -160,7 +160,7 @@ describe("zero-chat signals", () => {
         }),
       );
 
-      // Set up on an existing thread URL so chatThreadId$ is pre-populated
+      // Set up on an existing thread URL so currentChatThreadId$ is pre-populated
       await setupPage({
         context,
         path: "/chats/thread-existing",
@@ -410,7 +410,7 @@ describe("zero-chat signals", () => {
       await expect(context.store.get(zeroChatMessages$)).resolves.toHaveLength(
         0,
       );
-      expect(context.store.get(chatThreadId$)).toBeNull();
+      expect(context.store.get(currentChatThreadId$)).toBeNull();
       await expect(context.store.get(allFinished$)).resolves.toBeTruthy();
       expect(context.store.get(zeroChatInput$)).toBe("");
     });
@@ -446,7 +446,7 @@ describe("zero-chat signals", () => {
         withoutRender: true,
       });
 
-      expect(context.store.get(chatThreadId$)).toBe("url-thread");
+      expect(context.store.get(currentChatThreadId$)).toBe("url-thread");
       const messages = await context.store.get(zeroChatMessages$);
       expect(messages).toHaveLength(1);
       expect(messages[0]?.role).toBe("user");
@@ -462,7 +462,7 @@ describe("zero-chat signals", () => {
         withoutRender: true,
       });
 
-      expect(context.store.get(chatThreadId$)).toBeNull();
+      expect(context.store.get(currentChatThreadId$)).toBeNull();
     });
 
     it("should skip load when messages are already present", async () => {
@@ -502,7 +502,7 @@ describe("zero-chat signals", () => {
       const countAfterSetup = loadCount;
 
       // Second call skips because messages are already present
-      await context.store.set(loadSessionFromSnapshot$, context.signal);
+      await context.store.set(loadChatMessages$, context.signal);
       expect(loadCount).toBe(countAfterSetup);
     });
   });
@@ -537,7 +537,7 @@ describe("zero-chat signals", () => {
       await context.store.set(createNewChatThread$, null, context.signal);
 
       // Should navigate to the first empty thread, not the second
-      expect(context.store.get(chatThreadId$)).toBe("empty-thread-1");
+      expect(context.store.get(currentChatThreadId$)).toBe("empty-thread-1");
     });
 
     it("should create new thread when first thread has a title", async () => {
@@ -572,7 +572,9 @@ describe("zero-chat signals", () => {
 
       await context.store.set(createNewChatThread$, null, context.signal);
 
-      expect(context.store.get(chatThreadId$)).toBe("new-thread-created");
+      expect(context.store.get(currentChatThreadId$)).toBe(
+        "new-thread-created",
+      );
     });
 
     it("should create new thread when thread list is empty", async () => {
@@ -597,7 +599,9 @@ describe("zero-chat signals", () => {
 
       await context.store.set(createNewChatThread$, null, context.signal);
 
-      expect(context.store.get(chatThreadId$)).toBe("new-thread-empty-list");
+      expect(context.store.get(currentChatThreadId$)).toBe(
+        "new-thread-empty-list",
+      );
     });
 
     it("should not navigate to second thread when first has a title", async () => {
@@ -640,7 +644,7 @@ describe("zero-chat signals", () => {
       await context.store.set(createNewChatThread$, null, context.signal);
 
       // Should NOT navigate to empty-second-thread; should create brand new
-      expect(context.store.get(chatThreadId$)).toBe("brand-new-thread");
+      expect(context.store.get(currentChatThreadId$)).toBe("brand-new-thread");
     });
   });
 

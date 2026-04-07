@@ -3,6 +3,8 @@ import { zeroUserPreferencesContract } from "@vm0/core";
 import { accept } from "../../lib/accept.ts";
 import { zeroClient$ } from "../api-client.ts";
 import { clerk$ } from "../auth.ts";
+import { zeroOnboardingStatus$ } from "./zero-onboarding.ts";
+import { agents$ } from "../agent.ts";
 
 const reloadPinned$ = state(0);
 
@@ -25,17 +27,44 @@ const serverPinnedIds$ = computed(async (get) => {
 /**
  * Effective pinned agent IDs — optimistic value if set, otherwise server value.
  */
-export const pinnedAgentIds$ = computed((get) => {
+export const pinnedAgentIds$ = computed(async (get) => {
+  const status = await get(zeroOnboardingStatus$);
+  const defaultAgentId = status.defaultAgentId;
   const optimistic = get(optimisticPinnedIds$);
   if (optimistic !== null) {
-    return optimistic;
+    return [
+      defaultAgentId,
+      ...optimistic.filter((id) => {
+        return id !== defaultAgentId;
+      }),
+    ];
   }
-  return get(serverPinnedIds$);
+  return [
+    defaultAgentId,
+    ...(await get(serverPinnedIds$)).filter((id) => {
+      return id !== defaultAgentId;
+    }),
+  ];
 });
 
 /**
  * Update pinned agent IDs on the server with optimistic UI.
  */
+/** Pinned agent IDs resolved to full agent objects. */
+export const pinnedAgents$ = computed(async (get) => {
+  const ids = await get(pinnedAgentIds$);
+  const list = await get(agents$);
+  return ids
+    .map((id) => {
+      return list.find((a) => {
+        return a.id === id;
+      });
+    })
+    .filter((a) => {
+      return a !== undefined;
+    });
+});
+
 export const updatePinnedAgentIds$ = command(
   async ({ get, set }, ids: string[], _signal: AbortSignal) => {
     // Optimistic update — UI reflects the change immediately

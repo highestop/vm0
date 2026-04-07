@@ -7,11 +7,12 @@ import { updatePage$ } from "../react-router.ts";
 import { searchParams$, updateSearchParams$ } from "../route.ts";
 import { onboardGuard$ } from "./onboard-guard.ts";
 import { loadInitialData$, resolveAgentById$ } from "./zero-page.ts";
-import { currentAgentId$ } from "./agent.ts";
+import { currentAgentId$, defaultAgentId$, subagents$ } from "../agent.ts";
+import {
+  setChatAgentId$,
+  currentChatAgentDisplayName$,
+} from "../agent-chat.ts";
 import { talkDraft$ } from "./chat-draft.ts";
-import { defaultAgentId$, agentDisplayName$ } from "./zero-agent-name.ts";
-import { zeroSubagents$ } from "./zero-agents.ts";
-import { setSidebarChatAgent$ } from "./zero-nav.ts";
 import { hideAppSkeleton$ } from "../app-skeleton.ts";
 
 export const setupTalkPage$ = command(
@@ -29,7 +30,7 @@ export const setupTalkPage$ = command(
     // highlight early so the UI responds without waiting for async data.
     const agentId = get(currentAgentId$);
     if (agentId) {
-      set(setSidebarChatAgent$, agentId);
+      set(setChatAgentId$, agentId);
     }
 
     await set(loadInitialData$, signal);
@@ -52,17 +53,12 @@ export const setupTalkPage$ = command(
     const defaultId = await get(defaultAgentId$);
     signal.throwIfAborted();
 
-    // Correct sidebar to null when chatting with the default agent.
-    if (agentId === defaultId) {
-      set(setSidebarChatAgent$, null);
-    }
-
     let agentName: string;
     if (agentId === defaultId) {
-      agentName = (await get(agentDisplayName$)) ?? "Agent";
+      agentName = (await get(currentChatAgentDisplayName$)) ?? "Agent";
       signal.throwIfAborted();
     } else {
-      const subagents = await get(zeroSubagents$);
+      const subagents = await get(subagents$);
       signal.throwIfAborted();
       agentName =
         subagents.find((a) => {

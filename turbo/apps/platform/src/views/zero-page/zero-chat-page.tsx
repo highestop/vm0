@@ -1,5 +1,11 @@
 import { Component } from "react";
-import { useGet, useSet, useLoadable, useLastLoadable } from "ccstate-react";
+import {
+  useGet,
+  useSet,
+  useLoadable,
+  useLastLoadable,
+  useLastResolved,
+} from "ccstate-react";
 import { pageSignal$ } from "../../signals/page-signal.ts";
 import { user$ } from "../../signals/auth.ts";
 import { IconArrowUpRight, IconPin, IconUserPlus } from "@tabler/icons-react";
@@ -10,17 +16,19 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@vm0/ui";
+import { currentAgentId$, subagents$ } from "../../signals/agent.ts";
 import {
-  agentDisplayName$,
-  defaultAgentId$,
-} from "../../signals/zero-page/zero-agent-name.ts";
-import { currentAgentId$ } from "../../signals/zero-page/agent.ts";
-import { zeroChatAgentId$ } from "../../signals/zero-page/zero-active-agent.ts";
-import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
+  currentChatAgentId$,
+  currentChatAgent$,
+  currentChatAgentDisplayName$,
+} from "../../signals/agent-chat.ts";
+import { resolveAvatarUrl } from "./avatar-utils.ts";
+import avatar1Img from "./assets/avatar_1.webp";
 import {
   pinnedAgentIds$,
   updatePinnedAgentIds$,
 } from "../../signals/zero-page/zero-pinned-agents.ts";
+
 import { detach, Reason } from "../../signals/utils.ts";
 import { isOrgAdmin$ } from "../../signals/org.ts";
 import {
@@ -38,12 +46,11 @@ import {
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { detachedNavigateTo$ } from "../../signals/route.ts";
 import { Link } from "../router/link.tsx";
-import { useAgentAvatar } from "./zero-sidebar.tsx";
 import {
   resetTalkSendSignal$,
   sendNewThreadMessage$,
   startNewZeroSession$,
-} from "../../signals/zero-page/zero-chat.ts";
+} from "../../signals/chat-page/chat-message.ts";
 
 function getTagline(
   agentName: string,
@@ -176,10 +183,10 @@ function InviteButton({ pageSignal }: { pageSignal: AbortSignal }) {
 
 export function ZeroChatPage() {
   // Agent resolution (moved from ZeroTalkPage)
-  const chatAgentLoadable = useLastLoadable(zeroChatAgentId$);
+  const chatAgentLoadable = useLastLoadable(currentChatAgentId$);
   const currentChatAgentId =
     chatAgentLoadable.state === "hasData" ? chatAgentLoadable.data : null;
-  const subagentsLoadable = useLastLoadable(zeroSubagents$);
+  const subagentsLoadable = useLastLoadable(subagents$);
   const subagents =
     subagentsLoadable.state === "hasData" ? subagentsLoadable.data : [];
   const selectedSubagent = currentChatAgentId
@@ -188,18 +195,23 @@ export function ZeroChatPage() {
       })
     : null;
 
-  const defaultAgentIdLoadable = useLastLoadable(defaultAgentId$);
-  const defaultRawName =
-    defaultAgentIdLoadable.state === "hasData"
-      ? defaultAgentIdLoadable.data
+  const sidebarAgentIdLoadable = useLastLoadable(currentChatAgentId$);
+  const sidebarAgentIdResolved =
+    sidebarAgentIdLoadable.state === "hasData"
+      ? sidebarAgentIdLoadable.data
       : null;
-  const resolvedAgentId = selectedSubagent?.id ?? defaultRawName;
-  const zeroAvatarSrc = useAgentAvatar(resolvedAgentId ?? "");
+  const resolvedAgentId = selectedSubagent?.id ?? sidebarAgentIdResolved;
+  const sidebarAgent = useLastResolved(currentChatAgent$);
+  const zeroAvatarSrc = sidebarAgent
+    ? (resolveAvatarUrl(sidebarAgent.avatarUrl) ?? avatar1Img)
+    : null;
 
-  const agentDisplayNameLoadable = useLastLoadable(agentDisplayName$);
+  const agentDisplayNameLoadable = useLastLoadable(
+    currentChatAgentDisplayName$,
+  );
   const agentDisplayName =
     agentDisplayNameLoadable.state === "hasData"
-      ? agentDisplayNameLoadable.data
+      ? (agentDisplayNameLoadable.data ?? "Zero")
       : "Zero";
   const chatAgentName = selectedSubagent
     ? (selectedSubagent.displayName ?? selectedSubagent.id)
@@ -237,12 +249,16 @@ export function ZeroChatPage() {
 
   // Pin pill (currentChatAgentId is resolved above)
   const pinnedLoadable = useLastLoadable(pinnedAgentIds$);
-  const pinnedIds =
-    pinnedLoadable.state === "hasData" ? pinnedLoadable.data : [];
+  const pinnedIds = (
+    pinnedLoadable.state === "hasData" ? pinnedLoadable.data : []
+  ).filter((id): id is string => {
+    return id !== null;
+  });
   const savePinnedIds = useSet(updatePinnedAgentIds$);
   const pageSignal = useGet(pageSignal$);
   const showPinPill =
-    currentChatAgentId !== null && !pinnedIds.includes(currentChatAgentId);
+    typeof currentChatAgentId === "string" &&
+    !pinnedIds.includes(currentChatAgentId);
   const handlePin = () => {
     if (currentChatAgentId) {
       detach(

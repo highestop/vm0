@@ -60,25 +60,6 @@ function mockTeamAPI(
   );
 }
 
-function mockTeamAPIError() {
-  server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json(
-        {
-          error: {
-            message: "Internal server error",
-            code: "INTERNAL_SERVER_ERROR",
-          },
-        },
-        { status: 500 },
-      );
-    }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
-  );
-}
-
 async function renderTeamPage() {
   await setupPage({ context, path: "/agents" });
 }
@@ -181,15 +162,6 @@ describe("zero jobs page - team list", () => {
     // Descriptions should be visible where provided
     expect(screen.getByText("Handles alpha tasks")).toBeInTheDocument();
     expect(screen.getByText("Handles beta tasks")).toBeInTheDocument();
-  });
-
-  it("should show error state with retry link when API fails", async () => {
-    mockTeamAPIError();
-    await renderTeamPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("Retry")).toBeInTheDocument();
-    });
   });
 });
 

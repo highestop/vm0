@@ -1,4 +1,10 @@
-import { useGet, useSet, useLastLoadable, useLoadable } from "ccstate-react";
+import {
+  useGet,
+  useSet,
+  useLastLoadable,
+  useLoadable,
+  useLastResolved,
+} from "ccstate-react";
 import { IconPlus, IconSearch, IconX, IconTrash } from "@tabler/icons-react";
 import {
   Button,
@@ -16,17 +22,17 @@ import {
   deleteChatThread$,
   createNewChatThread$,
   creatingNewSession$,
-} from "../../signals/zero-page/zero-chat.ts";
+} from "../../signals/chat-page/chat-message.ts";
+import { navigateToChat$ } from "../../signals/zero-page/zero-nav.ts";
 import {
-  sidebarChatAgentId$,
-  navigateToChat$,
-  chatThreadId$,
-} from "../../signals/zero-page/zero-nav.ts";
-import {
-  agentDisplayName$,
-  defaultAgentId$,
-} from "../../signals/zero-page/zero-agent-name.ts";
-import { zeroSubagents$ } from "../../signals/zero-page/zero-agents.ts";
+  currentChatThreadId$,
+  currentChatAgentId$,
+  currentChatAgent$,
+  currentChatAgentDisplayName$,
+} from "../../signals/agent-chat.ts";
+import { resolveAvatarUrl } from "./avatar-utils.ts";
+import avatar1Img from "./assets/avatar_1.webp";
+import { subagents$ } from "../../signals/agent.ts";
 import {
   pendingDeleteThreadId$,
   setPendingDeleteThreadId$,
@@ -36,7 +42,6 @@ import {
 import { pageSignal$ } from "../../signals/page-signal.ts";
 import { detach, Reason } from "../../signals/utils.ts";
 import { Link } from "../router/link.tsx";
-import { useAgentAvatar } from "./zero-sidebar-shared.tsx";
 
 export function ZeroChatListPage() {
   const recentSessionsLoadable = useLastLoadable(chatThreads$);
@@ -52,20 +57,15 @@ export function ZeroChatListPage() {
         : "Failed to load chats"
       : null;
 
-  const currentChatAgentId = useGet(sidebarChatAgentId$);
-  const subagentsLoadable = useLastLoadable(zeroSubagents$);
+  const currentChatAgentId = useLastResolved(currentChatAgentId$);
+  const subagentsLoadable = useLastLoadable(subagents$);
   const subagents =
     subagentsLoadable.state === "hasData" ? subagentsLoadable.data : [];
-  const defaultAgentIdLoadable = useLastLoadable(defaultAgentId$);
-  const defaultAgentRawName =
-    defaultAgentIdLoadable.state === "hasData"
-      ? defaultAgentIdLoadable.data
-      : null;
-  const displayName = useLastLoadable(agentDisplayName$);
+  const displayName = useLastLoadable(currentChatAgentDisplayName$);
   const displayNameStr =
     displayName.state === "hasData" ? (displayName.data ?? "Zero") : "Zero";
 
-  const selectedRecentId = useGet(chatThreadId$);
+  const selectedRecentId = useGet(currentChatThreadId$);
   const navigateToChat = useSet(navigateToChat$);
   const createNewChat = useSet(createNewChatThread$);
   const creatingLoadable = useLoadable(creatingNewSession$);
@@ -75,9 +75,10 @@ export function ZeroChatListPage() {
   const searchTerm = useGet(chatListQuery$);
   const setSearchTerm = useSet(setChatListQuery$);
 
-  const avatarSrc = useAgentAvatar(
-    currentChatAgentId ?? defaultAgentRawName ?? "",
-  );
+  const sidebarAgent = useLastResolved(currentChatAgent$);
+  const avatarSrc = sidebarAgent
+    ? (resolveAvatarUrl(sidebarAgent.avatarUrl) ?? avatar1Img)
+    : null;
 
   // Filter sessions by current agent
   const subagentIds = new Set(

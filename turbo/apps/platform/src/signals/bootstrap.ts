@@ -17,8 +17,8 @@ import { setupQueuePage$ } from "./queue-page/queue-page-setup.ts";
 import { setupActivityPage$ } from "./activity-page/activity-page-setup.ts";
 import { setupActivityDetailPage$ } from "./activity-page/activity-detail-page-setup.ts";
 import { setupActivityInspectPage$ } from "./activity-page/activity-inspect-page-setup.ts";
-import { setupTeamPage$ } from "./team-page/team-page-setup.ts";
-import { setupTeamDetailPage$ } from "./team-page/team-detail-page-setup.ts";
+import { setupAgentsPage$ } from "./agents-page/agents-page-setup.ts";
+import { setupAgentDetailPage$ } from "./agents-page/agent-detail-page-setup.ts";
 import { setupWorksPage$ } from "./works-page/works-page-setup.ts";
 import { setupPreferencesPage$ } from "./preferences-page/preferences-page-setup.ts";
 import { setupSchedulePage$ } from "./schedule-page/schedule-page-setup.ts";
@@ -26,7 +26,7 @@ import { setupScheduleDetailPage$ } from "./schedule-page/schedule-detail-page-s
 import { setupTalkPage$ } from "./zero-page/talk-page-setup.ts";
 import { setupHomePage$ } from "./zero-page/home-page-setup.ts";
 import { setupUsagePage$ } from "./usage-page/usage-page-setup.ts";
-import { setupChatSessionPage$ } from "./zero-page/chat-session-page-setup.ts";
+import { setupChatPage$ } from "./chat-page/chat-page-setup.ts";
 import { setupInternalConnectorLogos$ } from "./internal-connector-logos-setup.ts";
 import { setupOnboardingPage$ } from "./onboarding-page/onboarding-page-setup.ts";
 import { setupIdeationPage$ } from "./zero-page/ideation-page-setup.ts";
@@ -88,7 +88,7 @@ const ROUTE_CONFIG = [
   },
   {
     path: ROUTES.chat,
-    setup: setupAuthPageWrapper(setupChatSessionPage$),
+    setup: setupAuthPageWrapper(setupChatPage$),
   },
   {
     path: ROUTES.ideas,
@@ -120,11 +120,11 @@ const ROUTE_CONFIG = [
   },
   {
     path: ROUTES.agentDetail,
-    setup: setupAuthPageWrapper(setupTeamDetailPage$),
+    setup: setupAuthPageWrapper(setupAgentDetailPage$),
   },
   {
     path: ROUTES.agents,
-    setup: setupAuthPageWrapper(setupTeamPage$),
+    setup: setupAuthPageWrapper(setupAgentsPage$),
   },
   {
     path: ROUTES.settingsSlack,

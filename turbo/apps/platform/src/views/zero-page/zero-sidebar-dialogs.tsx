@@ -1,4 +1,4 @@
-import { useGet, useSet } from "ccstate-react";
+import { useGet, useSet, useLastResolved } from "ccstate-react";
 import {
   IconSearch,
   IconX,
@@ -42,7 +42,8 @@ import {
   setChatListQuery$,
   setDraftPinnedIds$,
 } from "../../signals/zero-page/zero-sidebar-state.ts";
-import { type SubagentInfo, AgentAvatarImg } from "./zero-sidebar-shared.tsx";
+import { leadAgentAvatar$, type SubagentInfo } from "../../signals/agent.ts";
+import { AgentAvatarImg } from "./zero-sidebar-shared.tsx";
 
 function SortablePinnedAgent({
   agent,
@@ -119,7 +120,6 @@ function SortablePinnedAgent({
 export function ManagePinnedAgentsDialog({
   open,
   onOpenChange,
-  zeroAvatarSrc,
   displayName,
   subagents,
   onPinnedIdsChange,
@@ -128,11 +128,11 @@ export function ManagePinnedAgentsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   saving?: boolean;
-  zeroAvatarSrc: string | null;
   displayName: string;
   subagents: SubagentInfo[];
   onPinnedIdsChange: (ids: string[]) => void;
 }) {
+  const zeroAvatarSrc = useLastResolved(leadAgentAvatar$) ?? null;
   const draftIds = useGet(draftPinnedIds$);
   const setDraftIds = useSet(setDraftPinnedIds$);
 
@@ -349,7 +349,6 @@ export function ManagePinnedAgentsDialog({
 export function ChatListDialog({
   open,
   onOpenChange,
-  zeroAvatarSrc,
   displayName,
   subagents,
   pinnedIds,
@@ -358,13 +357,13 @@ export function ChatListDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  zeroAvatarSrc: string | null;
   displayName: string;
   subagents: SubagentInfo[];
   pinnedIds: string[];
   onPinnedIdsChange: (ids: string[]) => void;
   onNewChat?: (agentId: string | null) => void;
 }) {
+  const zeroAvatarSrc = useLastResolved(leadAgentAvatar$) ?? null;
   const query = useGet(chatListQuery$);
   const setQuery = useSet(setChatListQuery$);
 

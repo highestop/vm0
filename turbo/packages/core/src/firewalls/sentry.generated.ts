@@ -6,7 +6,7 @@
 
 import type { FirewallConfig } from "../contracts/firewalls";
 
-export const sentryFirewall: FirewallConfig = {
+export const sentryFirewall = {
   name: "sentry",
   description: "Sentry API",
   placeholders: {
@@ -700,4 +700,4 @@ export const sentryFirewall: FirewallConfig = {
       ],
     },
   ],
-};
+} as const satisfies FirewallConfig;

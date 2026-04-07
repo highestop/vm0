@@ -110,7 +110,7 @@ function generateTypeScript(permissions: PermissionGroup[]): string {
     "",
     'import type { FirewallConfig } from "../contracts/firewalls";',
     "",
-    "export const figmaFirewall: FirewallConfig = {",
+    "export const figmaFirewall = {",
     '  name: "figma",',
     '  description: "Figma API",',
     "  placeholders: {",
@@ -132,7 +132,7 @@ function generateTypeScript(permissions: PermissionGroup[]): string {
   lines.push("      ],");
   lines.push("    },");
   lines.push("  ],");
-  lines.push("};");
+  lines.push("} as const satisfies FirewallConfig;");
   lines.push("");
 
   return lines.join("\n");

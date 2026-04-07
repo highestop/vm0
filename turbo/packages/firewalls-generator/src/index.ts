@@ -7,8 +7,10 @@
  */
 
 import { generate as generateAgentmail } from "./agentmail";
+import { generate as generateAgentphone } from "./agentphone";
 import { generate as generateAhrefs } from "./ahrefs";
 import { generate as generateAirtable } from "./airtable";
+import { generate as generateApollo } from "./apollo";
 import { generate as generateApify } from "./apify";
 import { generate as generateAsana } from "./asana";
 import { generate as generateAtlassian } from "./atlassian";
@@ -32,6 +34,7 @@ import { generate as generateDeepseek } from "./deepseek";
 import { generate as generateDeel } from "./deel";
 import { generate as generateDevto } from "./devto";
 import { generate as generateDify } from "./dify";
+import { generate as generateDoppler } from "./doppler";
 import { generate as generateDiscord } from "./discord";
 import { generate as generateDiscordWebhook } from "./discord-webhook";
 import { generate as generateDocusign } from "./docusign";
@@ -53,6 +56,7 @@ import { generate as generateHubspot } from "./hubspot";
 import { generate as generateHuggingFace } from "./hugging-face";
 import { generate as generateHume } from "./hume";
 import { generate as generateImgur } from "./imgur";
+import { generate as generateInfisical } from "./infisical";
 import { generate as generateInstagram } from "./instagram";
 import { generate as generateInstantly } from "./instantly";
 import { generate as generateIntercom } from "./intercom";
@@ -129,8 +133,10 @@ import { createGoogleGenerator, googleServiceNames } from "./google";
 
 const GENERATORS: Record<string, () => Promise<void>> = {
   agentmail: generateAgentmail,
+  agentphone: generateAgentphone,
   ahrefs: generateAhrefs,
   airtable: generateAirtable,
+  apollo: generateApollo,
   apify: generateApify,
   asana: generateAsana,
   atlassian: generateAtlassian,
@@ -154,6 +160,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   deepseek: generateDeepseek,
   devto: generateDevto,
   dify: generateDify,
+  doppler: generateDoppler,
   discord: generateDiscord,
   "discord-webhook": generateDiscordWebhook,
   docusign: generateDocusign,
@@ -175,6 +182,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   "hugging-face": generateHuggingFace,
   hume: generateHume,
   imgur: generateImgur,
+  infisical: generateInfisical,
   instagram: generateInstagram,
   instantly: generateInstantly,
   intercom: generateIntercom,

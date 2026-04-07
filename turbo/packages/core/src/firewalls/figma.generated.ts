@@ -6,7 +6,7 @@
 
 import type { FirewallConfig } from "../contracts/firewalls";
 
-export const figmaFirewall: FirewallConfig = {
+export const figmaFirewall = {
   name: "figma",
   description: "Figma API",
   placeholders: {
@@ -200,4 +200,4 @@ export const figmaFirewall: FirewallConfig = {
       ],
     },
   ],
-};
+} as const satisfies FirewallConfig;

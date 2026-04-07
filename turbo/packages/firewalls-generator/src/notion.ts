@@ -176,7 +176,7 @@ function generateTypeScript(permissions: PermissionGroup[]): string {
     "",
     'import type { FirewallConfig } from "../contracts/firewalls";',
     "",
-    "export const notionFirewall: FirewallConfig = {",
+    "export const notionFirewall = {",
     '  name: "notion",',
     '  description: "Notion API",',
     "  placeholders: {",
@@ -198,7 +198,7 @@ function generateTypeScript(permissions: PermissionGroup[]): string {
   lines.push("      ],");
   lines.push("    },");
   lines.push("  ],");
-  lines.push("};");
+  lines.push("} as const satisfies FirewallConfig;");
   lines.push("");
 
   return lines.join("\n");

@@ -78,7 +78,7 @@ function makePendingRequest(overrides?: Record<string, unknown>) {
   };
 }
 
-describe("firewall allow page", () => {
+describe("permission allow page", () => {
   it("shows error when ref query param is missing", async () => {
     await setupPage({
       context,
@@ -87,9 +87,7 @@ describe("firewall allow page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(
-          "Missing firewall ref or permission in URL parameters",
-        ),
+        screen.getByText("Missing permission in URL parameters"),
       ).toBeInTheDocument();
     });
   });
@@ -118,7 +116,7 @@ describe("firewall allow page", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Unknown firewall: unknown-ref/),
+        screen.getByText(/Unknown permission: unknown-ref/),
       ).toBeInTheDocument();
     });
   });

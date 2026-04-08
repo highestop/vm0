@@ -63,6 +63,14 @@ interface ZipEntry {
   content: string;
 }
 
+interface ChatHistoryEvent {
+  runId: string;
+  eventType: string;
+  sequenceNumber: number;
+  eventData: Record<string, unknown>;
+  _time: string;
+}
+
 async function assembleZip(entries: ZipEntry[]): Promise<Buffer> {
   const archive = archiver("zip", { zlib: { level: 6 } });
   const chunks: Buffer[] = [];
@@ -204,26 +212,38 @@ const router = tsr.router(zeroDeveloperSupportContract, {
       }
     }
 
-    // Collect all run IDs for agent events.
+    // Collect all runs for agent events (with prompt + createdAt for chat history).
     // With a session: find continuation runs + first run (via result->>'agentSessionId').
-    // Without a session (first run): fall back to just the current runId.
-    const sessionRunIds: string[] = sessionId
-      ? (
-          await db
-            .select({ id: agentRuns.id })
-            .from(agentRuns)
-            .where(
-              or(
-                eq(agentRuns.continuedFromSessionId, sessionId),
-                sql`${agentRuns.result}->>'agentSessionId' = ${sessionId}`,
-              ),
-            )
-        ).map((r) => {
-          return r.id;
-        })
-      : [runId];
+    // Without a session (first run): fall back to just the current run.
+    const sessionRuns = sessionId
+      ? await db
+          .select({
+            id: agentRuns.id,
+            prompt: agentRuns.prompt,
+            createdAt: agentRuns.createdAt,
+          })
+          .from(agentRuns)
+          .where(
+            or(
+              eq(agentRuns.continuedFromSessionId, sessionId),
+              sql`${agentRuns.result}->>'agentSessionId' = ${sessionId}`,
+            ),
+          )
+          .orderBy(agentRuns.createdAt)
+      : await db
+          .select({
+            id: agentRuns.id,
+            prompt: agentRuns.prompt,
+            createdAt: agentRuns.createdAt,
+          })
+          .from(agentRuns)
+          .where(eq(agentRuns.id, runId))
+          .limit(1);
 
     // Query Axiom for agent events from all session runs
+    const sessionRunIds = sessionRuns.map((r) => {
+      return r.id;
+    });
     const agentEvents = await (async () => {
       if (sessionRunIds.length === 0) return [];
       const runIdList = sessionRunIds
@@ -236,18 +256,40 @@ const router = tsr.router(zeroDeveloperSupportContract, {
 | where runId in (${runIdList})
 | order by _time asc, sequenceNumber asc
 | limit 2000`;
-      return queryAxiom(apl);
+      return queryAxiom<ChatHistoryEvent>(apl);
     })().catch((err) => {
       log.warn("Failed to collect agent events from Axiom", {
         error: String(err),
       });
-      return [];
+      return [] as ChatHistoryEvent[];
     });
 
-    log.info("Collected agent events for diagnostic bundle", {
+    // Synthesize user_prompt events from agent_runs.prompt and merge with Axiom events
+    const promptEvents: ChatHistoryEvent[] = sessionRuns.map((r) => {
+      return {
+        runId: r.id,
+        eventType: "user_prompt",
+        sequenceNumber: -1,
+        eventData: {
+          type: "user_prompt",
+          sequenceNumber: -1,
+          role: "user",
+          content: r.prompt,
+        },
+        _time: r.createdAt.toISOString(),
+      };
+    });
+
+    const chatHistory = [...promptEvents, ...agentEvents].sort((a, b) => {
+      if (a._time !== b._time) return a._time < b._time ? -1 : 1;
+      return a.sequenceNumber - b.sequenceNumber;
+    });
+
+    log.info("Collected chat history for diagnostic bundle", {
       reference,
       runCount: sessionRunIds.length,
       eventCount: agentEvents.length,
+      promptCount: promptEvents.length,
     });
 
     // Safe connector subset (no tokens)
@@ -282,8 +324,8 @@ const router = tsr.router(zeroDeveloperSupportContract, {
         content: `# ${body.title}\n\n${body.description}`,
       },
       {
-        path: "agent-events.jsonl",
-        content: agentEvents
+        path: "chat-history.jsonl",
+        content: chatHistory
           .map((e) => {
             return JSON.stringify(e);
           })

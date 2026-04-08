@@ -5,6 +5,7 @@
 type IntegrationPlatform =
   | "Email"
   | "GitHub"
+  | "Phone"
   | "Slack"
   | "Telegram"
   | "Voice-Chat";

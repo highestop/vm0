@@ -182,6 +182,13 @@ export {
   getComputerUseHost,
 } from "./domains/zero-computer-use";
 
+// Domain modules - Phone Calls
+export {
+  createPhoneCall,
+  listPhoneCalls,
+  getPhoneCallDetail,
+} from "./domains/phone-calls";
+
 // Domain modules - Zero Voice Chat Context
 export {
   getVoiceChatContextEvents,

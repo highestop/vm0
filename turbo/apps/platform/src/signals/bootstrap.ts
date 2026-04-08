@@ -37,6 +37,7 @@ import { setupSignInTokenPage$ } from "./sign-in-token-setup.ts";
 import { setupPermissionAllowPage$ } from "./permission-allow/permission-allow-page-setup.ts";
 import { setupChatListPage$ } from "./zero-page/chat-list-page-setup.ts";
 import { setupLabPage$ } from "./lab-page/lab-page-setup.ts";
+import { setupPhonePage$ } from "./phone-page/phone-page-setup.ts";
 import { setupVoiceChatPage$ } from "./voice-chat/voice-chat-setup.ts";
 import { setupNetworkInsightsPage$ } from "./network-insights/network-insights-page-setup.ts";
 import { initSlackOrg$ } from "./zero-page/zero-slack.ts";
@@ -167,6 +168,10 @@ const ROUTE_CONFIG = [
   {
     path: ROUTES.settingsUsage,
     setup: setupAuthPageWrapper(setupUsagePage$),
+  },
+  {
+    path: ROUTES.phone,
+    setup: setupAuthPageWrapper(setupPhonePage$),
   },
   {
     path: ROUTES.lab,

@@ -197,7 +197,7 @@ function initEnv() {
         .optional(),
       // Realtime pub/sub
       ABLY_API_KEY: z.string().min(1).optional(),
-      // OpenAI Realtime API (for voice-chat feature)
+      // OpenAI (for voice-chat ephemeral token minting)
       OPENAI_API_KEY: z.string().min(1).optional(),
       // Vercel cron job authentication
       CRON_SECRET: z.string().min(1).optional(),

@@ -71,9 +71,11 @@ describe("applyConnectorPolicies", () => {
 
     const { firewalls, grantedPermissions } = applyConnectorPolicies([fw], {
       github: {
-        "repo-read": "allow",
-        "repo-write": "deny",
-        "issues-read": "allow",
+        permissions: {
+          "repo-read": "allow",
+          "repo-write": "deny",
+          "issues-read": "allow",
+        },
       },
     });
 
@@ -106,7 +108,7 @@ describe("applyConnectorPolicies", () => {
     });
 
     const { firewalls, grantedPermissions } = applyConnectorPolicies([fw], {
-      "custom-api": { "some-perm": "allow" },
+      "custom-api": { permissions: { "some-perm": "allow" } },
     });
 
     expect(firewalls).toHaveLength(1);
@@ -136,7 +138,7 @@ describe("applyConnectorPolicies", () => {
     });
 
     const { firewalls, grantedPermissions } = applyConnectorPolicies([fw], {
-      "custom-api": { x: "allow" },
+      "custom-api": { permissions: { x: "allow" } },
     });
 
     expect(firewalls[0]?.apis[0]?.permissions).toEqual([]);
@@ -164,11 +166,9 @@ describe("applyConnectorPolicies", () => {
       ],
     });
 
-    const { grantedPermissions } = applyConnectorPolicies(
-      [fw],
-      { github: { "repo-read": "allow" } },
-      { github: true },
-    );
+    const { grantedPermissions } = applyConnectorPolicies([fw], {
+      github: { permissions: { "repo-read": "allow" }, allowUnknown: true },
+    });
 
     expect(grantedPermissions.github).toEqual({
       allow: ["repo-read"],
@@ -196,9 +196,11 @@ describe("applyConnectorPolicies", () => {
 
     const { grantedPermissions } = applyConnectorPolicies([fw], {
       github: {
-        "repo-read": "allow",
-        "repo-write": "ask",
-        admin: "deny",
+        permissions: {
+          "repo-read": "allow",
+          "repo-write": "ask",
+          admin: "deny",
+        },
       },
     });
 
@@ -225,7 +227,7 @@ describe("applyConnectorPolicies", () => {
     });
 
     const { grantedPermissions } = applyConnectorPolicies([fw], {
-      github: { "repo-read": "allow" },
+      github: { permissions: { "repo-read": "allow" } },
     });
 
     expect(grantedPermissions.github).toEqual({

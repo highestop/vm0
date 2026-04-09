@@ -26,8 +26,10 @@ interface AgentResponse {
   displayName: string | null;
   sound: string | null;
   avatarUrl: string | null;
-  permissionPolicies: Record<string, Record<string, string>> | null;
-  allowUnknownEndpoints: Record<string, boolean> | null;
+  permissionPolicies: Record<
+    string,
+    { permissions: Record<string, string>; allowUnknown?: boolean }
+  > | null;
   customSkills: unknown[];
 }
 
@@ -40,7 +42,6 @@ function defaultAgent(overrides: Partial<AgentResponse> = {}): AgentResponse {
     sound: null,
     avatarUrl: null,
     permissionPolicies: null,
-    allowUnknownEndpoints: null,
     customSkills: [],
     ...overrides,
   };

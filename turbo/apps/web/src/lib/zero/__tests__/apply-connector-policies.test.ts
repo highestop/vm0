@@ -45,6 +45,8 @@ describe("applyConnectorPolicies", () => {
     expect(grantedPermissions).toEqual({
       github: {
         allow: ["repo-read", "repo-write"],
+        deny: [],
+        ask: [],
         allowUnknown: true,
       },
     });
@@ -77,10 +79,12 @@ describe("applyConnectorPolicies", () => {
 
     // Firewalls carry ALL permissions (unfiltered)
     expect(firewalls[0]?.apis[0]?.permissions).toEqual(allPermissions);
-    // grantedPermissions only includes "allow" ones
+    // grantedPermissions splits by policy
     expect(grantedPermissions).toEqual({
       github: {
         allow: ["repo-read", "issues-read"],
+        deny: ["repo-write"],
+        ask: [],
         allowUnknown: true,
       },
     });
@@ -112,6 +116,8 @@ describe("applyConnectorPolicies", () => {
     expect(grantedPermissions).toEqual({
       "custom-api": {
         allow: [],
+        deny: [],
+        ask: [],
         allowUnknown: true,
       },
     });
@@ -137,6 +143,8 @@ describe("applyConnectorPolicies", () => {
     expect(grantedPermissions).toEqual({
       "custom-api": {
         allow: [],
+        deny: [],
+        ask: [],
         allowUnknown: true,
       },
     });
@@ -164,6 +172,40 @@ describe("applyConnectorPolicies", () => {
 
     expect(grantedPermissions.github).toEqual({
       allow: ["repo-read"],
+      deny: [],
+      ask: [],
+      allowUnknown: true,
+    });
+  });
+
+  it("classifies ask policy into ask array", () => {
+    const fw = makeFirewall({
+      ref: "github",
+      apis: [
+        {
+          base: "https://api.github.com",
+          auth: { headers: { Authorization: "Bearer token" } },
+          permissions: [
+            { name: "repo-read", rules: ["GET /repos/{owner}/{repo}"] },
+            { name: "repo-write", rules: ["PUT /repos/{owner}/{repo}"] },
+            { name: "admin", rules: ["DELETE /repos/{owner}/{repo}"] },
+          ],
+        },
+      ],
+    });
+
+    const { grantedPermissions } = applyConnectorPolicies([fw], {
+      github: {
+        "repo-read": "allow",
+        "repo-write": "ask",
+        admin: "deny",
+      },
+    });
+
+    expect(grantedPermissions.github).toEqual({
+      allow: ["repo-read"],
+      deny: ["admin"],
+      ask: ["repo-write"],
       allowUnknown: true,
     });
   });
@@ -188,6 +230,8 @@ describe("applyConnectorPolicies", () => {
 
     expect(grantedPermissions.github).toEqual({
       allow: ["repo-read"],
+      deny: [],
+      ask: [],
       allowUnknown: true,
     });
   });

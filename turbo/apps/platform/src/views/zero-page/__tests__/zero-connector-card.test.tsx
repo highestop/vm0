@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { setupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import {
   CONNECTOR_TYPES,
   type ConnectorResponse,
@@ -62,7 +62,7 @@ function mockConnectors(connectors: ConnectorResponse[]) {
  * `orgConnectors` are the org-level connected connectors (shown in the list).
  * `enabledTypes` are the agent-level permissions (toggle checked state).
  */
-async function renderTeamPage(
+function renderTeamPage(
   orgConnectors: ConnectorResponse[],
   enabledTypes: string[],
 ) {
@@ -85,7 +85,7 @@ async function renderTeamPage(
     }),
   );
 
-  await setupPage({ context, path: "/agents/zero" });
+  detachedSetupPage({ context, path: "/agents/zero" });
 }
 
 describe("zero authorization tab — toggle rows", () => {
@@ -174,7 +174,7 @@ describe("zero authorization tab — multiple connectors", () => {
  * Render the default agent's authorization tab as a non-admin member.
  * Connector permissions are user-level, so toggles remain interactive.
  */
-async function renderTeamPageAsMember(
+function renderTeamPageAsMember(
   orgConnectors: ConnectorResponse[],
   enabledTypes: string[],
 ) {
@@ -219,7 +219,7 @@ async function renderTeamPageAsMember(
     }),
   );
 
-  await setupPage({ context, path: "/agents/zero" });
+  detachedSetupPage({ context, path: "/agents/zero" });
 }
 
 describe("zero authorization tab — member on default agent", () => {

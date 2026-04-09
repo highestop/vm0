@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { fill, setupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
 import type {
   OrgMember,
   OrgPendingInvitation,
@@ -92,8 +92,8 @@ function mockMembersAPI(options?: {
   );
 }
 
-async function renderMembersTab() {
-  await setupPage({ context, path: "/?settings=members" });
+function renderMembersTab() {
+  detachedSetupPage({ context, path: "/?settings=members" });
 }
 
 // ORG-D-022

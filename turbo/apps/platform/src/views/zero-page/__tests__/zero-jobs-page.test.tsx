@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { setupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 
 const context = testContext();
 
@@ -60,8 +60,8 @@ function mockTeamAPI(
   );
 }
 
-async function renderTeamPage() {
-  await setupPage({ context, path: "/agents" });
+function renderTeamPage() {
+  detachedSetupPage({ context, path: "/agents" });
 }
 
 describe("zero jobs page - team list", () => {
@@ -263,8 +263,8 @@ function mockScheduleAPI(schedules = createMockSchedulesFromAPI()) {
   );
 }
 
-async function renderSchedulePage() {
-  await setupPage({ context, path: "/schedules" });
+function renderSchedulePage() {
+  detachedSetupPage({ context, path: "/schedules" });
 }
 
 describe("zero jobs page - schedule list", () => {

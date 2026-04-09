@@ -10,10 +10,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import {
-  setupPage,
-  detachedSetupPage,
-} from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 
 const context = testContext();
 
@@ -102,7 +99,7 @@ describe("fw-d-001: agent ID renders from signal", () => {
   it("uses agentId from the URL path to load the correct agent", async () => {
     mockAgent(defaultAgent({ displayName: "Special Agent Smith" }));
     mockPermissionRequests();
-    await setupPage({
+    detachedSetupPage({
       context,
       path: `/agents/${AGENT_ID}/permissions?ref=slack&permission=channels:read&action=deny`,
     });
@@ -118,7 +115,7 @@ describe("fw-d-005: agent display name renders", () => {
   it("shows the agent displayName when set", async () => {
     mockAgent(defaultAgent({ displayName: "My Smart Bot" }));
     mockPermissionRequests();
-    await setupPage({
+    detachedSetupPage({
       context,
       path: `/agents/${AGENT_ID}/permissions?ref=slack&permission=channels:read&action=deny`,
     });
@@ -132,7 +129,7 @@ describe("fw-d-005: agent display name renders", () => {
   it("falls back to agentId when displayName is null", async () => {
     mockAgent(defaultAgent({ displayName: null }));
     mockPermissionRequests();
-    await setupPage({
+    detachedSetupPage({
       context,
       path: `/agents/${AGENT_ID}/permissions?ref=slack&permission=channels:read&action=deny`,
     });
@@ -148,7 +145,7 @@ describe("fw-d-006: connector label from CONNECTOR_TYPES renders", () => {
   it("resolves and displays the connector label for gmail", async () => {
     mockAgent(defaultAgent());
     mockPermissionRequests();
-    await setupPage({
+    detachedSetupPage({
       context,
       path: `/agents/${AGENT_ID}/permissions?ref=gmail&permission=gmail&action=allow`,
     });
@@ -228,7 +225,7 @@ describe("fw-d-009: member request form renders for non-owner", () => {
   it("shows request form for member who does not own the agent", async () => {
     setupMemberContext();
     mockPermissionRequests();
-    await setupPage({
+    detachedSetupPage({
       context,
       path: `/agents/${AGENT_ID}/permissions?ref=slack&permission=channels:read&action=deny`,
     });

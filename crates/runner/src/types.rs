@@ -149,7 +149,7 @@ pub struct NetworkPolicy {
     pub unknown_policy: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageManifest {
     pub storages: Vec<StorageEntry>,
@@ -159,15 +159,19 @@ pub struct StorageManifest {
     pub memory: Option<ArtifactEntry>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageEntry {
     pub mount_path: String,
     #[serde(default)]
     pub archive_url: Option<String>,
+    #[serde(default)]
+    pub vas_storage_name: Option<String>,
+    #[serde(default)]
+    pub vas_version_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactEntry {
     pub mount_path: String,

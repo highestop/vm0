@@ -8,11 +8,10 @@ import {
   createTestRunInDb,
   createTestCallback,
   createTestAgentSession,
-  createTestRequest,
   createTestOrg,
   createTestCompose,
+  createSignedCallbackRequest,
 } from "../../../../../../src/__tests__/api-test-helpers";
-import { computeHmacSignature } from "../../../../../../src/lib/infra/callback/hmac";
 import { mockClerk } from "../../../../../../src/__tests__/clerk-mock";
 import type { PhoneCallbackPayload } from "../../../../../../src/lib/infra/callback/callback-payloads";
 
@@ -22,37 +21,6 @@ vi.mock("@aws-sdk/s3-request-presigner");
 vi.mock("@axiomhq/js");
 
 const context = testContext();
-
-function createCallbackRequest(
-  body: {
-    runId: string;
-    status: "completed" | "failed" | "progress";
-    result?: Record<string, unknown>;
-    error?: string;
-    payload: PhoneCallbackPayload;
-  },
-  secret: string,
-  options?: { invalidSignature?: boolean; expiredTimestamp?: boolean },
-) {
-  const bodyString = JSON.stringify(body);
-  const timestamp = options?.expiredTimestamp
-    ? Math.floor(Date.now() / 1000) - 600
-    : Math.floor(Date.now() / 1000);
-
-  const signature = options?.invalidSignature
-    ? "invalid-signature"
-    : computeHmacSignature(bodyString, secret, timestamp);
-
-  return createTestRequest("http://localhost/api/internal/callbacks/phone", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-VM0-Signature": signature,
-      "X-VM0-Timestamp": timestamp.toString(),
-    },
-    body: bodyString,
-  });
-}
 
 async function setupPhoneCallback() {
   const userId = uniqueId("user");
@@ -92,7 +60,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should reject request with invalid signature", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "completed", payload },
         secret,
         { invalidSignature: true },
@@ -107,7 +76,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should reject request with expired timestamp", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "completed", payload },
         secret,
         { expiredTimestamp: true },
@@ -124,7 +94,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should return 200 on completed run", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "completed", payload },
         secret,
       );
@@ -138,7 +109,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should return 200 on failed run", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "failed", error: "Agent run failed", payload },
         secret,
       );
@@ -152,7 +124,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should return 200 for progress callback without session update", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "progress", payload },
         secret,
       );
@@ -168,7 +141,8 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should process callback with existing session ID", async () => {
       const { runId, payload, secret } = await setupPhoneCallback();
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         {
           runId,
           status: "completed",
@@ -187,7 +161,8 @@ describe("POST /api/internal/callbacks/phone", () => {
 
       await createTestAgentSession(userId, composeId);
 
-      const request = createCallbackRequest(
+      const request = createSignedCallbackRequest(
+        "http://localhost/api/internal/callbacks/phone",
         { runId, status: "completed", payload },
         secret,
       );
@@ -201,26 +176,15 @@ describe("POST /api/internal/callbacks/phone", () => {
     it("should reject request with invalid payload", async () => {
       const { runId, secret } = await setupPhoneCallback();
 
-      const body = JSON.stringify({
-        runId,
-        status: "completed",
-        payload: { callId: "call_123" },
-        // Missing required fields: userId, orgId, agentId
-      });
-      const timestamp = Math.floor(Date.now() / 1000);
-      const signature = computeHmacSignature(body, secret, timestamp);
-
-      const request = createTestRequest(
+      const request = createSignedCallbackRequest(
         "http://localhost/api/internal/callbacks/phone",
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-VM0-Signature": signature,
-            "X-VM0-Timestamp": timestamp.toString(),
-          },
-          body,
+          runId,
+          status: "completed",
+          payload: { callId: "call_123" },
+          // Missing required fields: userId, orgId, agentId
         },
+        secret,
       );
       const response = await POST(request);
 

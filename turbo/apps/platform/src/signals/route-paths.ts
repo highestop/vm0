@@ -29,6 +29,8 @@ export const ROUTES = {
   voiceChat: "/voice-chat",
   insights: "/insights",
   internalConnectorLogos: "/__internal-connector-logos",
+  skeleton: "/_/skeleton",
+  error: "/_/error",
 } as const;
 
 export type RouteKey = keyof typeof ROUTES;

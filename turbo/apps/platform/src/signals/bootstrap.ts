@@ -41,6 +41,9 @@ import { setupPhonePage$ } from "./phone-page/phone-page-setup.ts";
 import { setupVoiceChatPage$ } from "./voice-chat/voice-chat-setup.ts";
 import { setupNetworkInsightsPage$ } from "./network-insights/network-insights-page-setup.ts";
 import { initSlackOrg$ } from "./zero-page/zero-slack.ts";
+import { setupSkeletonPage$, setupErrorPage$ } from "./skeleton-page-setup.ts";
+import { startSkeletonCycling$ } from "./app-skeleton.ts";
+import { throwIfNotAbort } from "./utils.ts";
 
 /**
  * Catch-all fallback — redirects unknown paths to /.
@@ -194,6 +197,14 @@ const ROUTE_CONFIG = [
     setup: setupInternalConnectorLogos$,
   },
   {
+    path: ROUTES.skeleton,
+    setup: setupSkeletonPage$,
+  },
+  {
+    path: ROUTES.error,
+    setup: setupErrorPage$,
+  },
+  {
     path: ROUTES.home,
     setup: setupAuthPageWrapper(setupHomePage$),
   },
@@ -243,6 +254,8 @@ export const bootstrap$ = command(
     set(setupLoggers$);
 
     render();
+
+    void set(startSkeletonCycling$, signal).catch(throwIfNotAbort);
 
     await Promise.all([
       set(setupGlobalMethod$, signal),

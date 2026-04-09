@@ -15,13 +15,14 @@ import {
   type FirewallPolicyValue,
   type ConnectorResponse,
 } from "@vm0/core";
+import { policyIcon } from "../../../lib/utils/format-utils";
 
 interface ConnectorPermissionInfo {
   type: string;
   hasPermissions: boolean;
   permissions: Array<{ name: string; description?: string }>;
   policies: Record<string, FirewallPolicyValue> | null;
-  allowUnknown: boolean;
+  unknownPolicy: FirewallPolicyValue;
   allowed: number;
   total: number;
 }
@@ -36,7 +37,7 @@ function getConnectorPermissionInfo(
       hasPermissions: false,
       permissions: [],
       policies: null,
-      allowUnknown: true,
+      unknownPolicy: "allow",
       allowed: 0,
       total: 0,
     };
@@ -44,8 +45,8 @@ function getConnectorPermissionInfo(
 
   const refPolicy = resolvedPolicies?.[type];
   const policies =
-    refPolicy && Object.keys(refPolicy.permissions).length > 0
-      ? refPolicy.permissions
+    refPolicy && Object.keys(refPolicy.policies).length > 0
+      ? refPolicy.policies
       : null;
   const config = getConnectorFirewall(type);
   const permissions = config.apis.flatMap((a) => {
@@ -58,27 +59,21 @@ function getConnectorPermissionInfo(
       }).length
     : 0;
 
-  const allowUnknown = refPolicy?.allowUnknown ?? true;
+  const unknownPolicy = refPolicy?.unknownPolicy ?? "allow";
   return {
     type,
     hasPermissions: true,
     permissions,
     policies,
-    allowUnknown,
+    unknownPolicy,
     allowed,
     total,
   };
 }
 
-function policyIcon(policy: FirewallPolicyValue): string {
-  if (policy === "allow") return chalk.green("✓");
-  if (policy === "ask") return chalk.yellow("?");
-  return chalk.dim("✗");
-}
-
 function printDetailedPermissions(info: ConnectorPermissionInfo): void {
   if (!info.policies) {
-    const icon = info.allowUnknown ? chalk.green("✓") : chalk.dim("✗");
+    const icon = policyIcon(info.unknownPolicy);
     console.log(`    ${icon} unknown endpoints`);
     return;
   }
@@ -98,7 +93,7 @@ function printDetailedPermissions(info: ConnectorPermissionInfo): void {
     );
   }
 
-  const unknownIcon = info.allowUnknown ? chalk.green("✓") : chalk.dim("✗");
+  const unknownIcon = policyIcon(info.unknownPolicy);
   console.log(
     `    ${unknownIcon} ${"unknown endpoints".padEnd(nameWidth)}  Endpoints not matching any rule`,
   );

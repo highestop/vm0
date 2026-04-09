@@ -18,6 +18,7 @@ import {
   resolveFirewallPolicies,
   type FirewallPolicies,
 } from "@vm0/core";
+import { policyIcon } from "../../lib/utils/format-utils";
 
 /**
  * Detect if running inside a zero sandbox (agent runtime).
@@ -66,10 +67,9 @@ function printConnectorPermissions(
 
   if (
     permissions.length === 0 &&
-    Object.keys(refPolicy.permissions).length === 0
+    Object.keys(refPolicy.policies).length === 0
   ) {
-    const unknownIcon =
-      refPolicy.allowUnknown !== false ? chalk.green("✓") : chalk.dim("✗");
+    const unknownIcon = policyIcon(refPolicy.unknownPolicy ?? "allow");
     console.log(`    ${unknownIcon} unknown endpoints`);
     return;
   }
@@ -82,19 +82,13 @@ function printConnectorPermissions(
   );
 
   for (const perm of permissions) {
-    const policy = refPolicy.permissions[perm.name] ?? "deny";
-    const icon =
-      policy === "allow"
-        ? chalk.green("✓")
-        : policy === "ask"
-          ? chalk.yellow("?")
-          : chalk.dim("✗");
+    const policy = refPolicy.policies[perm.name] ?? "deny";
+    const icon = policyIcon(policy);
     const desc = perm.description ?? "";
     console.log(`    ${icon} ${perm.name.padEnd(nameWidth)}  ${desc}`);
   }
 
-  const unknownIcon =
-    refPolicy.allowUnknown !== false ? chalk.green("✓") : chalk.dim("✗");
+  const unknownIcon = policyIcon(refPolicy.unknownPolicy ?? "allow");
   console.log(
     `    ${unknownIcon} ${"unknown endpoints".padEnd(nameWidth)}  Endpoints not matching any rule`,
   );

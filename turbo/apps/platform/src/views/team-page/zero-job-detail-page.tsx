@@ -73,8 +73,7 @@ import { zeroOnboardingStatus$ } from "../../signals/zero-page/zero-onboarding.t
 import { Link } from "../router/link.tsx";
 import { detachedNavigateTo$ } from "../../signals/route.ts";
 import { detach, Reason } from "../../signals/utils.ts";
-import { useAgentAvatar } from "../zero-page/zero-sidebar.tsx";
-import { resolveAvatarUrl } from "../zero-page/avatar-utils.ts";
+import { AgentAvatarImg } from "../zero-page/zero-sidebar-shared.tsx";
 import { currentAgent$ } from "../../signals/agent.ts";
 import { isOrgAdmin$ } from "../../signals/org.ts";
 import { user$ } from "../../signals/auth.ts";
@@ -720,7 +719,6 @@ function JobInstructionsTab() {
 function AgentHeader({
   displayName,
   description,
-  avatarUrl,
   agentId,
   activeTab,
   onTabChange,
@@ -728,33 +726,22 @@ function AgentHeader({
 }: {
   displayName: string;
   description: string;
-  avatarUrl: string | null;
   agentId: string;
   activeTab: string;
   onTabChange: (tab: string) => void;
   showProfileAndInstructions: boolean;
 }) {
   const nav = useSet(detachedNavigateTo$);
-  const agentAvatar = useAgentAvatar(agentId);
-  const resolvedDbAvatar = resolveAvatarUrl(avatarUrl);
-  const currentAvatar = resolvedDbAvatar ?? agentAvatar;
 
   return (
     <header className="shrink-0 bg-transparent px-4 sm:px-6 pt-6 pb-0">
       <div className="mx-auto max-w-[900px]">
         <div className="flex items-center gap-4">
-          {currentAvatar ? (
-            <img
-              src={currentAvatar}
-              alt={displayName}
-              className="h-14 w-14 shrink-0 rounded-full object-cover object-top sm:h-16 sm:w-16"
-            />
-          ) : (
-            <div
-              className="h-14 w-14 shrink-0 rounded-full bg-muted sm:h-16 sm:w-16"
-              aria-hidden
-            />
-          )}
+          <AgentAvatarImg
+            name={agentId}
+            alt={displayName}
+            className="h-14 w-14 shrink-0 rounded-full object-cover object-top sm:h-16 sm:w-16"
+          />
           <div className="min-w-0">
             <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl truncate">
               {displayName}
@@ -918,7 +905,6 @@ export function ZeroJobDetailPage() {
       <AgentHeader
         displayName={fields.displayName}
         description={fields.description}
-        avatarUrl={fields.avatarUrl}
         agentId={fields.agentId}
         activeTab={activeTab}
         onTabChange={setActiveTab}

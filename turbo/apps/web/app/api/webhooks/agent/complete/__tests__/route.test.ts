@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { http, HttpResponse } from "msw";
 import { Resend } from "resend";
+import { server } from "../../../../../../src/mocks/server";
 import { POST } from "../route";
 import {
   createTestRequest,
@@ -563,6 +565,52 @@ describe("POST /api/webhooks/agent/complete", () => {
       const callbacks = await findTestCallbacksByRunId(testRunId);
       expect(callbacks).toHaveLength(1);
       expect(callbacks[0]!.attempts).toBe(1);
+    });
+
+    it("should dispatch callback with report-error link in error field", async () => {
+      let capturedBody: { error?: string } | undefined;
+
+      // Intercept the callback request with MSW
+      server.use(
+        http.post(
+          "http://localhost/api/internal/callbacks/test",
+          async ({ request }) => {
+            capturedBody = (await request.json()) as { error?: string };
+            return HttpResponse.json({ success: true });
+          },
+        ),
+      );
+
+      // Register a callback for this run
+      await createTestCallback({
+        runId: testRunId,
+        url: "http://localhost/api/internal/callbacks/test",
+        payload: { testKey: "testValue" },
+      });
+
+      // Fail the run
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 1,
+          }),
+        },
+      );
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+
+      await context.mocks.flushAfter();
+
+      // Verify the callback received the error with report-error link
+      expect(capturedBody).toBeDefined();
+      expect(capturedBody!.error).toContain(`/runs/${testRunId}/report-error`);
     });
 
     it("should register only one after() callback for dispatch", async () => {

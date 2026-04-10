@@ -2,7 +2,7 @@
 // oxlint-disable max-lines-per-function
 import { useGet, useSet, useLastResolved } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
-import { Button, Input } from "@vm0/ui";
+import { Button, Checkbox, Input } from "@vm0/ui";
 import { IconPhone, IconCheck, IconTrash } from "@tabler/icons-react";
 import { defaultAgentName$ } from "../../signals/agent.ts";
 import {
@@ -10,6 +10,8 @@ import {
   phoneError$,
   phoneInput$,
   setPhoneInput$,
+  smsConsent$,
+  setSmsConsent$,
   savePhoneLink$,
   removePhoneLink$,
   requestOrgPhoneSetup$,
@@ -23,8 +25,10 @@ export function PhonePage() {
   const phoneInput = useGet(phoneInput$);
   const pageSignal = useGet(pageSignal$);
   const agentName = useLastResolved(defaultAgentName$) ?? "Zero";
+  const smsConsent = useGet(smsConsent$);
 
   const setPhoneInput = useSet(setPhoneInput$);
+  const setSmsConsent = useSet(setSmsConsent$);
   const [saveLinkLoadable, saveLink] = useLoadableSet(savePhoneLink$);
   const [removeLinkLoadable, removeLink] = useLoadableSet(removePhoneLink$);
   const [setupLoadable, requestSetup] = useLoadableSet(requestOrgPhoneSetup$);
@@ -134,30 +138,43 @@ export function PhonePage() {
           </div>
         )}
         {error && <p className="text-sm text-red-500">{error}</p>}
-        <p className="text-muted-foreground mt-2 text-xs">
-          By providing your phone number, you authorize VM0 to send text
-          messages including verification codes and notifications to the number
-          provided. Message and data rates may apply. Message frequency varies.
-          Reply HELP for help or STOP to opt out. See{" "}
-          <a
-            href="https://www.vm0.ai/terms-of-use"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
+        <div className="mt-2 flex items-start gap-2">
+          <Checkbox
+            id="sms-consent"
+            checked={smsConsent}
+            onCheckedChange={(checked) => {
+              setSmsConsent(checked === true);
+            }}
+            className="mt-0.5"
+          />
+          <label
+            htmlFor="sms-consent"
+            className="text-muted-foreground cursor-pointer text-xs leading-relaxed"
           >
-            Terms of Use
-          </a>{" "}
-          and{" "}
-          <a
-            href="https://www.vm0.ai/privacy-policy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-          >
-            Privacy Policy
-          </a>
-          .
-        </p>
+            I agree to receive text messages (SMS) from VM0, including
+            verification codes and notifications. Message and data rates may
+            apply. Message frequency varies. Reply HELP for help or STOP to opt
+            out. See{" "}
+            <a
+              href="https://www.vm0.ai/terms-of-use"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Terms of Use
+            </a>{" "}
+            and{" "}
+            <a
+              href="https://www.vm0.ai/privacy-policy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Privacy Policy
+            </a>
+            .
+          </label>
+        </div>
       </section>
     </div>
   );

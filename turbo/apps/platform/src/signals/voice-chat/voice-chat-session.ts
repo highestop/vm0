@@ -58,6 +58,8 @@ function upsertUserTranscript(
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 2000;
+const PREP_TIMEOUT_CHAT_MS = 60_000;
+const PREP_TIMEOUT_MEETING_MS = 300_000;
 const REALTIME_MODEL = "gpt-realtime-1.5";
 
 const SESSION_TOOLS = [
@@ -177,6 +179,8 @@ const internalDc$ = state<RTCDataChannel | null>(null);
 const internalStream$ = state<MediaStream | null>(null);
 const internalAudioEl$ = state<HTMLAudioElement | null>(null);
 const internalPrompt$ = state<string | null>(null);
+const internalPrepStartTime$ = state<number | null>(null);
+const internalPrepElapsedMs$ = state(0);
 
 const meetingPromptInput$ = state("");
 
@@ -208,6 +212,9 @@ export const vcAgentId$ = computed(async (get) => {
 });
 export const vcPrompt$ = computed((get) => {
   return get(internalPrompt$);
+});
+export const vcPrepElapsedMs$ = computed((get) => {
+  return get(internalPrepElapsedMs$);
 });
 export const vcMeetingPromptInput$ = computed((get) => {
   return get(meetingPromptInput$);
@@ -679,16 +686,26 @@ const prepareActivateConnect$ = command(
     { get, set },
     sessionId: string,
     sessionSignal: AbortSignal,
+    timeoutMs: number,
     signal: AbortSignal,
   ) => {
     const fetchFn = get(fetch$);
+    const startTime = Date.now();
+    let preparationReady = false;
 
     // Start heartbeat during preparation to prevent session timeout
     const heartbeatPromise = set(startHeartbeat$, sessionSignal);
 
-    // Poll for preparation-ready event
+    // Poll for preparation-ready event with timeout
     await setLoop(
       async (loopSignal: AbortSignal) => {
+        const elapsed = Date.now() - startTime;
+        set(internalPrepElapsedMs$, elapsed);
+
+        if (elapsed > timeoutMs) {
+          return true;
+        }
+
         const sid = get(internalSessionId$);
         if (!sid) {
           return true;
@@ -721,6 +738,7 @@ const prepareActivateConnect$ = command(
               return e.type === "preparation-ready";
             })
           ) {
+            preparationReady = true;
             return true;
           }
         }
@@ -729,6 +747,26 @@ const prepareActivateConnect$ = command(
       POLL_INTERVAL_MS,
       sessionSignal,
     );
+    signal.throwIfAborted();
+
+    if (!preparationReady) {
+      if (!sessionSignal.aborted) {
+        set(internalPrepStartTime$, null);
+        set(internalPrepElapsedMs$, 0);
+        set(internalError$, "Preparation timed out");
+        set(internalStatus$, "error");
+        const sid = get(internalSessionId$);
+        if (sid) {
+          void fetchFn(`/api/zero/voice-chat/${sid}/end`, {
+            method: "POST",
+          }).catch(() => {
+            return undefined;
+          });
+        }
+      }
+      return;
+    }
+
     signal.throwIfAborted();
 
     // Activate session (preparing → active)
@@ -773,6 +811,7 @@ export const startVoiceChat$ = command(
     set(internalLastSeq$, 0);
     set(internalCurrentAssistant$, null);
     set(internalPrompt$, null);
+    set(internalPrepStartTime$, Date.now());
 
     const sessionSignal = set(resetSessionSignal$, signal);
 
@@ -809,7 +848,13 @@ export const startVoiceChat$ = command(
     signal.throwIfAborted();
     set(internalSessionId$, session.id);
 
-    await set(prepareActivateConnect$, session.id, sessionSignal, signal);
+    await set(
+      prepareActivateConnect$,
+      session.id,
+      sessionSignal,
+      PREP_TIMEOUT_CHAT_MS,
+      signal,
+    );
   },
 );
 
@@ -832,6 +877,7 @@ export const startVoiceMeeting$ = command(
     set(internalLastSeq$, 0);
     set(internalCurrentAssistant$, null);
     set(internalPrompt$, prompt);
+    set(internalPrepStartTime$, Date.now());
 
     const sessionSignal = set(resetSessionSignal$, signal);
 
@@ -868,7 +914,13 @@ export const startVoiceMeeting$ = command(
     signal.throwIfAborted();
     set(internalSessionId$, session.id);
 
-    await set(prepareActivateConnect$, session.id, sessionSignal, signal);
+    await set(
+      prepareActivateConnect$,
+      session.id,
+      sessionSignal,
+      PREP_TIMEOUT_MEETING_MS,
+      signal,
+    );
   },
 );
 
@@ -919,6 +971,8 @@ export const endVoiceChat$ = command(({ get, set }) => {
 
   set(internalSessionId$, null);
   set(internalPrompt$, null);
+  set(internalPrepStartTime$, null);
+  set(internalPrepElapsedMs$, 0);
   set(internalStatus$, "idle");
 });
 

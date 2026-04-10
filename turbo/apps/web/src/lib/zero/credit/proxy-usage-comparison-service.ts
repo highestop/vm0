@@ -143,8 +143,10 @@ async function compareProxyUsage(
     for (const field of fields) {
       const clientVal = client[field] ?? 0;
       const proxyVal = proxy[field] ?? 0;
-      if (clientVal !== proxyVal) {
-        log.error("Proxy usage mismatch", {
+      // Only flag undercounts. Proxy sees all API calls (main + subagents)
+      // while client reports main thread only, so proxy >= client is normal.
+      if (proxyVal < clientVal) {
+        log.error("Proxy usage undercount", {
           orgId,
           runId: client.runId,
           field,

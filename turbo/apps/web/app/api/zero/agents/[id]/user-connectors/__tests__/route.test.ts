@@ -4,6 +4,8 @@ import { POST as postAgentRoute } from "../../../route";
 import {
   createTestRequest,
   createTestCliToken,
+  setComposeHeadVersion,
+  getComposeHeadVersion,
 } from "../../../../../../../src/__tests__/api-test-helpers";
 import {
   testContext,
@@ -201,6 +203,46 @@ describe("User Connectors API", () => {
       );
 
       expect(res.status).toBe(401);
+    });
+
+    it("should recompose when compose version is stale", async () => {
+      const agentId = await createAgent();
+
+      // Simulate a stale compose by pointing headVersionId to a fake hash
+      const staleVersionId = "f".repeat(64);
+      await setComposeHeadVersion(agentId, staleVersionId);
+
+      // PUT user-connectors should trigger recompose since hash differs
+      const res = await putUserConnectors(
+        agentId,
+        { enabledTypes: ["github"] },
+        testCliToken,
+      );
+      expect(res.status).toBe(200);
+
+      // Verify compose was updated back to a fresh version
+      const after = await getComposeHeadVersion(agentId);
+      expect(after!.headVersionId).not.toBe(staleVersionId);
+    });
+
+    it("should skip recompose when compose version is current", async () => {
+      const agentId = await createAgent();
+
+      // Record the current head version (freshly built)
+      const before = await getComposeHeadVersion(agentId);
+      expect(before).toBeDefined();
+
+      // PUT user-connectors — compose is already up to date, should skip recompose
+      const res = await putUserConnectors(
+        agentId,
+        { enabledTypes: ["github"] },
+        testCliToken,
+      );
+      expect(res.status).toBe(200);
+
+      // Verify compose version unchanged
+      const after = await getComposeHeadVersion(agentId);
+      expect(after!.headVersionId).toBe(before!.headVersionId);
     });
 
     it("should isolate permissions between users", async () => {

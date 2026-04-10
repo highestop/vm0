@@ -863,14 +863,14 @@ class TestSseUsageExtractor:
         assert usage["web_search_requests"] == 3
 
 
-class TestReportUsage:
-    """Tests for _report_usage HTTP request construction."""
+class TestDoReportUsage:
+    """Tests for _do_report_usage HTTP request construction."""
 
     def test_posts_correct_payload(self):
         usage = {"model": "claude-sonnet-4-6", "input_tokens": 100}
         with patch.object(mitm_addon, "_opener") as mock_opener:
             mock_opener.open.return_value = MagicMock()
-            mitm_addon._report_usage("https://api.vm0.ai", "tok-123", "run-1", usage)
+            mitm_addon._do_report_usage("https://api.vm0.ai", "tok-123", "run-1", usage)
         mock_opener.open.assert_called_once()
         req = mock_opener.open.call_args[0][0]
         assert req.full_url == "https://api.vm0.ai/api/webhooks/agent/usage"
@@ -880,18 +880,15 @@ class TestReportUsage:
         assert body["runId"] == "run-1"
         assert body["usage"]["model"] == "claude-sonnet-4-6"
 
-    def test_swallows_network_errors(self):
-        """Network failures should be caught, not propagated."""
-        with (
-            patch.object(
-                mitm_addon,
-                "_opener",
-                **{"open.side_effect": ConnectionError("refused")},
-            ),
-            patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
+    def test_raises_on_network_error(self):
+        """Network failures should propagate (retry handled by caller)."""
+        with patch.object(
+            mitm_addon,
+            "_opener",
+            **{"open.side_effect": ConnectionError("refused")},
         ):
-            # Should not raise
-            mitm_addon._report_usage("https://api.vm0.ai", "tok", "run-1", {})
+            with pytest.raises(ConnectionError):
+                mitm_addon._do_report_usage("https://api.vm0.ai", "tok", "run-1", {})
 
     def test_closes_http_error_response(self):
         """HTTPError (non-2xx) should be closed to avoid socket leak."""
@@ -901,15 +898,13 @@ class TestReportUsage:
             "https://api.vm0.ai", 500, "Internal Server Error", {}, None
         )
         http_err.close = MagicMock()
-        with (
-            patch.object(
-                mitm_addon,
-                "_opener",
-                **{"open.side_effect": http_err},
-            ),
-            patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
+        with patch.object(
+            mitm_addon,
+            "_opener",
+            **{"open.side_effect": http_err},
         ):
-            mitm_addon._report_usage("https://api.vm0.ai", "tok", "run-1", {})
+            with pytest.raises(urllib.error.HTTPError):
+                mitm_addon._do_report_usage("https://api.vm0.ai", "tok", "run-1", {})
         http_err.close.assert_called_once()
 
     def test_adds_vercel_bypass_header(self):
@@ -921,7 +916,7 @@ class TestReportUsage:
             ),
         ):
             mock_opener.open.return_value = MagicMock()
-            mitm_addon._report_usage("https://api.vm0.ai", "tok", "run-1", {})
+            mitm_addon._do_report_usage("https://api.vm0.ai", "tok", "run-1", {})
         req = mock_opener.open.call_args[0][0]
         assert req.get_header("X-vercel-protection-bypass") == "bypass-secret"
 
@@ -991,6 +986,14 @@ class TestResponseUsageReporting:
     def setup_method(self):
         _reset()
 
+    def teardown_method(self):
+        try:
+            mitm_addon._usage_executor.submit(lambda: None)
+        except RuntimeError:
+            mitm_addon._usage_executor = mitm_addon.ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="usage"
+            )
+
     def test_reports_proxy_usage_from_sse(self, tmp_path):
         """When proxy_usage is set by SSE parser, it should trigger a usage report."""
         flow = _make_http_flow(host="api.anthropic.com")
@@ -1013,20 +1016,12 @@ class TestResponseUsageReporting:
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
-            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
-            patch.object(mitm_addon.threading, "Thread") as mock_thread,
+            patch.object(mitm_addon, "_maybe_report_proxy_usage") as mock_report,
         ):
             mitm_addon.response(flow)
 
-        mock_thread.assert_called_once()
-        call_kwargs = mock_thread.call_args
-        assert call_kwargs[1]["target"] == mitm_addon._report_usage
-        args = call_kwargs[1]["args"]
-        assert args[0] == "https://api.vm0.ai"  # api_url
-        assert args[1] == "tok-xyz"  # sandbox_token from metadata
-        assert args[2] == "run-abc-123"  # run_id
-        assert args[3]["model"] == "claude-sonnet-4-6"
+        mock_report.assert_called_once_with(flow, "run-abc-123")
 
     def test_non_streaming_json_fallback(self, tmp_path):
         """Non-streaming JSON response should extract usage from buffer."""
@@ -1061,18 +1056,17 @@ class TestResponseUsageReporting:
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
-            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
-            patch.object(mitm_addon.threading, "Thread") as mock_thread,
+            patch.object(mitm_addon, "_maybe_report_proxy_usage") as mock_report,
         ):
             mitm_addon.response(flow)
 
-        mock_thread.assert_called_once()
-        args = mock_thread.call_args[1]["args"]
-        usage = args[3]
+        # JSON fallback should populate proxy_usage in metadata
+        usage = flow.metadata["proxy_usage"]
         assert usage["model"] == "claude-sonnet-4-6"
         assert usage["input_tokens"] == 50
         assert usage["output_tokens"] == 200
+        mock_report.assert_called_once_with(flow, "run-abc-123")
 
     def test_model_provider_buffer_not_truncated(self):
         """Model provider responses should buffer without truncation."""
@@ -1130,11 +1124,100 @@ class TestResponseUsageReporting:
 
         with (
             patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
-            patch.object(mitm_addon.threading, "Thread") as mock_thread,
+            patch.object(mitm_addon, "_maybe_report_proxy_usage") as mock_report,
         ):
             mitm_addon.response(flow)
 
-        mock_thread.assert_not_called()
+        # _maybe_report_proxy_usage is always called; it checks firewall_name internally
+        mock_report.assert_called_once()
+
+    def test_full_path_response_to_opener(self, tmp_path):
+        """Integration: response() → _maybe_report → _enqueue → _retry → _opener.
+
+        Only _opener is mocked — verifies wiring between all intermediate layers.
+        """
+        flow = _make_http_flow(host="api.anthropic.com")
+        log_path = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_run_id"] = "run-int-001"
+        flow.metadata["vm_client_ip"] = "10.200.0.1"
+        flow.metadata["vm_network_log_path"] = log_path
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.metadata["original_url"] = "https://api.anthropic.com/v1/messages"
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["proxy_usage"] = {
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 100,
+            "output_tokens": 500,
+        }
+        flow.response = MagicMock()
+        flow.response.status_code = 200
+        flow.response.headers = {"content-type": "text/event-stream"}
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
+            patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
+            patch.object(mitm_addon, "_opener") as mock_opener,
+        ):
+            mock_opener.open.return_value = MagicMock()
+            mitm_addon.response(flow)
+            # Flush the executor to ensure the background POST completes
+            mitm_addon._usage_executor.shutdown(wait=True)
+
+        # Restore executor
+        mitm_addon._usage_executor = mitm_addon.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="usage"
+        )
+
+        # Verify the webhook POST reached _opener with correct payload
+        mock_opener.open.assert_called_once()
+        req = mock_opener.open.call_args[0][0]
+        assert req.full_url == "https://api.vm0.ai/api/webhooks/agent/usage"
+        body = json.loads(req.data)
+        assert body["runId"] == "run-int-001"
+        assert body["usage"]["input_tokens"] == 100
+        assert body["usage"]["output_tokens"] == 500
+
+    def test_full_path_error_to_opener(self, tmp_path):
+        """Integration: error() → _maybe_report → _enqueue → _retry → _opener.
+
+        Verifies that error() hook delivers partial usage all the way to _opener.
+        """
+        flow = _make_http_flow(host="api.anthropic.com")
+        log_path = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_run_id"] = "run-int-002"
+        flow.metadata["vm_network_log_path"] = log_path
+        flow.metadata["original_url"] = "https://api.anthropic.com/v1/messages"
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["proxy_usage"] = {
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 80,
+        }
+        flow.error = MagicMock()
+        flow.error.msg = "connection reset by peer"
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
+            patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
+            patch.object(mitm_addon, "_opener") as mock_opener,
+        ):
+            mock_opener.open.return_value = MagicMock()
+            mitm_addon.error(flow)
+            mitm_addon._usage_executor.shutdown(wait=True)
+
+        mitm_addon._usage_executor = mitm_addon.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="usage"
+        )
+
+        mock_opener.open.assert_called_once()
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert body["runId"] == "run-int-002"
+        assert body["usage"]["input_tokens"] == 80
 
 
 class TestErrorHandler:
@@ -1234,6 +1317,234 @@ class TestErrorHandler:
         assert "run-abc-123" in warn_msg
         assert "connection reset by peer" in warn_msg
         assert "slack.com" in warn_msg
+
+
+class TestMaybeReportProxyUsage:
+    """Tests for _maybe_report_proxy_usage helper."""
+
+    def setup_method(self):
+        _reset()
+
+    def test_reports_usage_for_model_provider(self):
+        """Should enqueue usage when proxy_usage exists for model provider."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["proxy_usage"] = {
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 100,
+        }
+
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
+            patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue,
+        ):
+            mitm_addon._maybe_report_proxy_usage(flow, "run-abc-123")
+
+        mock_enqueue.assert_called_once()
+        args = mock_enqueue.call_args[0]
+        assert args[0] == "https://api.vm0.ai"
+        assert args[1] == "tok-xyz"
+        assert args[2] == "run-abc-123"
+        assert args[3]["input_tokens"] == 100
+
+    def test_skips_non_model_provider(self):
+        """Should NOT enqueue usage for non-model-provider requests."""
+        flow = _make_http_flow(host="api.github.com")
+        flow.metadata["firewall_name"] = "github"
+        flow.metadata["proxy_usage"] = {"input_tokens": 50}
+
+        with patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue:
+            mitm_addon._maybe_report_proxy_usage(flow, "run-abc-123")
+
+        mock_enqueue.assert_not_called()
+
+    def test_skips_when_no_proxy_usage(self):
+        """Should NOT enqueue when proxy_usage is absent."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        # No proxy_usage in metadata
+
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
+            patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue,
+        ):
+            mitm_addon._maybe_report_proxy_usage(flow, "run-abc-123")
+
+        mock_enqueue.assert_not_called()
+
+    def test_skips_when_no_run_id(self):
+        """Should NOT enqueue when run_id is empty."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["proxy_usage"] = {"input_tokens": 50}
+
+        with patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue:
+            mitm_addon._maybe_report_proxy_usage(flow, "")
+
+        mock_enqueue.assert_not_called()
+
+    def test_warns_when_missing_sandbox_token(self):
+        """Should log warning and skip when sandbox_token is empty."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = ""
+        flow.metadata["proxy_usage"] = {"input_tokens": 50}
+
+        mock_log = MagicMock()
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value="https://api.vm0.ai"),
+            patch.object(mitm_addon.ctx, "log", mock_log, create=True),
+            patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue,
+        ):
+            mitm_addon._maybe_report_proxy_usage(flow, "run-abc-123")
+
+        mock_enqueue.assert_not_called()
+        mock_log.warn.assert_called_once()
+        assert "missing sandbox_token or api_url" in mock_log.warn.call_args[0][0]
+
+    def test_warns_when_missing_api_url(self):
+        """Should log warning and skip when api_url is empty."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["proxy_usage"] = {"input_tokens": 50}
+
+        mock_log = MagicMock()
+        with (
+            patch.object(mitm_addon, "get_api_url", return_value=""),
+            patch.object(mitm_addon.ctx, "log", mock_log, create=True),
+            patch.object(mitm_addon, "_enqueue_usage") as mock_enqueue,
+        ):
+            mitm_addon._maybe_report_proxy_usage(flow, "run-abc-123")
+
+        mock_enqueue.assert_not_called()
+        mock_log.warn.assert_called_once()
+
+
+class TestErrorUsageReporting:
+    """Tests that error() hook calls _maybe_report_proxy_usage."""
+
+    def setup_method(self):
+        _reset()
+
+    def test_error_calls_maybe_report(self, tmp_path):
+        """error() should invoke _maybe_report_proxy_usage."""
+        flow = _make_http_flow(host="api.anthropic.com")
+        log_path = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_run_id"] = "run-abc-123"
+        flow.metadata["vm_network_log_path"] = log_path
+        flow.metadata["original_url"] = "https://api.anthropic.com/v1/messages"
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.error = MagicMock()
+        flow.error.msg = "connection reset by peer"
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            patch.object(mitm_addon.ctx, "log", MagicMock(), create=True),
+            patch.object(mitm_addon, "_maybe_report_proxy_usage") as mock_report,
+        ):
+            mitm_addon.error(flow)
+
+        mock_report.assert_called_once_with(flow, "run-abc-123")
+
+
+class TestReportUsageWithRetry:
+    """Tests for _report_usage_with_retry retry logic."""
+
+    def test_succeeds_on_first_attempt(self):
+        with patch.object(mitm_addon, "_do_report_usage") as mock_do:
+            mitm_addon._report_usage_with_retry("url", "tok", "run-1", {})
+        mock_do.assert_called_once()
+
+    def test_retries_on_failure(self):
+        with patch.object(
+            mitm_addon,
+            "_do_report_usage",
+            side_effect=[ConnectionError("fail"), None],
+        ) as mock_do:
+            mitm_addon._report_usage_with_retry("url", "tok", "run-1", {})
+        assert mock_do.call_count == 2
+
+    def test_gives_up_after_max_retries(self):
+        mock_log = MagicMock()
+        with (
+            patch.object(
+                mitm_addon,
+                "_do_report_usage",
+                side_effect=ConnectionError("fail"),
+            ),
+            patch.object(mitm_addon.ctx, "log", mock_log, create=True),
+        ):
+            # Should not raise
+            mitm_addon._report_usage_with_retry("url", "tok", "run-1", {}, max_retries=2)
+        mock_log.warn.assert_called_once()
+        assert "3 attempts" in mock_log.warn.call_args[0][0]
+
+    def test_sleeps_between_retries(self):
+        with (
+            patch.object(
+                mitm_addon,
+                "_do_report_usage",
+                side_effect=[ConnectionError("fail"), None],
+            ),
+            patch.object(mitm_addon.time, "sleep") as mock_sleep,
+        ):
+            mitm_addon._report_usage_with_retry("url", "tok", "run-1", {})
+        mock_sleep.assert_called_once_with(0.5)
+
+
+class TestEnqueueUsage:
+    """Tests for _enqueue_usage (ThreadPoolExecutor submission)."""
+
+    def teardown_method(self):
+        """Ensure executor is always restored even if a test fails mid-way."""
+        try:
+            mitm_addon._usage_executor.submit(lambda: None)
+        except RuntimeError:
+            mitm_addon._usage_executor = mitm_addon.ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="usage"
+            )
+
+    def test_enqueue_copies_usage_dict(self):
+        """Mutating the original dict after enqueue should not affect the submitted task."""
+        original = {"input_tokens": 100}
+        captured = []
+
+        def capture_usage(_url, _tok, _rid, usage):
+            captured.append(usage)
+
+        with patch.object(mitm_addon, "_report_usage_with_retry", capture_usage):
+            mitm_addon._enqueue_usage("url", "tok", "run-1", original)
+            original["input_tokens"] = 999
+            mitm_addon._usage_executor.shutdown(wait=True)
+
+        assert len(captured) == 1
+        assert captured[0]["input_tokens"] == 100
+
+    def test_enqueue_submits_to_executor(self):
+        """_enqueue_usage should submit work to the thread pool."""
+        mock_executor = MagicMock()
+        with patch.object(mitm_addon, "_usage_executor", mock_executor):
+            mitm_addon._enqueue_usage("url", "tok", "run-1", {"k": 1})
+        mock_executor.submit.assert_called_once()
+        args = mock_executor.submit.call_args[0]
+        assert args[0] == mitm_addon._report_usage_with_retry
+        assert args[1] == "url"
+        assert args[2] == "tok"
+        assert args[3] == "run-1"
+
+
+class TestDoneHook:
+    """Tests for the done() graceful shutdown hook."""
+
+    def test_done_shuts_down_executor(self):
+        """done() should call shutdown(wait=True) on the executor."""
+        mock_executor = MagicMock()
+        with patch.object(mitm_addon, "_usage_executor", mock_executor):
+            mitm_addon.done()
+        mock_executor.shutdown.assert_called_once_with(wait=True)
 
 
 class TestTlsClienthello:

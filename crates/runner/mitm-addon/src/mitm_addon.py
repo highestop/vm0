@@ -213,7 +213,8 @@ async def request(flow: http.HTTPFlow) -> None:
                     "message": "Request blocked: no matching permission rule",
                     "method": result.method,
                     "path": result.path,
-                    "permission": result.ref,
+                    "ref": result.ref,
+                    "permissions": list(result.permissions),
                     "base": result.base,
                 }
             )

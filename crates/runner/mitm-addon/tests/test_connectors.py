@@ -3630,89 +3630,176 @@ class TestThreeLevelMatching:
         )
 
     def test_allowed_permission_passes(self):
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "deny"}}
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-write"], "unknownPolicy": "deny"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == "repo-read"
 
-    def test_non_allowed_permission_denies(self):
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "deny"}}
+    def test_denied_permission_blocked(self):
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-write"], "unknownPolicy": "deny"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "PUT",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
-    def test_unknown_endpoint_allowed_when_unknown_policy_allow(self):
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "allow"}}
+    def test_uncategorized_permission_allowed(self):
+        """Permission not in allow/deny/ask defaults to allowed."""
+        policies = {"github": {"allow": [], "deny": [], "ask": [], "unknownPolicy": "deny"}}
+        result = matching.match_firewall_request(
+            "https://api.github.com/repos/org/repo",
+            "GET",
+            self._firewalls(),
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallAllow)
+        assert result.match_info["permission"] == "repo-read"
+
+    def test_ask_permission_blocked(self):
+        """Permission in ask list is treated as denied at proxy level."""
+        policies = {
+            "github": {"allow": [], "deny": [], "ask": ["repo-read"], "unknownPolicy": "allow"}
+        }
+        result = matching.match_firewall_request(
+            "https://api.github.com/repos/org/repo",
+            "GET",
+            self._firewalls(),
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallBlock)
+
+    def test_deny_and_ask_union(self):
+        """Permissions in deny and ask are both blocked."""
+        policies = {
+            "github": {
+                "allow": [],
+                "deny": ["repo-read"],
+                "ask": ["repo-write"],
+                "unknownPolicy": "allow",
+            }
+        }
+        # repo-read in deny → blocked
+        result = matching.match_firewall_request(
+            "https://api.github.com/repos/org/repo",
+            "GET",
+            self._firewalls(),
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallBlock)
+        # repo-write in ask → blocked
+        result = matching.match_firewall_request(
+            "https://api.github.com/repos/org/repo",
+            "PUT",
+            self._firewalls(),
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallBlock)
+
+    def test_unknown_policy_key_missing_defaults_to_allow(self):
+        """Ref present but unknownPolicy key absent → defaults to allow."""
+        policies = {"github": {"allow": ["repo-read"], "deny": ["repo-write"]}}
         result = matching.match_firewall_request(
             "https://api.github.com/users/octocat",
             "GET",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallAllow)
+        assert result.match_info["permission"] == ""
+
+    def test_permission_in_both_allow_and_deny_is_blocked(self):
+        """deny takes precedence when permission appears in both allow and deny."""
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-read"], "unknownPolicy": "allow"}
+        }
+        result = matching.match_firewall_request(
+            "https://api.github.com/repos/org/repo",
+            "GET",
+            self._firewalls(),
+            network_policies=policies,
+        )
+        assert isinstance(result, FirewallBlock)
+
+    def test_unknown_endpoint_allowed_when_unknown_policy_allow(self):
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-write"], "unknownPolicy": "allow"}
+        }
+        result = matching.match_firewall_request(
+            "https://api.github.com/users/octocat",
+            "GET",
+            self._firewalls(),
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == ""
         assert result.match_info["rule"] == ""
 
     def test_unknown_endpoint_blocked_when_unknown_policy_deny(self):
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "deny"}}
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-write"], "unknownPolicy": "deny"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/users/octocat",
             "GET",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
     def test_unknown_endpoint_blocked_when_unknown_policy_ask(self):
         """unknownPolicy 'ask' is treated as deny at the proxy level."""
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "ask"}}
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": ["repo-write"], "unknownPolicy": "ask"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/users/octocat",
             "GET",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
-    def test_ref_absent_denies(self):
-        """Ref not in networkPolicies → fail-closed."""
-        granted = {}  # github not in map
+    def test_ref_absent_allows(self):
+        """Ref not in networkPolicies → fully permissive."""
+        policies = {}  # github not in map
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "PUT",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
-        assert isinstance(result, FirewallBlock)
+        assert isinstance(result, FirewallAllow)
 
     def test_no_base_match_returns_none(self):
-        granted = {}
+        policies = {}
         result = matching.match_firewall_request(
             "https://api.example.com/foo",
             "GET",
             self._firewalls(),
-            network_policies=granted,
+            network_policies=policies,
         )
         assert result is None
 
-    def test_none_network_policies_denies_all(self):
-        """None networkPolicies → empty map → fail-closed."""
+    def test_none_network_policies_allows_all(self):
+        """None networkPolicies → empty map → absent refs are fully permissive."""
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             self._firewalls(),
             network_policies=None,
         )
-        assert isinstance(result, FirewallBlock)
+        assert isinstance(result, FirewallAllow)
 
         result = matching.match_firewall_request(
             "https://api.github.com/users/octocat",
@@ -3720,7 +3807,7 @@ class TestThreeLevelMatching:
             self._firewalls(),
             network_policies=None,
         )
-        assert isinstance(result, FirewallBlock)
+        assert isinstance(result, FirewallAllow)
 
     def test_empty_permissions_with_unknown_policy_allow(self):
         """Firewall with no permission rules + unknownPolicy=allow allows all."""
@@ -3735,18 +3822,18 @@ class TestThreeLevelMatching:
             name="hubspot",
             ref="hubspot",
         )
-        granted = {"hubspot": {"allow": [], "unknownPolicy": "allow"}}
+        policies = {"hubspot": {"allow": [], "unknownPolicy": "allow"}}
         result = matching.match_firewall_request(
             "https://api.hubspot.com/crm/v3/objects",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == ""
 
-    def test_overlapping_permissions_grants_if_any_granted(self):
-        """Same endpoint in two permissions — one denied, one granted → ALLOW."""
+    def test_overlapping_permissions_allows_if_any_not_blocked(self):
+        """Same endpoint in two permissions — one denied, one allowed → ALLOW."""
         fws = _wrap_firewalls(
             [
                 {
@@ -3761,17 +3848,19 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": ["repo-admin"], "unknownPolicy": "deny"}}
+        policies = {
+            "github": {"allow": ["repo-admin"], "deny": ["repo-read"], "unknownPolicy": "deny"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == "repo-admin"
 
-    def test_overlapping_permissions_denies_if_none_granted(self):
+    def test_overlapping_permissions_denies_if_all_blocked(self):
         """Same endpoint in two permissions — both denied → DENY."""
         fws = _wrap_firewalls(
             [
@@ -3787,18 +3876,24 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": ["issues-read"], "unknownPolicy": "deny"}}
+        policies = {
+            "github": {
+                "allow": ["issues-read"],
+                "deny": ["repo-read", "repo-admin"],
+                "unknownPolicy": "deny",
+            }
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
         assert result.permissions == ("repo-read", "repo-admin")
 
     def test_multi_firewall_different_refs(self):
-        """Two firewalls with different refs, each with own grants."""
+        """Two firewalls with different refs, each with own policies."""
         fws = [
             {
                 "name": "github",
@@ -3827,26 +3922,26 @@ class TestThreeLevelMatching:
                 ],
             },
         ]
-        granted = {
-            "github": {"allow": ["repo-read"], "unknownPolicy": "deny"},
-            "slack": {"allow": [], "unknownPolicy": "allow"},
+        policies = {
+            "github": {"allow": ["repo-read"], "deny": [], "unknownPolicy": "deny"},
+            "slack": {"allow": [], "deny": ["channels:read"], "unknownPolicy": "allow"},
         }
-        # GitHub: granted → ALLOW
+        # GitHub: not in deny → ALLOW
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["ref"] == "github"
 
-        # Slack: channels:read not granted → DENY
+        # Slack: channels:read explicitly denied → DENY
         result = matching.match_firewall_request(
             "https://slack.com/api/conversations.list",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
@@ -3855,7 +3950,7 @@ class TestThreeLevelMatching:
             "https://slack.com/api/users.info",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["ref"] == "slack"
@@ -3875,16 +3970,16 @@ class TestThreeLevelMatching:
                 "apis": [{"base": "https://slack.com/api", "auth": {"headers": {}}}],
             },
         ]
-        granted = {
-            "github": {"allow": [], "unknownPolicy": "deny"},
-            "slack": {"allow": [], "unknownPolicy": "allow"},
+        policies = {
+            "github": {"allow": [], "deny": [], "unknownPolicy": "deny"},
+            "slack": {"allow": [], "deny": [], "unknownPolicy": "allow"},
         }
         # GitHub unknown → DENY (unknownPolicy: deny)
         result = matching.match_firewall_request(
             "https://api.github.com/anything",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
@@ -3893,7 +3988,7 @@ class TestThreeLevelMatching:
             "https://slack.com/api/anything",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
 
@@ -3912,14 +4007,14 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": [], "unknownPolicy": "allow"}}
+        policies = {"github": {"allow": [], "deny": ["repo-write"], "unknownPolicy": "allow"}}
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "PUT",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
-        # repo-write rule matches but is not granted → DENY, not overridden by unknownPolicy
+        # repo-write explicitly denied → DENY, not overridden by unknownPolicy
         assert isinstance(result, FirewallBlock)
         assert result.permissions == ("repo-write",)
 
@@ -3944,18 +4039,18 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": [], "unknownPolicy": "deny"}}
+        policies = {"github": {"allow": [], "deny": ["repo-read"], "unknownPolicy": "deny"}}
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
         assert result.permissions == ("repo-read",)
 
     def test_empty_permissions_list_denies_all_known(self):
-        """permissions: [] means nothing is granted — all known endpoints denied."""
+        """All permissions in deny list — all known endpoints denied."""
         fws = _wrap_firewalls(
             [
                 {
@@ -3970,17 +4065,19 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": [], "unknownPolicy": "deny"}}
+        policies = {
+            "github": {"allow": [], "deny": ["repo-read", "repo-write"], "unknownPolicy": "deny"}
+        }
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallBlock)
 
-    def test_ref_absent_from_granted_denies(self):
-        """Firewall ref not in networkPolicies → fail-closed."""
+    def test_ref_absent_from_policies_allows(self):
+        """Firewall ref not in networkPolicies → fully permissive."""
         fws = _wrap_firewalls(
             [
                 {
@@ -3994,24 +4091,24 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        # networkPolicies exists but has no entry for "github"
-        granted = {"slack": {"allow": [], "unknownPolicy": "allow"}}
+        # networkPolicies exists but has no entry for "github" → fully permissive
+        policies = {"slack": {"allow": [], "unknownPolicy": "allow"}}
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
-        assert isinstance(result, FirewallBlock)
+        assert isinstance(result, FirewallAllow)
 
-        # Unknown endpoint also blocked (ref absent → fail-closed)
+        # Unknown endpoint also allowed (ref absent → fully permissive)
         result = matching.match_firewall_request(
             "https://api.github.com/users/octocat",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
-        assert isinstance(result, FirewallBlock)
+        assert isinstance(result, FirewallAllow)
 
     def test_multi_api_mixed_permissions(self):
         """One API has permissions, another doesn't — mixed within same firewall."""
@@ -4033,14 +4130,14 @@ class TestThreeLevelMatching:
             name="github",
             ref="github",
         )
-        granted = {"github": {"allow": ["repo-read"], "unknownPolicy": "allow"}}
+        policies = {"github": {"allow": ["repo-read"], "deny": [], "unknownPolicy": "allow"}}
 
-        # First API: known permission granted → ALLOW
+        # First API: known permission not in deny → ALLOW
         result = matching.match_firewall_request(
             "https://api.github.com/repos/org/repo",
             "GET",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == "repo-read"
@@ -4050,7 +4147,7 @@ class TestThreeLevelMatching:
             "https://uploads.github.com/anything",
             "POST",
             fws,
-            network_policies=granted,
+            network_policies=policies,
         )
         assert isinstance(result, FirewallAllow)
         assert result.match_info["permission"] == ""

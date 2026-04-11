@@ -134,6 +134,18 @@ const AXIOM: ConnectorRef = {
   icon: "/assets/connectors/axiom.svg",
 };
 
+const V0: ConnectorRef = {
+  id: "v0",
+  label: "v0",
+  icon: "/assets/connectors/v0.svg",
+};
+
+const VERCEL: ConnectorRef = {
+  id: "vercel",
+  label: "Vercel",
+  icon: "/assets/connectors/vercel.svg",
+};
+
 // ---------------------------------------------------------------------------
 // Full use cases
 // ---------------------------------------------------------------------------
@@ -856,6 +868,127 @@ export const USE_CASES: UseCase[] = [
       "Works for contractors and interns too, just adjust the template and meeting list.",
     ],
     relatedSlugs: ["slack-triage", "standup-summary", "file-bugs-from-slack"],
+  },
+
+  {
+    slug: "build-with-v0",
+    title: "Turn a Slack idea into an interactive prototype instantly",
+    description:
+      "When an idea sparks mid-conversation, describe it to Zero. It uses v0 to generate a clickable React prototype and posts the live preview link back in the thread — before the discussion moves on.",
+    color: "#7c8cbe",
+    avatar: {
+      rotation: 3,
+      skin: 1,
+      hairStyle: 4,
+      hairColor: 5,
+      expression: 4,
+      intensity: "h",
+    },
+    roles: ["engineering", "product"],
+    capability: "instant",
+    timeSaved: "Hours → seconds",
+    model: "Claude 4 Sonnet",
+    connectors: [SLACK, V0],
+    slackPreview: [
+      {
+        role: "user",
+        name: "Ethan",
+        text: "@Zero prototype this: a command palette that lets users search agents, recent runs, and connectors. Keyboard-navigable, fuzzy search, shows a preview on the right.",
+      },
+      {
+        role: "zero",
+        name: "Zero",
+        text: "Here's the interactive prototype:\nv0.dev/r/cmd-palette-preview\n\nIncludes fuzzy search across agents, runs, and connectors. Arrow-key navigation. Right-side preview panel updates on hover. Click to open.",
+      },
+    ],
+    headings: {
+      scenario: "Why ideas get lost before anyone can see them",
+      prompt: "How to turn a Slack idea into a prototype with Zero",
+      steps: "How Zero goes from your description to a live, clickable UI",
+      nextActions: "Refine, share, or hand off to engineering",
+      integrations: "Required integrations: v0",
+      tips: "Best practices for rapid idea prototyping with v0",
+    },
+    scenario:
+      "You're in a Slack thread debating how a feature should work. Someone proposes a new UI pattern — a command palette, a settings panel, a multi-step wizard. Words aren't landing. Sketching on a whiteboard isn't an option. Scheduling a Figma session pushes the decision to next week. You describe the idea to Zero in plain language. It calls v0, generates a fully interactive React prototype, and posts the live preview link right back in the thread — in under a minute. Everyone can click through it before the conversation moves on.",
+    promptVariants: [
+      {
+        label: "New UI idea",
+        prompt:
+          "@Zero prototype this: a command palette that lets users search agents, recent runs, and connectors. Keyboard-navigable, fuzzy search, shows a preview panel on the right side.",
+      },
+      {
+        label: "From thread context",
+        prompt:
+          "@Zero based on the flow we just described above, build a quick v0 prototype so the team can see it before we decide.",
+      },
+      {
+        label: "Iterate",
+        prompt:
+          "@Zero update the prototype — add a filter tab at the top for 'Agents / Runs / Connectors' and highlight the active item in orange. Regenerate.",
+      },
+    ],
+    steps: [
+      {
+        title: "Describe the idea in plain language",
+        description:
+          "No spec, no wireframe required. Tell Zero what the UI should do — the components, the interactions, the data it surfaces. Paste a rough sketch description or just riff from the thread.",
+      },
+      {
+        title: "Zero generates the prototype via v0",
+        description:
+          "Zero translates your description into a structured v0 prompt and calls the v0 API. v0 produces a fully interactive React component — real buttons, real states, real navigation.",
+      },
+      {
+        title: "Live preview link posted in Slack",
+        description:
+          "Zero posts the v0 preview URL back in the same thread. Teammates can click through the prototype immediately, on any device, without installing anything or checking out code.",
+      },
+    ],
+    nextActions: [
+      {
+        title: "Refine in the thread",
+        description: "Keep iterating without leaving Slack",
+        examplePrompt:
+          "@Zero update the prototype — the search input should have an icon on the left, and empty state should show recent items instead of nothing.",
+      },
+      {
+        title: "Share for async feedback",
+        description: "Post to a broader channel or DM stakeholders",
+        examplePrompt:
+          "@Zero share the v0 prototype link to #product with the message: 'Quick prototype of the command palette idea — feedback welcome before Thursday.'",
+      },
+      {
+        title: "Hand off to engineering",
+        description: "Export the generated code into the repo",
+        examplePrompt:
+          "@Zero take the v0 prototype code and open a PR in vm0-ai/vm0 under turbo/apps/platform/src/components/CommandPalette.tsx for the team to build on.",
+      },
+    ],
+    integrations: [
+      {
+        connector: V0,
+        description:
+          "Zero sends your idea as a generation prompt to v0 and retrieves the interactive prototype URL. Connect your v0 account to enable this.",
+        required: true,
+      },
+      {
+        connector: SLACK,
+        description:
+          "Zero reads your idea from the Slack thread and posts the prototype link back in the same conversation.",
+        required: false,
+      },
+    ],
+    tips: [
+      "Describe behavior, not just appearance. 'Clicking a row expands details below it' gets a more accurate prototype than 'expandable rows'.",
+      "Reference existing UI patterns by name — 'like a VS Code command palette' or 'like Notion's slash menu' — to anchor v0's generation.",
+      "Use the iterate prompt immediately after the first result. One round of refinement usually gets you 90% of the way there.",
+    ],
+    relatedSlugs: [
+      "file-bugs-from-slack",
+      "standup-summary",
+      "employee-onboarding",
+    ],
   },
 ];
 

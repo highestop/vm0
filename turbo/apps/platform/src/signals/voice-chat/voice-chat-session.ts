@@ -193,6 +193,7 @@ const internalReconnectAttempt$ = state(0);
 const internalInputMode$ = state<"hands-free" | "push-to-talk">("hands-free");
 
 const internalParentSignal$ = state<AbortSignal | null>(null);
+const internalWakeLock$ = state<WakeLockSentinel | null>(null);
 
 const meetingPromptInput$ = state("");
 
@@ -768,6 +769,8 @@ const reconnectVoiceSession$ = command(
       if (ok) {
         // Success — restart heartbeat and poll loops
         set(internalReconnectAttempt$, 0);
+        await set(acquireWakeLock$, signal);
+        signal.throwIfAborted();
         const parentSignal = get(internalParentSignal$);
         if (!parentSignal) {
           set(internalError$, "No parent signal for reconnect");
@@ -791,6 +794,35 @@ const reconnectVoiceSession$ = command(
     set(internalStatus$, "disconnected");
   },
 );
+
+// --- Wake lock ---
+
+const acquireWakeLock$ = command(async ({ set }, signal: AbortSignal) => {
+  if (!("wakeLock" in navigator)) {
+    return;
+  }
+  let lock: WakeLockSentinel | undefined;
+  // eslint-disable-next-line no-restricted-syntax -- wakeLock.request can fail if document is not visible
+  try {
+    lock = await navigator.wakeLock.request("screen");
+  } catch {
+    // Wake lock request failed — non-critical, ignore
+  }
+  signal.throwIfAborted();
+  if (lock) {
+    set(internalWakeLock$, lock);
+  }
+});
+
+const releaseWakeLock$ = command(({ get, set }) => {
+  const lock = get(internalWakeLock$);
+  if (lock) {
+    lock.release().catch(() => {
+      return undefined;
+    });
+    set(internalWakeLock$, null);
+  }
+});
 
 // --- Shared connection logic ---
 
@@ -852,6 +884,9 @@ const connectVoiceSession$ = command(
     if (!ok) {
       return;
     }
+
+    await set(acquireWakeLock$, sessionSignal);
+    sessionSignal.throwIfAborted();
 
     await Promise.allSettled([
       set(startHeartbeat$, sessionSignal),
@@ -1126,6 +1161,7 @@ export const endVoiceChat$ = command(({ get, set }) => {
   }
 
   set(resetSessionSignal$);
+  set(releaseWakeLock$);
 
   const dc = get(internalDc$);
   if (dc) {

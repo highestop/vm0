@@ -1,9 +1,10 @@
-import { useGet, useSet, useLastLoadable } from "ccstate-react";
+import { useGet, useSet, useLastLoadable, useResolved } from "ccstate-react";
 import {
   IconMessageCircle,
   IconCalendar,
   IconBrandSlack,
   IconMail,
+  IconX,
 } from "@tabler/icons-react";
 import { Skeleton, Card } from "@vm0/ui";
 import type { TaskItem, TaskType } from "@vm0/core";
@@ -12,8 +13,18 @@ import {
   selectedTaskIndex$,
   navigateToTask$,
 } from "../../signals/mission-control-page/mission-control.ts";
+import {
+  missionControlPanelVisible$,
+  openThreadEntries$,
+  openMissionControlThread$,
+  closeMissionControlThread$,
+} from "../../signals/mission-control-page/mission-control-threads.ts";
+import { ZeroChatThreadPageInner } from "../zero-page/zero-chat-thread-page.tsx";
 import { StatusBadge } from "../zero-page/components/log-views/status-badge.tsx";
 import { AvatarFromUrl } from "../zero-page/zero-sidebar-shared.tsx";
+import { detach, Reason } from "../../signals/utils.ts";
+import { pageSignal$ } from "../../signals/page-signal.ts";
+import type { ChatThreadSignals } from "../../signals/chat-page/create-chat-thread.ts";
 
 function getTaskTypeConfig(type: TaskType): {
   label: string;
@@ -53,17 +64,76 @@ function getTaskTypeConfig(type: TaskType): {
 }
 
 export function MissionControlPage() {
+  const panelVisible = useGet(missionControlPanelVisible$);
+
   return (
-    <div className="flex flex-1 flex-col min-h-0">
-      <div className="shrink-0 px-6 pt-6 pb-2">
-        <h1 className="text-lg font-semibold">Mission Control</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Active tasks across all channels
-        </p>
+    <div className="flex flex-1 min-h-0">
+      {/* Left column: task list */}
+      <div
+        className={`flex flex-col min-h-0 transition-all duration-300 ${
+          panelVisible ? "w-[360px] shrink-0 border-r" : "flex-1"
+        }`}
+      >
+        <div className="shrink-0 px-6 pt-6 pb-2">
+          <h1 className="text-lg font-semibold">Mission Control</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Active tasks across all channels
+          </p>
+        </div>
+        <div className="flex-1 overflow-auto px-6 pb-6">
+          <TaskList />
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 pb-6">
-        <TaskList />
+      {/* Right column: thread panel, slides in */}
+      {panelVisible && <MissionControlThreadPanel />}
+    </div>
+  );
+}
+
+function MissionControlThreadPanel() {
+  const entries = useGet(openThreadEntries$);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 divide-y">
+      {entries.map(([threadId, signals]) => {
+        return (
+          <ThreadCard key={threadId} threadId={threadId} signals={signals} />
+        );
+      })}
+    </div>
+  );
+}
+
+function ThreadCard({
+  threadId,
+  signals,
+}: {
+  threadId: string;
+  signals: ChatThreadSignals;
+}) {
+  const closeThread = useSet(closeMissionControlThread$);
+  const displayName = useResolved(signals.agentDisplayName$);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b bg-muted/30">
+        <span className="text-xs text-muted-foreground font-medium truncate">
+          {displayName ?? threadId}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            closeThread(threadId);
+          }}
+          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          aria-label="Close thread"
+        >
+          <IconX size={14} stroke={1.5} />
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <ZeroChatThreadPageInner thread={signals} />
       </div>
     </div>
   );
@@ -137,9 +207,15 @@ function TaskCard({
   isSelected: boolean;
 }) {
   const navigate = useSet(navigateToTask$);
+  const openThread = useSet(openMissionControlThread$);
+  const pageSignal = useGet(pageSignal$);
 
   const onClick = () => {
-    navigate(task);
+    if (task.type === "chat" && task.chatThreadId) {
+      detach(openThread(task.chatThreadId, pageSignal), Reason.DomCallback);
+    } else {
+      navigate(task);
+    }
   };
 
   const config = getTaskTypeConfig(task.type);

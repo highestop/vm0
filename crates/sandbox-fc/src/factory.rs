@@ -544,6 +544,21 @@ impl SandboxFactory for FirecrackerFactory {
     }
 }
 
+impl Drop for FirecrackerFactory {
+    /// Abort the leak cleanup task if `shutdown()` was never called.
+    ///
+    /// Safety net for abnormal paths (e.g., panic during startup).
+    /// Harmless if `shutdown()` already ran — the handle is `None`.
+    fn drop(&mut self) {
+        // Mirror shutdown(): close the sender first so the drain task's
+        // rx.recv() returns None, then abort as the immediate backstop.
+        self.leak_tx.take();
+        if let Some(h) = self.leak_cleanup_handle.take() {
+            h.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -34,18 +34,22 @@ pub fn new_ip_log_map() -> IpLogMap {
 pub struct KmsgHandle {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<()>,
+    child: Option<tokio::process::Child>,
 }
 
 impl KmsgHandle {
-    /// Stop the kmsg monitor and wait for the child process to be reaped.
-    pub async fn stop(self) {
+    /// Stop the kmsg monitor and wait for cleanup.
+    pub async fn stop(mut self) {
         self.cancel.cancel();
-        let _ = self.task.await;
+        if let Some(ref mut child) = self.child {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+        let _ = (&mut self.task).await;
         info!("kmsg monitor stopped");
     }
 
-    /// Create a noop handle for testing. The background task simply waits
-    /// for cancellation — no `dmesg` process is spawned.
+    /// Create a noop handle for testing. No `dmesg` process is spawned.
     #[cfg(test)]
     pub fn noop() -> Self {
         let cancel = CancellationToken::new();
@@ -53,33 +57,30 @@ impl KmsgHandle {
         Self {
             cancel,
             task: tokio::spawn(async move { token.cancelled().await }),
+            child: None,
         }
+    }
+}
+
+impl Drop for KmsgHandle {
+    /// Kill dmesg and abort the log task if `stop()` was never called.
+    ///
+    /// Prevents a leaked `dmesg -w` process when `run()` returns early
+    /// (e.g., factory creation failure). Harmless if `stop()` already ran —
+    /// `start_kill` on an exited child is a no-op.
+    fn drop(&mut self) {
+        if let Some(ref mut child) = self.child {
+            let _ = child.start_kill();
+        }
+        self.cancel.cancel();
+        self.task.abort();
     }
 }
 
 /// Spawn a background async task that tails `dmesg -w` and writes
 /// network log entries. Returns a handle; call [`KmsgHandle::stop`] during
 /// shutdown so the tokio runtime can exit cleanly.
-pub fn spawn(ip_log_map: IpLogMap) -> KmsgHandle {
-    let cancel = CancellationToken::new();
-    let token = cancel.clone();
-    let task = tokio::spawn(async move {
-        if let Err(e) = run_async(&ip_log_map, token).await {
-            warn!(error = %e, "kmsg log monitor exited");
-        }
-    });
-    KmsgHandle { cancel, task }
-}
-
-/// Async loop that reads kernel log messages via `dmesg -w`.
-///
-/// The runner runs as root, so `dmesg -w` works directly without sudo.
-///
-/// `dmesg -w` outputs lines like:
-/// ```text
-/// [12345.678901] VM0:10.200.0.2:IN=vm0-ve-00-00 OUT=ens5 SRC=10.200.0.2 DST=8.8.8.8 LEN=64 ...
-/// ```
-async fn run_async(ip_log_map: &IpLogMap, cancel: CancellationToken) -> std::io::Result<()> {
+pub fn spawn(ip_log_map: IpLogMap) -> std::io::Result<KmsgHandle> {
     let mut child = tokio::process::Command::new("dmesg")
         .args(["-w"])
         .stdout(Stdio::piped())
@@ -91,9 +92,11 @@ async fn run_async(ip_log_map: &IpLogMap, cancel: CancellationToken) -> std::io:
         .take()
         .ok_or_else(|| std::io::Error::other("failed to capture dmesg stdout"))?;
 
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+
     // Log stderr in a background task so dmesg errors are visible.
-    // Shares the cancel token so the task exits promptly on shutdown,
-    // dropping the pipe and allowing the orphaned dmesg to receive SIGPIPE.
+    // Shares the cancel token so the task exits promptly on shutdown.
     if let Some(stderr) = child.stderr.take() {
         let stderr_cancel = cancel.clone();
         tokio::spawn(async move {
@@ -115,6 +118,23 @@ async fn run_async(ip_log_map: &IpLogMap, cancel: CancellationToken) -> std::io:
         });
     }
 
+    let task = tokio::spawn(async move {
+        run_loop(&ip_log_map, token, stdout).await;
+    });
+    Ok(KmsgHandle {
+        cancel,
+        task,
+        child: Some(child),
+    })
+}
+
+/// Read kernel log lines from `dmesg -w` stdout, parse iptables LOG
+/// entries, and write matching entries to per-run network JSONL files.
+async fn run_loop(
+    ip_log_map: &IpLogMap,
+    cancel: CancellationToken,
+    stdout: tokio::process::ChildStdout,
+) {
     let mut lines = tokio::io::BufReader::new(stdout).lines();
     loop {
         tokio::select! {
@@ -142,13 +162,6 @@ async fn run_async(ip_log_map: &IpLogMap, cancel: CancellationToken) -> std::io:
             }
         }
     }
-
-    // Kill the child and reap it. start_kill may fail if dmesg already
-    // exited (e.g. stdout EOF triggered the break above) — that's fine,
-    // but we must still wait() to avoid a zombie process.
-    let _ = child.start_kill();
-    let _ = child.wait().await;
-    Ok(())
 }
 
 /// Parsed fields from a single iptables LOG line.

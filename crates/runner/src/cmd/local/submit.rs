@@ -36,9 +36,12 @@ pub struct SubmitArgs {
     /// VM profile to use (e.g. "vm0/default")
     #[arg(long)]
     profile: Option<String>,
-    /// Session ID for keep-alive VM reuse across conversation turns
+    /// Session ID for sandbox reuse across conversation turns
     #[arg(long)]
     session_id: Option<String>,
+    /// Feature flags (repeatable, format: key=value, e.g. --feature-flag sandboxReuse=true)
+    #[arg(long = "feature-flag")]
+    feature_flags: Vec<String>,
     /// Timeout in seconds waiting for a runner to complete the job
     #[arg(long, default_value_t = 300)]
     timeout: u64,
@@ -89,6 +92,24 @@ pub async fn run_submit(args: SubmitArgs) -> RunnerResult<ExitCode> {
         )));
     }
 
+    let feature_flags = if args.feature_flags.is_empty() {
+        None
+    } else {
+        let mut map = std::collections::HashMap::new();
+        for flag in &args.feature_flags {
+            let (key, value) = flag.split_once('=').ok_or_else(|| {
+                RunnerError::Config(format!("invalid feature flag (expected key=value): {flag}"))
+            })?;
+            let bool_val = value.parse::<bool>().map_err(|_| {
+                RunnerError::Config(format!(
+                    "invalid feature flag value (expected true/false): {flag}"
+                ))
+            })?;
+            map.insert(key.to_string(), bool_val);
+        }
+        Some(map)
+    };
+
     let home = HomePaths::new()?;
     let group_dir = home.groups_dir().join(&args.group);
 
@@ -107,6 +128,7 @@ pub async fn run_submit(args: SubmitArgs) -> RunnerResult<ExitCode> {
         user_timezone: detect_system_timezone(),
         profile: args.profile,
         session_id: args.session_id,
+        feature_flags,
     };
 
     let json = serde_json::to_vec(&request)
@@ -278,6 +300,7 @@ mod tests {
             cli_agent_type: "claude-code".into(),
             profile: Some("bad-name".into()),
             session_id: None,
+            feature_flags: vec![],
             timeout: 1,
         };
         let err = run_submit(args).await.unwrap_err();
@@ -296,6 +319,7 @@ mod tests {
             cli_agent_type: "claude-code".into(),
             profile: Some("vm0/default".into()),
             session_id: None,
+            feature_flags: vec![],
             timeout: 1,
         };
         // Should pass validation and fail later (HomePaths or timeout), not on profile.
@@ -303,5 +327,40 @@ mod tests {
         if let Err(e) = &result {
             assert!(!e.to_string().contains("invalid profile name"), "got: {e}");
         }
+    }
+
+    #[tokio::test]
+    async fn rejects_feature_flag_missing_equals() {
+        let args = SubmitArgs {
+            group: "test/group".into(),
+            prompt: "hello".into(),
+            working_dir: "/workspace".into(),
+            cli_agent_type: "claude-code".into(),
+            profile: None,
+            session_id: None,
+            feature_flags: vec!["sandboxReuse".into()],
+            timeout: 1,
+        };
+        let err = run_submit(args).await.unwrap_err();
+        assert!(err.to_string().contains("expected key=value"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_feature_flag_non_boolean() {
+        let args = SubmitArgs {
+            group: "test/group".into(),
+            prompt: "hello".into(),
+            working_dir: "/workspace".into(),
+            cli_agent_type: "claude-code".into(),
+            profile: None,
+            session_id: None,
+            feature_flags: vec!["sandboxReuse=yes".into()],
+            timeout: 1,
+        };
+        let err = run_submit(args).await.unwrap_err();
+        assert!(
+            err.to_string().contains("expected true/false"),
+            "got: {err}"
+        );
     }
 }

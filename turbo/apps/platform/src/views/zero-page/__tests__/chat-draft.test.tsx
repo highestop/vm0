@@ -61,7 +61,7 @@ describe("chat draft persistence across thread navigation", () => {
     // Type on thread-2
     await fill(getTextarea(), "draft for thread 2");
 
-    // Navigate back to thread-1 — draft restored
+    // Navigate back to thread-1 — draft restored from per-thread cache
     context.store.set(detachedNavigateTo$, "/chats/:threadId", {
       pathParams: { threadId: "thread-1" },
     });
@@ -183,12 +183,12 @@ describe("chat draft persistence across thread navigation", () => {
       }),
     );
 
-    // Navigate back to thread-1
+    // Navigate back to thread-1 — draft restored from per-thread cache,
+    // upload should now be complete
     context.store.set(detachedNavigateTo$, "/chats/:threadId", {
       pathParams: { threadId: "thread-1" },
     });
 
-    // The upload should now be complete — "Remove" instead of "Cancel upload"
     await waitFor(() => {
       expect(screen.getByLabelText("Remove photo.png")).toBeInTheDocument();
     });

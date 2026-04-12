@@ -120,11 +120,7 @@ async fn gc_dir(
 
     let mut candidates: Vec<GcCandidate> = Vec::new();
 
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| RunnerError::Internal(format!("read entry in {}: {e}", dir.display())))?
-    {
+    while let Some(entry) = next_entry_warn(&mut entries, label, dir).await {
         let path = entry.path();
         let Some(hash) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
             continue;
@@ -227,6 +223,25 @@ fn probe_lock(path: &Path) -> LockProbe {
     }
 }
 
+/// Like `next_entry()`, but logs a warning and returns `None` on I/O error
+/// instead of propagating — suitable for best-effort scans like GC.
+///
+/// Returning `None` terminates a `while let Some(entry)` loop, so an error
+/// stops iteration for the current directory (remaining entries are skipped).
+async fn next_entry_warn(
+    entries: &mut tokio::fs::ReadDir,
+    label: &str,
+    dir: &Path,
+) -> Option<tokio::fs::DirEntry> {
+    match entries.next_entry().await {
+        Ok(entry) => entry,
+        Err(e) => {
+            warn!("{label}: read entry in {}: {e}", dir.display());
+            None
+        }
+    }
+}
+
 /// Remove cached debootstrap tarballs, keeping the `keep_latest` most recent.
 async fn gc_debootstrap(
     home: &HomePaths,
@@ -246,11 +261,7 @@ async fn gc_debootstrap(
     };
 
     let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| RunnerError::Internal(format!("read entry in {}: {e}", dir.display())))?
-    {
+    while let Some(entry) = next_entry_warn(&mut entries, "gc_debootstrap", &dir).await {
         let path = entry.path();
         let meta = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
@@ -324,7 +335,7 @@ async fn gc_orphaned_locks(home: &HomePaths, dry_run: bool) -> RunnerResult<u64>
 
     let mut removed = 0u64;
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    while let Some(entry) = next_entry_warn(&mut entries, "gc_orphaned_locks", &locks_dir).await {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if !name.ends_with(".lock") {
@@ -375,7 +386,7 @@ async fn gc_job_logs(home: &HomePaths, dry_run: bool) -> RunnerResult<(u64, u64)
     let mut removed = 0u64;
     let mut freed = 0u64;
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    while let Some(entry) = next_entry_warn(&mut entries, "gc_job_logs", &logs_dir).await {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
 
@@ -442,7 +453,7 @@ async fn dir_stats(dir: &Path) -> (u64, SystemTime) {
                 continue;
             }
         };
-        while let Ok(Some(entry)) = entries.next_entry().await {
+        while let Some(entry) = next_entry_warn(&mut entries, "dir_stats", &current).await {
             let Ok(meta) = entry.metadata().await else {
                 tracing::debug!("dir_stats: cannot stat {}", entry.path().display());
                 continue;
@@ -487,11 +498,7 @@ async fn gc_versions(home: &HomePaths, dry_run: bool) -> RunnerResult<Vec<String
 
     let mut removed: Vec<String> = Vec::new();
 
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| RunnerError::Internal(format!("read entry in {}: {e}", bin_dir.display())))?
-    {
+    while let Some(entry) = next_entry_warn(&mut entries, "gc_versions", &bin_dir).await {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if !is_semver_version(name) {
@@ -723,7 +730,8 @@ async fn gc_workspace_orphans(home: &HomePaths, dry_run: bool) -> RunnerResult<(
             }
         };
 
-        while let Ok(Some(entry)) = entries.next_entry().await {
+        while let Some(entry) = next_entry_warn(&mut entries, "workspace gc", &workspaces_dir).await
+        {
             let path = entry.path();
             let Ok(meta) = tokio::fs::metadata(&path).await else {
                 continue;

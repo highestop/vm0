@@ -5,7 +5,14 @@ import { runStatusSchema } from "./runs";
 
 const c = initContract();
 
-const taskTypeSchema = z.enum(["chat", "schedule", "slack", "email"]);
+const taskTypeSchema = z.enum([
+  "chat",
+  "schedule",
+  "slack",
+  "email",
+  "voice_chat",
+  "agent",
+]);
 
 const taskAgentSchema = z.object({
   id: z.string(),
@@ -26,6 +33,8 @@ const taskItemSchema = z.object({
   scheduleId: z.string().optional(),
   slackThreadSessionId: z.string().optional(),
   emailThreadSessionId: z.string().optional(),
+  voiceChatSessionId: z.string().optional(),
+  agentRunId: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

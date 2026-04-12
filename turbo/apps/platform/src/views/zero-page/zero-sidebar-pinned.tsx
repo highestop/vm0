@@ -17,6 +17,7 @@ import {
 import {
   isChatRoute,
   setSidebarExpanded$,
+  navigateToChat$,
 } from "../../signals/zero-page/zero-nav.ts";
 import { activeRoute$ } from "../../signals/active-route.ts";
 import {
@@ -72,6 +73,7 @@ export function PinnedAgentListSection() {
   const [pinLoadable, savePinnedIds] = useLoadableSet(updatePinnedAgentIds$);
   const savingPinned = pinLoadable.state === "loading";
   const createNewChat = useSet(createNewChatThread$);
+  const navigateToChat = useSet(navigateToChat$);
   const setExpanded = useSet(setSidebarExpanded$);
   const pageSignal = useGet(pageSignal$);
 
@@ -80,7 +82,14 @@ export function PinnedAgentListSection() {
   };
 
   const onNewChat = (agentId: string | null) => {
-    detach(createNewChat(agentId, pageSignal), Reason.DomCallback);
+    detach(
+      createNewChat(agentId, pageSignal).then((threadId) => {
+        if (threadId) {
+          navigateToChat(threadId);
+        }
+      }),
+      Reason.DomCallback,
+    );
     setExpanded(false);
   };
   const defaultAgentId = useLastResolved(defaultAgentId$);

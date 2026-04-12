@@ -22,7 +22,12 @@ function assertStrapiDataSource(): void {
 
 export async function getPosts(locale: string = "en"): Promise<BlogPost[]> {
   assertStrapiDataSource();
-  return getPostsFromStrapi(locale);
+  try {
+    return await getPostsFromStrapi(locale);
+  } catch (error) {
+    console.error("[blog] Failed to fetch posts:", error);
+    return [];
+  }
 }
 
 export async function getPost(

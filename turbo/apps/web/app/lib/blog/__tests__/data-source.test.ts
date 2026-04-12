@@ -165,4 +165,23 @@ describe("blog/data-source", () => {
       expect(categories).toEqual([]);
     });
   });
+
+  describe("error fallback", () => {
+    it("getPosts returns empty array on Strapi error", async () => {
+      server.use(
+        http.get(`${STRAPI_URL}/api/articles`, () => {
+          return new HttpResponse(null, {
+            status: 500,
+            statusText: "Internal Server Error",
+          });
+        }),
+      );
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const posts = await getPosts("en");
+
+      expect(posts).toEqual([]);
+      vi.restoreAllMocks();
+    });
+  });
 });

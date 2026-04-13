@@ -11,7 +11,7 @@ import {
 import { Card, Shortcut } from "@vm0/ui";
 import type { TaskItem, TaskType } from "@vm0/core";
 import {
-  archiveTask$,
+  archiveAndFocusNext$,
   type TaskSignals,
 } from "../../signals/mission-control-page/mission-control-tasks.ts";
 import { StatusBadge } from "../zero-page/components/log-views/status-badge.tsx";
@@ -98,7 +98,6 @@ export function TaskCard({ taskSignals }: { taskSignals: TaskSignals }) {
   const unread = useGet(taskSignals.unread$);
 
   const closeTask = useSet(taskSignals.closeTask$);
-  const archiveTask = useSet(archiveTask$);
 
   const config = getTaskTypeConfig(task.type);
   const TypeIcon = config.icon;
@@ -106,6 +105,7 @@ export function TaskCard({ taskSignals }: { taskSignals: TaskSignals }) {
   const focusInput = useSet(taskSignals.focusInput$);
   const setCardRef = useSet(taskSignals.setCardRef$);
   const inputFocused = useGet(taskSignals.inputFocused$);
+  const archiveAndFocusNext = useSet(archiveAndFocusNext$);
 
   const toggle = () => {
     if (isOpen) {
@@ -128,9 +128,13 @@ export function TaskCard({ taskSignals }: { taskSignals: TaskSignals }) {
     }
   };
 
-  const handleArchive = (e: React.MouseEvent) => {
+  const archiveTask = () => {
+    detach(archiveAndFocusNext(task.id, pageSignal), Reason.DomCallback);
+  };
+
+  const archiveOnClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    detach(archiveTask(task.id, pageSignal), Reason.DomCallback);
+    archiveTask();
   };
 
   return (
@@ -164,7 +168,7 @@ export function TaskCard({ taskSignals }: { taskSignals: TaskSignals }) {
               {task.status && <StatusBadge status={task.status} zeroStyle />}
               <button
                 aria-label="Archive task"
-                onClick={handleArchive}
+                onClick={archiveOnClick}
                 className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground shrink-0"
               >
                 <IconArchive size={14} stroke={1.5} />

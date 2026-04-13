@@ -229,6 +229,12 @@ function createTaskSignals(initialTask: TaskItem): TaskSignals {
 }
 
 // ---------------------------------------------------------------------------
+// Optimistic archive — client-side set of archived run IDs
+// ---------------------------------------------------------------------------
+
+const internalArchivedRunIds$ = state<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
 // Cache + reconciliation (follows memberCapSettingCache$ pattern)
 // ---------------------------------------------------------------------------
 
@@ -311,6 +317,30 @@ export const setupTasksLoop$ = command(
 
         set(internalTaskSignals$, taskSignals);
 
+        // Reconcile optimistic archived run IDs: once the server no longer
+        // returns a task with a given runId, the archive has been confirmed and
+        // the ID can be removed from the client-side filter set.
+        const serverRunIds = new Set(
+          tasks
+            .map((t) => {
+              return t.latestRunId;
+            })
+            .filter((id): id is string => {
+              return id !== null;
+            }),
+        );
+        const currentArchived = get(internalArchivedRunIds$);
+        if (currentArchived.size > 0) {
+          const stillPending = new Set(
+            [...currentArchived].filter((id) => {
+              return serverRunIds.has(id);
+            }),
+          );
+          if (stillPending.size !== currentArchived.size) {
+            set(internalArchivedRunIds$, stillPending);
+          }
+        }
+
         return false;
       },
       10_000,
@@ -323,10 +353,12 @@ export const setupTasksLoop$ = command(
  * Ordered list of TaskSignals derived from the reconciled cache.
  * Optimistic entries (not yet confirmed by server) are prepended at the top.
  * Server-confirmed entries follow in server order.
+ * Tasks whose latestRunId is in the archived set are excluded.
  */
 export const taskSignals$ = computed(async (get) => {
   const tasks = await get(tasks$);
   const signals = get(internalTaskSignals$);
+  const archivedRunIds = get(internalArchivedRunIds$);
   const serverIds = new Set(
     tasks.map((t) => {
       return t.id;
@@ -338,8 +370,11 @@ export const taskSignals$ = computed(async (get) => {
     return ts.optimistic && !serverIds.has(ts.taskId);
   });
 
-  // Server-confirmed entries in server order
+  // Server-confirmed entries in server order, excluding optimistically archived tasks
   const serverEntries = tasks
+    .filter((task) => {
+      return !task.latestRunId || !archivedRunIds.has(task.latestRunId);
+    })
     .map((task) => {
       return signals.get(task.id);
     })
@@ -354,7 +389,7 @@ export const taskSignals$ = computed(async (get) => {
 // Archive command
 // ---------------------------------------------------------------------------
 
-export const archiveTask$ = command(
+const archiveTask$ = command(
   async ({ get, set }, taskId: string, _signal: AbortSignal): Promise<void> => {
     const taskSignals = get(internalTaskSignals$);
     const ts = taskSignals.get(taskId);
@@ -460,6 +495,57 @@ export const closeAndFocusNextInput$ = command(
         return;
       }
     }
+  },
+);
+
+/**
+ * Optimistically archive a task by its latestRunId and focus the next card.
+ * The card disappears immediately from the UI, and the archive request is sent
+ * to the server in the background. The optimistic filter is cleared once the
+ * server confirms the task is gone (reconciliation in setupTasksLoop$).
+ */
+export const archiveAndFocusNext$ = command(
+  async ({ get, set }, taskId: string, signal: AbortSignal) => {
+    const allTasks = await get(taskSignals$);
+    signal.throwIfAborted();
+    const currentIndex = allTasks.findIndex((ts) => {
+      return ts.taskId === taskId;
+    });
+    if (currentIndex === -1) {
+      return;
+    }
+
+    const ts = allTasks[currentIndex];
+    const runId = get(ts.task$).latestRunId;
+    if (!runId) {
+      return;
+    }
+
+    // Close panel if open
+    if (get(ts.open$)) {
+      set(ts.closeTask$);
+    }
+
+    // Determine next card to focus (prefer next, fall back to previous)
+    let nextTask: TaskSignals | undefined;
+    if (currentIndex < allTasks.length - 1) {
+      nextTask = allTasks[currentIndex + 1];
+    } else if (currentIndex > 0) {
+      nextTask = allTasks[currentIndex - 1];
+    }
+
+    // Optimistic archive — card disappears immediately from the UI
+    const archived = new Set(get(internalArchivedRunIds$));
+    archived.add(runId);
+    set(internalArchivedRunIds$, archived);
+
+    // Focus next card after optimistic removal
+    if (nextTask) {
+      set(nextTask.focusCard$);
+    }
+
+    // Persist the archive to the server
+    await set(archiveTask$, taskId, signal);
   },
 );
 

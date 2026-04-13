@@ -61,8 +61,8 @@ import {
   type ChatThreadSignals,
 } from "../../signals/chat-page/create-chat-thread.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
-import { useAutoScroll } from "./use-auto-scroll.ts";
 import { useAutoRead } from "./use-auto-read.ts";
+import { useAutoScroll, useAutoScrollOnce } from "./use-auto-scroll.ts";
 import { AgentAvatarImg } from "./zero-sidebar-shared.tsx";
 import { Link } from "../router/link.tsx";
 import { setOrgManageDialogOpen$ } from "../../signals/zero-page/settings/org-manage-dialog.ts";
@@ -233,6 +233,10 @@ export function ZeroChatThreadPageInner({
       : null;
   const messagesLoading = messagesLoadable.state === "loading";
   const setScrollContainer = useSet(thread.setScrollContainer$);
+
+  // Force scroll to bottom once when messages first load, without
+  // re-triggering on every render (e.g. streaming chunks or re-navigation).
+  useAutoScrollOnce(messages.length > 0, thread.forceScrollToBottom$);
 
   return (
     <div className="flex flex-1 flex-col min-h-0 bg-transparent">

@@ -13,7 +13,7 @@ import {
   meetingPrepStatus$,
 } from "./voice-chat-preparation.ts";
 import { zeroClient$ } from "../api-client.ts";
-import { currentChatAgentId$ } from "../agent-chat.ts";
+import { defaultAgentId$ } from "../agent.ts";
 import { accept } from "../../lib/accept.ts";
 import { logger } from "../log.ts";
 
@@ -37,7 +37,7 @@ export const setupVoiceChatPage$ = command(
     // By the time the user clicks "Start Voice Chat", the preparation
     // is likely already cached, reducing perceived latency.
     (async () => {
-      const agentId = await get(currentChatAgentId$);
+      const agentId = await get(defaultAgentId$);
       if (!agentId || signal.aborted) {
         return;
       }

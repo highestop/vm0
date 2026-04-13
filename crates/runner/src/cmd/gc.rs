@@ -11,6 +11,15 @@ use crate::cmd::service;
 use crate::error::{RunnerError, RunnerResult};
 use crate::lock;
 use crate::paths::{HomePaths, LogPaths};
+use crate::r2_cache::R2ImageCache;
+
+/// Default TTL for completed R2 image objects. Older objects are deleted by
+/// `gc_r2`. 7 days comfortably covers our typical release cadence: an image
+/// from the last week's release is still useful for a host that just spun
+/// up. If a host has been offline >7 days and the cached image got swept,
+/// the next `runner build` does a one-time local rebuild + re-upload — slow
+/// but correct.
+const R2_DEFAULT_KEEP_DAYS: u64 = 7;
 
 /// Artifacts younger than this are unconditionally kept, regardless of lock
 /// status or `--keep-latest`. This prevents races between `runner build`
@@ -28,6 +37,11 @@ pub struct GcArgs {
     /// Keep the N most recent unused versions (by modification time)
     #[arg(long)]
     keep_latest: Option<usize>,
+    /// TTL for R2 image cache objects (in days). Objects older than this
+    /// are deleted from `runner-images/` on R2. Default: 7 days.
+    /// Minimum: 1 — `0` would wipe even the just-uploaded image.
+    #[arg(long, default_value_t = R2_DEFAULT_KEEP_DAYS, value_parser = clap::value_parser!(u64).range(1..))]
+    r2_keep_days: u64,
 }
 
 pub async fn run_gc(args: GcArgs) -> RunnerResult<()> {
@@ -55,13 +69,16 @@ pub async fn run_gc(args: GcArgs) -> RunnerResult<()> {
 
     let debootstrap_freed = gc_debootstrap(&home, args.keep_latest, args.dry_run).await?;
 
-    let total = images_freed + job_logs_freed + debootstrap_freed + workspace_freed;
+    let (r2_deleted, r2_freed) = gc_r2(args.r2_keep_days, args.dry_run).await;
+
+    let total = images_freed + job_logs_freed + debootstrap_freed + workspace_freed + r2_freed;
     if total == 0
         && locks_removed == 0
         && job_logs_removed == 0
         && versions_removed.is_empty()
         && nbd_orphans == 0
         && workspace_orphans == 0
+        && r2_deleted == 0
     {
         info!("nothing to clean up");
     } else {
@@ -82,6 +99,54 @@ pub async fn run_gc(args: GcArgs) -> RunnerResult<()> {
     }
 
     Ok(())
+}
+
+/// Delete R2 image cache objects older than `keep_days`. Errors (R2 not
+/// configured, network blip, etc.) are logged and swallowed: GC must not
+/// fail the deploy because the cache layer is misconfigured. Returns
+/// `(deleted_count, freed_bytes)`.
+///
+/// Idempotent across the fleet — every host runs the same scan; DELETE on
+/// already-absent keys is a no-op success.
+async fn gc_r2(keep_days: u64, dry_run: bool) -> (u64, u64) {
+    let cache = match R2ImageCache::from_env().await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            info!("r2: cache not configured, skipping R2 GC");
+            return (0, 0);
+        }
+        Err(e) => {
+            warn!("r2: init failed ({e}), skipping R2 GC");
+            return (0, 0);
+        }
+    };
+
+    if dry_run {
+        // No safe dry-run: list_objects_v2 + counting age would still cost
+        // R2 reads, and we can't filter without making the call. Surface the
+        // intent and skip the destructive part.
+        info!("[dry-run] would delete R2 image objects older than {keep_days} days");
+        return (0, 0);
+    }
+
+    let max_age = std::time::Duration::from_secs(keep_days.saturating_mul(86_400));
+    match cache.gc_older_than(max_age).await {
+        Ok((0, _)) => {
+            info!("r2: no objects older than {keep_days} days");
+            (0, 0)
+        }
+        Ok((count, bytes)) => {
+            info!(
+                "r2: deleted {count} object(s) older than {keep_days} days ({})",
+                human_bytes(bytes)
+            );
+            (count, bytes)
+        }
+        Err(e) => {
+            warn!("r2: GC failed ({e}); will retry on next gc invocation");
+            (0, 0)
+        }
+    }
 }
 
 /// An unused artifact directory whose exclusive lock is held to prevent races.
@@ -821,6 +886,34 @@ fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    /// `--r2-keep-days 0` would wipe even just-uploaded images. Verify the
+    /// clap range validator rejects it (catches a regression if the
+    /// `value_parser` annotation is dropped).
+    #[derive(Parser)]
+    struct GcCli {
+        #[command(flatten)]
+        args: GcArgs,
+    }
+
+    #[test]
+    fn r2_keep_days_zero_is_rejected() {
+        let r = GcCli::try_parse_from(["gc", "--r2-keep-days", "0"]);
+        assert!(r.is_err(), "--r2-keep-days 0 must be rejected");
+    }
+
+    #[test]
+    fn r2_keep_days_one_is_accepted() {
+        let r = GcCli::try_parse_from(["gc", "--r2-keep-days", "1"]);
+        assert!(r.is_ok(), "--r2-keep-days 1 must be accepted");
+    }
+
+    #[test]
+    fn r2_keep_days_default_when_omitted() {
+        let parsed = GcCli::try_parse_from(["gc"]).unwrap();
+        assert_eq!(parsed.args.r2_keep_days, R2_DEFAULT_KEEP_DAYS);
+    }
 
     #[test]
     fn human_bytes_formats_correctly() {

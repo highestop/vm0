@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql, desc } from "drizzle-orm";
-import type { TaskItem } from "@vm0/core";
+import type { TaskItem, RunStatus } from "@vm0/core";
 import { chatThreads, chatThreadRuns } from "../../../db/schema/chat-thread";
 import { zeroAgentSchedules } from "../../../db/schema/zero-agent-schedule";
 import { slackOrgThreadSessions } from "../../../db/schema/slack-org-thread-session";
@@ -16,6 +16,12 @@ import { archivedTaskRuns } from "../../../db/schema/archived-task-runs";
 
 const TASKS_LIMIT = 25;
 const PROMPT_SUMMARY_MAX_LENGTH = 100;
+const TERMINAL_STATUSES = new Set<RunStatus>([
+  "completed",
+  "failed",
+  "timeout",
+  "cancelled",
+]);
 
 function truncatePrompt(prompt: string): string {
   if (prompt.length <= PROMPT_SUMMARY_MAX_LENGTH) return prompt;
@@ -164,8 +170,13 @@ export async function listTasks(
     return { task, sortKey };
   });
 
-  // Sort by sortKey DESC (latest first) and take top N
+  // Sort: active tasks first (tier 0), terminal tasks second (tier 1); within each tier sort by sortKey DESC
   tasksWithSortKey.sort((a, b) => {
+    const aTier =
+      a.task.status !== null && TERMINAL_STATUSES.has(a.task.status) ? 1 : 0;
+    const bTier =
+      b.task.status !== null && TERMINAL_STATUSES.has(b.task.status) ? 1 : 0;
+    if (aTier !== bTier) return aTier - bTier;
     return b.sortKey.getTime() - a.sortKey.getTime();
   });
 
@@ -476,7 +487,7 @@ async function listInFlightEmailTasks(
   orgId: string,
   agentId?: string,
 ): Promise<RawTask[]> {
-  const activeStatuses = ["pending", "running", "paused"];
+  const activeStatuses: RunStatus[] = ["pending", "running"];
   const conditions = [
     eq(agentRuns.userId, userId),
     eq(agentRuns.orgId, orgId),

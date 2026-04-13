@@ -42,6 +42,7 @@ interface RawTask {
   agent: AgentInfo;
   latestRunId: string | null;
   sourceUpdatedAt: Date;
+  fallbackSummary?: string;
 }
 
 /**
@@ -137,7 +138,7 @@ export async function listTasks(
       id: raw.id,
       type: raw.type,
       title: raw.title,
-      summary: runInfo?.summary ?? null,
+      summary: runInfo?.summary ?? raw.fallbackSummary ?? null,
       agent: raw.agent,
       latestRunId: raw.latestRunId,
       status: runInfo ? (runInfo.status as TaskItem["status"]) : null,
@@ -327,6 +328,7 @@ async function listScheduleTasks(
     .select({
       id: zeroAgentSchedules.id,
       name: zeroAgentSchedules.name,
+      prompt: zeroAgentSchedules.prompt,
       agentId: zeroAgentSchedules.agentId,
       agentName: zeroAgents.name,
       agentDisplayName: zeroAgents.displayName,
@@ -351,6 +353,7 @@ async function listScheduleTasks(
       },
       latestRunId: r.lastRunId,
       sourceUpdatedAt: r.updatedAt,
+      fallbackSummary: truncatePrompt(r.prompt),
     };
   });
 }

@@ -168,6 +168,26 @@ function logContextEvent(
   );
 }
 
+async function prefetchCachedEvents(
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response>,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<ContextEvent[] | null> {
+  const ctxRes = await fetchFn(
+    `/api/zero/voice-chat/${sessionId}/context?after=0`,
+  );
+  signal.throwIfAborted();
+  if (!ctxRes.ok) {
+    L.warn("Failed to pre-fetch cached events", {
+      status: ctxRes.status,
+      sessionId,
+    });
+    return null;
+  }
+  const data = (await ctxRes.json()) as { events: ContextEvent[] };
+  return data.events;
+}
+
 function formatInjectionMessage(event: ContextEvent): string {
   const prefixes: Record<string, string> = {
     directive: "[Slow-brain directive]",
@@ -1156,6 +1176,20 @@ export const startVoiceChat$ = command(
         return;
       }
 
+      // Pre-fetch cached preparation events so they're available when DC opens
+      const cachedEvents = await prefetchCachedEvents(
+        fetchFn,
+        session.id,
+        signal,
+      );
+      if (cachedEvents && cachedEvents.length > 0) {
+        set(internalEvents$, cachedEvents);
+        const lastEvent = cachedEvents[cachedEvents.length - 1];
+        if (lastEvent) {
+          set(internalLastSeq$, lastEvent.seq);
+        }
+      }
+
       await Promise.allSettled([
         heartbeatPromise,
         set(connectVoiceSession$, sessionSignal),
@@ -1243,6 +1277,20 @@ export const startVoiceMeeting$ = command(
         set(internalError$, "Failed to activate session");
         set(internalStatus$, "error");
         return;
+      }
+
+      // Pre-fetch cached preparation events so they're available when DC opens
+      const cachedEvents = await prefetchCachedEvents(
+        fetchFn,
+        session.id,
+        signal,
+      );
+      if (cachedEvents && cachedEvents.length > 0) {
+        set(internalEvents$, cachedEvents);
+        const lastEvent = cachedEvents[cachedEvents.length - 1];
+        if (lastEvent) {
+          set(internalLastSeq$, lastEvent.seq);
+        }
       }
 
       await Promise.allSettled([

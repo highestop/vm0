@@ -4,6 +4,8 @@ import {
   createTestRequest,
   createTestCompose,
   createTestZeroAgent,
+  seedOrphanCompose,
+  updateOrgDefaultAgent,
 } from "../../../../../../src/__tests__/api-test-helpers";
 import { testContext } from "../../../../../../src/__tests__/test-helpers";
 import { mockClerk } from "../../../../../../src/__tests__/clerk-mock";
@@ -220,6 +222,35 @@ describe("GET /api/zero/onboarding/status", () => {
     expect(response.status).toBe(200);
     expect(data.isAdmin).toBe(false);
     expect(data.hasOrg).toBe(true);
+    expect(data.needsOnboarding).toBe(true);
+  });
+
+  it("should treat orphan compose (missing zero_agents row) as no default agent", async () => {
+    const user = await context.setupUser();
+
+    // Create a compose WITHOUT a zero_agents row — simulates a partially
+    // completed onboarding where the agent_composes row was written but the
+    // zero_agents insert never ran.
+    const orphan = await seedOrphanCompose({
+      userId: user.userId,
+      name: `orphan-agent-${Date.now()}`,
+      orgId: user.orgId,
+    });
+
+    // Directly set the orphan compose as defaultAgentId in org_metadata
+    await updateOrgDefaultAgent(user.orgId, orphan.composeId);
+
+    const request = createTestRequest(
+      "http://localhost:3000/api/zero/onboarding/status",
+    );
+    const response = await GET(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    // The orphan compose should NOT be reported as a valid default agent,
+    // so the admin re-enters full onboarding and creates a complete agent.
+    expect(data.hasDefaultAgent).toBe(false);
+    expect(data.defaultAgentId).toBeNull();
     expect(data.needsOnboarding).toBe(true);
   });
 

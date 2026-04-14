@@ -945,7 +945,11 @@ async fn is_lock_free(lock_path: &str) -> bool {
         use std::fs::File;
         let file = match File::open(&lock_path) {
             Ok(f) => f,
-            Err(_) => return true, // no lock file → not held
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
+            Err(e) => {
+                tracing::warn!("cannot open lock file {lock_path}: {e}, assuming held");
+                return false;
+            }
         };
         // Try exclusive lock without blocking
         match nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock) {
@@ -1602,5 +1606,31 @@ mod tests {
             parse_exec_start_config(line),
             Some(PathBuf::from("/data/runner.yaml"))
         );
+    }
+
+    #[tokio::test]
+    async fn is_lock_free_returns_true_when_file_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-such-file.lock");
+        assert!(super::is_lock_free(path.to_str().unwrap()).await);
+    }
+
+    #[tokio::test]
+    async fn is_lock_free_returns_true_when_lock_not_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("free.lock");
+        std::fs::File::create(&path).unwrap();
+        assert!(super::is_lock_free(path.to_str().unwrap()).await);
+    }
+
+    #[tokio::test]
+    async fn is_lock_free_returns_false_when_lock_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("held.lock");
+        let file = std::fs::File::create(&path).unwrap();
+        // Hold an exclusive lock for the duration of the test.
+        let _lock = nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock)
+            .expect("failed to acquire test lock");
+        assert!(!super::is_lock_free(path.to_str().unwrap()).await);
     }
 }

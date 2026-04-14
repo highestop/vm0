@@ -246,7 +246,6 @@ const ROUTE_CONFIG = [
   },
   { path: "/queue", setup: redirectTo(ROUTES.queues) },
   { path: "/preferences", setup: redirectTo(ROUTES.settings) },
-  { path: "/slack/connect", setup: redirectTo(ROUTES.settingsSlack) },
 
   {
     // Catch-all: redirect unknown paths to /

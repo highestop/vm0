@@ -55,10 +55,13 @@ export interface ChatThreadSignals {
   loadMessages$: Command<Promise<void>, [AbortSignal]>;
   sendMessage$: Command<Promise<void>, [string, AbortSignal]>;
   cancelRun$: Command<Promise<void>, [AbortSignal]>;
-  setScrollContainer$: Command<void, [HTMLElement | null]>;
+  setScrollContainer$: Command<(() => void) | undefined, [HTMLElement | null]>;
   draft: DraftSignals;
   composerFileInput$: Computed<HTMLElement | null>;
-  setComposerFileInput$: Command<void, [HTMLElement | null]>;
+  setComposerFileInput$: Command<
+    (() => void) | undefined,
+    [HTMLElement | null]
+  >;
   // ── Agent info (derived from threadData$.agentId) ─────────────────────────
   agentId$: Computed<Promise<string | null>>;
   agentDisplayName$: Computed<Promise<string | null>>;
@@ -281,11 +284,10 @@ function createScrollSignals() {
 
   const setScrollContainer$ = onRef(
     command(({ set }, el: HTMLElement, signal: AbortSignal) => {
-      set(internalScrollContainer$, el);
-
       signal.addEventListener("abort", () => {
         set(internalScrollContainer$, null);
       });
+      set(internalScrollContainer$, el);
     }),
   );
 
@@ -314,9 +316,14 @@ function createComposerFileInput() {
   const composerFileInput$ = computed((get) => {
     return get(internal$);
   });
-  const setComposerFileInput$ = command(({ set }, el: HTMLElement | null) => {
-    set(internal$, el);
-  });
+  const setComposerFileInput$ = onRef(
+    command(({ set }, el: HTMLElement, signal: AbortSignal) => {
+      signal.addEventListener("abort", () => {
+        set(internal$, null);
+      });
+      set(internal$, el);
+    }),
+  );
   return { composerFileInput$, setComposerFileInput$ };
 }
 

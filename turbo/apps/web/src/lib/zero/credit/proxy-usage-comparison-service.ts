@@ -143,9 +143,10 @@ async function compareProxyUsage(
   );
 
   // Walk the union of runIds.  Any asymmetry is an error:
-  //   proxy missing entirely → mitmproxy lost all reports for this run
-  //   client missing entirely → events webhook never delivered result events
+  //   proxy missing + client non-zero → mitmproxy lost all reports for this run
+  //   client missing + proxy non-zero → events webhook never delivered result events
   //   both present but proxy < client on any field → partial proxy data loss
+  // Runs where the present side is all-zero are silently skipped (no LLM call).
   const allRunIds = new Set<string>([
     ...proxyByRun.keys(),
     ...clientByRun.keys(),
@@ -164,17 +165,31 @@ async function compareProxyUsage(
     const client = clientByRun.get(runId);
 
     if (!proxy) {
-      log.error("Proxy usage missing for run with client data", {
-        orgId,
-        runId,
-      });
+      const hasNonZero = client
+        ? fields.some((f) => {
+            return (client[f] ?? 0) > 0;
+          })
+        : false;
+      if (hasNonZero) {
+        log.error("Proxy usage missing for run with client data", {
+          orgId,
+          runId,
+        });
+      }
       continue;
     }
     if (!client) {
-      log.error("Client usage missing for run with proxy data", {
-        orgId,
-        runId,
-      });
+      const hasNonZero = proxy
+        ? fields.some((f) => {
+            return (proxy[f] ?? 0) > 0;
+          })
+        : false;
+      if (hasNonZero) {
+        log.error("Client usage missing for run with proxy data", {
+          orgId,
+          runId,
+        });
+      }
       continue;
     }
 

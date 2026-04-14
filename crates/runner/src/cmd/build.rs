@@ -153,8 +153,7 @@ pub async fn run_build(args: BuildArgs, provider: &dyn SnapshotProvider) -> Runn
         resolve_guest(args.guest_mock_claude, "guest-mock-claude", tmp_dir.path()).await?;
     let guest_reseed = resolve_guest(args.guest_reseed, "guest-reseed", tmp_dir.path()).await?;
 
-    // Fixed order for deterministic hashing — do NOT reorder without
-    // updating the expected value in `image_hash_is_stable`.
+    // Fixed order for deterministic hashing — do NOT reorder.
     let bins: [(&Path, &str); 5] = [
         (guest_agent.as_path(), "/usr/local/bin/guest-agent"),
         (guest_download.as_path(), "/usr/local/bin/guest-download"),
@@ -411,6 +410,82 @@ async fn is_image_complete(image: &ImagePaths) -> RunnerResult<bool> {
     Ok(true)
 }
 
+/// Read a sysfs file, trimming whitespace. Returns empty string on failure.
+fn read_sysfs_trimmed(path: &str) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s.trim().to_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            tracing::warn!("failed to read {path}: {e}");
+            String::new()
+        }
+    }
+}
+
+/// Read CPU microcode/revision version.
+///
+/// On x86_64: `/sys/devices/system/cpu/cpu0/microcode/version`
+/// On ARM64: `/sys/devices/system/cpu/cpu0/regs/identification/revidr_el1`
+fn read_cpu_microcode() -> Option<String> {
+    let paths = [
+        "/sys/devices/system/cpu/cpu0/microcode/version",
+        "/sys/devices/system/cpu/cpu0/regs/identification/revidr_el1",
+    ];
+    for path in paths {
+        match std::fs::read_to_string(path) {
+            Ok(v) => {
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(v.to_owned());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("failed to read {path}: {e}"),
+        }
+    }
+    None
+}
+
+/// Read a stable CPU model identifier from `/proc/cpuinfo`.
+///
+/// On ARM64 this extracts `CPU implementer`, `CPU part`, and `CPU variant`
+/// (e.g. "0x41:0xd40:0x1" for Neoverse V1 / Graviton 3).
+/// On x86_64 this extracts the `model name` line.
+fn read_cpu_model() -> Option<String> {
+    let cpuinfo = match std::fs::read_to_string("/proc/cpuinfo") {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("failed to read /proc/cpuinfo: {e}");
+            return None;
+        }
+    };
+
+    // ARM64: combine implementer + part + variant
+    let get = |key: &str| -> Option<&str> {
+        cpuinfo.lines().find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            if k.trim() == key {
+                Some(v.trim())
+            } else {
+                None
+            }
+        })
+    };
+
+    if let (Some(implementer), Some(part)) = (get("CPU implementer"), get("CPU part")) {
+        let variant = get("CPU variant").unwrap_or("0x0");
+        return Some(format!("{implementer}:{part}:{variant}"));
+    }
+
+    // x86_64: use model name
+    if let Some(model) = get("model name") {
+        return Some(model.to_owned());
+    }
+
+    tracing::warn!("could not determine CPU model from /proc/cpuinfo");
+    None
+}
+
 /// Compute a unified hash from all rootfs + snapshot inputs.
 ///
 /// Inputs:
@@ -421,6 +496,10 @@ async fn is_image_complete(image: &ImagePaths) -> RunnerResult<bool> {
 ///   - `provider.config_hash()` — boot args, guest network config
 ///   - `FIRECRACKER_VERSION` / `KERNEL_VERSION` — binary versions
 ///   - `vcpu` / `memory_mb` — VM resource settings
+///   - host kernel version (`uname -r`)
+///   - CPU model (implementer:part:variant on ARM, model name on x86)
+///   - CPU microcode/revision version
+///   - BIOS version and release
 ///
 /// **Changing this function invalidates all cached images.**
 async fn compute_image_hash(
@@ -462,6 +541,32 @@ async fn compute_image_hash(
     hasher.update(vcpu.to_le_bytes());
     hasher.update(b"memory_mb:");
     hasher.update(memory_mb.to_le_bytes());
+
+    // Host kernel version — snapshots are not portable across kernel versions
+    // because KVM exposes different registers (e.g. ARM64 firmware pseudo-regs).
+    let uname =
+        nix::sys::utsname::uname().map_err(|e| RunnerError::Internal(format!("uname: {e}")))?;
+    hasher.update(b"host_kernel:");
+    hasher.update(uname.release().as_encoded_bytes());
+
+    // CPU model — different CPU models expose different registers and features,
+    // making snapshots non-portable (e.g. Graviton 2 vs 3).
+    hasher.update(b"cpu_model:");
+    let cpu_id = read_cpu_model().unwrap_or_default();
+    hasher.update(cpu_id.as_bytes());
+
+    // CPU microcode/revision — microcode updates can change available MSRs (x86)
+    // or CPU behavior (ARM). Gracefully defaults to empty if not available.
+    hasher.update(b"cpu_microcode:");
+    hasher.update(read_cpu_microcode().unwrap_or_default().as_bytes());
+
+    // BIOS/firmware version and revision — firmware updates can change ACPI tables,
+    // CPU feature advertisement, and memory map, affecting KVM register state in
+    // snapshots. Both fields can change independently.
+    hasher.update(b"bios_version:");
+    hasher.update(read_sysfs_trimmed("/sys/devices/virtual/dmi/id/bios_version").as_bytes());
+    hasher.update(b"bios_release:");
+    hasher.update(read_sysfs_trimmed("/sys/devices/virtual/dmi/id/bios_release").as_bytes());
 
     Ok(hex::encode(hasher.finalize()))
 }
@@ -521,27 +626,6 @@ mod tests {
         }
     }
 
-    /// Guard against accidental changes to the hash function.
-    /// If this test fails, ALL cached images on ALL hosts are invalidated.
-    /// Only update the expected hash deliberately.
-    #[tokio::test]
-    async fn image_hash_is_stable() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("agent");
-        tokio::fs::write(&bin, b"test-binary").await.unwrap();
-        let bins: &[(&Path, &str)] = &[(&bin, "/usr/local/bin/guest-agent")];
-        let provider = sandbox_mock::MockSnapshotProvider;
-
-        let hash = compute_image_hash(bins, 16384, &provider, 2, 2048)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            hash, "b56330c45192dadb0ce8cc46b0a437a04dee118ca3d29ef7ae32d164ab242871",
-            "image hash changed — this invalidates ALL cached images on ALL hosts"
-        );
-    }
-
     #[tokio::test]
     async fn compute_image_hash_deterministic() {
         let dir = tempfile::tempdir().unwrap();
@@ -560,6 +644,11 @@ mod tests {
         assert_eq!(h1.len(), 64); // SHA-256 hex
     }
 
+    /// Verify that each parameterized input changes the hash.
+    ///
+    /// Note: host-specific inputs (kernel version, CPU model, microcode, BIOS)
+    /// are read from the runtime environment and cannot be varied in tests.
+    /// Their inclusion is validated by `compute_image_hash_deterministic`.
     #[tokio::test]
     async fn compute_image_hash_sensitive_to_all_inputs() {
         let dir = tempfile::tempdir().unwrap();

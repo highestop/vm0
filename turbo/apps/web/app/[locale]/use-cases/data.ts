@@ -530,3 +530,25 @@ export function getUseCaseBySlug(slug: string): UseCase | undefined {
     return uc.slug === slug;
   });
 }
+
+/**
+ * Build a platform deep-link from an arbitrary prompt string and connector list.
+ * Strips a leading `@Zero ` prefix from the prompt if present.
+ */
+export function buildPromptHref(
+  prompt: string,
+  connectors: ConnectorRef[],
+  platformUrl: string,
+): string {
+  const cleaned = prompt.replace(/^@Zero\s+/i, "");
+  const connector = connectors
+    .map((c) => {
+      return c.id;
+    })
+    .join(",");
+  const qs = new URLSearchParams();
+  if (cleaned) qs.set("prompt", cleaned);
+  if (connector) qs.set("connector", connector);
+  const query = qs.toString();
+  return query ? `${platformUrl}/?${query}` : platformUrl;
+}

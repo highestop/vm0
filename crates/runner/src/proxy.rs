@@ -367,7 +367,11 @@ pub(crate) async fn spawn_mitmdump(
     }
 
     // Wait for process to be alive (poll liveness).
-    wait_for_ready(&mut child, port, READY_TIMEOUT).await?;
+    if let Err(e) = wait_for_ready(&mut child, port, READY_TIMEOUT).await {
+        stopping.store(true, Ordering::Release);
+        let _ = child.kill().await;
+        return Err(e);
+    }
 
     Ok(child)
 }
@@ -942,5 +946,57 @@ mod tests {
         assert_eq!(api["auth"]["base"], "${{ secrets.DISCORD_WEBHOOK_URL }}");
         // headers should be empty object
         assert_eq!(api["auth"]["headers"], serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_returns_error_on_timeout() {
+        // `sleep` never listens on TCP — guarantees timeout.
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let raw_pid = child.id().unwrap() as i32;
+        let pid = nix::unistd::Pid::from_raw(raw_pid);
+        let port = find_available_port().unwrap();
+
+        let result = wait_for_ready(&mut child, port, Duration::from_millis(500)).await;
+        assert!(result.is_err());
+
+        // Process must still be alive — wait_for_ready does NOT kill on error.
+        // This is the scenario that caused orphaned processes before the fix:
+        // the caller (spawn_mitmdump) is responsible for killing.
+        assert!(
+            nix::sys::signal::kill(pid, None).is_ok(),
+            "process should still be alive after timeout"
+        );
+
+        // Simulate spawn_mitmdump error path: kill the child.
+        let _ = child.kill().await;
+
+        assert!(
+            nix::sys::signal::kill(pid, None).is_err(),
+            "process should be dead after kill"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_returns_error_on_early_exit() {
+        // `true` exits immediately with status 0.
+        let mut child = tokio::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        // Wait for `true` to actually exit before calling wait_for_ready,
+        // so the first try_wait() inside the function detects it immediately.
+        let _ = child.wait().await;
+
+        let port = find_available_port().unwrap();
+        let result = wait_for_ready(&mut child, port, Duration::from_secs(5)).await;
+        assert!(result.is_err());
     }
 }

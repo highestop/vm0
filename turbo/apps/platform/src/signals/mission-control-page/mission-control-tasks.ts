@@ -2,7 +2,13 @@ import { command, computed, state, type Command, type Computed } from "ccstate";
 import { tasksContract, type TaskItem } from "@vm0/core";
 import { zeroClient$ } from "../api-client";
 import { accept } from "../../lib/accept";
-import { jsonParseOr, onRef, setLoop } from "../utils.ts";
+import {
+  jsonParseOr,
+  onRef,
+  resetSignal,
+  setLoop,
+  throwIfNotAbort,
+} from "../utils.ts";
 import {
   createChatThreadSignals,
   ensureDraft$,
@@ -39,7 +45,7 @@ const OPTIMISTIC_TTL_MS = 30_000;
 
 export type TaskPanelEntry =
   | { kind: "chat"; signals: ChatThreadSignals }
-  | { kind: "activity"; signals: ActivitySignals };
+  | { kind: "activity"; signals: ActivitySignals; runId: string };
 
 // ---------------------------------------------------------------------------
 // TaskSignals — per-task signal bundle
@@ -57,6 +63,7 @@ export interface TaskSignals {
   panelEntry$: Computed<TaskPanelEntry | null>;
   openTask$: Command<Promise<void>, [AbortSignal]>;
   closeTask$: Command<void, []>;
+  refreshPanel$: Command<void, [AbortSignal]>;
   focusInput$: Command<void, []>;
   setCardRef$: Command<void | (() => void), [HTMLElement | null]>;
   focusCard$: Command<void, []>;
@@ -85,90 +92,7 @@ const markRead$ = command(
   },
 );
 
-function createTaskSignals(initialTask: TaskItem): TaskSignals {
-  const internalTask$ = state(initialTask);
-
-  const task$ = computed((get) => {
-    return get(internalTask$);
-  });
-
-  const updateTask$ = command(({ set }, task: TaskItem) => {
-    set(internalTask$, task);
-  });
-
-  const unread$ = computed((get) => {
-    const task = get(internalTask$);
-    if (!task.latestRunId) {
-      return false;
-    }
-    const seen = get(lastSeenRunIds$);
-    return seen[initialTask.id] !== task.latestRunId;
-  });
-
-  const internalOpen$ = state(false);
-  const internalOpenedAt$ = state<number | null>(null);
-  const internalPanelEntry$ = state<TaskPanelEntry | null>(null);
-
-  const open$ = computed((get) => {
-    return get(internalOpen$);
-  });
-
-  const openedAt$ = computed((get) => {
-    return get(internalOpenedAt$);
-  });
-
-  const panelEntry$ = computed((get) => {
-    return get(internalPanelEntry$);
-  });
-
-  const closeTask$ = command(({ set }) => {
-    set(internalOpen$, false);
-    set(internalOpenedAt$, null);
-    set(internalPanelEntry$, null);
-    set(internalInputFocused$, false);
-  });
-
-  const optimisticRef = { value: false };
-  const optimisticInsertedAtRef = { value: null as number | null };
-
-  const openTask$ = command(
-    async ({ get, set }, signal: AbortSignal): Promise<void> => {
-      if (get(internalOpen$)) {
-        return;
-      }
-
-      const task = get(internalTask$);
-
-      // Mark as read when opening
-      set(markRead$, initialTask.id, task.latestRunId);
-
-      if (task.type === "chat" && task.chatThreadId) {
-        const { draft } = set(ensureDraft$, task.chatThreadId);
-        const signals = createChatThreadSignals(task.chatThreadId, draft);
-        set(internalPanelEntry$, { kind: "chat", signals });
-        set(internalOpenedAt$, Date.now());
-        set(internalOpen$, true);
-        await set(signals.loadMessages$, signal);
-        return;
-      }
-
-      if (task.latestRunId) {
-        const signals = createActivitySignals(task.latestRunId);
-        set(internalPanelEntry$, { kind: "activity", signals });
-        set(internalOpenedAt$, Date.now());
-        set(internalOpen$, true);
-        await set(signals.startPolling$, signal);
-      }
-    },
-  );
-
-  const focusInput$ = command(({ get, set }) => {
-    const entry = get(internalPanelEntry$);
-    if (entry) {
-      set(entry.signals.focusInput$);
-    }
-  });
-
+function createCardSignals() {
   const internalCardRef$ = state<HTMLElement | null>(null);
   const setCardRef$ = onRef(
     command(({ set }, el: HTMLElement, signal: AbortSignal) => {
@@ -198,6 +122,169 @@ function createTaskSignals(initialTask: TaskItem): TaskSignals {
   });
 
   return {
+    setCardRef$,
+    focusCard$,
+    scrollCardIntoView$,
+    inputFocused$,
+    setInputFocused$,
+  };
+}
+
+interface PanelSignals {
+  internalOpen$: ReturnType<typeof state<boolean>>;
+  internalOpenedAt$: ReturnType<typeof state<number | null>>;
+  internalPanelEntry$: ReturnType<typeof state<TaskPanelEntry | null>>;
+  resetPanelPolling$: ReturnType<typeof resetSignal>;
+  open$: Computed<boolean>;
+  openedAt$: Computed<number | null>;
+  panelEntry$: Computed<TaskPanelEntry | null>;
+  closeTask$: Command<void, []>;
+  refreshPanel$: Command<void, [AbortSignal]>;
+}
+
+function createPanelSignals(
+  internalTask$: ReturnType<typeof state<TaskItem>>,
+  setInputFocused$: Command<void, [boolean]>,
+): PanelSignals {
+  const internalOpen$ = state(false);
+  const internalOpenedAt$ = state<number | null>(null);
+  const internalPanelEntry$ = state<TaskPanelEntry | null>(null);
+  const resetPanelPolling$ = resetSignal();
+
+  const open$ = computed((get) => {
+    return get(internalOpen$);
+  });
+  const openedAt$ = computed((get) => {
+    return get(internalOpenedAt$);
+  });
+  const panelEntry$ = computed((get) => {
+    return get(internalPanelEntry$);
+  });
+
+  const closeTask$ = command(({ set }) => {
+    set(resetPanelPolling$);
+    set(internalOpen$, false);
+    set(internalOpenedAt$, null);
+    set(internalPanelEntry$, null);
+    set(setInputFocused$, false);
+  });
+
+  const refreshPanel$ = command(({ get, set }, signal: AbortSignal) => {
+    const entry = get(internalPanelEntry$);
+    if (!entry || entry.kind !== "activity") {
+      return;
+    }
+    const task = get(internalTask$);
+    if (!task.latestRunId || entry.runId === task.latestRunId) {
+      return;
+    }
+    const panelSignal = set(resetPanelPolling$, signal);
+    const signals = createActivitySignals(task.latestRunId);
+    set(internalPanelEntry$, {
+      kind: "activity",
+      signals,
+      runId: task.latestRunId,
+    });
+    // Polling lifecycle is managed by resetPanelPolling$ — aborted on next
+    // refresh or panel close. throwIfNotAbort swallows the expected AbortError.
+    set(signals.startPolling$, panelSignal).catch(throwIfNotAbort);
+  });
+
+  return {
+    internalOpen$,
+    internalOpenedAt$,
+    internalPanelEntry$,
+    resetPanelPolling$,
+    open$,
+    openedAt$,
+    panelEntry$,
+    closeTask$,
+    refreshPanel$,
+  };
+}
+
+function createTaskSignals(initialTask: TaskItem): TaskSignals {
+  const internalTask$ = state(initialTask);
+
+  const task$ = computed((get) => {
+    return get(internalTask$);
+  });
+
+  const updateTask$ = command(({ set }, task: TaskItem) => {
+    set(internalTask$, task);
+  });
+
+  const unread$ = computed((get) => {
+    const task = get(internalTask$);
+    if (!task.latestRunId) {
+      return false;
+    }
+    const seen = get(lastSeenRunIds$);
+    return seen[initialTask.id] !== task.latestRunId;
+  });
+
+  const {
+    setCardRef$,
+    focusCard$,
+    scrollCardIntoView$,
+    inputFocused$,
+    setInputFocused$,
+  } = createCardSignals();
+
+  const {
+    internalOpen$,
+    internalOpenedAt$,
+    internalPanelEntry$,
+    resetPanelPolling$,
+    open$,
+    openedAt$,
+    panelEntry$,
+    closeTask$,
+    refreshPanel$,
+  } = createPanelSignals(internalTask$, setInputFocused$);
+
+  const optimisticRef = { value: false };
+  const optimisticInsertedAtRef = { value: null as number | null };
+
+  const openTask$ = command(
+    async ({ get, set }, signal: AbortSignal): Promise<void> => {
+      if (get(internalOpen$)) {
+        return;
+      }
+      const task = get(internalTask$);
+      set(markRead$, initialTask.id, task.latestRunId);
+      if (task.type === "chat" && task.chatThreadId) {
+        const { draft } = set(ensureDraft$, task.chatThreadId);
+        const signals = createChatThreadSignals(task.chatThreadId, draft);
+        set(internalPanelEntry$, { kind: "chat", signals });
+        set(internalOpenedAt$, Date.now());
+        set(internalOpen$, true);
+        await set(signals.loadMessages$, signal);
+        return;
+      }
+      if (task.latestRunId) {
+        const panelSignal = set(resetPanelPolling$, signal);
+        const signals = createActivitySignals(task.latestRunId);
+        set(internalPanelEntry$, {
+          kind: "activity",
+          signals,
+          runId: task.latestRunId,
+        });
+        set(internalOpenedAt$, Date.now());
+        set(internalOpen$, true);
+        await set(signals.startPolling$, panelSignal);
+      }
+    },
+  );
+
+  const focusInput$ = command(({ get, set }) => {
+    const entry = get(internalPanelEntry$);
+    if (entry) {
+      set(entry.signals.focusInput$);
+    }
+  });
+
+  return {
     taskId: initialTask.id,
     task$,
     updateTask$,
@@ -219,6 +306,7 @@ function createTaskSignals(initialTask: TaskItem): TaskSignals {
     panelEntry$,
     openTask$,
     closeTask$,
+    refreshPanel$,
     focusInput$,
     setCardRef$,
     focusCard$,
@@ -293,8 +381,9 @@ export const setupTasksLoop$ = command(
             set(existing.updateTask$, task);
             existing.optimistic = false;
             existing.optimisticInsertedAt = null;
-            // Auto-mark read when task panel is already open
+            // Refresh activity panel when latestRunId changes, then mark read
             if (get(existing.open$)) {
+              set(existing.refreshPanel$, signal);
               set(markRead$, task.id, task.latestRunId);
             }
           } else {

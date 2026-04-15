@@ -148,7 +148,6 @@ export async function insertPendingOutboundCall(opts: {
  */
 export async function linkIMessageHandle(
   imessageHandle: string,
-  _userId: string,
   orgId: string,
 ): Promise<void> {
   const timestamp = Math.floor(Date.now() / 1000);

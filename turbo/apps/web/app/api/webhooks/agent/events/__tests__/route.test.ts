@@ -26,8 +26,8 @@ import { mockClerk } from "../../../../../../src/__tests__/clerk-mock";
 import { randomUUID } from "crypto";
 import * as axiomModule from "../../../../../../src/lib/shared/axiom";
 import { seedTestRun } from "../../../../../../src/__tests__/db-test-seeders/runs";
-
-// Only mock external services
+import { reloadEnv } from "../../../../../../src/env";
+import { mockAblyPublish } from "../../../../../../src/__tests__/ably-mock";
 
 const context = testContext();
 
@@ -39,6 +39,7 @@ describe("POST /api/webhooks/agent/events", () => {
   let ingestToAxiomSpy: MockInstance<typeof axiomModule.ingestToAxiom>;
 
   beforeEach(async () => {
+    mockAblyPublish.mockClear();
     context.setupMocks();
     user = await context.setupUser();
 
@@ -1071,6 +1072,42 @@ describe("POST /api/webhooks/agent/events", () => {
       // Should have a single record (deduplicated by runId + resultUuid)
       const records = await findTestClientCreditUsagesByRunId(testRunId);
       expect(records).toHaveLength(1);
+    });
+  });
+
+  describe("Signal Publishing", () => {
+    it("should publish thread signal after receiving events", async () => {
+      vi.stubEnv("ABLY_API_KEY", "test-key:test-secret");
+      reloadEnv();
+
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/events",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            events: [
+              {
+                type: "message",
+                sequenceNumber: 0,
+                timestamp: Date.now(),
+                data: {},
+              },
+            ],
+          }),
+        },
+      );
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+
+      // Flush the after() callback to trigger signal publishing
+      await context.mocks.flushAfter();
+
+      expect(mockAblyPublish).toHaveBeenCalledWith(`thread:${testRunId}`, null);
     });
   });
 });

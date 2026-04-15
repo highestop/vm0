@@ -11,10 +11,14 @@ import { zeroOnboardingStatus$ } from "../zero-page/zero-onboarding.ts";
 import { zeroClient$ } from "../api-client.ts";
 import { createRunLoop } from "../zero-page/polling.ts";
 import { setLoop } from "../utils.ts";
+import { delay } from "signal-timers";
 import { accept } from "../../lib/accept.ts";
 import { navigateToChat$ } from "../zero-page/zero-nav.ts";
 import { reloadChatThreads$ } from "../agent-chat.ts";
-import { autoScrollActivityDetail$ } from "./activity-detail-scroll.ts";
+import {
+  autoScrollActivityDetail$,
+  scrollToBottomActivityDetail$,
+} from "./activity-detail-scroll.ts";
 
 // ---------------------------------------------------------------------------
 // Filters — URL-derived
@@ -253,6 +257,12 @@ export const setupActivityLogLoop$ = command(
 
     const run = createRunLoop(runId);
     set(internalActiveRunLoop$, run);
+    // Yield one microtask tick so React can flush the run detail panel into the
+    // DOM before we trigger scrollToBottomActivityDetail$. Without this yield
+    // the scroll container may still reflect the previous layout and the scroll
+    // would be a no-op.
+    await delay(0, { signal });
+    set(scrollToBottomActivityDetail$);
     await setLoop(
       (sig) => {
         const finished = set(run.checkFinished$, sig);

@@ -6,7 +6,12 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { http, HttpResponse } from "msw";
+import type { NextRequest } from "next/server";
 import { POST } from "../route";
+import { POST as axiomConsumerPOST } from "../../../../internal/event-consumers/axiom/route";
+import { POST as creditConsumerPOST } from "../../../../internal/event-consumers/credit/route";
+import { POST as chatAssistantConsumerPOST } from "../../../../internal/event-consumers/chat-assistant/route";
 import {
   createTestRequest,
   createTestCompose,
@@ -23,13 +28,42 @@ import {
   type UserContext,
 } from "../../../../../../src/__tests__/test-helpers";
 import { mockClerk } from "../../../../../../src/__tests__/clerk-mock";
+import { server } from "../../../../../../src/mocks/server";
 import { randomUUID } from "crypto";
 import * as axiomModule from "../../../../../../src/lib/shared/axiom";
 import { seedTestRun } from "../../../../../../src/__tests__/db-test-seeders/runs";
 import { reloadEnv } from "../../../../../../src/env";
 import { mockAblyPublish } from "../../../../../../src/__tests__/ably-mock";
 
+/**
+ * Forward an MSW-intercepted fetch to the matching Next.js route handler so
+ * the real end-to-end flow (HMAC-signed dispatch → consumer route → service
+ * call) runs inside the test. Without this, MSW would reject the internal
+ * fetch (onUnhandledRequest: "error") and the real consumer logic would
+ * never execute.
+ */
+async function forwardToConsumer(
+  request: Request,
+  handler: (req: NextRequest) => Promise<Response>,
+): Promise<Response> {
+  const response = await handler(request as NextRequest);
+  return new HttpResponse(response.body, {
+    status: response.status,
+    headers: response.headers,
+  });
+}
+
 const context = testContext();
+
+/**
+ * Send a request and drain `after()` so the mocked consumer dispatch
+ * (Axiom ingestion, credit_usage writes) has completed before assertions.
+ */
+async function postAndFlush(request: Request): Promise<Response> {
+  const response = await POST(request as never);
+  await context.mocks.flushAfter();
+  return response;
+}
 
 describe("POST /api/webhooks/agent/events", () => {
   let user: UserContext;
@@ -61,6 +95,29 @@ describe("POST /api/webhooks/agent/events", () => {
 
     // Reset auth mock for webhook tests (which use token auth)
     mockClerk({ userId: null });
+
+    // Route the webhook's internal fetches through MSW to the real consumer
+    // route handlers so HMAC verification + business logic run end-to-end.
+    server.use(
+      http.post(
+        "http://localhost:3000/api/internal/event-consumers/axiom",
+        ({ request }) => {
+          return forwardToConsumer(request, axiomConsumerPOST);
+        },
+      ),
+      http.post(
+        "http://localhost:3000/api/internal/event-consumers/credit",
+        ({ request }) => {
+          return forwardToConsumer(request, creditConsumerPOST);
+        },
+      ),
+      http.post(
+        "http://localhost:3000/api/internal/event-consumers/chat-assistant",
+        ({ request }) => {
+          return forwardToConsumer(request, chatAssistantConsumerPOST);
+        },
+      ),
+    );
   });
 
   // ============================================
@@ -88,7 +145,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(401);
       const data = await response.json();
@@ -121,7 +178,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(401);
     });
@@ -155,7 +212,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(400);
       const data = await response.json();
@@ -178,7 +235,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(400);
       const data = await response.json();
@@ -201,7 +258,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(400);
       const data = await response.json();
@@ -244,7 +301,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(404);
       const data = await response.json();
@@ -290,7 +347,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(404); // 404 for security (not 403)
       const data = await response.json();
@@ -332,7 +389,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       // Verify response
       expect(response.status).toBe(200);
@@ -413,7 +470,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       // Verify Axiom was called with correct event types
@@ -468,7 +525,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const data = await response.json();
@@ -526,7 +583,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
 
       expect(response.status).toBe(200);
       const data = await response.json();
@@ -560,7 +617,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       // Axiom ingest returned true, DB fallback should not run
@@ -598,7 +655,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(testRunId);
@@ -636,7 +693,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const proxyRows = await findTestCreditUsagesByRunId(testRunId);
@@ -681,7 +738,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(testRunId);
@@ -735,7 +792,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(zeroRunId);
@@ -790,7 +847,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(zeroRunId);
@@ -836,7 +893,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(testRunId);
@@ -873,7 +930,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(testRunId);
@@ -933,7 +990,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response = await POST(request);
+      const response = await postAndFlush(request);
       expect(response.status).toBe(200);
 
       const records = await findTestClientCreditUsagesByRunId(testRunId);
@@ -987,7 +1044,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response1 = await POST(request1);
+      const response1 = await postAndFlush(request1);
       expect(response1.status).toBe(200);
 
       // Second request with same UUID but updated data (retry)
@@ -1019,7 +1076,7 @@ describe("POST /api/webhooks/agent/events", () => {
         },
       );
 
-      const response2 = await POST(request2);
+      const response2 = await postAndFlush(request2);
       expect(response2.status).toBe(200);
 
       // Should have single row (deduplicated)
@@ -1060,11 +1117,13 @@ describe("POST /api/webhooks/agent/events", () => {
         );
       };
 
-      // Send two requests concurrently
+      // Send two requests concurrently, then drain after() once so both
+      // dispatch callbacks (queued by both POSTs) run before assertions.
       const [response1, response2] = await Promise.all([
         POST(makeRequest()),
         POST(makeRequest()),
       ]);
+      await context.mocks.flushAfter();
 
       expect(response1.status).toBe(200);
       expect(response2.status).toBe(200);

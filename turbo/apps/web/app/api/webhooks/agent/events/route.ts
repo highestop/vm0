@@ -10,12 +10,7 @@ import { zeroRuns } from "../../../../../src/db/schema/zero-run";
 import { eq, and } from "drizzle-orm";
 import { getSandboxAuthForRun } from "../../../../../src/lib/auth/get-sandbox-auth";
 import { logger } from "../../../../../src/lib/shared/logger";
-import {
-  ingestToAxiom,
-  getDatasetName,
-  DATASETS,
-} from "../../../../../src/lib/shared/axiom";
-import { upsertCreditUsage } from "../../../../../src/lib/zero/credit/credit-usage-service";
+import { dispatchToEventConsumers } from "../../../../../src/lib/infra/event-consumer";
 import { publishUserSignal } from "../../../../../src/lib/infra/realtime/client";
 import { after } from "next/server";
 
@@ -66,57 +61,27 @@ const router = tsr.router(webhookEventsContract, {
       };
     }
 
-    // Events are already masked client-side in the sandbox before sending
-    // No server-side masking needed - secrets values are never stored
-    const axiomEvents = body.events.map(
-      (event: {
-        type: string;
-        sequenceNumber: number;
-        [key: string]: unknown;
-      }) => {
-        return {
-          runId: body.runId,
-          userId,
-          sequenceNumber: event.sequenceNumber,
-          eventType: event.type,
-          eventData: event, // Already masked by client
-        };
-      },
-    );
-
-    // Buffer events for Axiom (flushed at response boundary)
-    const axiomDataset = getDatasetName(DATASETS.AGENT_RUN_EVENTS);
-    ingestToAxiom(axiomDataset, axiomEvents);
-
     // Get first and last sequence numbers from the events
     // Note: events array is validated as non-empty by the contract
     const firstSequence = body.events[0]!.sequenceNumber;
     const lastSequence = body.events[body.events.length - 1]!.sequenceNumber;
 
     log.debug(
-      `Ingested events ${firstSequence}-${lastSequence} to Axiom for run ${body.runId}`,
+      `Dispatching events ${firstSequence}-${lastSequence} to consumers for run ${body.runId}`,
     );
 
-    // Upsert client_credit_usage (audit trail of client-reported result
-    // events). Not a billing source — proxy-observed API calls in
-    // credit_usage drive charges. Errors are swallowed so a failed audit
-    // write doesn't cause guest-agent to retry this batch (which would
-    // double-ingest Axiom events).
-    try {
-      await upsertCreditUsage(
-        body.runId,
-        run.orgId,
-        userId,
-        body.events,
-        run.modelProvider ?? undefined,
-        run.selectedModel ?? undefined,
-      );
-    } catch (err) {
-      log.error("Failed to upsert client credit usage", {
-        runId: body.runId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // Dispatch to all registered event consumers (Axiom, credit, chat-assistant, etc.).
+    // Awaited (not deferred via next/server `after`) so that downstream pollers of
+    // /api/agent/runs/:id/events — including the CLI — can see events as soon as the
+    // webhook returns. With `after()`, fast mock-claude runs completed before Axiom
+    // ingestion finished, leaving the CLI with no `● Bash(...)` rendering.
+    // Per-consumer failures are swallowed inside the dispatcher (Promise.allSettled).
+    await dispatchToEventConsumers(body.runId, body.events, {
+      userId,
+      orgId: run.orgId,
+      modelProvider: run.modelProvider ?? undefined,
+      selectedModel: run.selectedModel ?? undefined,
+    });
 
     // Notify run owner that new events are available
     after(() => {

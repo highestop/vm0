@@ -30,8 +30,9 @@ const router = tsr.router(chatThreadByIdContract, {
 
     try {
       const thread = await getChatThread(params.id, userId);
-      const { chatMessages, latestSessionId, unsavedRuns } =
-        await getChatThreadMessages(params.id, userId);
+      const { chatMessages, latestSessionId } = await getChatThreadMessages(
+        params.id,
+      );
 
       return {
         status: 200 as const,
@@ -41,7 +42,6 @@ const router = tsr.router(chatThreadByIdContract, {
           agentId: thread.agentComposeId,
           chatMessages,
           latestSessionId,
-          unsavedRuns,
           createdAt: thread.createdAt.toISOString(),
           updatedAt: thread.updatedAt.toISOString(),
           draftContent: thread.draftContent,

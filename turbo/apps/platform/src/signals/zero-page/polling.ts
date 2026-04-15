@@ -29,15 +29,15 @@ export interface PagedRunEvents {
 async function fetchEvents(
   client: ZeroClientFactory,
   runId: string,
-  since?: string,
+  since?: number,
   signal?: AbortSignal,
 ) {
   const query: { limit: number; order: "asc"; since?: number } = {
     limit: AGENT_EVENTS_PAGE_LIMIT,
     order: "asc",
   };
-  if (since) {
-    query.since = new Date(since).getTime();
+  if (since !== undefined) {
+    query.since = since;
   }
   const result = await accept(
     client(zeroRunAgentEventsContract).getAgentEvents({
@@ -54,7 +54,7 @@ async function fetchEvents(
 
 function createEventPageComputed(
   runId: string,
-  since?: string,
+  since?: number,
 ): Computed<Promise<PagedRunEvents>> {
   return computed(async (get) => {
     const client = get(zeroClient$);
@@ -117,6 +117,33 @@ function createQueuePosition(runId: string) {
   };
 }
 
+/**
+ * Walk backwards through already-fetched pages to find the most recent event's
+ * `sequenceNumber`. Needed because a page can legitimately return zero events
+ * (e.g. during a long-running tool like `Bash sleep`), and using that empty
+ * page's (absent) last event as `since` would cause the next page to refetch
+ * from the beginning of the run — yielding duplicate events in the accumulated
+ * stream.
+ *
+ * Uses `sequenceNumber` (integer) instead of `createdAt` because Axiom stores
+ * `_time` at nanosecond precision but JS Date is millisecond precision, so a
+ * timestamp cursor would truncate sub-millisecond digits and cause the server
+ * to return the boundary event again on the next page.
+ */
+async function findLastEventSequence(
+  pages: readonly Computed<Promise<PagedRunEvents>>[],
+  get: (c: Computed<Promise<PagedRunEvents>>) => Promise<PagedRunEvents>,
+): Promise<number | undefined> {
+  for (let i = pages.length - 1; i >= 0; i--) {
+    const page = await get(pages[i]);
+    const lastEvent = page.events[page.events.length - 1];
+    if (lastEvent) {
+      return lastEvent.sequenceNumber;
+    }
+  }
+  return undefined;
+}
+
 function createRunPagedEvents(runId: string) {
   const firstPage = createEventPageComputed(runId);
   const pagedEventsList$ = state([firstPage]);
@@ -137,11 +164,10 @@ function createRunPagedEvents(runId: string) {
       }
 
       const pagedEventsList = get(pagedEventsList$);
-      const lastPage = await get(pagedEventsList[pagedEventsList.length - 1]);
+      const since = await findLastEventSequence(pagedEventsList, get);
       signal.throwIfAborted();
 
-      const lastEvent = lastPage.events[lastPage.events.length - 1];
-      const nextPage$ = createEventPageComputed(runId, lastEvent?.createdAt);
+      const nextPage$ = createEventPageComputed(runId, since);
       set(pagedEventsList$, (x) => {
         return [...x, nextPage$];
       });
@@ -202,13 +228,10 @@ export function createRunLoop(runId: string) {
     signal.throwIfAborted();
 
     const loopedPagedEvents = get(internalLoopedPagedEvents$);
-    const lastPagedEventsLists =
-      loopedPagedEvents.length > 0 ? loopedPagedEvents : initialPagedEvents;
-    const lastPagedEvents =
-      lastPagedEventsLists[lastPagedEventsLists.length - 1] ?? null;
-    const since = lastPagedEvents
-      ? (await get(lastPagedEvents)).events.slice(-1)[0]?.createdAt
-      : undefined;
+    // Walk back across both lists (looped first, then initial) so an empty
+    // tail page doesn't reset `since` to undefined and refetch from the top.
+    const allPages = [...initialPagedEvents, ...loopedPagedEvents];
+    const since = await findLastEventSequence(allPages, get);
     signal.throwIfAborted();
 
     const nextPage$ = createEventPageComputed(runId, since);

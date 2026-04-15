@@ -1,7 +1,4 @@
-import {
-  addRunToThread,
-  updateChatThreadTitle,
-} from "../../lib/zero/chat-thread";
+import { updateChatThreadTitle } from "../../lib/zero/chat-thread";
 import { POST as createComposeRoute } from "../../../app/api/agent/composes/route";
 import { POST as upsertOrgModelProviderRoute } from "../../../app/api/zero/model-providers/route";
 import {
@@ -28,6 +25,11 @@ export {
   insertTestAgentSessionWithMessages,
   appendTestChatMessages,
   insertTestChatThread,
+  insertTestChatMessage,
+  getTestChatMessagesByThread,
+  addTestRunToThread,
+  insertTestAssistantEventMessages,
+  updateTestAssistantMessageByRunId,
 } from "../db-test-seeders/agents";
 
 export {
@@ -165,24 +167,6 @@ export async function createTestOrgMultiAuthModelProvider(
   }
   const data = await response.json();
   return data.provider;
-}
-
-// ---------------------------------------------------------------------------
-// Service wrappers.
-//
-// These wrap internal service functions and are valid API-level helpers.
-// ---------------------------------------------------------------------------
-
-/**
- * Link a run to a chat thread for test setup.
- * Wraps addRunToThread from chat-thread-service.
- */
-export async function addTestRunToThread(
-  threadId: string,
-  runId: string,
-  userId: string,
-): Promise<void> {
-  return addRunToThread(threadId, runId, userId);
 }
 
 /**

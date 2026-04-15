@@ -25,6 +25,7 @@ import {
   dispatchQueuedZeroRun,
 } from "../../../../../src/lib/zero/zero-run-queue-service";
 import { processOrgCredits } from "../../../../../src/lib/zero/credit/credit-service";
+import { updateAssistantMessageByRunId } from "../../../../../src/lib/zero/chat-thread/chat-message-service";
 import { publishUserSignal } from "../../../../../src/lib/infra/realtime/client";
 import { getOrgMemberUserIds } from "../../../../../src/lib/infra/realtime/audience";
 import { after } from "next/server";
@@ -165,7 +166,7 @@ const router = tsr.router(webhookCompleteContract, {
             completedAt: new Date(),
             error: "Checkpoint for run not found",
           },
-          ["pending", "running"],
+          ["pending", "running", "timeout"],
         );
 
         // Dispatch callbacks so the user gets notified about the failure
@@ -200,7 +201,9 @@ const router = tsr.router(webhookCompleteContract, {
 
       const result = buildRunResult(checkpoint, session?.id);
 
-      // Atomically transition to "completed" only if still pending/running
+      // Atomically transition to "completed". Also accept "timeout" so a
+      // sandbox that eventually reports success after a heartbeat-timeout
+      // sweep can still upgrade the run state.
       const transitioned = await transitionRunStatus(
         body.runId,
         {
@@ -208,7 +211,7 @@ const router = tsr.router(webhookCompleteContract, {
           completedAt: new Date(),
           result,
         },
-        ["pending", "running"],
+        ["pending", "running", "timeout"],
       );
 
       if (!transitioned) {
@@ -221,6 +224,14 @@ const router = tsr.router(webhookCompleteContract, {
         };
       }
 
+      // Upgrade path (rare): sandbox reports success after a prior heartbeat
+      // timeout. The placeholder still carries "Run timed out..." content
+      // that the cron's callback wrote — clear it so the UI falls back to
+      // the event-backed assistant rows (if any).
+      if (run.status === "timeout") {
+        await updateAssistantMessageByRunId(body.runId, null, undefined);
+      }
+
       finalStatus = "completed";
       log.debug(`Run ${body.runId} completed successfully`);
     } else {
@@ -228,6 +239,9 @@ const router = tsr.router(webhookCompleteContract, {
       const reportUrl = `${env().NEXT_PUBLIC_APP_URL}/runs/${body.runId}/report-error`;
       errorMessage = `An unexpected error occurred. [Report this issue](${reportUrl})`;
 
+      // Also accept "timeout" so the sandbox's own exit-code-based error
+      // (with the report-error link) supersedes a stale "Run timed out
+      // (no heartbeat)" stamped earlier by the cleanup cron.
       const transitioned = await transitionRunStatus(
         body.runId,
         {
@@ -235,7 +249,7 @@ const router = tsr.router(webhookCompleteContract, {
           completedAt: new Date(),
           error: errorMessage,
         },
-        ["pending", "running"],
+        ["pending", "running", "timeout"],
       );
 
       if (!transitioned) {
@@ -246,6 +260,19 @@ const router = tsr.router(webhookCompleteContract, {
           status: 200 as const,
           body: { success: true, status: "failed" as const },
         };
+      }
+
+      // Upgrade path: if the cron already stamped this run as timeout and
+      // fired its chat callback, the placeholder's content/error still
+      // carries "Run timed out (no heartbeat)". Refresh it with the
+      // sandbox-reported error so the user sees the report-error link
+      // instead of the generic timeout message. No-op for non-chat runs.
+      if (run.status === "timeout") {
+        await updateAssistantMessageByRunId(
+          body.runId,
+          errorMessage,
+          errorMessage,
+        );
       }
 
       finalStatus = "failed";

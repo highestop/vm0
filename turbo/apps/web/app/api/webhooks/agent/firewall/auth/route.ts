@@ -232,42 +232,45 @@ async function refreshExpiredTokens(
   };
 }
 
-/** Collect all secret keys referenced in auth header/base/query templates (simple + basic). */
-function collectReferencedSecrets(
+/** Collect all secret and var keys referenced in auth header/base/query templates (simple + basic). */
+function collectReferencedKeys(
   authHeaders: Record<string, string>,
   authBase?: string,
   authQuery?: Record<string, string>,
-): Set<string> {
-  const keys = new Set<string>();
+): { secrets: Set<string>; vars: Set<string> } {
+  const secrets = new Set<string>();
+  const vars = new Set<string>();
+  const addKey = (namespace: string, key: string) => {
+    if (namespace === "secrets") secrets.add(key);
+    else if (namespace === "vars") vars.add(key);
+  };
   for (const template of Object.values(authHeaders)) {
     for (const match of template.matchAll(TEMPLATE_RE)) {
-      if (match[1] === "secrets" && match[2]) keys.add(match[2]);
+      if (match[1] && match[2]) addKey(match[1], match[2]);
     }
     for (const match of template.matchAll(basicAuthTemplateRe())) {
-      if (match[1] === "secrets" && match[2]) keys.add(match[2]);
-      if (match[3] === "secrets" && match[4]) keys.add(match[4]);
+      if (match[1] && match[2]) addKey(match[1], match[2]);
+      if (match[3] && match[4]) addKey(match[3], match[4]);
     }
   }
   if (authBase) {
     for (const match of authBase.matchAll(TEMPLATE_RE)) {
-      if (match[1] === "secrets" && match[2]) keys.add(match[2]);
+      if (match[1] && match[2]) addKey(match[1], match[2]);
     }
   }
   if (authQuery) {
     for (const template of Object.values(authQuery)) {
       for (const match of template.matchAll(TEMPLATE_RE)) {
-        if (match[1] === "secrets" && match[2]) keys.add(match[2]);
+        if (match[1] && match[2]) addKey(match[1], match[2]);
       }
     }
   }
-  return keys;
+  return { secrets, vars };
 }
 
 /**
  * Resolve a single secrets.X or vars.X reference inside a basic() call.
  * Returns the resolved value, or empty string if the slot is omitted/missing.
- * Missing values produce a warning log but don't fail the request — consistent
- * with simple ${{ secrets.X }} resolution behavior.
  */
 function resolveBasicArg(
   namespace: string | undefined,
@@ -275,21 +278,11 @@ function resolveBasicArg(
   secrets: Record<string, string>,
   vars: Record<string, string>,
   resolvedKeys: Set<string>,
-  runId: string,
 ): string {
   if (!namespace || !key) return "";
   if (namespace === "secrets") {
     resolvedKeys.add(key);
-    if (!(key in secrets)) {
-      log.warn(`[${runId}] No secret value for "${key}" in basic()`);
-      return "";
-    }
     return secrets[key] ?? "";
-  }
-  // namespace === "vars"
-  if (!(key in vars)) {
-    log.warn(`[${runId}] No var value for "${key}" in basic()`);
-    return "";
   }
   return vars[key] ?? "";
 }
@@ -302,7 +295,6 @@ function resolveTemplates(
   authHeaders: Record<string, string>,
   secrets: Record<string, string>,
   vars: Record<string, string>,
-  runId: string,
   authBase?: string,
   authQuery?: Record<string, string>,
 ): {
@@ -319,16 +311,7 @@ function resolveTemplates(
       (_match, namespace: string, key: string) => {
         if (namespace === "secrets") {
           resolvedKeys.add(key);
-          if (!(key in secrets)) {
-            log.warn(`[${runId}] No secret value for "${key}" in template`);
-            return "";
-          }
           return secrets[key] ?? "";
-        }
-        // namespace === "vars"
-        if (!(key in vars)) {
-          log.warn(`[${runId}] No var value for "${key}" in template`);
-          return "";
         }
         return vars[key] ?? "";
       },
@@ -343,22 +326,8 @@ function resolveTemplates(
     resolved = resolved.replace(
       basicAuthTemplateRe(),
       (_match, ns1?: string, key1?: string, ns2?: string, key2?: string) => {
-        const user = resolveBasicArg(
-          ns1,
-          key1,
-          secrets,
-          vars,
-          resolvedKeys,
-          runId,
-        );
-        const pass = resolveBasicArg(
-          ns2,
-          key2,
-          secrets,
-          vars,
-          resolvedKeys,
-          runId,
-        );
+        const user = resolveBasicArg(ns1, key1, secrets, vars, resolvedKeys);
+        const pass = resolveBasicArg(ns2, key2, secrets, vars, resolvedKeys);
         return `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
       },
     );
@@ -468,12 +437,27 @@ export async function POST(request: Request) {
     );
   }
 
-  // Collect which secret keys are referenced in auth templates
-  const referencedKeys = collectReferencedSecrets(
-    authHeaders,
-    authBase,
-    authQuery,
-  );
+  // Collect which secret and var keys are referenced in auth templates
+  const referenced = collectReferencedKeys(authHeaders, authBase, authQuery);
+
+  // Check that all referenced secrets and vars exist.
+  // Missing secrets indicate the connector is enabled but not linked.
+  // Missing vars indicate incomplete connector configuration.
+  const missingSecrets = [...referenced.secrets].filter((key) => {
+    return !(key in secrets);
+  });
+  const missingVars = [...referenced.vars].filter((key) => {
+    return !(key in (vars ?? {}));
+  });
+  if (missingSecrets.length > 0 || missingVars.length > 0) {
+    const errorDetail: Record<string, unknown> = {
+      message: "Connector not configured",
+      code: "CONNECTOR_NOT_CONFIGURED",
+    };
+    if (missingSecrets.length > 0) errorDetail.missingSecrets = missingSecrets;
+    if (missingVars.length > 0) errorDetail.missingVars = missingVars;
+    return NextResponse.json({ error: errorDetail }, { status: 424 });
+  }
 
   // Refresh expired OAuth tokens (mutates secrets map with fresh values)
   let expiresAt: number | null = null;
@@ -485,7 +469,7 @@ export async function POST(request: Request) {
       auth,
       secrets,
       secretConnectorMap,
-      referencedKeys,
+      referenced.secrets,
     );
     expiresAt = result.expiresAt;
     refreshedConnectors = result.refreshedConnectors;
@@ -513,7 +497,6 @@ export async function POST(request: Request) {
     authHeaders,
     secrets,
     vars ?? {},
-    auth.runId,
     authBase,
     authQuery,
   );

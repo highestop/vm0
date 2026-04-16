@@ -7,6 +7,7 @@ import {
   insertAssistantEventMessages,
   getChatThreadIdForRun,
 } from "../../../../../src/lib/zero/chat-thread/chat-message-service";
+import { publishUserSignal } from "../../../../../src/lib/infra/realtime/client";
 import { logger } from "../../../../../src/lib/shared/logger";
 
 const log = logger("event-consumer:chat-assistant");
@@ -97,13 +98,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ processed: 0 });
   }
 
-  const threadId = await getChatThreadIdForRun(runId);
-  if (!threadId) {
+  const thread = await getChatThreadIdForRun(runId);
+  if (!thread) {
     // Run is not tied to a chat thread (e.g., non-chat trigger) — skip.
     return NextResponse.json({ processed: 0 });
   }
 
+  const { chatThreadId: threadId, userId } = thread;
   const written = await insertAssistantEventMessages(runId, threadId, items);
+
+  if (written > 0) {
+    await publishUserSignal([userId], `chatThreadMessageCreated:${threadId}`);
+  }
 
   log.debug("Chat assistant consumer processed", {
     runId,

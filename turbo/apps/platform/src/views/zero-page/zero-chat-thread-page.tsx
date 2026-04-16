@@ -466,22 +466,38 @@ function ChatMessageRow({
 }
 
 /**
- * Parse inline attachment lines from message content.
- * Matches `[Attached file: name](url)` optionally followed by a curl line.
- * Returns the cleaned content and parsed attachments.
+ * Strip file-attachment blocks from the displayed user prompt.
+ *
+ * Handles three formats:
+ * 1. Legacy: `[Attached file: name](url)` with optional curl line
+ * 2. Web:    `[Web file] ...` blocks (legacy: with `# Web Attached Files` header)
+ * 3. Slack:  `[Slack file] ...` blocks
+ *
+ * Returns the cleaned content and any legacy parsed attachments.
  */
 function parseInlineAttachments(content: string): {
   cleanContent: string;
   parsed: { filename: string; url: string }[];
 } {
   const parsed: { filename: string; url: string }[] = [];
-  const cleaned = content.replace(
+  let cleaned = content;
+
+  // Legacy format: [Attached file: name](url) + optional curl line
+  cleaned = cleaned.replace(
     /\[Attached file: ([^\]]+)\]\(([^)]+)\)(?:\nDownload with: curl [^\n]*)?\n?/g,
     (_match, filename: string, url: string) => {
       parsed.push({ filename, url });
       return "";
     },
   );
+
+  // Web/Slack file blocks: [Web file] ... or [Slack file] ... with metadata lines
+  // Also handles legacy format with colon after bracket: [Web file]: ...
+  cleaned = cleaned.replace(
+    /(?:# (?:Web|Slack) Attached Files\n\n)?(?:\[(?:Web|Slack) file\]:? [^\n]+\n(?:\s+\[[^\]]+\]:? [^\n]+\n?)*)(?:\n?)/g,
+    "",
+  );
+
   return { cleanContent: cleaned.trim(), parsed };
 }
 
@@ -491,9 +507,12 @@ function isImageFilename(filename: string): boolean {
 
 function UserMessage({ message }: { message: UserChatMessage }) {
   const { cleanContent, parsed } = parseInlineAttachments(message.content);
+  // Hide the placeholder prompt used when user sends only files with no text
+  const visibleContent =
+    cleanContent === "(see attached files)" ? "" : cleanContent;
   // Preserve user-entered line breaks: CommonMark collapses single newlines
   // into spaces, so convert each \n to a hard line break (two trailing spaces + \n).
-  const displayContent = cleanContent.replace(/\n/g, "  \n");
+  const displayContent = visibleContent.replace(/\n/g, "  \n");
   const lightboxUrl = useGet(attachmentLightboxUrl$);
   const setLightboxUrl = useSet(setAttachmentLightboxUrl$);
 

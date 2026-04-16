@@ -883,12 +883,18 @@ describe("zero-chat signals", () => {
         context.signal,
       );
 
-      // The sent prompt should include the attachment
+      // File download instructions are now built server-side in the system prompt.
+      // The client sends clean prompt text + attachFiles metadata separately.
       expect(capturedBody).toBeDefined();
-      expect(JSON.stringify(capturedBody)).toContain(
-        "https://example.com/report.pdf",
-      );
-      expect(JSON.stringify(capturedBody)).toContain("report.pdf");
+      const body = capturedBody as Record<string, unknown>;
+      expect(body.prompt).toBe("Check this file");
+      const attachFiles = body.attachFiles as Record<string, unknown>[];
+      expect(attachFiles).toHaveLength(1);
+      expect(attachFiles[0]).toMatchObject({
+        id: "upload-att-1",
+        filename: "report.pdf",
+        contentType: "application/pdf",
+      });
 
       // Attachments should be cleared after the send
       expect(context.store.get(zeroChatAttachments$)).toHaveLength(0);
@@ -898,6 +904,12 @@ describe("zero-chat signals", () => {
       interface CapturedChatBody {
         prompt: string;
         hasTextContent: boolean;
+        attachFiles?: {
+          id: string;
+          filename: string;
+          contentType: string;
+          size: number;
+        }[];
       }
 
       function isCapturedChatBody(v: unknown): v is CapturedChatBody {
@@ -968,11 +980,17 @@ describe("zero-chat signals", () => {
         context.signal,
       );
 
-      // API should receive non-empty prompt (attachment markdown)
+      // File download instructions are now built server-side in the system prompt.
+      // The client sends a placeholder prompt + attachFiles metadata separately.
       assert(isCapturedChatBody(capturedBody));
-      expect(capturedBody.prompt).toContain("https://example.com/photo.png");
-      expect(capturedBody.prompt).toContain("photo.png");
-      expect(capturedBody.prompt).not.toMatch(/^\n/);
+      expect(capturedBody.prompt).toBe("(see attached files)");
+      expect(capturedBody.hasTextContent).toBeFalsy();
+      expect(capturedBody.attachFiles).toHaveLength(1);
+      expect(capturedBody.attachFiles![0]).toMatchObject({
+        id: "upload-img-1",
+        filename: "photo.png",
+        contentType: "image/png",
+      });
 
       // Attachments should be cleared after send
       expect(context.store.get(zeroChatAttachments$)).toHaveLength(0);

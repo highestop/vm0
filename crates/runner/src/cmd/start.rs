@@ -23,6 +23,7 @@ use crate::http::HttpClient;
 use crate::idle_pool::{IdleEntry, IdlePool, IdlePoolConfig, ParkResult};
 use crate::kmsg_log;
 use crate::lock;
+use crate::network_logs;
 use crate::paths::{HomePaths, LogPaths, RunnerPaths, touch_mtime};
 use crate::prefetch;
 use crate::provider::{ApiProvider, JobProvider, LocalProvider};
@@ -30,6 +31,7 @@ use crate::proxy;
 use crate::resource_budget::ResourceBudget;
 use crate::retry::{RetryState, recv_retry, sleep_until_retry};
 use crate::status::{RunnerMode, StatusTracker};
+use crate::telemetry::JobTelemetry;
 use crate::types::{ExecutionContext, HeartbeatState};
 
 /// Initial backoff before retrying mitmproxy after a crash.
@@ -1074,6 +1076,14 @@ fn spawn_job(
     let mode = ctx.mode;
     let factory_for_cleanup = Arc::clone(&factory);
 
+    // Captured for the post-complete deferred work below: the panic-arm
+    // empty `JobTelemetry` construction, the final `telemetry.flush()`, and
+    // the mitm `upload_network_logs()` POST. `context` gets moved into the
+    // inner executor task and `exec_config` with it, so we snapshot the
+    // token and bump the Arc before spawning.
+    let sandbox_token = context.sandbox_token.clone();
+    let exec_config_for_deferred = Arc::clone(&exec_config);
+
     jobs.spawn(async move {
         // Inner spawn isolates panics: if execute_job panics, the outer task
         // still reports completion and releases budget.
@@ -1095,8 +1105,8 @@ fn spawn_job(
             }
         });
 
-        let (exit_code, err, sandbox, source_ip, guest_session_id) = match inner.await {
-            Ok(outcome) => {
+        let (exit_code, err, sandbox, source_ip, guest_session_id, telemetry) = match inner.await {
+            Ok((outcome, telemetry)) => {
                 let err = if job_cancel.is_cancelled() {
                     Some("cancelled by user".to_string())
                 } else {
@@ -1108,16 +1118,26 @@ fn spawn_job(
                     outcome.sandbox,
                     outcome.source_ip,
                     outcome.guest_session_id,
+                    telemetry,
                 )
             }
             Err(e) => {
                 error!(run_id = %run_id, error = %e, "executor task panicked");
+                // Panic lost the in-flight telemetry buffer; substitute an
+                // empty collector so the post-complete flush path stays
+                // unconditional. `flush` early-returns on empty pending_ops.
+                let empty_telemetry = JobTelemetry::new(
+                    exec_config_for_deferred.http.clone(),
+                    run_id,
+                    sandbox_token.clone(),
+                );
                 (
                     1,
                     Some(format!("internal error: {e}")),
                     None,
                     String::new(),
                     None,
+                    empty_telemetry,
                 )
             }
         };
@@ -1228,6 +1248,24 @@ fn spawn_job(
         if !parked {
             budget.release(vcpu, memory_mb);
         }
+
+        // Best-effort telemetry, deferred past `provider.complete` so the
+        // user-visible run-complete signal isn't blocked on these uploads.
+        // They're still awaited (not spawned) so the surrounding `jobs`
+        // JoinSet drains them on graceful shutdown — no data loss on SIGTERM.
+        // Flush and upload run concurrently — they share no state and both
+        // target the telemetry endpoint, so parallelism shortens the drain
+        // window (~383 ms + ~1.6 s → ~1.6 s).
+        let network_log_path = exec_config_for_deferred.log_paths.network_log(run_id);
+        tokio::join!(
+            telemetry.flush(),
+            network_logs::upload_network_logs(
+                &exec_config_for_deferred.http,
+                run_id,
+                &sandbox_token,
+                &network_log_path,
+            ),
+        );
 
         Some(run_id)
     });
@@ -1997,6 +2035,27 @@ mod tests {
             max_concurrent,
             make_provider,
             Box::new(MockSandboxRuntime::new()),
+            "http://localhost:0",
+        )
+    }
+
+    /// Variant that points the runner's HTTP client at an explicit URL. Used by
+    /// tests that spin up an `httpmock::MockServer` to observe webhook traffic.
+    fn mock_run_config_with_api_url(
+        profiles: BTreeMap<String, config::ProfileConfig>,
+        budget_vcpu: u32,
+        budget_memory_mb: u32,
+        max_concurrent: usize,
+        api_url: &str,
+    ) -> (RunConfig, MockRunEnv) {
+        build_mock_run_config_with_runtime(
+            profiles,
+            budget_vcpu,
+            budget_memory_mb,
+            max_concurrent,
+            MockJobProvider::new,
+            Box::new(MockSandboxRuntime::new()),
+            api_url,
         )
     }
 
@@ -2007,6 +2066,7 @@ mod tests {
         max_concurrent: usize,
         make_provider: impl FnOnce(CancellationToken) -> (Arc<MockJobProvider>, MockProviderHandle),
         runtime: Box<dyn sandbox::SandboxRuntime>,
+        api_url: &str,
     ) -> (RunConfig, MockRunEnv) {
         let temp_dir = tempfile::tempdir().unwrap();
         let cancel = CancellationToken::new();
@@ -2060,9 +2120,9 @@ mod tests {
             cancel_tokens: Arc::clone(&cancel_tokens),
             cancel: cancel.clone(),
             exec_config: Arc::new(executor::ExecutorConfig {
-                api_url: "http://localhost:0".into(),
+                api_url: api_url.to_string(),
                 registry,
-                http: crate::http::HttpClient::new("http://localhost:0".into()).unwrap(),
+                http: crate::http::HttpClient::new(api_url.to_string()).unwrap(),
                 log_paths: crate::paths::LogPaths::new(log_dir),
                 ip_log_map: kmsg_log::new_ip_log_map(),
             }),
@@ -2181,6 +2241,84 @@ mod tests {
         assert!(c.error.is_none());
 
         shutdown(&env, run_handle).await;
+    }
+
+    /// Regression guard: the post-complete deferred network-log upload (moved
+    /// out of `post_job_cleanup` by #9828) must still reach the telemetry
+    /// endpoint, AND the drain shutdown must actually block on it — catching a
+    /// `tokio::spawn` fire-and-forget refactor that would silently lose the
+    /// upload on runtime drop.
+    ///
+    /// The mock responds with a 400 ms delay. Since the job completes almost
+    /// immediately under `MockSandboxRuntime`, `shutdown()` is invoked while
+    /// the deferred `tokio::join!(flush, upload)` is still in-flight, so a
+    /// well-behaved drain returns AFTER the mock delay elapses. A detached
+    /// upload would let shutdown return immediately — the elapsed-time
+    /// assertion below is what catches that.
+    #[tokio::test]
+    async fn deferred_network_log_upload_drains_on_graceful_shutdown() {
+        use httpmock::prelude::*;
+
+        const MOCK_DELAY: Duration = Duration::from_millis(400);
+
+        let server = MockServer::start_async().await;
+        let telemetry_mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/webhooks/agent/telemetry");
+                then.delay(MOCK_DELAY)
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"success":true,"id":"ok"}"#);
+            })
+            .await;
+
+        let (config, env) =
+            mock_run_config_with_api_url(test_profiles(), 8, 32768, 4, &server.base_url());
+
+        // Seed a network log file so `upload_network_logs` has a payload to POST
+        // (otherwise it early-returns on NotFound and the assertion below would
+        // measure nothing).
+        let run_id = RunId::new_v4();
+        let network_log_path = config.exec_config.log_paths.network_log(run_id);
+        std::fs::create_dir_all(network_log_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &network_log_path,
+            r#"{"timestamp":"2026-01-01T00:00:00","action":"ALLOW","host":"example.com","method":"GET","url":"https://example.com/","status":200}"#,
+        )
+        .unwrap();
+
+        let run_handle = tokio::spawn(run(config));
+        push_job(&env, run_id, "vm0/default", Some(minimal_context(run_id)));
+
+        let completion = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(completion.is_some(), "job should complete");
+
+        // Drain shutdown — must block on each `spawn_job` closure's deferred
+        // `tokio::join!(flush, upload)` via the outer `jobs` JoinSet.
+        let shutdown_start = tokio::time::Instant::now();
+        shutdown(&env, run_handle).await;
+        let shutdown_elapsed = shutdown_start.elapsed();
+
+        // At least one POST: the mitm network-log upload (and likely a second
+        // for sandbox-op telemetry like `vm_create`). The endpoint must have
+        // been hit — a fire-and-forget refactor that dropped the await on
+        // runtime shutdown would fail this.
+        assert!(
+            telemetry_mock.calls_async().await >= 1,
+            "telemetry endpoint should receive deferred post-complete upload"
+        );
+
+        // Stronger invariant: drain must actually WAIT for the deferred work.
+        // With a 400 ms mock delay, a well-behaved drain takes ≥ the delay;
+        // a detached (fire-and-forget) upload would let shutdown return in
+        // tens of ms, dropping the in-flight request on runtime teardown.
+        assert!(
+            shutdown_elapsed >= MOCK_DELAY - Duration::from_millis(50),
+            "drain must block on deferred upload (≥{MOCK_DELAY:?}); took only {shutdown_elapsed:?}",
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3761,6 +3899,7 @@ mod tests {
             max_concurrent,
             MockJobProvider::new,
             Box::new(MockSandboxRuntime::with_overrides(overrides)),
+            "http://localhost:0",
         )
     }
 

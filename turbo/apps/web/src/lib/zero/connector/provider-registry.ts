@@ -41,6 +41,7 @@ import { devtoHandler } from "./providers/devto-handler";
 import { dopplerHandler } from "./providers/doppler-handler";
 import { infisicalHandler } from "./providers/infisical-handler";
 import { docusignHandler } from "./providers/docusign-handler";
+import { db9Handler } from "./providers/db9-handler";
 import { dropboxHandler } from "./providers/dropbox-handler";
 import { elevenlabsHandler } from "./providers/elevenlabs-handler";
 import { exploriumHandler } from "./providers/explorium-handler";
@@ -185,6 +186,7 @@ export const PROVIDER_HANDLERS: Record<
   doppler: dopplerHandler,
   infisical: infisicalHandler,
   docusign: docusignHandler,
+  db9: db9Handler,
   dropbox: dropboxHandler,
   elevenlabs: elevenlabsHandler,
   explorium: exploriumHandler,

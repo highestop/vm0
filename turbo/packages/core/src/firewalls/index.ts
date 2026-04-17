@@ -60,6 +60,7 @@ import { difyFirewall } from "./dify.generated";
 import { discordFirewall } from "./discord.generated";
 import { discordWebhookFirewall } from "./discord-webhook.generated";
 import { docusignFirewall } from "./docusign.generated";
+import { db9Firewall } from "./db9.generated";
 import { dropboxFirewall } from "./dropbox.generated";
 import { elevenlabsFirewall } from "./elevenlabs.generated";
 import { exploriumFirewall } from "./explorium.generated";
@@ -211,6 +212,7 @@ const CONNECTOR_FIREWALLS = {
   discord: discordFirewall,
   "discord-webhook": discordWebhookFirewall,
   docusign: docusignFirewall,
+  db9: db9Firewall,
   dropbox: dropboxFirewall,
   elevenlabs: elevenlabsFirewall,
   explorium: exploriumFirewall,

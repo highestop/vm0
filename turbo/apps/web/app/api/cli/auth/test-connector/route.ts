@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { connectorTypeSchema } from "@vm0/core";
 import { initServices } from "../../../../../src/lib/init-services";
 import { upsertOAuthConnector } from "../../../../../src/lib/zero/connector/connector-service";
+import { PROVIDER_HANDLERS } from "../../../../../src/lib/zero/connector/provider-registry";
 import {
   resolveTestUserId,
   DEFAULT_TEST_EMAIL,
@@ -11,33 +12,20 @@ import {
 import { orgMembersCache } from "../../../../../src/db/schema/org-members-cache";
 import { getOrgMetadata } from "../../../../../src/lib/zero/org/org-metadata-service";
 import { isNotFound } from "../../../../../src/lib/shared/errors";
-import { env } from "../../../../../src/env";
+import { isTestEndpointAllowed } from "../../../../../src/lib/auth/test-endpoint-guard";
 
 const bodySchema = z.object({
   connectorName: z.string(),
   accessToken: z.string(),
+  /** Optional refresh token. Stored under handler's getRefreshSecretName(). */
+  refreshToken: z.string().min(1).optional(),
+  /**
+   * Seconds until the access token is considered expired. May be negative
+   * (already-expired) to drive the mid-run refresh path in E2E tests.
+   * Default: upsertOAuthConnector's own default (1h for refreshable types).
+   */
+  expiresIn: z.number().int().optional(),
 });
-
-/**
- * Check if test endpoint is allowed (same guard as test-token).
- * Only available in local development or Vercel preview with bypass secret.
- */
-function isAllowed(request: Request): boolean {
-  const vercelEnv = env().VERCEL_ENV;
-  const nodeEnv = env().NODE_ENV;
-
-  if (!vercelEnv && nodeEnv === "development") {
-    return true;
-  }
-
-  if (vercelEnv === "preview") {
-    const bypassHeader = request.headers.get("x-vercel-protection-bypass");
-    const expectedSecret = env().VERCEL_AUTOMATION_BYPASS_SECRET;
-    return !!expectedSecret && bypassHeader === expectedSecret;
-  }
-
-  return false;
-}
 
 /**
  * POST /api/cli/auth/test-connector
@@ -49,7 +37,7 @@ function isAllowed(request: Request): boolean {
  * Query: ?email=<email> (default: dev+clerk_test+serial@vm0-e2e.ai)
  */
 export async function POST(request: Request) {
-  if (!isAllowed(request)) {
+  if (!isTestEndpointAllowed(request)) {
     return new NextResponse("Not found", { status: 404 });
   }
 
@@ -109,6 +97,13 @@ export async function POST(request: Request) {
     );
   }
 
+  const handler =
+    connectorType === "computer" ? null : PROVIDER_HANDLERS[connectorType];
+  const refreshSecretName = handler?.getRefreshSecretName?.();
+
+  const hasOptionalFields =
+    body.refreshToken !== undefined || body.expiresIn !== undefined;
+
   await upsertOAuthConnector(
     org.orgId,
     userId,
@@ -120,6 +115,13 @@ export async function POST(request: Request) {
       email: `e2e-${connectorType}@test.vm0.ai`,
     },
     [],
+    hasOptionalFields
+      ? {
+          refreshToken: body.refreshToken,
+          refreshSecretName,
+          expiresIn: body.expiresIn,
+        }
+      : undefined,
   );
 
   return NextResponse.json({

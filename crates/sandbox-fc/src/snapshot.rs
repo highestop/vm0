@@ -33,6 +33,8 @@ pub enum SnapshotError {
     Setup(String),
     #[error("firecracker process failed: {0}")]
     Process(String),
+    #[error("teardown failed: {0}")]
+    Teardown(String),
     #[error("api error: {0}")]
     Api(#[from] ApiError),
     #[error("vsock connection failed: {0}")]
@@ -404,7 +406,6 @@ async fn run_snapshot_workflow(
     // released. The COW-device bind mount lived inside the FC process's
     // private mount namespace and was auto-cleaned when the process exited.
     if result.is_ok() {
-        let cow_file = cow_device.cow_file().to_owned();
         let mut last_err = None;
         for attempt in 0..DESTROY_RETRIES {
             match cow_device.destroy_keep_cow().await {
@@ -413,31 +414,38 @@ async fn run_snapshot_workflow(
                     break;
                 }
                 Err(e) => {
+                    last_err = Some(e);
                     if attempt + 1 < DESTROY_RETRIES {
-                        last_err = Some(e);
                         tokio::time::sleep(DESTROY_RETRY_DELAY).await;
-                    } else {
-                        tracing::warn!(
-                            error = %e,
-                            "destroy_keep_cow failed after {DESTROY_RETRIES} attempts"
-                        );
-                        last_err = Some(e);
                     }
                 }
             }
         }
-        if last_err.is_some() {
-            // Last resort: abandon the device. It persists in the kernel
-            // until `runner gc` cleans it up. Does NOT delete the COW file.
+        if let Some(e) = last_err {
+            // Last resort: abandon the device so Drop is a no-op. It persists
+            // in the kernel until `runner gc` cleans it up; the COW file is
+            // left in the work dir and will be cleaned up by the next
+            // `create_snapshot` run.
+            //
+            // Fail the snapshot instead of finalizing it: without a successful
+            // `destroy_keep_cow` we cannot rely on `save_bitmap` having
+            // persisted the dirty bitmap, and renaming the COW file into the
+            // output dir without a matching bitmap would produce a snapshot
+            // that `is_complete()` reports as valid but silently corrupts
+            // restore reads (dirty blocks shadowed by base image). See #9843.
             cow_device.abandon();
+            return Err(SnapshotError::Teardown(format!(
+                "destroy_keep_cow exhausted retries; device abandoned, snapshot aborted (last error: {e})"
+            )));
         }
-        tokio::fs::rename(&cow_file, &output.cow()).await?;
-        // Also move the bitmap sidecar if it exists (for snapshot restore).
-        let bitmap_src = std::path::PathBuf::from(format!("{}.bitmap", cow_file.display()));
-        if tokio::fs::try_exists(&bitmap_src).await.unwrap_or(false) {
-            let bitmap_dst = output.cow_bitmap();
-            tokio::fs::rename(&bitmap_src, &bitmap_dst).await?;
-        }
+        // destroy_keep_cow succeeded, so save_bitmap succeeded — the bitmap
+        // sidecar is on disk. Rename is unconditional: if the sidecar is
+        // missing we want to fail loudly, not silently produce a
+        // bitmap-less snapshot.
+        let cow_file = cow_device.cow_file();
+        let bitmap_src = nbd_cow::cow::bitmap_path_for(cow_file);
+        tokio::fs::rename(&bitmap_src, &output.cow_bitmap()).await?;
+        tokio::fs::rename(cow_file, &output.cow()).await?;
         // Persist the output directory so all four final dir entries
         // (snapshot.bin and memory.bin written by Firecracker via the API,
         // cow.img and cow.img.bitmap just renamed in) are durable. Without
@@ -584,6 +592,7 @@ impl SnapshotProvider for FirecrackerSnapshotProvider {
         let sc = create_snapshot(config).await.map_err(|e| match e {
             SnapshotError::Setup(msg) => sandbox::SnapshotError::Setup(msg),
             SnapshotError::Process(msg) => sandbox::SnapshotError::Process(msg),
+            SnapshotError::Teardown(msg) => sandbox::SnapshotError::Teardown(msg),
             SnapshotError::Api(api_err) => sandbox::SnapshotError::Api(api_err.to_string()),
             SnapshotError::Vsock(msg) => sandbox::SnapshotError::Vsock(msg),
             SnapshotError::Io(io_err) => sandbox::SnapshotError::Io(io_err),

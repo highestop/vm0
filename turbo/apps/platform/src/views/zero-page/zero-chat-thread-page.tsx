@@ -348,6 +348,17 @@ function ChatThreadComposer({
           setComposerFileInput$={thread.setComposerFileInput$}
           setInputRef={setInputRef}
         />
+        {sending && (
+          <div className="flex items-center justify-end gap-1.5 mt-2 pr-1">
+            <IconLoader2
+              size={12}
+              className="animate-spin text-foreground/50 shrink-0"
+            />
+            <span className="zero-shimmer-text text-xs">
+              {displayName} is working...
+            </span>
+          </div>
+        )}
       </div>
     </footer>
   );
@@ -397,7 +408,7 @@ function ThinkingIndicator({ thread }: { thread: ChatThreadSignals }) {
   const hasActiveRun = useLastResolved(thread.hasActiveRun$) ?? false;
   const groups = useGet(thread.groupedChatMessages$);
   const lastGroup = groups[groups.length - 1];
-  const show = hasActiveRun && (!lastGroup || lastGroup.role !== "assistant");
+  const show = lastGroup?.role !== "assistant" || hasActiveRun;
 
   if (!show) {
     return null;

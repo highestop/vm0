@@ -1631,6 +1631,101 @@
           "公開前に確認しましょう。Zeroはデフォルトでドラフトを作成します — Zeroが返すStrapiアドミンのリンクを使って、本公開前に各ロケールをチェックしてください。",
           "ブランドコンテキストをZeroに渡しましょう。ブランドボイスガイドラインや対象ロケールのサンプル記事を貼り付けると、出力が格段にブランドらしくなります。"
         ]
+      },
+      "daily-engineering-brief": {
+        "title": "異常検知付きデイリーエンジニアリングブリーフ",
+        "description": "@Zeroに毎朝GitHub、Linear、Sentry、Plausibleからリアルタイムデータを取得させ、7日間の移動平均を算出し、異常値をフラグ付けして、フォーマットされた4セクションのブリーフをSlackチャンネルに自動投稿します。",
+        "timeSaved": "毎日約20分の時間削減",
+        "headings": {
+          "scenario": "分散したダッシュボードが朝の同期を遅らせる理由",
+          "prompt": "@Zeroでクロスツールのデイリーエンジニアリングブリーフを設定する方法",
+          "steps": "@Zeroがリアルタイムデータを取得し、ベースラインを算出し、異常を検知する仕組み",
+          "nextActions": "異常の深掘り、壊れたコネクタの修復、またはブリーフの拡張",
+          "integrations": "必須連携: GitHubとSlack。オプション: Linear、Sentry、Plausible",
+          "tips": "スケジュール型マルチツールエンジニアリングブリーフのベストプラクティス"
+        },
+        "scenario": "毎朝誰かが4つのタブを開きます。GitHubでPRアクティビティ、Linearでスプリント進捗、Sentryで夜間エラー、Plausibleでトラフィック傾向を確認します。今日の数値を先週の記憶と手動で比較し、スタンドアップ前に異常がないか見つけようとします。この照合作業には15〜20分かかり、記憶に頼っています。@Zeroはスタンドアップ前に実行され、4つすべてのソースからリアルタイムデータを取得し、7日間の移動平均を算出し、大幅な偏差をフラグ付けし、誰もラップトップを開く前にSlackに整理された4セクションのブリーフを投稿します。",
+        "promptVariants": [
+          {
+            "label": "フルデイリーブリーフ",
+            "prompt": "@Zero every weekday at 8:30am, pull live data from Plausible, Sentry, GitHub, and Linear, flag anomalies vs the 7-day rolling average, and post a formatted 4-section daily brief to #engineering."
+          },
+          {
+            "label": "GitHubとLinearのみ",
+            "prompt": "@Zero every morning at 9am, pull today's GitHub PR and issue stats for vm0-ai/vm0 and Linear sprint progress. Flag anything more than 2x above the 7-day average and post to #standup."
+          },
+          {
+            "label": "オンデマンド",
+            "prompt": "@Zero pull live data from GitHub and Linear right now, compare to the 7-day rolling average, and tell me what looks unusual today."
+          }
+        ],
+        "slackPreview": [
+          {
+            "name": "Alex",
+            "text": "@Zero every weekday at 8:30am pull live data from Plausible, Sentry, GitHub, and Linear, flag anomalies vs the 7-day rolling average, and post a 4-section brief to #engineering."
+          },
+          {
+            "name": "Zero",
+            "text": "Scheduled. Running weekdays at 08:30.\n\nRun from this morning:\n*GitHub* — 96 PRs merged today vs 14.3 avg 🔴 572% spike (coordinated test refactor). Issues closed: 71 vs 28.6 avg 🟢.\n*Linear* — 0 issues created this week, 3 in backlog.\n*Sentry* — connector not configured.\n*Plausible* — connector not configured."
+          }
+        ],
+        "steps": [
+          {
+            "title": "@Zeroが各ソースからリアルタイムデータを取得",
+            "description": "@ZeroはGitHubからマージされたPR、オープン・クローズされたissue、コミットを取得します。Linearからは作成されたissue、進行中の作業、バックログ数を取得します。設定されている場合、Sentryのエラー数やPlausibleの訪問者数・ページビュー指標も取得します。"
+          },
+          {
+            "title": "7日間の移動平均を算出",
+            "description": "各指標について、@Zeroは過去7日間の同じデータを取得し、日次平均を算出します。これにより、週末、デプロイ、チーム規模の変更を考慮した安定したベースラインが得られます。"
+          },
+          {
+            "title": "異常を自動的にフラグ付け",
+            "description": "@Zeroは今日の数値を移動平均と比較し、大幅な偏差をフラグ付けします。マージされたPRの急増は協調的なリファクタリングを示す可能性があり、Plausibleのトラフィック低下はデプロイの問題を示す可能性があり、オープンされたissueの急増は新たなバグ領域の発見を意味する可能性があります。"
+          },
+          {
+            "title": "4セクションのブリーフをSlackに投稿",
+            "description": "@Zeroはソースごとに1セクションの構造化されたメッセージを投稿します：Webトラフィック、エラーと信頼性、エンジニアリングアクティビティ、プロジェクトトラッカー。各セクションには今日の数値、7日間の平均、該当する場合は平易な言葉での異常ノートが記載されます。"
+          }
+        ],
+        "nextActions": [
+          {
+            "title": "異常を深掘りする",
+            "description": "ブリーフのスレッドから直接@Zeroにスパイクの調査を依頼",
+            "examplePrompt": "@Zero the 572% PR spike in today's brief — list all those PRs and group them by label or title prefix so I can see what the team was shipping."
+          },
+          {
+            "title": "壊れたコネクタを修復する",
+            "description": "不足しているトークンを解決して4つすべてのセクションにライブデータを反映",
+            "examplePrompt": "@Zero check which connectors are missing or misconfigured for the daily brief and tell me what tokens I need to set."
+          },
+          {
+            "title": "カスタム閾値を追加する",
+            "description": "指標が意味のある閾値を超えた場合のみアラートを受け取る",
+            "examplePrompt": "@Zero update the daily brief schedule to only flag anomalies that are more than 3x the 7-day average. For smaller deviations, just include the number without a flag."
+          }
+        ],
+        "integrations": [
+          {
+            "description": "@ZeroはマージされたPR、オープン・クローズされたissue、コミット数を読み取ります。エンジニアリングアクティビティセクションに必須です。"
+          },
+          {
+            "description": "@Zeroはフォーマットされたブリーフを投稿し、フォローアップの分析を同じメッセージのスレッドにまとめます。配信に必須です。"
+          },
+          {
+            "description": "@Zeroはissueの作成、進行中の作業、バックログ数をプロジェクトトラッカーセクション用に読み取ります。オプションです。"
+          },
+          {
+            "description": "@Zeroは未解決のエラー数と新規issue数をエラーと信頼性セクション用に読み取ります。オプションです。"
+          },
+          {
+            "description": "@Zeroは訪問者数、ページビュー、直帰率をWebトラフィックセクション用に読み取ります。オプションです。"
+          }
+        ],
+        "tips": [
+          "スタンドアップの15〜20分前にブリーフをスケジュールして、ミーティング開始前にチームが確認できるようにしましょう。",
+          "まずGitHubとSlackだけで始めましょう。ブリーフが安定して動作するようになったら、SentryとPlausibleを1つずつ追加して、拡張前に各コネクタを検証しましょう。",
+          "ノイズを減らすために、プロンプトにカスタム閾値の指示を追加しましょう。例えば、移動平均の2倍を超える指標のみフラグ付けすることで、日常的な小さな変動によるアラートを防げます。"
+        ]
       }
     }
   },

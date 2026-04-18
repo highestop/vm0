@@ -248,8 +248,6 @@ interface ZeroScheduleCardProps {
   saving?: boolean;
   /** Default timezone for new schedules. Falls back to browser timezone. */
   defaultTimezone?: string;
-  /** Error message to display in the save dialog. Provided by consuming view via useLoadableSet. */
-  saveError?: string | null;
 }
 
 export function ZeroScheduleCard({
@@ -262,7 +260,6 @@ export function ZeroScheduleCard({
   onRunNow,
   onOpenDetails,
   saving,
-  saveError,
 }: ZeroScheduleCardProps) {
   const signal = useGet(pageSignal$);
   const scheduleViewMode = useGet(scheduleViewMode$);
@@ -368,7 +365,6 @@ export function ZeroScheduleCard({
   const handleCreateSave = (values: ScheduleFormValues) => {
     if (onSave) {
       detach(
-        // eslint-disable-next-line ccstate/no-abort-swallower -- known debt: useLoadableSet's setter both sets saveError state AND rethrows; the empty .then reject handler silences the rethrow so detach does not double-log a rejection the dialog already shows. Tracked for follow-up.
         onSave({
           prompt: values.prompt.trim(),
           description: values.description.trim() || undefined,
@@ -382,14 +378,9 @@ export function ZeroScheduleCard({
             values.freq === "every_week" ? values.dayOfWeek : undefined,
           dayOfMonth:
             values.freq === "every_month" ? values.dayOfMonth : undefined,
-        }).then(
-          () => {
-            detach(setAddScheduleOpen(false, signal), Reason.DomCallback);
-          },
-          () => {
-            // error is captured by useLoadableSet in the consuming view and passed as saveError prop
-          },
-        ),
+        }).then(() => {
+          return setAddScheduleOpen(false, signal);
+        }),
         Reason.DomCallback,
       );
       return;
@@ -420,7 +411,6 @@ export function ZeroScheduleCard({
   const handleEditSave = (values: ScheduleFormValues) => {
     if (onSave) {
       detach(
-        // eslint-disable-next-line ccstate/no-abort-swallower -- known debt: useLoadableSet's setter both sets saveError state AND rethrows; the empty .then reject handler silences the rethrow so detach does not double-log a rejection the dialog already shows. Tracked for follow-up.
         onSave({
           prompt: values.prompt.trim(),
           description: values.description.trim() || undefined,
@@ -435,14 +425,9 @@ export function ZeroScheduleCard({
           dayOfMonth:
             values.freq === "every_month" ? values.dayOfMonth : undefined,
           editName: editingEntry?.name,
-        }).then(
-          () => {
-            detach(setEditingScheduleId(null, signal), Reason.DomCallback);
-          },
-          () => {
-            // error is captured by useLoadableSet in the consuming view and passed as saveError prop
-          },
-        ),
+        }).then(() => {
+          return setEditingScheduleId(null, signal);
+        }),
         Reason.DomCallback,
       );
       return;
@@ -552,7 +537,6 @@ export function ZeroScheduleCard({
           onSave={handleCreateSave}
           saving={!!saving}
           mode="create"
-          saveError={saveError}
         />
         <ScheduleFormDialog
           open={editingScheduleId !== null}
@@ -582,7 +566,6 @@ export function ZeroScheduleCard({
                 }
               : undefined
           }
-          saveError={saveError}
         />
         <Dialog
           open={pendingDelete !== null}

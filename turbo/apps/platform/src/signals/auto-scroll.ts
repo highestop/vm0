@@ -53,6 +53,48 @@ function scrollInfo(el: HTMLElement) {
   return `scrollTop=${top} scrollHeight=${height} clientHeight=${client} fromBottom=${fromBottom}`;
 }
 
+interface RestoreState {
+  pendingRestorePosition: number | null;
+  suppressNextScrollToBottom: boolean;
+}
+
+function attachUserInputListeners(
+  el: HTMLElement,
+  markUserInput: () => void,
+  onScroll: () => void,
+  signal: AbortSignal,
+) {
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (isUserScrollKey(e.key)) {
+      markUserInput();
+    }
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  el.addEventListener("wheel", markUserInput, { passive: true });
+  el.addEventListener("touchmove", markUserInput, { passive: true });
+  el.addEventListener("pointerdown", markUserInput, { passive: true });
+  el.addEventListener("keydown", onKeyDown, { passive: true });
+  signal.addEventListener("abort", () => {
+    el.removeEventListener("scroll", onScroll);
+    el.removeEventListener("wheel", markUserInput);
+    el.removeEventListener("touchmove", markUserInput);
+    el.removeEventListener("pointerdown", markUserInput);
+    el.removeEventListener("keydown", onKeyDown);
+  });
+}
+
+function observeContainerResize(
+  el: HTMLElement,
+  onResize: () => void,
+  signal: AbortSignal,
+) {
+  const resizeObserver = new ResizeObserver(onResize);
+  resizeObserver.observe(el.firstElementChild ?? el);
+  signal.addEventListener("abort", () => {
+    resizeObserver.disconnect();
+  });
+}
+
 /**
  * Factory that creates scroll-management signals for a scrollable container.
  *
@@ -66,35 +108,50 @@ function scrollInfo(el: HTMLElement) {
  * `scrollToBottom$`  — unconditional force scroll (ignores disabled state).
  *
  * When `id` is provided, the user's last non-bottom scroll position is
- * persisted in a module-level cache. On the first `scrollToBottom$` call
- * after a new container binds with the same id, the saved position is
- * restored instead — this preserves reading position across chat-thread
- * switches. The cache is cleared once the user scrolls back to the bottom.
+ * persisted in a module-level cache. At container-bind time, if the cache
+ * holds a saved position for this id, auto-scroll is disabled and the
+ * position is queued for restore — this preserves reading position across
+ * chat-thread switches. Restore must happen at bind (not on the first
+ * `scrollToBottom$` call) because ResizeObserver fires as soon as messages
+ * render and would otherwise auto-scroll to bottom first, triggering the
+ * "user reached bottom" path that clears the cache before the caller gets
+ * a chance to invoke `scrollToBottom$`. The cache is cleared once the user
+ * scrolls back to the bottom.
  */
 export function createScrollSignals(id?: string) {
   const internalScrollContainer$ = state<HTMLElement | null>(null);
   const autoScrollDisabled$ = state(false);
-  let firstScrollToBottomCall = true;
-  // Held while ResizeObserver is still growing the container up to a saved
-  // position — set scrollTop clamps early and needs to be re-applied.
-  let pendingRestorePosition: number | null = null;
+  // `pendingRestorePosition` is held while ResizeObserver is still growing the
+  // container up to a saved position — set scrollTop clamps early and needs to
+  // be re-applied. `suppressNextScrollToBottom` is set when bind-time restore
+  // happened and the caller has not yet fired its post-load scrollToBottom$.
+  // That call must be suppressed so it doesn't override the restored position.
+  const restoreState: RestoreState = {
+    pendingRestorePosition: null,
+    suppressNextScrollToBottom: false,
+  };
 
   const setScrollContainer$ = onRef(
     command(({ get, set }, el: HTMLElement, signal: AbortSignal) => {
       set(internalScrollContainer$, el);
       L.debug("container bound");
 
+      const saved =
+        id !== undefined ? get(scrollPositionCache$).get(id) : undefined;
+      if (saved !== undefined) {
+        restoreState.pendingRestorePosition = saved;
+        restoreState.suppressNextScrollToBottom = true;
+        el.scrollTop = saved;
+        set(autoScrollDisabled$, true);
+        L.debug("container bound → restoring", `id=${id}`, `saved=${saved}`);
+      }
+
       let lastKnownScrollTop = el.scrollTop;
       let lastUserInputAt = 0;
 
       const markUserInput = () => {
         lastUserInputAt = performance.now();
-      };
-
-      const onKeyDown = (e: KeyboardEvent) => {
-        if (isUserScrollKey(e.key)) {
-          markUserInput();
-        }
+        restoreState.suppressNextScrollToBottom = false;
       };
 
       const onScroll = () => {
@@ -102,8 +159,8 @@ export function createScrollSignals(id?: string) {
           el.scrollHeight - el.scrollTop - el.clientHeight;
         const userRecent =
           performance.now() - lastUserInputAt < USER_INPUT_WINDOW_MS;
-        if (pendingRestorePosition !== null && userRecent) {
-          pendingRestorePosition = null;
+        if (restoreState.pendingRestorePosition !== null && userRecent) {
+          restoreState.pendingRestorePosition = null;
         }
         if (distanceFromBottom <= AT_BOTTOM_THRESHOLD) {
           const wasDisabled = get(autoScrollDisabled$);
@@ -137,41 +194,33 @@ export function createScrollSignals(id?: string) {
         lastKnownScrollTop = el.scrollTop;
       };
 
-      el.addEventListener("scroll", onScroll, { passive: true });
-      el.addEventListener("wheel", markUserInput, { passive: true });
-      el.addEventListener("touchmove", markUserInput, { passive: true });
-      el.addEventListener("pointerdown", markUserInput, { passive: true });
-      el.addEventListener("keydown", onKeyDown, { passive: true });
+      attachUserInputListeners(el, markUserInput, onScroll, signal);
 
-      const resizeObserver = new ResizeObserver(() => {
-        const disabled = get(autoScrollDisabled$);
-        L.debug("ResizeObserver fired", scrollInfo(el), `disabled=${disabled}`);
-        if (pendingRestorePosition !== null) {
-          el.scrollTop = pendingRestorePosition;
-          if (el.scrollTop >= pendingRestorePosition) {
-            pendingRestorePosition = null;
+      observeContainerResize(
+        el,
+        () => {
+          const disabled = get(autoScrollDisabled$);
+          L.debug(
+            "ResizeObserver fired",
+            scrollInfo(el),
+            `disabled=${disabled}`,
+          );
+          if (restoreState.pendingRestorePosition !== null) {
+            el.scrollTop = restoreState.pendingRestorePosition;
+            if (el.scrollTop >= restoreState.pendingRestorePosition) {
+              restoreState.pendingRestorePosition = null;
+            }
+            return;
           }
-          return;
-        }
-        if (!disabled) {
-          el.scrollTop = el.scrollHeight;
-        }
-      });
-      const inner = el.firstElementChild;
-      if (inner) {
-        resizeObserver.observe(inner);
-      } else {
-        resizeObserver.observe(el);
-      }
+          if (!disabled) {
+            el.scrollTop = el.scrollHeight;
+          }
+        },
+        signal,
+      );
 
       signal.addEventListener("abort", () => {
         L.debug("container unbound (abort)");
-        resizeObserver.disconnect();
-        el.removeEventListener("scroll", onScroll);
-        el.removeEventListener("wheel", markUserInput);
-        el.removeEventListener("touchmove", markUserInput);
-        el.removeEventListener("pointerdown", markUserInput);
-        el.removeEventListener("keydown", onKeyDown);
         set(internalScrollContainer$, null);
       });
     }),
@@ -192,23 +241,16 @@ export function createScrollSignals(id?: string) {
     scrollEl.scrollTop = scrollEl.scrollHeight;
   });
 
-  const scrollToBottom$ = command(({ get, set }) => {
+  const scrollToBottom$ = command(({ get }) => {
     const scrollEl = get(internalScrollContainer$);
     if (!scrollEl) {
       L.debug("scrollToBottom$ SKIPPED (no container)");
       return;
     }
-    const wasFirst = firstScrollToBottomCall;
-    firstScrollToBottomCall = false;
-    if (wasFirst && id !== undefined) {
-      const saved = get(scrollPositionCache$).get(id);
-      if (saved !== undefined) {
-        pendingRestorePosition = saved;
-        scrollEl.scrollTop = saved;
-        set(autoScrollDisabled$, true);
-        L.debug("scrollToBottom$ → restored", `id=${id}`, `saved=${saved}`);
-        return;
-      }
+    if (restoreState.suppressNextScrollToBottom) {
+      restoreState.suppressNextScrollToBottom = false;
+      L.debug("scrollToBottom$ → skipped (restore in progress)");
+      return;
     }
     L.debug("scrollToBottom$ → scrolling to bottom", scrollInfo(scrollEl));
     scrollEl.scrollTop = scrollEl.scrollHeight;

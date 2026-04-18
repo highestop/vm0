@@ -548,6 +548,75 @@ describe("POST /api/zero/report-error", () => {
     expect((await response.json()).reference).toBeDefined();
   });
 
+  it("should still submit bundle when one run's activity log assembly throws", async () => {
+    const sessionId = randomUUID();
+
+    const compose1 = await createTestCompose(`agent-${uniqueId("rpt")}`);
+    const { runId: firstRunId } = await seedTestRun(
+      userId,
+      compose1.composeId,
+      {
+        status: "completed",
+        prompt: "First prompt",
+        createdAt: new Date("2024-01-01T00:00:00Z"),
+        result: { agentSessionId: sessionId },
+      },
+    );
+
+    const compose2 = await createTestCompose(`agent-${uniqueId("rpt")}`);
+    const { runId: failedRunId } = await seedTestRun(
+      userId,
+      compose2.composeId,
+      {
+        status: "failed",
+        prompt: "Second prompt",
+        createdAt: new Date("2024-01-01T01:00:00Z"),
+        continuedFromSessionId: sessionId,
+      },
+    );
+
+    // Force per-run failure for the first run by returning a non-array from
+    // the per-run agent-events Axiom query — assembleActivityLog then throws
+    // on events.map(...) and the bundle must isolate that failure.
+    //
+    // The per-run query uses `runId == "<id>"` (exact match on a single run),
+    // while the bundle-level agentEvents query uses `runId in (...)`. We
+    // discriminate on that semantic difference rather than hand-counting call
+    // order so the test stays pinned to the right invocation even if future
+    // refactors reorder axiom queries.
+    const STALE_AXIOM_RESPONSE = null as unknown as never[];
+    context.mocks.axiom.queryAxiom.mockImplementation(async (apl: string) => {
+      if (apl.includes(`runId == "${firstRunId}"`) && apl.includes("agent")) {
+        return STALE_AXIOM_RESPONSE;
+      }
+      return [];
+    });
+
+    const response = await postReportError({
+      runId: failedRunId,
+      title: "Resilience test",
+    });
+    expect(response.status).toBe(200);
+
+    const zipBuffer = context.mocks.s3.uploadS3Buffer.mock
+      .calls[0]![2] as Buffer;
+    const zip = new AdmZip(zipBuffer);
+    const activityLogEntries = zip.getEntries().filter((e) => {
+      return e.entryName.startsWith("activity-log-");
+    });
+    expect(activityLogEntries).toHaveLength(2);
+
+    const contents = activityLogEntries.map((e) => {
+      return JSON.parse(e.getData().toString("utf-8"));
+    });
+    const erroredEntry = contents.find((c) => {
+      return c.ok === false;
+    });
+    expect(erroredEntry).toBeDefined();
+    expect(erroredEntry.runId).toBe(firstRunId);
+    expect(typeof erroredEntry.error).toBe("string");
+  });
+
   // -------------------------------------------------------------------------
   // Plain.com integration
   // -------------------------------------------------------------------------

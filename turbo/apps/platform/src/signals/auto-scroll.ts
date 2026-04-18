@@ -6,6 +6,33 @@ const L = logger("AutoScroll");
 const AT_BOTTOM_THRESHOLD = 10;
 const USER_INPUT_WINDOW_MS = 200;
 
+// Persists a user's last non-bottom scroll position across container
+// re-binds (e.g. when switching between parallel chat threads). Keyed by
+// caller-provided id — typically a threadId. When absent, no caching occurs.
+const scrollPositionCache$ = state(new Map<string, number>());
+
+const setCachedScrollTop$ = command(
+  ({ get, set }, id: string, scrollTop: number) => {
+    const cache = get(scrollPositionCache$);
+    if (cache.get(id) === scrollTop) {
+      return;
+    }
+    const next = new Map(cache);
+    next.set(id, scrollTop);
+    set(scrollPositionCache$, next);
+  },
+);
+
+const clearCachedScrollTop$ = command(({ get, set }, id: string) => {
+  const cache = get(scrollPositionCache$);
+  if (!cache.has(id)) {
+    return;
+  }
+  const next = new Map(cache);
+  next.delete(id);
+  set(scrollPositionCache$, next);
+});
+
 function isUserScrollKey(key: string): boolean {
   return (
     key === "PageUp" ||
@@ -37,10 +64,20 @@ function scrollInfo(el: HTMLElement) {
  *
  * `autoScroll$`     — scroll to bottom only when auto-scroll is enabled.
  * `scrollToBottom$`  — unconditional force scroll (ignores disabled state).
+ *
+ * When `id` is provided, the user's last non-bottom scroll position is
+ * persisted in a module-level cache. On the first `scrollToBottom$` call
+ * after a new container binds with the same id, the saved position is
+ * restored instead — this preserves reading position across chat-thread
+ * switches. The cache is cleared once the user scrolls back to the bottom.
  */
-export function createScrollSignals() {
+export function createScrollSignals(id?: string) {
   const internalScrollContainer$ = state<HTMLElement | null>(null);
   const autoScrollDisabled$ = state(false);
+  let firstScrollToBottomCall = true;
+  // Held while ResizeObserver is still growing the container up to a saved
+  // position — set scrollTop clamps early and needs to be re-applied.
+  let pendingRestorePosition: number | null = null;
 
   const setScrollContainer$ = onRef(
     command(({ get, set }, el: HTMLElement, signal: AbortSignal) => {
@@ -63,9 +100,17 @@ export function createScrollSignals() {
       const onScroll = () => {
         const distanceFromBottom =
           el.scrollHeight - el.scrollTop - el.clientHeight;
+        const userRecent =
+          performance.now() - lastUserInputAt < USER_INPUT_WINDOW_MS;
+        if (pendingRestorePosition !== null && userRecent) {
+          pendingRestorePosition = null;
+        }
         if (distanceFromBottom <= AT_BOTTOM_THRESHOLD) {
           const wasDisabled = get(autoScrollDisabled$);
           set(autoScrollDisabled$, false);
+          if (id !== undefined) {
+            set(clearCachedScrollTop$, id);
+          }
           if (wasDisabled) {
             L.debug("re-enabled (at bottom)", scrollInfo(el));
           }
@@ -76,25 +121,18 @@ export function createScrollSignals() {
           // clamps to the new max, and scroll anchoring can nudge position on
           // layout changes. Those programmatic shifts should not disable
           // auto-scroll; we want ResizeObserver to snap back to the bottom.
-          const userRecent =
-            performance.now() - lastUserInputAt < USER_INPUT_WINDOW_MS;
           if (userRecent) {
             const wasDisabled = get(autoScrollDisabled$);
             set(autoScrollDisabled$, true);
             if (!wasDisabled) {
-              L.debug(
-                "DISABLED (scrolled up)",
-                scrollInfo(el),
-                `lastKnown=${Math.round(lastKnownScrollTop)}`,
-              );
+              L.debug("DISABLED (scrolled up)", scrollInfo(el));
             }
           } else {
-            L.debug(
-              "scrollTop decreased without user input (ignored)",
-              scrollInfo(el),
-              `lastKnown=${Math.round(lastKnownScrollTop)}`,
-            );
+            L.debug("scrollTop decreased without user input", scrollInfo(el));
           }
+        }
+        if (id !== undefined && get(autoScrollDisabled$)) {
+          set(setCachedScrollTop$, id, el.scrollTop);
         }
         lastKnownScrollTop = el.scrollTop;
       };
@@ -108,6 +146,13 @@ export function createScrollSignals() {
       const resizeObserver = new ResizeObserver(() => {
         const disabled = get(autoScrollDisabled$);
         L.debug("ResizeObserver fired", scrollInfo(el), `disabled=${disabled}`);
+        if (pendingRestorePosition !== null) {
+          el.scrollTop = pendingRestorePosition;
+          if (el.scrollTop >= pendingRestorePosition) {
+            pendingRestorePosition = null;
+          }
+          return;
+        }
         if (!disabled) {
           el.scrollTop = el.scrollHeight;
         }
@@ -147,11 +192,23 @@ export function createScrollSignals() {
     scrollEl.scrollTop = scrollEl.scrollHeight;
   });
 
-  const scrollToBottom$ = command(({ get }) => {
+  const scrollToBottom$ = command(({ get, set }) => {
     const scrollEl = get(internalScrollContainer$);
     if (!scrollEl) {
       L.debug("scrollToBottom$ SKIPPED (no container)");
       return;
+    }
+    const wasFirst = firstScrollToBottomCall;
+    firstScrollToBottomCall = false;
+    if (wasFirst && id !== undefined) {
+      const saved = get(scrollPositionCache$).get(id);
+      if (saved !== undefined) {
+        pendingRestorePosition = saved;
+        scrollEl.scrollTop = saved;
+        set(autoScrollDisabled$, true);
+        L.debug("scrollToBottom$ → restored", `id=${id}`, `saved=${saved}`);
+        return;
+      }
     }
     L.debug("scrollToBottom$ → scrolling to bottom", scrollInfo(scrollEl));
     scrollEl.scrollTop = scrollEl.scrollHeight;

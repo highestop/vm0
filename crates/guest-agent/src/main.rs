@@ -26,7 +26,7 @@ async fn main() {
 }
 
 /// Top-level orchestrator. Returns exit code directly (never panics/errors out).
-/// Cleanup (final telemetry + complete API) is guaranteed to run.
+/// Final telemetry upload is guaranteed to run on every code path.
 async fn run() -> i32 {
     // Record API-to-agent E2E time (as early as possible)
     guest_agent::timing::record_e2e_from_api("api_to_agent_start");
@@ -36,7 +36,7 @@ async fn run() -> i32 {
         log_error!(LOG_TAG, "Fatal: VM0_WORKING_DIR is required but not set");
         let masker = masker::SecretMasker::from_env();
         log_info!(LOG_TAG, "▷ Cleanup");
-        cleanup(&masker).await;
+        final_telemetry(&masker).await;
         log_info!(LOG_TAG, "Background processes stopped");
         log_info!(LOG_TAG, "✗ Sandbox failed (exit code 1)");
         return 1;
@@ -79,12 +79,11 @@ async fn run() -> i32 {
     log_info!(LOG_TAG, "Telemetry upload started");
     record_sandbox_op("telemetry_upload_start", t.elapsed(), true, None);
 
-    // Execute main logic (init + CLI + checkpoint)
+    // Execute main logic (init + CLI + checkpoint + final telemetry).
+    // `execute` owns the final telemetry upload — on the success path it's run
+    // in parallel with `checkpoint` so the ~1s upload doesn't serialize behind
+    // the ~4s snapshot work.
     let exit_code = execute(&masker, start, heartbeat_handle).await;
-
-    // Guaranteed cleanup: final telemetry upload
-    log_info!(LOG_TAG, "▷ Cleanup");
-    cleanup(&masker).await;
 
     // Stop all background processes (heartbeat, metrics, telemetry)
     shutdown.cancel();
@@ -101,7 +100,8 @@ async fn run() -> i32 {
     exit_code
 }
 
-/// Main execution logic: working dir, CLI, checkpoint.
+/// Main execution logic: working dir, CLI, checkpoint, and final telemetry
+/// upload (parallel with checkpoint on the success path; serial otherwise).
 async fn execute(
     masker: &masker::SecretMasker,
     start: Instant,
@@ -190,13 +190,35 @@ async fn execute(
         log_info!(LOG_TAG, "✗ Execution failed ({}s)", cli_elapsed.as_secs());
     }
 
-    // Checkpoint on success (skip when no API — local/test mode)
+    // Checkpoint on success (skip when no API — local/test mode). The final
+    // telemetry upload runs in two phases to keep the operator-visible log
+    // output identical to the pre-parallelization sequence while still
+    // overlapping the ~1s upload with checkpoint:
+    //   1. A silent first pass inside `tokio::join!` drains the pre-checkpoint
+    //      sandbox_ops under cover of `checkpoint::create_checkpoint` — no
+    //      log banner, no error log, no `record_sandbox_op`. On failure,
+    //      position tracking doesn't advance so the catch-up re-reads the
+    //      same delta.
+    //   2. After checkpoint completes, `final_telemetry` runs serially as
+    //      the pre-parallelization "cleanup" step — it emits the `▷ Cleanup`
+    //      lifecycle banner, the `"Performing final telemetry upload..."`
+    //      log inside `final_upload`, the failure log on error, and records
+    //      the `final_telemetry_upload` sandbox op.
+    // The catch-up step also captures records checkpoint wrote after the
+    // parallel pass snapshotted the file (`session_id_read`, VAS snapshot
+    // timings, `checkpoint_total`, etc) — `telemetry_loop` breaks on
+    // shutdown without a final flush, so without this serial pass those
+    // records would never reach the server.
     if cli_exit_code == 0 && exit_code == 0 && env::has_api() {
         log_info!(LOG_TAG, "claude-code completed successfully");
 
         log_info!(LOG_TAG, "▷ Checkpoint");
         let cp_start = Instant::now();
-        match checkpoint::create_checkpoint().await {
+        let (cp_result, _) = tokio::join!(
+            checkpoint::create_checkpoint(),
+            telemetry::final_upload_silent(masker),
+        );
+        match cp_result {
             Ok(()) => {
                 log_info!(
                     LOG_TAG,
@@ -216,19 +238,25 @@ async fn execute(
                 exit_code = 1;
             }
         }
-    } else if cli_exit_code == 0 && exit_code == 0 {
-        log_info!(LOG_TAG, "claude-code completed successfully");
-    } else if cli_exit_code != 0 {
-        log_info!(LOG_TAG, "claude-code failed with exit code {cli_exit_code}");
+
+        log_info!(LOG_TAG, "▷ Cleanup");
+        final_telemetry(masker).await;
+    } else {
+        if cli_exit_code == 0 && exit_code == 0 {
+            log_info!(LOG_TAG, "claude-code completed successfully");
+        } else if cli_exit_code != 0 {
+            log_info!(LOG_TAG, "claude-code failed with exit code {cli_exit_code}");
+        }
+        log_info!(LOG_TAG, "▷ Cleanup");
+        final_telemetry(masker).await;
     }
 
     exit_code
 }
 
-/// Cleanup that always runs: final telemetry upload.
-/// Note: complete API is called by the runner after VM exits, not by guest-agent.
-async fn cleanup(masker: &masker::SecretMasker) {
-    // Final telemetry upload
+/// Final telemetry upload — records timing and logs on failure.
+/// The complete API is called by the runner after VM exits, not by guest-agent.
+async fn final_telemetry(masker: &masker::SecretMasker) {
     let telemetry_start = Instant::now();
     let telemetry_ok = telemetry::final_upload(masker).await.is_ok();
     if !telemetry_ok {

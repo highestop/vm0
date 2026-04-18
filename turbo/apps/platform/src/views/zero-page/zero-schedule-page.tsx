@@ -66,7 +66,8 @@ import { zeroOnboardingStatus$ } from "../../signals/zero-page/zero-onboarding.t
 import { detachedNavigateTo$ } from "../../signals/route.ts";
 import {
   createDialogOpen$,
-  setCreateDialogOpen$,
+  openCreateScheduleDialog$,
+  closeCreateScheduleDialog$,
   creatingOrgSchedule$,
   pageTogglingIds$,
   setPageTogglingIds$,
@@ -506,7 +507,8 @@ export function ZeroSchedulePage() {
       ? "list"
       : rawActiveListTab;
   const createOpen = useGet(createDialogOpen$);
-  const setCreateOpen = useSet(setCreateDialogOpen$);
+  const openCreateDialog = useSet(openCreateScheduleDialog$);
+  const closeCreateDialog = useSet(closeCreateScheduleDialog$);
   const togglingIds = useGet(pageTogglingIds$);
   const setTogglingIds = useSet(setPageTogglingIds$);
   const runningIds = useGet(pageRunningIds$);
@@ -616,7 +618,7 @@ export function ZeroSchedulePage() {
               className="zero-btn-morandi h-9 gap-2 shrink-0 rounded-lg border"
               disabled={agents.length === 0}
               onClick={() => {
-                return setCreateOpen(true);
+                return detach(openCreateDialog(pageSignal), Reason.DomCallback);
               }}
             >
               <IconPlus size={14} stroke={2} />
@@ -685,7 +687,10 @@ export function ZeroSchedulePage() {
                   }}
                   onDelete={handleDelete}
                   onNew={() => {
-                    return setCreateOpen(true);
+                    return detach(
+                      openCreateDialog(pageSignal),
+                      Reason.DomCallback,
+                    );
                   }}
                   onRunNow={(entry) => {
                     handleRunNow(entry);
@@ -712,7 +717,7 @@ export function ZeroSchedulePage() {
       <ScheduleFormDialog
         open={createOpen}
         onClose={() => {
-          return setCreateOpen(false);
+          return closeCreateDialog();
         }}
         onSave={onCreateSave}
         saving={saving}

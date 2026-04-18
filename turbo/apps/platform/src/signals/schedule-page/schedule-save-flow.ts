@@ -3,8 +3,8 @@ import { detachedNavigateTo$ } from "../route.ts";
 import { saveOrgSchedule$ } from "../zero-page/zero-schedule.ts";
 import type { ScheduleFormData } from "./schedule-form.ts";
 import {
+  closeCreateScheduleDialog$,
   creatingOrgSchedule$,
-  setCreateDialogOpen$,
   setCreatingOrgSchedule$,
 } from "./schedule-page-ui.ts";
 
@@ -49,7 +49,7 @@ export const createOrgScheduleFromForm$ = command(
       set(setCreatingOrgSchedule$, false);
     });
     signal.throwIfAborted();
-    set(setCreateDialogOpen$, false);
+    set(closeCreateScheduleDialog$);
     set(detachedNavigateTo$, "/schedules/:scheduleId", {
       pathParams: { scheduleId },
     });

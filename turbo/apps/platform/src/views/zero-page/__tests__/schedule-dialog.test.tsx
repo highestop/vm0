@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent, {
   PointerEventsCheckLevel,
 } from "@testing-library/user-event";
@@ -160,16 +160,21 @@ async function openEditDialog(user: ReturnType<typeof userEvent.setup>) {
   });
 }
 
+function getOpenListboxOption(text: string): HTMLElement {
+  const listbox = screen.getByRole("listbox");
+  return within(listbox).getByText(text);
+}
+
 async function switchFrequency(
   user: ReturnType<typeof userEvent.setup>,
   freqLabel: string,
 ) {
   const freqTrigger = screen.getByRole("combobox", { name: "Time" });
   await user.click(freqTrigger);
-  await waitFor(() => {
-    expect(screen.getByRole("option", { name: freqLabel })).toBeInTheDocument();
+  const option = await waitFor(() => {
+    return getOpenListboxOption(freqLabel);
   });
-  await user.click(screen.getByRole("option", { name: freqLabel }));
+  await user.click(option);
 }
 
 describe("schedule dialog - form title (SCHED-D-046)", () => {
@@ -298,12 +303,10 @@ describe("schedule dialog - agent selection (SCHED-D-051)", () => {
     await openCreateDialog(user);
     const agentTrigger = screen.getByRole("combobox", { name: "Agent" });
     await user.click(agentTrigger);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: "Research Agent" }),
-      ).toBeInTheDocument();
+    const agentOption = await waitFor(() => {
+      return getOpenListboxOption("Research Agent");
     });
-    await user.click(screen.getByRole("option", { name: "Research Agent" }));
+    await user.click(agentOption);
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent(
         "Research Agent",
@@ -335,12 +338,10 @@ describe("schedule dialog - loop interval (SCHED-D-055)", () => {
     });
     const loopTrigger = screen.getByRole("combobox", { name: "Every" });
     await user.click(loopTrigger);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: "30 minutes" }),
-      ).toBeInTheDocument();
+    const loopOption = await waitFor(() => {
+      return getOpenListboxOption("30 minutes");
     });
-    await user.click(screen.getByRole("option", { name: "30 minutes" }));
+    await user.click(loopOption);
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Every" })).toHaveTextContent(
         "30 minutes",
@@ -377,10 +378,10 @@ describe("schedule dialog - day of month (SCHED-D-058)", () => {
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("combobox", { name: "Day of month" }));
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "15" })).toBeInTheDocument();
+    const domOption = await waitFor(() => {
+      return getOpenListboxOption("15");
     });
-    await user.click(screen.getByRole("option", { name: "15" }));
+    await user.click(domOption);
     await waitFor(() => {
       expect(
         screen.getByRole("combobox", { name: "Day of month" }),
@@ -400,10 +401,10 @@ describe("schedule dialog - hour select (SCHED-D-059)", () => {
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("combobox", { name: "Hour" }));
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "14" })).toBeInTheDocument();
+    const hourOption = await waitFor(() => {
+      return getOpenListboxOption("14");
     });
-    await user.click(screen.getByRole("option", { name: "14" }));
+    await user.click(hourOption);
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Hour" })).toHaveTextContent(
         "14",
@@ -423,10 +424,10 @@ describe("schedule dialog - minute select (SCHED-D-060)", () => {
       ).toBeInTheDocument();
     });
     await user.click(screen.getByRole("combobox", { name: "Minute" }));
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "30" })).toBeInTheDocument();
+    const minuteOption = await waitFor(() => {
+      return getOpenListboxOption("30");
     });
-    await user.click(screen.getByRole("option", { name: "30" }));
+    await user.click(minuteOption);
     await waitFor(() => {
       expect(
         screen.getByRole("combobox", { name: "Minute" }),
@@ -467,7 +468,7 @@ describe("schedule dialog - cancel button (SCHED-D-062)", () => {
     await user.click(screen.getByText("Cancel"));
     await waitFor(() => {
       expect(
-        screen.queryByRole("heading", { name: "Add schedule" }),
+        screen.queryByText("Add schedule", { selector: "h2" }),
       ).not.toBeInTheDocument();
     });
   });
@@ -492,7 +493,7 @@ describe("schedule dialog - save button (SCHED-D-063)", () => {
     });
     await waitFor(() => {
       expect(
-        screen.queryByRole("heading", { name: "Add schedule" }),
+        screen.queryByText("Add schedule", { selector: "h2" }),
       ).not.toBeInTheDocument();
     });
   });
@@ -507,7 +508,7 @@ describe("schedule dialog - close button (SCHED-D-064)", () => {
     await user.click(screen.getAllByLabelText("Close")[0]);
     await waitFor(() => {
       expect(
-        screen.queryByRole("heading", { name: "Add schedule" }),
+        screen.queryByText("Add schedule", { selector: "h2" }),
       ).not.toBeInTheDocument();
     });
   });
@@ -529,7 +530,7 @@ describe("schedule dialog - unsaved discard (SCHED-D-065)", () => {
     await user.click(screen.getByText("Discard Changes"));
     await waitFor(() => {
       expect(
-        screen.queryByRole("heading", { name: "Add schedule" }),
+        screen.queryByText("Add schedule", { selector: "h2" }),
       ).not.toBeInTheDocument();
     });
   });
@@ -569,7 +570,7 @@ describe("schedule dialog - ESC with unsaved changes (SCHED-D-067)", () => {
     });
     // Dialog must remain open behind the confirm overlay.
     expect(
-      screen.getByRole("heading", { name: "Add schedule" }),
+      screen.getByText("Add schedule", { selector: "h2" }),
     ).toBeInTheDocument();
   });
 
@@ -579,7 +580,7 @@ describe("schedule dialog - ESC with unsaved changes (SCHED-D-067)", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => {
       expect(
-        screen.queryByRole("heading", { name: "Add schedule" }),
+        screen.queryByText("Add schedule", { selector: "h2" }),
       ).not.toBeInTheDocument();
     });
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();

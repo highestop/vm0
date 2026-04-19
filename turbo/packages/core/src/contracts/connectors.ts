@@ -587,6 +587,28 @@ const CONNECTOR_TYPES_DEF = {
     },
     defaultAuthMethod: "api-token",
   },
+  helicone: {
+    label: "Helicone",
+    helpText:
+      "Connect to Helicone for LLM cost tracking, request logging, and performance analytics.",
+    environmentMapping: {
+      HELICONE_TOKEN: "$secrets.HELICONE_TOKEN",
+    },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText: "Go to helicone.ai → Settings → API Keys → create a new key.",
+        secrets: {
+          HELICONE_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "sk-helicone-...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   hubspot: {
     label: "HubSpot",
     environmentMapping: {
@@ -1132,6 +1154,27 @@ const CONNECTOR_TYPES_DEF = {
     },
     defaultAuthMethod: "api-token",
   },
+  mem0: {
+    label: "Mem0",
+    helpText:
+      "Connect to Mem0 for persistent AI memory across conversations and sessions.",
+    environmentMapping: { MEM0_TOKEN: "$secrets.MEM0_TOKEN" },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "Go to [app.mem0.ai](https://app.mem0.ai) → **API Keys** → create or copy your key.",
+        secrets: {
+          MEM0_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "m0-...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   metabase: {
     label: "Metabase",
     environmentMapping: {
@@ -1381,6 +1424,29 @@ const CONNECTOR_TYPES_DEF = {
             label: "API Key",
             required: true,
             placeholder: "app-...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  e2b: {
+    label: "E2B",
+    environmentMapping: {
+      E2B_TOKEN: "$secrets.E2B_TOKEN",
+    },
+    helpText:
+      "Connect your E2B account to create and manage secure cloud sandboxes for AI code execution",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Sign up at [e2b.dev](https://e2b.dev)\n2. Go to Dashboard → **API Keys**\n3. Click **Create API Key**\n4. Copy the key (starts with `e2b_`). Paste it here.",
+        secrets: {
+          E2B_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "e2b_...",
           },
         },
       },
@@ -2305,6 +2371,27 @@ const CONNECTOR_TYPES_DEF = {
       ],
     },
   },
+  workos: {
+    label: "WorkOS",
+    helpText:
+      "Connect to WorkOS for enterprise SSO, SCIM directory sync, RBAC fine-grained authorization, and audit log management.",
+    environmentMapping: { WORKOS_TOKEN: "$secrets.WORKOS_TOKEN" },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "Go to WorkOS Dashboard → API Keys → copy your secret key (starts with `sk_live_` for production or `sk_test_` for sandbox).",
+        secrets: {
+          WORKOS_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "sk_live_...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   wrike: {
     label: "Wrike",
     environmentMapping: {
@@ -2598,6 +2685,29 @@ const CONNECTOR_TYPES_DEF = {
     },
     defaultAuthMethod: "api-token",
   },
+  pipedrive: {
+    label: "Pipedrive",
+    environmentMapping: {
+      PIPEDRIVE_TOKEN: "$secrets.PIPEDRIVE_TOKEN",
+    },
+    helpText:
+      "Connect your Pipedrive account to manage your sales pipeline — deals, contacts, organizations, activities, and notes",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. In Pipedrive, click your avatar (top right) → **Personal Preferences** → **API**\n2. Copy your personal API token\n3. Paste it here",
+        secrets: {
+          PIPEDRIVE_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "your-pipedrive-api-token",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   plain: {
     label: "Plain",
     environmentMapping: {
@@ -2753,6 +2863,29 @@ const CONNECTOR_TYPES_DEF = {
     },
     defaultAuthMethod: "api-token",
   },
+  replicate: {
+    label: "Replicate",
+    environmentMapping: {
+      REPLICATE_TOKEN: "$secrets.REPLICATE_TOKEN",
+    },
+    helpText:
+      "Connect your Replicate account to run open-source ML models for image generation, text generation, and more",
+    authMethods: {
+      "api-token": {
+        label: "API Token",
+        helpText:
+          "1. Sign up at [replicate.com](https://replicate.com)\n2. Click your avatar → **API Tokens**\n3. Click **Create token**, give it a name\n4. Copy the token (starts with `r8_`)\n5. Paste it here",
+        secrets: {
+          REPLICATE_TOKEN: {
+            label: "API Token",
+            required: true,
+            placeholder: "r8_...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   pdf4me: {
     label: "PDF4me",
     environmentMapping: {
@@ -2868,6 +3001,29 @@ const CONNECTOR_TYPES_DEF = {
             label: "API Key",
             required: true,
             placeholder: "your-apollo-api-key",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  pinecone: {
+    label: "Pinecone",
+    environmentMapping: {
+      PINECONE_TOKEN: "$secrets.PINECONE_TOKEN",
+    },
+    helpText:
+      "Connect your Pinecone account for vector database operations, semantic search, and managing embeddings",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to [Pinecone](https://app.pinecone.io)\n2. Go to **API Keys** in the left sidebar\n3. Copy your default API key or create a new one",
+        secrets: {
+          PINECONE_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "pcsk_...",
           },
         },
       },
@@ -3359,6 +3515,27 @@ const CONNECTOR_TYPES_DEF = {
     },
     defaultAuthMethod: "api-token",
   },
+  zep: {
+    label: "Zep",
+    helpText:
+      "Connect to Zep for long-term memory and conversation history management in AI agents.",
+    environmentMapping: { ZEP_TOKEN: "$secrets.ZEP_TOKEN" },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Log in to [app.getzep.com](https://app.getzep.com)\n2. Go to **Settings**\n3. Navigate to **API Keys**\n4. Click **Create API Key** and copy the key",
+        secrets: {
+          ZEP_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "z_...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
   zeptomail: {
     label: "ZeptoMail",
     environmentMapping: {
@@ -3453,6 +3630,30 @@ const CONNECTOR_TYPES_DEF = {
             label: "API Key",
             required: true,
             placeholder: "your-shortio-api-key",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  "stability-ai": {
+    label: "Stability AI",
+    environmentMapping: {
+      STABILITY_TOKEN: "$secrets.STABILITY_TOKEN",
+    },
+    featureFlag: FeatureSwitchKey.StabilityAiConnector,
+    helpText:
+      "Connect your Stability AI account to generate images using Stable Diffusion models",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Sign up at [platform.stability.ai](https://platform.stability.ai)\n2. Go to **Account → API Keys → Create API Key**\n3. Copy the key (starts with `sk-`). Paste here. Free credits on signup.",
+        secrets: {
+          STABILITY_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "sk-...",
           },
         },
       },
@@ -3878,6 +4079,52 @@ const CONNECTOR_TYPES_DEF = {
             label: "App ID",
             required: true,
             type: "variable",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  luma: {
+    label: "Luma AI",
+    environmentMapping: {
+      LUMA_TOKEN: "$secrets.LUMA_TOKEN",
+    },
+    helpText:
+      "Connect your Luma AI account to generate videos and images using the Dream Machine API",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Sign up at [lumalabs.ai](https://lumalabs.ai)\n2. Go to [lumalabs.ai/dream-machine/api](https://lumalabs.ai/dream-machine/api) or account settings → API Keys\n3. Create a new API key and copy it\n4. Paste the key here",
+        secrets: {
+          LUMA_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "your-luma-api-key",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  langsmith: {
+    label: "LangSmith",
+    helpText:
+      "Connect to LangSmith for LLM tracing, evaluation, and dataset management.",
+    environmentMapping: {
+      LANGSMITH_TOKEN: "$secrets.LANGSMITH_TOKEN",
+    },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "Go to [smith.langchain.com](https://smith.langchain.com) → Settings → API Keys → Create API Key.",
+        secrets: {
+          LANGSMITH_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "lsv2_pt_...",
           },
         },
       },
@@ -4571,6 +4818,110 @@ const CONNECTOR_TYPES_DEF = {
         "webinar:read:webinar",
       ],
     },
+  },
+  groq: {
+    label: "Groq",
+    tags: ["llm", "ai", "llama", "inference"],
+    environmentMapping: {
+      GROQ_TOKEN: "$secrets.GROQ_TOKEN",
+    },
+    helpText:
+      "Connect your Groq account to run ultra-fast LLM inference on open-weight models (Llama, Mixtral, Gemma) and Whisper audio transcription using Groq's LPU hardware",
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Sign up at [console.groq.com](https://console.groq.com)\n2. Click **API Keys** in the left sidebar\n3. Click **Create API Key**, name it, and copy it immediately — it is shown only once\n4. Paste it here. Free tier available; the key is org-bound.",
+        secrets: {
+          GROQ_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "gsk_...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  langfuse: {
+    label: "Langfuse",
+    tags: ["observability", "tracing", "llm", "analytics"],
+    environmentMapping: {
+      LANGFUSE_PUBLIC_KEY: "$secrets.LANGFUSE_PUBLIC_KEY",
+      LANGFUSE_SECRET_KEY: "$secrets.LANGFUSE_SECRET_KEY",
+    },
+    helpText:
+      "Connect your Langfuse project to ingest LLM traces, attach evaluate scores, and manage prompt templates",
+    authMethods: {
+      "api-token": {
+        label: "API Keys",
+        helpText:
+          "1. Sign up at [cloud.langfuse.com](https://cloud.langfuse.com)\n2. Create an organization and a project\n3. In project **Settings → API Keys**, click **Create new API keys**\n4. Copy both the **Public Key** (`pk-lf-...`) and the **Secret Key** (`sk-lf-...`) — the secret is shown only once\n5. Paste both values into the fields below",
+        secrets: {
+          LANGFUSE_PUBLIC_KEY: {
+            label: "Public Key",
+            required: true,
+            placeholder: "pk-lf-...",
+          },
+          LANGFUSE_SECRET_KEY: {
+            label: "Secret Key",
+            required: true,
+            placeholder: "sk-lf-...",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  n8n: {
+    label: "n8n",
+    helpText:
+      "Connect your n8n instance to manage workflows, trigger executions, and automate processes",
+    environmentMapping: {
+      N8N_TOKEN: "$secrets.N8N_TOKEN",
+      N8N_BASE_URL: "$vars.N8N_BASE_URL",
+    },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText:
+          "1. Open your n8n instance\n2. Go to **Settings** → **n8n API**\n3. Click **Create an API key**\n4. Copy the key and paste it below\n5. Set your instance URL (e.g. `https://your-instance.app.n8n.cloud`)",
+        secrets: {
+          N8N_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "n8n_api_CoffeeSafeLocalCoffeeSafeLocalCo",
+          },
+          N8N_BASE_URL: {
+            label: "Instance URL",
+            required: true,
+            type: "variable",
+            placeholder: "https://your-instance.app.n8n.cloud",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
+  },
+  wandb: {
+    label: "Weights & Biases",
+    helpText:
+      "Connect to Weights & Biases for ML experiment tracking and LLM observability.",
+    environmentMapping: { WANDB_TOKEN: "$secrets.WANDB_TOKEN" },
+    authMethods: {
+      "api-token": {
+        label: "API Key",
+        helpText: "Go to wandb.ai → Settings → API Keys → copy your key.",
+        secrets: {
+          WANDB_TOKEN: {
+            label: "API Key",
+            required: true,
+            placeholder: "Your W&B API Key",
+          },
+        },
+      },
+    },
+    defaultAuthMethod: "api-token",
   },
 } satisfies Record<string, ConnectorConfig>;
 

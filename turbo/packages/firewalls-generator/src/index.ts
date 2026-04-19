@@ -48,6 +48,7 @@ import { generate as generateDrive9 } from "./drive9";
 import { generate as generateDropbox } from "./dropbox";
 import { generate as generateDropboxSign } from "./dropbox-sign";
 import { generate as generateDuffel } from "./duffel";
+import { generate as generateE2b } from "./e2b";
 import { generate as generateElevenlabs } from "./elevenlabs";
 import { generate as generateExa } from "./exa";
 import { generate as generateExplorium } from "./explorium";
@@ -62,7 +63,9 @@ import { generate as generateGitHub } from "./github";
 import { generate as generateGitlab } from "./gitlab";
 import { generate as generateGranola } from "./granola";
 import { generate as generateGreenhouse } from "./greenhouse";
+import { generate as generateGroq } from "./groq";
 import { generate as generateHeygen } from "./heygen";
+import { generate as generateHelicone } from "./helicone";
 import { generate as generateHtmlcsstoimage } from "./htmlcsstoimage";
 import { generate as generateHubspot } from "./hubspot";
 import { generate as generateHuggingFace } from "./hugging-face";
@@ -79,13 +82,17 @@ import { generate as generateJotform } from "./jotform";
 import { generate as generateKlaviyo } from "./klaviyo";
 import { generate as generateKommo } from "./kommo";
 import { generate as generateLark } from "./lark";
+import { generate as generateLangfuse } from "./langfuse";
+import { generate as generateLangsmith } from "./langsmith";
 import { generate as generateLine } from "./line";
 import { generate as generateLinear } from "./linear";
 import { generate as generateLoops } from "./loops";
+import { generate as generateLuma } from "./luma";
 import { generate as generateMailchimp } from "./mailchimp";
 import { generate as generateMake } from "./make";
 import { generate as generateMailsac } from "./mailsac";
 import { generate as generateManus } from "./manus";
+import { generate as generateMem0 } from "./mem0";
 import { generate as generateMercury } from "./mercury";
 import { generate as generateMetabase } from "./metabase";
 import { generate as generateMetaAds } from "./meta-ads";
@@ -94,6 +101,7 @@ import { generate as generateMiro } from "./miro";
 import { generate as generateMixpanel } from "./mixpanel";
 import { generate as generateMonday } from "./monday";
 import { generate as generateMsg9 } from "./msg9";
+import { generate as generateN8n } from "./n8n";
 import { generate as generateNeon } from "./neon";
 import { generate as generateNotion } from "./notion";
 import { generate as generateOpenai } from "./openai";
@@ -105,6 +113,8 @@ import { generate as generatePdfco } from "./pdfco";
 import { generate as generatePdforge } from "./pdforge";
 import { generate as generatePerplexity } from "./perplexity";
 import { generate as generatePika } from "./pika";
+import { generate as generatePinecone } from "./pinecone";
+import { generate as generatePipedrive } from "./pipedrive";
 import { generate as generatePlain } from "./plain";
 import { generate as generatePlausible } from "./plausible";
 import { generate as generatePodchaser } from "./podchaser";
@@ -116,6 +126,7 @@ import { generate as generateQdrant } from "./qdrant";
 import { generate as generateQiita } from "./qiita";
 import { generate as generateReddit } from "./reddit";
 import { generate as generateReportei } from "./reportei";
+import { generate as generateReplicate } from "./replicate";
 import { generate as generateResend } from "./resend";
 import { generate as generateRevenuecat } from "./revenuecat";
 import { generate as generateRunway } from "./runway";
@@ -125,6 +136,7 @@ import { generate as generateSentry } from "./sentry";
 import { generate as generateSerpapi } from "./serpapi";
 import { generate as generateShopify } from "./shopify";
 import { generate as generateShortio } from "./shortio";
+import { generate as generateStabilityAi } from "./stability-ai";
 import { generate as generateSimilarweb } from "./similarweb";
 import { generate as generateSlack } from "./slack";
 import { generate as generateSlackWebhook } from "./slack-webhook";
@@ -146,13 +158,16 @@ import { generate as generateV0 } from "./v0";
 import { generate as generateVercel } from "./vercel";
 import { generate as generateWebflow } from "./webflow";
 import { generate as generateWix } from "./wix";
+import { generate as generateWorkos } from "./workos";
 import { generate as generateWrike } from "./wrike";
 import { generate as generateX } from "./x";
 import { generate as generateXero } from "./xero";
 import { generate as generateZapier } from "./zapier";
 import { generate as generateZapsign } from "./zapsign";
 import { generate as generateZendesk } from "./zendesk";
+import { generate as generateZep } from "./zep";
 import { generate as generateZeptomail } from "./zeptomail";
+import { generate as generateWandb } from "./wandb";
 import { generate as generateZoom } from "./zoom";
 import { createGoogleGenerator, googleServiceNames } from "./google";
 
@@ -199,6 +214,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   dropbox: generateDropbox,
   "dropbox-sign": generateDropboxSign,
   duffel: generateDuffel,
+  e2b: generateE2b,
   elevenlabs: generateElevenlabs,
   exa: generateExa,
   explorium: generateExplorium,
@@ -213,7 +229,9 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   gitlab: generateGitlab,
   granola: generateGranola,
   greenhouse: generateGreenhouse,
+  groq: generateGroq,
   heygen: generateHeygen,
+  helicone: generateHelicone,
   htmlcsstoimage: generateHtmlcsstoimage,
   hubspot: generateHubspot,
   "hugging-face": generateHuggingFace,
@@ -230,13 +248,17 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   klaviyo: generateKlaviyo,
   kommo: generateKommo,
   lark: generateLark,
+  langfuse: generateLangfuse,
+  langsmith: generateLangsmith,
   line: generateLine,
   linear: generateLinear,
   loops: generateLoops,
+  luma: generateLuma,
   mailchimp: generateMailchimp,
   make: generateMake,
   mailsac: generateMailsac,
   manus: generateManus,
+  mem0: generateMem0,
   mercury: generateMercury,
   metabase: generateMetabase,
   "meta-ads": generateMetaAds,
@@ -245,6 +267,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   mixpanel: generateMixpanel,
   monday: generateMonday,
   msg9: generateMsg9,
+  n8n: generateN8n,
   neon: generateNeon,
   notion: generateNotion,
   openai: generateOpenai,
@@ -256,6 +279,8 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   pdforge: generatePdforge,
   perplexity: generatePerplexity,
   pika: generatePika,
+  pinecone: generatePinecone,
+  pipedrive: generatePipedrive,
   plain: generatePlain,
   plausible: generatePlausible,
   podchaser: generatePodchaser,
@@ -267,6 +292,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   qiita: generateQiita,
   reddit: generateReddit,
   reportei: generateReportei,
+  replicate: generateReplicate,
   resend: generateResend,
   revenuecat: generateRevenuecat,
   runway: generateRunway,
@@ -276,6 +302,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   serpapi: generateSerpapi,
   shopify: generateShopify,
   shortio: generateShortio,
+  "stability-ai": generateStabilityAi,
   similarweb: generateSimilarweb,
   slack: generateSlack,
   "slack-webhook": generateSlackWebhook,
@@ -297,13 +324,16 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   vercel: generateVercel,
   webflow: generateWebflow,
   wix: generateWix,
+  workos: generateWorkos,
   wrike: generateWrike,
   x: generateX,
   xero: generateXero,
   zapier: generateZapier,
   zapsign: generateZapsign,
   zendesk: generateZendesk,
+  zep: generateZep,
   zeptomail: generateZeptomail,
+  wandb: generateWandb,
   zoom: generateZoom,
   ...Object.fromEntries(
     googleServiceNames.map((name) => [name, createGoogleGenerator(name)]),

@@ -50,6 +50,7 @@ import { drive9Handler } from "./providers/drive9-handler";
 import { dropboxHandler } from "./providers/dropbox-handler";
 import { dropboxSignHandler } from "./providers/dropbox-sign-handler";
 import { duffelHandler } from "./providers/duffel-handler";
+import { e2bHandler } from "./providers/e2b-handler";
 import { elevenlabsHandler } from "./providers/elevenlabs-handler";
 import { exaHandler } from "./providers/exa-handler";
 import { exploriumHandler } from "./providers/explorium-handler";
@@ -63,8 +64,10 @@ import { garminConnectHandler } from "./providers/garmin-connect-handler";
 import { gitlabHandler } from "./providers/gitlab-handler";
 import { granolaHandler } from "./providers/granola-handler";
 import { greenhouseHandler } from "./providers/greenhouse-handler";
+import { groqHandler } from "./providers/groq-handler";
 import { githubHandler } from "./providers/github-handler";
 import { heygenHandler } from "./providers/heygen-handler";
+import { heliconeHandler } from "./providers/helicone-handler";
 import { huggingFaceHandler } from "./providers/hugging-face-handler";
 import { humeHandler } from "./providers/hume-handler";
 import { htmlcsstoimageHandler } from "./providers/htmlcsstoimage-handler";
@@ -85,12 +88,16 @@ import { jotformHandler } from "./providers/jotform-handler";
 import { klaviyoHandler } from "./providers/klaviyo-handler";
 import { kommoHandler } from "./providers/kommo-handler";
 import { larkHandler } from "./providers/lark-handler";
+import { langfuseHandler } from "./providers/langfuse-handler";
+import { langsmithHandler } from "./providers/langsmith-handler";
 import { lineHandler } from "./providers/line-handler";
 import { linearHandler } from "./providers/linear-handler";
 import { loopsHandler } from "./providers/loops-handler";
+import { lumaHandler } from "./providers/luma-handler";
 import { mailsacHandler } from "./providers/mailsac-handler";
 import { makeHandler } from "./providers/make-handler";
 import { manusHandler } from "./providers/manus-handler";
+import { mem0Handler } from "./providers/mem0-handler";
 import { metabaseHandler } from "./providers/metabase-handler";
 import { mercuryHandler } from "./providers/mercury-handler";
 import { minioHandler } from "./providers/minio-handler";
@@ -109,6 +116,7 @@ import { runwayHandler } from "./providers/runway-handler";
 import { salesforceHandler } from "./providers/salesforce-handler";
 import { shopifyHandler } from "./providers/shopify-handler";
 import { shortioHandler } from "./providers/shortio-handler";
+import { stabilityAiHandler } from "./providers/stability-ai-handler";
 import { strapiHandler } from "./providers/strapi-handler";
 import { streakHandler } from "./providers/streak-handler";
 import { supadataHandler } from "./providers/supadata-handler";
@@ -141,6 +149,8 @@ import { pdf4meHandler } from "./providers/pdf4me-handler";
 import { pandadocHandler } from "./providers/pandadoc-handler";
 import { pdfcoHandler } from "./providers/pdfco-handler";
 import { perplexityHandler } from "./providers/perplexity-handler";
+import { pineconeHandler } from "./providers/pinecone-handler";
+import { pipedriveHandler } from "./providers/pipedrive-handler";
 import { pushinatorHandler } from "./providers/pushinator-handler";
 import { plainHandler } from "./providers/plain-handler";
 import { plausibleHandler } from "./providers/plausible-handler";
@@ -148,20 +158,25 @@ import { podchaserHandler } from "./providers/podchaser-handler";
 import { productlaneHandler } from "./providers/productlane-handler";
 import { qdrantHandler } from "./providers/qdrant-handler";
 import { qiitaHandler } from "./providers/qiita-handler";
+import { replicateHandler } from "./providers/replicate-handler";
 import { resendHandler } from "./providers/resend-handler";
 import { revenuecatHandler } from "./providers/revenuecat-handler";
 import { scrapeninjaHandler } from "./providers/scrapeninja-handler";
 import { similarwebHandler } from "./providers/similarweb-handler";
 import { spotifyHandler } from "./providers/spotify-handler";
+import { workosHandler } from "./providers/workos-handler";
 import { wrikeHandler } from "./providers/wrike-handler";
 import { xeroHandler } from "./providers/xero-handler";
 import { pdforgeHandler } from "./providers/pdforge-handler";
 import { slackWebhookHandler } from "./providers/slack-webhook-handler";
 import { v0Handler } from "./providers/v0-handler";
 import { wixHandler } from "./providers/wix-handler";
+import { zepHandler } from "./providers/zep-handler";
 import { zeptomailHandler } from "./providers/zeptomail-handler";
 import { zoomHandler } from "./providers/zoom-handler";
+import { n8nHandler } from "./providers/n8n-handler";
 import { testOauthHandler } from "./providers/test-oauth-handler";
+import { wandbHandler } from "./providers/wandb-handler";
 
 export type { AuthUrlResult, OAuthTokenResult };
 
@@ -214,6 +229,7 @@ export const PROVIDER_HANDLERS: Record<
   dropbox: dropboxHandler,
   "dropbox-sign": dropboxSignHandler,
   duffel: duffelHandler,
+  e2b: e2bHandler,
   elevenlabs: elevenlabsHandler,
   exa: exaHandler,
   explorium: exploriumHandler,
@@ -227,9 +243,11 @@ export const PROVIDER_HANDLERS: Record<
   gitlab: gitlabHandler,
   granola: granolaHandler,
   greenhouse: greenhouseHandler,
+  groq: groqHandler,
   github: githubHandler,
   gmail: gmailHandler,
   heygen: heygenHandler,
+  helicone: heliconeHandler,
   "hugging-face": huggingFaceHandler,
   hume: humeHandler,
   htmlcsstoimage: htmlcsstoimageHandler,
@@ -243,12 +261,16 @@ export const PROVIDER_HANDLERS: Record<
   "google-meet": googleMeetHandler,
   "google-sheets": googleSheetsHandler,
   lark: larkHandler,
+  langfuse: langfuseHandler,
+  langsmith: langsmithHandler,
   line: lineHandler,
   linear: linearHandler,
   loops: loopsHandler,
+  luma: lumaHandler,
   mailsac: mailsacHandler,
   make: makeHandler,
   manus: manusHandler,
+  mem0: mem0Handler,
   metabase: metabaseHandler,
   mailchimp: mailchimpHandler,
   mercury: mercuryHandler,
@@ -289,6 +311,8 @@ export const PROVIDER_HANDLERS: Record<
   pdf4me: pdf4meHandler,
   pdfco: pdfcoHandler,
   perplexity: perplexityHandler,
+  pinecone: pineconeHandler,
+  pipedrive: pipedriveHandler,
   plain: plainHandler,
   plausible: plausibleHandler,
   podchaser: podchaserHandler,
@@ -296,19 +320,23 @@ export const PROVIDER_HANDLERS: Record<
   pushinator: pushinatorHandler,
   qdrant: qdrantHandler,
   qiita: qiitaHandler,
+  replicate: replicateHandler,
   resend: resendHandler,
   revenuecat: revenuecatHandler,
   scrapeninja: scrapeninjaHandler,
   similarweb: similarwebHandler,
   spotify: spotifyHandler,
+  workos: workosHandler,
   wrike: wrikeHandler,
   x: xHandler,
   xero: xeroHandler,
+  zep: zepHandler,
   zeptomail: zeptomailHandler,
   runway: runwayHandler,
   salesforce: salesforceHandler,
   shopify: shopifyHandler,
   shortio: shortioHandler,
+  "stability-ai": stabilityAiHandler,
   streak: streakHandler,
   supadata: supadataHandler,
   tavily: tavilyHandler,
@@ -325,7 +353,9 @@ export const PROVIDER_HANDLERS: Record<
   "slack-webhook": slackWebhookHandler,
   v0: v0Handler,
   wix: wixHandler,
+  n8n: n8nHandler,
   "test-oauth": testOauthHandler,
+  wandb: wandbHandler,
 };
 
 /**

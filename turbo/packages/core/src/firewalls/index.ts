@@ -167,6 +167,7 @@ import { zapierFirewall } from "./zapier.generated";
 import { zapsignFirewall } from "./zapsign.generated";
 import { zendeskFirewall } from "./zendesk.generated";
 import { zeptomailFirewall } from "./zeptomail.generated";
+import { zoomFirewall } from "./zoom.generated";
 
 // ── Permission categories ───────────────────────────────────────────────
 
@@ -325,6 +326,7 @@ const CONNECTOR_FIREWALLS = {
   zapsign: zapsignFirewall,
   zendesk: zendeskFirewall,
   zeptomail: zeptomailFirewall,
+  zoom: zoomFirewall,
 } as const satisfies Partial<Record<ConnectorType, FirewallConfig>>;
 
 /**

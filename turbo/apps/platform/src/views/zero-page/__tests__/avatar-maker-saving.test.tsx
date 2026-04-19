@@ -5,6 +5,11 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import {
+  zeroAgentsByIdContract,
+  zeroAgentInstructionsContract,
+} from "@vm0/core";
 
 const context = testContext();
 
@@ -34,21 +39,23 @@ function mockAPIs() {
         },
       ]);
     }),
-    http.get("*/api/zero/agents/my-agent", () => {
-      return HttpResponse.json({
-        name: "my-agent",
+    http.get("*/api/zero/chat-threads", () => {
+      return HttpResponse.json({ threads: [] });
+    }),
+    mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
+      return respond(200, {
         agentId: "e0000000-0000-4000-a000-000000000010",
         ownerId: "test-user-123",
         description: "A helpful agent",
         displayName: "My Agent",
         sound: "professional",
         avatarUrl: "preset:0",
-        connectors: [],
         permissionPolicies: null,
+        customSkills: [],
       });
     }),
-    http.get("*/api/zero/agents/:name/instructions", () => {
-      return HttpResponse.json({ content: null, filename: null });
+    mockApi(zeroAgentInstructionsContract.get, ({ respond }) => {
+      return respond(200, { content: null, filename: null });
     }),
     http.get("*/api/zero/schedules", () => {
       return HttpResponse.json({ schedules: [] });
@@ -78,8 +85,12 @@ describe("avatar maker - saving state", () => {
     const user = userEvent.setup();
     mockAPIs();
     server.use(
-      http.put("*/api/zero/agents/my-agent", () => {
-        return HttpResponse.json(null, { status: 500 });
+      // mockApi cannot return 500 (not in contract responses); 404 triggers
+      // the same "update failed" error path and is sufficient for this test.
+      mockApi(zeroAgentsByIdContract.update, ({ respond }) => {
+        return respond(404, {
+          error: { message: "Not found", code: "NOT_FOUND" },
+        });
       }),
     );
     await openAvatarMaker(user);

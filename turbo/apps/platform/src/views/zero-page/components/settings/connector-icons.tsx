@@ -89,6 +89,7 @@ const CONNECTOR_ICON_COLORFUL = {
   "discord-webhook": true,
   docusign: true,
   dropbox: true,
+  "dropbox-sign": true,
   explorium: true,
   fal: true,
   figma: true,

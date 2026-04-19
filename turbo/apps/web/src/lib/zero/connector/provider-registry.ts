@@ -45,6 +45,7 @@ import { docusignHandler } from "./providers/docusign-handler";
 import { db9Handler } from "./providers/db9-handler";
 import { drive9Handler } from "./providers/drive9-handler";
 import { dropboxHandler } from "./providers/dropbox-handler";
+import { dropboxSignHandler } from "./providers/dropbox-sign-handler";
 import { duffelHandler } from "./providers/duffel-handler";
 import { elevenlabsHandler } from "./providers/elevenlabs-handler";
 import { exploriumHandler } from "./providers/explorium-handler";
@@ -200,6 +201,7 @@ export const PROVIDER_HANDLERS: Record<
   db9: db9Handler,
   drive9: drive9Handler,
   dropbox: dropboxHandler,
+  "dropbox-sign": dropboxSignHandler,
   duffel: duffelHandler,
   elevenlabs: elevenlabsHandler,
   explorium: exploriumHandler,

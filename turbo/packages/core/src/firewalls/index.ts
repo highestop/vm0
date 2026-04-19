@@ -113,6 +113,7 @@ import { metabaseFirewall } from "./metabase.generated";
 import { metaAdsFirewall } from "./meta-ads.generated";
 import { minimaxFirewall } from "./minimax.generated";
 import { miroFirewall } from "./miro.generated";
+import { mixpanelFirewall } from "./mixpanel.generated";
 import { mondayFirewall } from "./monday.generated";
 import { msg9Firewall } from "./msg9.generated";
 import { neonFirewall } from "./neon.generated";
@@ -278,6 +279,7 @@ const CONNECTOR_FIREWALLS = {
   "meta-ads": metaAdsFirewall,
   minimax: minimaxFirewall,
   miro: miroFirewall,
+  mixpanel: mixpanelFirewall,
   monday: mondayFirewall,
   msg9: msg9Firewall,
   neon: neonFirewall,

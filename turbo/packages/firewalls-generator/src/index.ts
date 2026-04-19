@@ -22,6 +22,7 @@ import { generate as generateBrevo } from "./brevo";
 import { generate as generateBrightData } from "./bright-data";
 import { generate as generateBrowserbase } from "./browserbase";
 import { generate as generateBrowserless } from "./browserless";
+import { generate as generateBuffer } from "./buffer";
 import { generate as generateCalCom } from "./cal-com";
 import { generate as generateCalendly } from "./calendly";
 import { generate as generateCanva } from "./canva";
@@ -166,6 +167,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   "bright-data": generateBrightData,
   browserbase: generateBrowserbase,
   browserless: generateBrowserless,
+  buffer: generateBuffer,
   "cal-com": generateCalCom,
   calendly: generateCalendly,
   canva: generateCanva,

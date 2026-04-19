@@ -5,6 +5,8 @@ import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { navigate$ } from "../../../signals/route.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { chatThreadsContract } from "@vm0/core";
 
 const context = testContext();
 
@@ -79,6 +81,7 @@ function mockTwoAgents() {
           sound: null;
           avatarUrl: null;
           permissionPolicies: null;
+          customSkills: string[];
         }
       > = {
         "mock-compose-id": {
@@ -89,6 +92,7 @@ function mockTwoAgents() {
           sound: null,
           avatarUrl: null,
           permissionPolicies: null,
+          customSkills: [],
         },
         "agent-alpha": {
           agentId: "agent-alpha",
@@ -98,6 +102,7 @@ function mockTwoAgents() {
           sound: null,
           avatarUrl: null,
           permissionPolicies: null,
+          customSkills: [],
         },
         "agent-beta": {
           agentId: "agent-beta",
@@ -107,6 +112,7 @@ function mockTwoAgents() {
           sound: null,
           avatarUrl: null,
           permissionPolicies: null,
+          customSkills: [],
         },
       };
       const agent = agents[params.id as string];
@@ -115,15 +121,14 @@ function mockTwoAgents() {
       }
       return HttpResponse.json(agent);
     }),
-    http.get("*/api/zero/chat-threads", ({ request }) => {
-      const url = new URL(request.url);
-      const agentId = url.searchParams.get("agentId");
+    mockApi(chatThreadsContract.list, ({ query, respond }) => {
+      const agentId = query.agentId;
       const filtered = agentId
         ? allThreads.filter((t) => {
             return t.agentId === agentId;
           })
         : [];
-      return HttpResponse.json({ threads: filtered });
+      return respond(200, { threads: filtered });
     }),
   );
 }

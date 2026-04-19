@@ -50,9 +50,6 @@ function mockAPIs(overrides: Record<string, unknown> = {}) {
     http.get("*/api/zero/schedules", () => {
       return HttpResponse.json({ schedules: [createMockSchedule(overrides)] });
     }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
   );
 }
 

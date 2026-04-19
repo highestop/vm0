@@ -41,9 +41,6 @@ function mockBaseAPIs() {
         },
       ]);
     }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
   );
 }
 
@@ -80,9 +77,6 @@ describe("sidebar layout - breadcrumb name renders (SIDEBAR-D-046)", () => {
             updatedAt: "2024-01-01T00:00:00Z",
           },
         ]);
-      }),
-      http.get("*/api/zero/chat-threads", () => {
-        return HttpResponse.json({ threads: [] });
       }),
     );
 
@@ -167,9 +161,6 @@ describe("sidebar layout - breadcrumb section link navigates (SIDEBAR-D-051)", (
             updatedAt: "2024-01-01T00:00:00Z",
           },
         ]);
-      }),
-      http.get("*/api/zero/chat-threads", () => {
-        return HttpResponse.json({ threads: [] });
       }),
     );
 

@@ -5,6 +5,8 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { chatThreadsContract, logsListContract } from "@vm0/core";
 
 const context = testContext();
 
@@ -44,8 +46,8 @@ function mockAPIs(overrides: Record<string, unknown> = {}) {
     http.get("*/api/zero/schedules", () => {
       return HttpResponse.json({ schedules: [createMockSchedule(overrides)] });
     }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
+    mockApi(chatThreadsContract.list, ({ respond }) => {
+      return respond(200, { threads: [] });
     }),
   );
 }
@@ -153,8 +155,8 @@ describe("zero schedule detail page - instruction editor (SCHED-D-016)", () => {
 describe("zero schedule detail page - run history table with pagination (SCHED-D-017)", () => {
   it("should render run history table rows and pagination controls", async () => {
     server.use(
-      http.get("*/api/zero/logs", () => {
-        return HttpResponse.json({
+      mockApi(logsListContract.list, ({ respond }) => {
+        return respond(200, {
           data: [
             {
               id: "b0000001-0000-4000-a000-000000000001",

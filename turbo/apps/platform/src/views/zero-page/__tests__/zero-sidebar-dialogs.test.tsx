@@ -11,6 +11,8 @@ import {
   setManagePinnedDialogOpen$,
   setDraftPinnedIds$,
 } from "../../../signals/zero-page/zero-sidebar-state.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { chatThreadsContract, chatThreadByIdContract } from "@vm0/core";
 
 const context = testContext();
 
@@ -49,30 +51,29 @@ function mockAPIsWithSubagents({
         },
       ]);
     }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
+    mockApi(chatThreadsContract.list, ({ respond }) => {
+      return respond(200, { threads: [] });
     }),
-    http.get("*/api/zero/chat-threads/:id", () => {
-      return HttpResponse.json({
+    mockApi(chatThreadByIdContract.get, ({ respond }) => {
+      return respond(200, {
         id: "new-thread-from-dialog",
         title: null,
         agentId: "c0000000-0000-4000-a000-000000000001",
         chatMessages: [],
         latestSessionId: "session-new",
         activeRunIds: [],
+        draftContent: null,
+        draftAttachments: null,
         createdAt: "2026-03-10T00:00:00Z",
         updatedAt: "2026-03-10T00:00:00Z",
       });
     }),
-    http.post("*/api/zero/chat-threads", () => {
-      return HttpResponse.json(
-        {
-          id: "new-thread-from-dialog",
-          title: null,
-          createdAt: "2026-03-10T00:00:00Z",
-        },
-        { status: 201 },
-      );
+    mockApi(chatThreadsContract.create, ({ respond }) => {
+      return respond(201, {
+        id: "new-thread-from-dialog",
+        title: null,
+        createdAt: "2026-03-10T00:00:00Z",
+      });
     }),
     http.get("*/api/zero/user-preferences", () => {
       return HttpResponse.json({

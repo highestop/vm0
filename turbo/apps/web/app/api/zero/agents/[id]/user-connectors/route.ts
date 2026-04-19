@@ -113,8 +113,10 @@ const router = tsr.router(zeroUserConnectorsContract, {
       };
     }
 
+    const uniqueTypes = Array.from(new Set(body.enabledTypes));
+
     // Validate connector types before storing
-    const invalidTypes = body.enabledTypes.filter((t) => {
+    const invalidTypes = uniqueTypes.filter((t) => {
       return !connectorTypeSchema.safeParse(t).success;
     });
     if (invalidTypes.length > 0) {
@@ -143,9 +145,9 @@ const router = tsr.router(zeroUserConnectorsContract, {
           ),
         );
 
-      if (body.enabledTypes.length > 0) {
+      if (uniqueTypes.length > 0) {
         await tx.insert(userConnectors).values(
-          body.enabledTypes.map((connectorType) => {
+          uniqueTypes.map((connectorType) => {
             return {
               orgId: org.orgId,
               userId,
@@ -177,7 +179,7 @@ const router = tsr.router(zeroUserConnectorsContract, {
 
     return {
       status: 200 as const,
-      body: { enabledTypes: body.enabledTypes },
+      body: { enabledTypes: uniqueTypes },
     };
   },
 });

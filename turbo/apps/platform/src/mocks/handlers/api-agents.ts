@@ -100,6 +100,8 @@ export const apiAgentsHandlers = [
       avatarUrl: null,
       permissionPolicies: null,
       customSkills: [],
+      modelProviderId: null,
+      selectedModel: null,
     });
   }),
 

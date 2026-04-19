@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
 import chalk from "chalk";
 import {
   isInteractive,
@@ -136,7 +135,6 @@ interface SetupOptions {
   interval?: string;
   timezone?: string;
   prompt?: string;
-  promptFile?: string;
   enable?: boolean;
   modelProvider?: string;
   model?: string;
@@ -360,23 +358,12 @@ async function gatherTimezone(
 
 async function gatherPromptText(
   optionPrompt: string | undefined,
-  optionPromptFile: string | undefined,
   existingPrompt: string | undefined | null,
 ): Promise<string | undefined> {
-  if (optionPrompt && optionPromptFile) {
-    throw new Error(
-      "Cannot use --prompt and --prompt-file together. Choose one.",
-    );
-  }
-
-  if (optionPromptFile) {
-    return readFileSync(optionPromptFile, "utf-8");
-  }
-
   if (optionPrompt) return optionPrompt;
 
   if (!isInteractive()) {
-    throw new Error("--prompt or --prompt-file is required");
+    throw new Error("--prompt is required");
   }
 
   return await promptText(
@@ -662,7 +649,6 @@ export const setupCommand = new Command()
   .option("-i, --interval <seconds>", "Interval in seconds for loop mode")
   .option("-z, --timezone <tz>", "IANA timezone")
   .option("-p, --prompt <text>", "Prompt to run")
-  .option("--prompt-file <path>", "Path to file containing prompt to run")
   .option("-e, --enable", "Enable schedule immediately after creation")
   .option(
     "--model-provider <id>",
@@ -684,7 +670,6 @@ Examples:
   Create and enable:     zero schedule setup <agent-id> -f daily -t 09:00 -p "run report" --enable
   Override model:        zero schedule setup <agent-id> -f daily -t 09:00 -p "..." --model-provider <id> --model MiniMax-M2.7
   Reset model override:  zero schedule setup <agent-id> -f daily -t 09:00 -p "..." --model-provider default --model default
-  Prompt from file:      zero schedule setup <agent-id> -f daily -t 09:00 --prompt-file ./prompt.md
 
 Notes:
   - Re-running setup with the same agent updates the existing "default" schedule
@@ -692,7 +677,6 @@ Notes:
   - --model-provider and --model default to inheriting the agent's configuration
   - Use 'zero org model-provider list' to see available providers and models
   - All flags are required in non-interactive mode; interactive mode prompts for missing values
-  - Cannot use --prompt and --prompt-file together
   - If the user wants to be notified when a schedule completes, ask them where they want to receive the notification: web chat or Slack, then include it in the prompt`,
   )
   .action(
@@ -753,7 +737,6 @@ Notes:
       // 6. Gather prompt
       const promptText_ = await gatherPromptText(
         options.prompt,
-        options.promptFile,
         existingSchedule?.prompt,
       );
       if (!promptText_) {

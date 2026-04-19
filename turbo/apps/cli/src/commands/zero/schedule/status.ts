@@ -36,10 +36,7 @@ function formatTrigger(schedule: ScheduleResponse): string {
 /**
  * Print run configuration section
  */
-function printRunConfiguration(
-  schedule: ScheduleResponse,
-  showFullPrompt?: boolean,
-): void {
+function printRunConfiguration(schedule: ScheduleResponse): void {
   const statusText = schedule.enabled
     ? chalk.green("enabled")
     : chalk.yellow("disabled");
@@ -47,15 +44,11 @@ function printRunConfiguration(
 
   console.log(`${"Agent:".padEnd(16)}${schedule.agentId}`);
 
-  if (showFullPrompt) {
-    console.log(`${"Prompt:".padEnd(16)}${schedule.prompt}`);
-  } else {
-    const promptPreview =
-      schedule.prompt.length > 60
-        ? schedule.prompt.slice(0, 57) + "..."
-        : schedule.prompt;
-    console.log(`${"Prompt:".padEnd(16)}${chalk.dim(promptPreview)}`);
-  }
+  const promptPreview =
+    schedule.prompt.length > 60
+      ? schedule.prompt.slice(0, 57) + "..."
+      : schedule.prompt;
+  console.log(`${"Prompt:".padEnd(16)}${chalk.dim(promptPreview)}`);
 
   if (schedule.vars && Object.keys(schedule.vars).length > 0) {
     console.log(
@@ -100,11 +93,6 @@ function printTimeSchedule(schedule: ScheduleResponse): void {
   }
 }
 
-interface StatusOptions {
-  name?: string;
-  prompt?: boolean;
-}
-
 export const statusCommand = new Command()
   .name("status")
   .description("Show detailed status of a zero schedule")
@@ -113,17 +101,15 @@ export const statusCommand = new Command()
     "-n, --name <schedule-name>",
     "Schedule name (required when agent has multiple schedules)",
   )
-  .option("-p, --prompt", "Show full prompt content")
   .addHelpText(
     "after",
     `
 Examples:
   zero schedule status <agent-id>
-  zero schedule status <agent-id> -n my-schedule
-  zero schedule status <agent-id> --prompt`,
+  zero schedule status <agent-id> -n my-schedule`,
   )
   .action(
-    withErrorHandler(async (agentName: string, options: StatusOptions) => {
+    withErrorHandler(async (agentName: string, options: { name?: string }) => {
       const schedule = await resolveZeroScheduleByAgent(
         agentName,
         options.name,
@@ -133,7 +119,7 @@ Examples:
       console.log(`Schedule for agent: ${chalk.cyan(agentName)}`);
       console.log(chalk.dim("━".repeat(50)));
 
-      printRunConfiguration(schedule, options.prompt);
+      printRunConfiguration(schedule);
       printTimeSchedule(schedule);
 
       console.log();

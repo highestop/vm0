@@ -12,9 +12,6 @@ import { http, HttpResponse } from "msw";
 import { server } from "../../../../mocks/server";
 import { setupCommand } from "../setup";
 import chalk from "chalk";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const mockCompose = {
   id: "comp_abc123",
@@ -221,98 +218,6 @@ describe("zero schedule setup command", () => {
       setupCommand.outputHelp();
       expect(helpOutput).toContain("notified when a schedule completes");
       expect(helpOutput).toContain("web chat or Slack");
-    });
-  });
-
-  describe("--prompt-file option", () => {
-    it("should create schedule with prompt from file", async () => {
-      const tempDir = mkdtempSync(join(tmpdir(), "zero-test-"));
-      const promptFile = join(tempDir, "prompt.txt");
-      writeFileSync(promptFile, "This is a prompt from file", "utf-8");
-
-      server.use(
-        http.get("http://localhost:3000/api/agent/composes", ({ request }) => {
-          const url = new URL(request.url);
-          if (url.searchParams.get("name") !== "my-agent") {
-            return HttpResponse.json(
-              { error: { message: "Not found", code: "NOT_FOUND" } },
-              { status: 404 },
-            );
-          }
-          return HttpResponse.json(mockCompose);
-        }),
-        http.get("http://localhost:3000/api/zero/schedules", () => {
-          return HttpResponse.json({ schedules: [] });
-        }),
-        http.post("http://localhost:3000/api/zero/schedules", () => {
-          return HttpResponse.json(mockDeployResponse, { status: 201 });
-        }),
-      );
-
-      await setupCommand.parseAsync([
-        "node",
-        "cli",
-        "my-agent",
-        "--frequency",
-        "daily",
-        "--time",
-        "09:00",
-        "--timezone",
-        "UTC",
-        "--prompt-file",
-        promptFile,
-      ]);
-
-      const logCalls = mockConsoleLog.mock.calls.flat().join("\n");
-      expect(logCalls).toContain("Schedule");
-      expect(logCalls).toContain("created");
-
-      rmSync(tempDir, { recursive: true, force: true });
-    });
-
-    it("should reject when both --prompt and --prompt-file are used", async () => {
-      const tempDir = mkdtempSync(join(tmpdir(), "zero-test-"));
-      const promptFile = join(tempDir, "prompt.txt");
-      writeFileSync(promptFile, "This is a prompt from file", "utf-8");
-
-      server.use(
-        http.get("http://localhost:3000/api/agent/composes", ({ request }) => {
-          const url = new URL(request.url);
-          if (url.searchParams.get("name") !== "my-agent") {
-            return HttpResponse.json(
-              { error: { message: "Not found", code: "NOT_FOUND" } },
-              { status: 404 },
-            );
-          }
-          return HttpResponse.json(mockCompose);
-        }),
-        http.get("http://localhost:3000/api/zero/schedules", () => {
-          return HttpResponse.json({ schedules: [] });
-        }),
-      );
-
-      await expect(async () => {
-        await setupCommand.parseAsync([
-          "node",
-          "cli",
-          "my-agent",
-          "--frequency",
-          "daily",
-          "--time",
-          "09:00",
-          "--prompt",
-          "inline prompt",
-          "--prompt-file",
-          promptFile,
-        ]);
-      }).rejects.toThrow("process.exit called");
-
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Cannot use --prompt and --prompt-file together"),
-      );
-      expect(mockExit).toHaveBeenCalledWith(1);
-
-      rmSync(tempDir, { recursive: true, force: true });
     });
   });
 

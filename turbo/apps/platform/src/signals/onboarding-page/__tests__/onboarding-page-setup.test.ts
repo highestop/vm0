@@ -1,25 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { setupOnboardingPage$ } from "../onboarding-page-setup.ts";
 import { zeroSelectedConnectors$ } from "../../zero-page/zero-onboarding.ts";
 import { pathname, search } from "../../location.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { onboardingStatusContract } from "@vm0/core";
 
 const context = testContext();
 
 function mockAdminOnboarding() {
   server.use(
-    http.get("*/api/zero/onboarding/status", () => {
-      return HttpResponse.json({
+    mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+      return respond(200, {
         needsOnboarding: true,
         isAdmin: true,
         hasOrg: true,
         hasDefaultAgent: false,
         defaultAgentId: null,
         defaultAgentMetadata: null,
-        defaultAgentSkills: [],
       });
     }),
   );

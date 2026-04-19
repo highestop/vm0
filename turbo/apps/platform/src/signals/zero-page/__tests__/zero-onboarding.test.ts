@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
@@ -9,6 +8,8 @@ import {
   setZeroWorkspaceName$,
   toggleZeroConnector$,
 } from "../zero-onboarding.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { onboardingSetupContract } from "@vm0/core";
 
 const context = testContext();
 
@@ -21,12 +22,9 @@ interface SetupPayload {
 }
 
 function setupHandler(capturePayload?: (payload: SetupPayload) => void) {
-  return http.post("*/api/zero/onboarding/setup", async ({ request }) => {
-    const body = (await request.json()) as SetupPayload;
-    capturePayload?.(body);
-    return HttpResponse.json({
-      agentId: "d0000000-0000-4000-a000-000000000001",
-    });
+  return mockApi(onboardingSetupContract.setup, ({ body, respond }) => {
+    capturePayload?.(body as SetupPayload);
+    return respond(200, { agentId: "d0000000-0000-4000-a000-000000000001" });
   });
 }
 
@@ -139,11 +137,10 @@ describe("completeZeroOnboarding$", () => {
 
   it("should treat 409 conflict as success", async () => {
     server.use(
-      http.post("*/api/zero/onboarding/setup", () => {
-        return HttpResponse.json(
-          { agentId: "d0000000-0000-4000-a000-000000000002" },
-          { status: 409 },
-        );
+      mockApi(onboardingSetupContract.setup, ({ respond }) => {
+        return respond(409, {
+          agentId: "d0000000-0000-4000-a000-000000000002",
+        });
       }),
     );
 

@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
 import { PLACEHOLDER } from "./chat-test-helpers.ts";
 import { pathname } from "../../../signals/location.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import {
+  onboardingStatusContract,
+  onboardingSetupContract,
+  onboardingCompleteContract,
+} from "@vm0/core";
 
 const context = testContext();
 
@@ -15,8 +20,8 @@ const MOCK_MEMBER_AGENT_ID = "c0000000-0000-4000-a000-000000000001";
 
 function mockAdminOnboarding() {
   server.use(
-    http.get("*/api/zero/onboarding/status", () => {
-      return HttpResponse.json({
+    mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+      return respond(200, {
         needsOnboarding: true,
         isAdmin: true,
         hasOrg: true,
@@ -25,16 +30,16 @@ function mockAdminOnboarding() {
         defaultAgentMetadata: null,
       });
     }),
-    http.post("*/api/zero/onboarding/setup", () => {
-      return HttpResponse.json({ agentId: MOCK_AGENT_ID });
+    mockApi(onboardingSetupContract.setup, ({ respond }) => {
+      return respond(200, { agentId: MOCK_AGENT_ID });
     }),
   );
 }
 
 function mockMemberOnboarding() {
   server.use(
-    http.get("*/api/zero/onboarding/status", () => {
-      return HttpResponse.json({
+    mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+      return respond(200, {
         needsOnboarding: true,
         isAdmin: false,
         hasOrg: true,
@@ -43,8 +48,8 @@ function mockMemberOnboarding() {
         defaultAgentMetadata: { displayName: "Zero" },
       });
     }),
-    http.post("*/api/zero/onboarding/complete", () => {
-      return HttpResponse.json({ ok: true });
+    mockApi(onboardingCompleteContract.complete, ({ respond }) => {
+      return respond(200, { ok: true });
     }),
   );
 }
@@ -106,8 +111,8 @@ describe("onboarding → chat page (no auto-intro)", () => {
 
     // Switch onboarding status so post-navigate route doesn't redirect back
     server.use(
-      http.get("*/api/zero/onboarding/status", () => {
-        return HttpResponse.json({
+      mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           needsOnboarding: false,
           isAdmin: true,
           hasOrg: true,
@@ -140,8 +145,8 @@ describe("onboarding → chat page (no auto-intro)", () => {
     await walkToWhereStep(user, true);
 
     server.use(
-      http.get("*/api/zero/onboarding/status", () => {
-        return HttpResponse.json({
+      mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           needsOnboarding: false,
           isAdmin: false,
           hasOrg: true,

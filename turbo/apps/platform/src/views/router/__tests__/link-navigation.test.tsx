@@ -7,25 +7,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { pathname } from "../../../signals/location.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { chatThreadsContract } from "@vm0/core";
-import { setMockComposesList } from "../../../mocks/handlers/api-agents.ts";
+import {
+  setMockComposesList,
+  setMockTeam,
+} from "../../../mocks/handlers/api-agents.ts";
 
 const context = testContext();
 
 function mockAPIs() {
   setMockComposesList([]);
+  setMockTeam([]);
   server.use(
     mockApi(chatThreadsContract.list, ({ respond }) => {
       return respond(200, { threads: [] });
-    }),
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([]);
     }),
   );
 }

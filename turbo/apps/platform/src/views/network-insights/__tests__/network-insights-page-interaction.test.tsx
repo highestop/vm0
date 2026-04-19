@@ -7,11 +7,12 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { setMockOrg } from "../../../mocks/handlers/api-org.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { zeroInsightsContract, type InsightsResponse } from "@vm0/core";
 
 const context = testContext();
 
@@ -27,28 +28,30 @@ const day2Ago = daysAgoIso(2);
 const day20Ago = daysAgoIso(20);
 const day25Ago = daysAgoIso(25);
 
-function mockInsightsAPI(days: Record<string, unknown>[] = []) {
+function mockInsightsAPI(days: InsightsResponse["days"] = []) {
+  const totalCredits = days.reduce((s, d) => {
+    return s + (d.creditsUsed ?? 0);
+  }, 0);
+  const totalRuns = days.reduce((s, d) => {
+    return (
+      s +
+      (d.agents ?? []).reduce((rs, a) => {
+        return rs + (a.runs ?? 0);
+      }, 0)
+    );
+  }, 0);
+  const lastUpdated = days.length > 0 ? new Date().toISOString() : null;
   server.use(
-    http.get("*/api/zero/insights", () => {
-      const totalCredits = days.reduce((s, d) => {
-        return s + ((d.creditsUsed as number) ?? 0);
-      }, 0);
-      const totalRuns = days.reduce((s, d) => {
-        const agents = (d.agents as { runs: number }[]) ?? [];
-        return (
-          s +
-          agents.reduce((rs, a) => {
-            return rs + (a.runs ?? 0);
-          }, 0)
-        );
-      }, 0);
-      const lastUpdated = days.length > 0 ? new Date().toISOString() : null;
-      return HttpResponse.json({ days, totalCredits, totalRuns, lastUpdated });
+    mockApi(zeroInsightsContract.get, ({ respond }) => {
+      return respond(200, { days, totalCredits, totalRuns, lastUpdated });
     }),
   );
 }
 
-function sampleDay(date: string, overrides?: Record<string, unknown>) {
+function sampleDay(
+  date: string,
+  overrides?: Partial<InsightsResponse["days"][0]>,
+): InsightsResponse["days"][0] {
   return {
     date,
     agents: [
@@ -59,14 +62,12 @@ function sampleDay(date: string, overrides?: Record<string, unknown>) {
     creditBalance: 9800,
     teamUsage: [
       {
-        userId: "user-alice",
         name: "alice",
         credits: 120,
         agentNames: ["Alpha Bot"],
         agentCredits: { "Alpha Bot": 120 },
       },
       {
-        userId: "user-bob",
         name: "bob",
         credits: 80,
         agentNames: ["Beta Bot"],
@@ -177,7 +178,6 @@ describe("network insights page - data rendering", () => {
         creditBalance: 9500,
         teamUsage: [
           {
-            userId: "user-alice",
             name: "alice",
             credits: 12_400,
             agentNames: ["Alpha Bot"],
@@ -202,7 +202,6 @@ describe("network insights page - data rendering", () => {
         creditBalance: 5_000_000,
         teamUsage: [
           {
-            userId: "user-alice",
             name: "alice",
             credits: 2_300_000,
             agentNames: ["Alpha Bot"],
@@ -227,7 +226,6 @@ describe("network insights page - data rendering", () => {
         creditBalance: 9500,
         teamUsage: [
           {
-            userId: "user-alice",
             name: "alice",
             credits: 12_400,
             agentNames: ["Alpha Bot"],
@@ -484,7 +482,7 @@ describe("network insights page - data refetch", () => {
   it("should fetch fresh data when navigating to insights page", async () => {
     let callCount = 0;
     server.use(
-      http.get("*/api/zero/insights", () => {
+      mockApi(zeroInsightsContract.get, ({ respond }) => {
         callCount++;
         const agents =
           callCount <= 1
@@ -504,7 +502,7 @@ describe("network insights page - data refetch", () => {
                   credits: 20,
                 },
               ];
-        return HttpResponse.json({
+        return respond(200, {
           days: [sampleDay(day1Ago, { agents })],
           totalCredits: 10,
           totalRuns: 1,
@@ -596,14 +594,12 @@ describe("network insights page - your credit usage card", () => {
       sampleDay(day1Ago, {
         teamUsage: [
           {
-            userId: "test-user-123",
             name: "me",
             credits: 75,
             agentNames: ["Alpha Bot"],
             agentCredits: { "Alpha Bot": 75 },
           },
           {
-            userId: "other-user",
             name: "other",
             credits: 125,
             agentNames: ["Beta Bot"],
@@ -627,7 +623,6 @@ describe("network insights page - your credit usage card", () => {
       sampleDay(day1Ago, {
         teamUsage: [
           {
-            userId: "someone-else",
             name: "someone",
             credits: 200,
             agentNames: ["Alpha Bot"],

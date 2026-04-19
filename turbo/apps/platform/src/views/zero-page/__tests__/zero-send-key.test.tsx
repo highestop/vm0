@@ -2,10 +2,10 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 // eslint-disable-next-line ccstate/prefer-user-event -- fireEvent needed for simulating IME keydown with isComposing; confirmed by ethan@vm0.ai
 import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { chatMessagesContract } from "@vm0/core";
 
@@ -39,16 +39,7 @@ function mockChatAPI() {
 }
 
 function mockSendMode(mode: "enter" | "cmd-enter") {
-  server.use(
-    http.get("*/api/zero/user-preferences", () => {
-      return HttpResponse.json({
-        timezone: null,
-        pinnedAgentIds: [],
-        sendMode: mode,
-        captureNetworkBodiesRemaining: 0,
-      });
-    }),
-  );
+  setMockUserPreferences({ sendMode: mode });
 }
 
 function renderChatPage(sendMode: "enter" | "cmd-enter" = "enter") {

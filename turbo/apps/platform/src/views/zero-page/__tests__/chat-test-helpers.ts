@@ -23,6 +23,7 @@ import {
 } from "@vm0/core";
 
 import { fill } from "../../../__tests__/page-helper.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
 
 export const PLACEHOLDER = "Ask me to automate workflows, manage tasks...";
 
@@ -30,6 +31,26 @@ const DEFAULT_AGENT_ID = "c0000000-0000-4000-a000-000000000001";
 export const SUB_AGENT_ID = "a1111111-0000-4000-a000-000000000001";
 
 export function mockSubagentThread(threadId: string) {
+  setMockTeam([
+    {
+      id: DEFAULT_AGENT_ID,
+      displayName: null,
+      description: null,
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_1",
+      updatedAt: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: SUB_AGENT_ID,
+      displayName: "Assistant",
+      description: null,
+      sound: null,
+      avatarUrl: "https://example.com/avatar.png",
+      headVersionId: "version_2",
+      updatedAt: "2024-01-01T00:00:00Z",
+    },
+  ]);
   server.use(
     mockApi(zeroTeamContract.list, ({ respond }) => {
       return respond(200, [

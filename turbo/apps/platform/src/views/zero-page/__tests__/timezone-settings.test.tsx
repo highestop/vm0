@@ -5,27 +5,26 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { getTimezoneLabel } from "../../../signals/zero-page/cron.ts";
-import type { UserPreferencesResponse } from "@vm0/core";
+import {
+  type UserPreferencesResponse,
+  zeroUserPreferencesContract,
+} from "@vm0/core";
+import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
 
 const context = testContext();
 
 function mockPreferencesAPI(
   prefs: Omit<UserPreferencesResponse, "captureNetworkBodiesRemaining">,
 ) {
-  const full: UserPreferencesResponse = {
+  setMockUserPreferences({
     captureNetworkBodiesRemaining: 0,
     ...prefs,
-  };
-  server.use(
-    http.get("*/api/zero/user-preferences", () => {
-      return HttpResponse.json(full);
-    }),
-  );
+  });
 }
 
 async function openTimezoneTab(user: ReturnType<typeof userEvent.setup>) {
@@ -65,8 +64,8 @@ describe("timezone-settings - display", () => {
       sendMode: "enter",
     });
     server.use(
-      http.post("*/api/zero/user-preferences", () => {
-        return new Promise(() => {});
+      mockApi(zeroUserPreferencesContract.update, () => {
+        return new Promise<never>(() => {});
       }),
     );
     await openTimezoneTab(user);
@@ -84,8 +83,8 @@ describe("timezone-settings - display", () => {
 
   it("hides select before preferences have loaded (PREF-D-013)", async () => {
     server.use(
-      http.get("*/api/zero/user-preferences", () => {
-        return new Promise(() => {});
+      mockApi(zeroUserPreferencesContract.get, () => {
+        return new Promise<never>(() => {});
       }),
     );
     const user = userEvent.setup();

@@ -1,32 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { setZeroShowAboutPage$ } from "../../../signals/zero-page/zero-nav.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { zeroAgentsByIdContract } from "@vm0/core";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+import { setMockOnboardingStatus } from "../../../mocks/handlers/api-onboarding.ts";
 
 const context = testContext();
 
 function mockBasicAPIs() {
-  server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([
-        {
-          id: "c0000000-0000-4000-a000-000000000001",
-          displayName: null,
-          description: null,
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_1",
-          updatedAt: "2024-01-01T00:00:00Z",
-        },
-      ]);
-    }),
-  );
+  setMockTeam([
+    {
+      id: "c0000000-0000-4000-a000-000000000001",
+      displayName: null,
+      description: null,
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_1",
+      updatedAt: "2024-01-01T00:00:00Z",
+    },
+  ]);
 }
 
 describe("zero about page", () => {
@@ -46,17 +43,10 @@ describe("zero about page", () => {
   // AGENT-D-073: Dynamic text interpolation with name
   it("interpolates agent display name in section headings", async () => {
     mockBasicAPIs();
+    setMockOnboardingStatus({
+      defaultAgentMetadata: { displayName: "MyAgent" },
+    });
     server.use(
-      http.get("*/api/zero/onboarding/status", () => {
-        return HttpResponse.json({
-          needsOnboarding: false,
-          isAdmin: true,
-          hasOrg: true,
-          hasDefaultAgent: true,
-          defaultAgentId: "c0000000-0000-4000-a000-000000000001",
-          defaultAgentMetadata: { displayName: "MyAgent" },
-        });
-      }),
       mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
         return respond(200, {
           agentId: "c0000000-0000-4000-a000-000000000001",

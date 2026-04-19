@@ -15,16 +15,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import {
   CONNECTOR_TYPES,
   type ConnectorType,
   type ScheduleResponse,
+  zeroSchedulesMainContract,
 } from "@vm0/core";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
 import { setMockOrg, resetMockOrg } from "../../../mocks/handlers/api-org.ts";
+import { setMockSchedules } from "../../../mocks/handlers/api-schedules.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
 
 const context = testContext();
 
@@ -143,11 +145,7 @@ function testSchedule(
 function mockScheduleDetailAPIs(
   schedules: ScheduleResponse[] = [testSchedule()],
 ) {
-  server.use(
-    http.get("*/api/zero/schedules", () => {
-      return HttpResponse.json({ schedules });
-    }),
-  );
+  setMockSchedules(schedules);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +278,8 @@ describe("zero unsaved bar - interaction (ORG-I-114)", () => {
     const user = userEvent.setup();
     await openScheduleSettings();
     server.use(
-      http.post("*/api/zero/schedules", () => {
-        return HttpResponse.json({
+      mockApi(zeroSchedulesMainContract.deploy, ({ respond }) => {
+        return respond(200, {
           schedule: testSchedule({ description: "New description" }),
           created: false,
         });
@@ -387,11 +385,7 @@ describe("setup prompt - state (ORG-S-107)", () => {
 
 describe("clerk provider - display (ORG-D-122)", () => {
   it("clerk provider loads with publishable key from environment", async () => {
-    server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: [] });
-      }),
-    );
+    setMockSchedules([]);
     detachedSetupPage({ context, path: "/" });
     // VM0ClerkProvider wraps children and renders null if Clerk is not loaded.
     // Verify that app content rendered — the mock-auth Clerk instance is in "hasData"

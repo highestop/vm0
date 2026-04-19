@@ -11,6 +11,7 @@ import {
   zeroAgentsMainContract,
   zeroAgentInstructionsContract,
 } from "@vm0/core";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
 
 const context = testContext();
 
@@ -35,11 +36,7 @@ function mockTeamAPI(
     updatedAt: string;
   }[] = [],
 ) {
-  server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([DEFAULT_AGENT, ...extraAgents]);
-    }),
-  );
+  setMockTeam([DEFAULT_AGENT, ...extraAgents]);
 }
 
 async function openDialog(user: ReturnType<typeof userEvent.setup>) {
@@ -87,9 +84,6 @@ describe("zero jobs page - create agent dialog", () => {
           return HttpResponse.json([DEFAULT_AGENT]);
         }
         return HttpResponse.json([DEFAULT_AGENT, NEW_AGENT]);
-      }),
-      http.get("*/api/zero/chat-threads", () => {
-        return HttpResponse.json({ threads: [] });
       }),
       mockApi(zeroAgentsMainContract.create, ({ respond }) => {
         return respond(201, {
@@ -147,22 +141,18 @@ describe("zero jobs page - create agent dialog", () => {
 
 describe("zero jobs page - avatar display", () => {
   it("renders avatar for agents in the grid (AGENT-D-012)", async () => {
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          DEFAULT_AGENT,
-          {
-            id: "avatar-agent-id",
-            displayName: "Avatar Agent",
-            description: "Has a custom SVG avatar",
-            sound: null,
-            avatarUrl: "svg:r2s1h4c3f2m",
-            headVersionId: "version_av",
-            updatedAt: "2024-01-02T00:00:00Z",
-          },
-        ]);
-      }),
-    );
+    setMockTeam([
+      DEFAULT_AGENT,
+      {
+        id: "avatar-agent-id",
+        displayName: "Avatar Agent",
+        description: "Has a custom SVG avatar",
+        sound: null,
+        avatarUrl: "svg:r2s1h4c3f2m",
+        headVersionId: "version_av",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    ]);
     detachedSetupPage({ context, path: "/agents" });
 
     // Agent with SVG avatar should render an avatar image
@@ -173,22 +163,18 @@ describe("zero jobs page - avatar display", () => {
   });
 
   it("renders fallback avatar when avatarUrl is null (AGENT-D-013)", async () => {
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          DEFAULT_AGENT,
-          {
-            id: "no-avatar-agent-id",
-            displayName: "No Avatar Agent",
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "version_no",
-            updatedAt: "2024-01-02T00:00:00Z",
-          },
-        ]);
-      }),
-    );
+    setMockTeam([
+      DEFAULT_AGENT,
+      {
+        id: "no-avatar-agent-id",
+        displayName: "No Avatar Agent",
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "version_no",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    ]);
     detachedSetupPage({ context, path: "/agents" });
 
     // Even without an avatar URL, a fallback SVG avatar should render
@@ -202,22 +188,18 @@ describe("zero jobs page - avatar display", () => {
 describe("zero jobs page - navigation", () => {
   it("navigates to agent detail when an agent card is clicked (AGENT-D-009)", async () => {
     const user = userEvent.setup();
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          DEFAULT_AGENT,
-          {
-            id: "nav-agent-id",
-            displayName: "Nav Agent",
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "version_nav",
-            updatedAt: "2024-01-02T00:00:00Z",
-          },
-        ]);
-      }),
-    );
+    setMockTeam([
+      DEFAULT_AGENT,
+      {
+        id: "nav-agent-id",
+        displayName: "Nav Agent",
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "version_nav",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    ]);
     detachedSetupPage({ context, path: "/agents" });
 
     const card = await waitFor(() => {

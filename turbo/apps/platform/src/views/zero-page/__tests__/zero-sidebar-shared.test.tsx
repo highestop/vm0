@@ -14,11 +14,13 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { zeroTeamContract } from "@vm0/core";
 import { createDeferredPromise } from "../../../signals/utils.ts";
 
 const context = testContext();
@@ -33,19 +35,15 @@ function mockBaseAPIs(
     avatarUrl: string | null;
   }[],
 ): void {
-  server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json(
-        agents.map((a) => {
-          return {
-            ...a,
-            description: null,
-            sound: null,
-            headVersionId: "version_1",
-            updatedAt: "2024-01-01T00:00:00Z",
-          };
-        }),
-      );
+  setMockTeam(
+    agents.map((a) => {
+      return {
+        ...a,
+        description: null,
+        sound: null,
+        headVersionId: "version_1",
+        updatedAt: "2024-01-01T00:00:00Z",
+      };
     }),
   );
 }
@@ -153,9 +151,9 @@ describe("avatar loading state shows no image initially (SIDEBAR-D-044)", () => 
     const deferred = createDeferredPromise<void>(context.signal);
 
     server.use(
-      http.get("*/api/zero/team", async () => {
+      mockApi(zeroTeamContract.list, async ({ respond }) => {
         await deferred.promise;
-        return HttpResponse.json([
+        return respond(200, [
           {
             id: DEFAULT_AGENT_ID,
             displayName: null,

@@ -17,12 +17,12 @@ import {
   setSidebarExpanded$,
 } from "../../../signals/zero-page/zero-nav.ts";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { mockedClerk } from "../../../__tests__/mock-auth.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
 import { pathname } from "../../../signals/location.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
@@ -110,10 +110,8 @@ function mockBaseAPIs(options?: {
   const agents = options?.agents ?? [makeDefaultAgent()];
   const threads = options?.threads ?? [];
 
+  setMockTeam(agents);
   server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json(agents);
-    }),
     mockApi(chatThreadsContract.list, ({ respond }) => {
       return respond(200, { threads });
     }),
@@ -344,10 +342,8 @@ describe("zero sidebar - confirm delete removes thread (SIDEBAR-D-019)", () => {
       makeThread("thread-2", "Second chat", "2026-03-09T00:00:00Z"),
     ];
 
+    setMockTeam([makeDefaultAgent()]);
     server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([makeDefaultAgent()]);
-      }),
       mockApi(chatThreadsContract.list, ({ respond }) => {
         return respond(200, { threads });
       }),

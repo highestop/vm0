@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../__tests__/test-helpers.ts";
 import {
@@ -9,6 +8,8 @@ import {
 import { zeroAddedConnectors$, addZeroConnector$ } from "../zero-connectors.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { zeroAgentsByIdContract, zeroUserConnectorsContract } from "@vm0/core";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+
 const context = testContext();
 
 function mockAgentApi(connectors: string[]) {
@@ -72,30 +73,28 @@ describe("zeroAddedConnectors$", () => {
       mockApi(zeroUserConnectorsContract.get, ({ respond }) => {
         return respond(200, { enabledTypes: ["github"] });
       }),
-      // Include cycling-coach in the team list so route setup resolves it
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          {
-            id: "c0000000-0000-4000-a000-000000000001",
-            displayName: null,
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "version_1",
-            updatedAt: "2024-01-01T00:00:00Z",
-          },
-          {
-            id: "sub-agent-compose-id",
-            displayName: "Cycling Coach",
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "version_2",
-            updatedAt: "2024-01-01T00:00:00Z",
-          },
-        ]);
-      }),
     );
+    // Include cycling-coach in the team list so route setup resolves it
+    setMockTeam([
+      {
+        id: "c0000000-0000-4000-a000-000000000001",
+        displayName: null,
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "version_1",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+      {
+        id: "sub-agent-compose-id",
+        displayName: "Cycling Coach",
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "version_2",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+    ]);
 
     await setupPage({
       context,

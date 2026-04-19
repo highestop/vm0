@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
@@ -13,6 +12,8 @@ import {
   zeroRunAgentEventsContract,
   zeroRunsByIdContract,
   logsByIdContract,
+  onboardingStatusContract,
+  onboardingSetupContract,
 } from "@vm0/core";
 
 const context = testContext();
@@ -122,9 +123,9 @@ describe("talk navigation", () => {
     let onboardingComplete = false;
 
     server.use(
-      http.get("*/api/zero/onboarding/status", () => {
+      mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
         if (onboardingComplete) {
-          return HttpResponse.json({
+          return respond(200, {
             needsOnboarding: false,
             isAdmin: true,
             hasOrg: true,
@@ -133,7 +134,7 @@ describe("talk navigation", () => {
             defaultAgentMetadata: null,
           });
         }
-        return HttpResponse.json({
+        return respond(200, {
           needsOnboarding: true,
           isAdmin: true,
           hasOrg: true,
@@ -143,9 +144,9 @@ describe("talk navigation", () => {
         });
       }),
       // Single setup endpoint
-      http.post("*/api/zero/onboarding/setup", () => {
+      mockApi(onboardingSetupContract.setup, ({ respond }) => {
         onboardingComplete = true;
-        return HttpResponse.json({ agentId: MOCK_AGENT_ID });
+        return respond(200, { agentId: MOCK_AGENT_ID });
       }),
     );
 

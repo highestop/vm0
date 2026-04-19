@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../__tests__/test-helpers.ts";
 import {
@@ -12,6 +11,12 @@ import {
   removePhoneLink$,
   requestOrgPhoneSetup$,
 } from "../phone-signals.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import {
+  zeroPhoneStatusContract,
+  zeroPhoneLinkContract,
+  zeroPhoneSetupContract,
+} from "@vm0/core";
 
 const context = testContext();
 
@@ -20,8 +25,8 @@ describe("fetchPhoneStatus$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.get("*/api/zero/phone/status", () => {
-        return HttpResponse.json({
+      mockApi(zeroPhoneStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           userPhone: "+14155551234",
           userPhonePending: null,
           orgPhone: "+18001234567",
@@ -42,8 +47,8 @@ describe("fetchPhoneStatus$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.get("*/api/zero/phone/status", () => {
-        return new HttpResponse(null, { status: 500 });
+      mockApi(zeroPhoneStatusContract.getStatus, ({ respond }) => {
+        return respond(401, { error: "unauthorized" });
       }),
     );
 
@@ -69,11 +74,11 @@ describe("savePhoneLink$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.post("*/api/zero/phone/link", () => {
-        return HttpResponse.json({ success: true });
+      mockApi(zeroPhoneLinkContract.link, ({ respond }) => {
+        return respond(200, { success: true });
       }),
-      http.get("*/api/zero/phone/status", () => {
-        return HttpResponse.json({
+      mockApi(zeroPhoneStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           userPhone: "+14155551234",
           userPhonePending: null,
           orgPhone: "+18001234567",
@@ -93,11 +98,10 @@ describe("savePhoneLink$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.post("*/api/zero/phone/link", () => {
-        return HttpResponse.json(
-          { error: "Direct phone linking is not available for this org" },
-          { status: 403 },
-        );
+      mockApi(zeroPhoneLinkContract.link, ({ respond }) => {
+        return respond(403, {
+          error: "Direct phone linking is not available for this org",
+        });
       }),
     );
 
@@ -114,11 +118,11 @@ describe("removePhoneLink$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.delete("*/api/zero/phone/link", () => {
-        return HttpResponse.json({ success: true });
+      mockApi(zeroPhoneLinkContract.unlink, ({ respond }) => {
+        return respond(200, { success: true });
       }),
-      http.get("*/api/zero/phone/status", () => {
-        return HttpResponse.json({
+      mockApi(zeroPhoneStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           userPhone: null,
           userPhonePending: null,
           orgPhone: "+18001234567",
@@ -136,11 +140,8 @@ describe("removePhoneLink$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.delete("*/api/zero/phone/link", () => {
-        return HttpResponse.json(
-          { error: "Failed to remove phone number" },
-          { status: 500 },
-        );
+      mockApi(zeroPhoneLinkContract.unlink, ({ respond }) => {
+        return respond(401, { error: "Failed to remove phone number" });
       }),
     );
 
@@ -155,14 +156,14 @@ describe("requestOrgPhoneSetup$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.post("*/api/zero/phone/setup", () => {
-        return HttpResponse.json({
+      mockApi(zeroPhoneSetupContract.setup, ({ respond }) => {
+        return respond(200, {
           phoneNumber: "+18001234567",
           agentId: "agent_123",
         });
       }),
-      http.get("*/api/zero/phone/status", () => {
-        return HttpResponse.json({
+      mockApi(zeroPhoneStatusContract.getStatus, ({ respond }) => {
+        return respond(200, {
           userPhone: null,
           userPhonePending: null,
           orgPhone: "+18001234567",
@@ -180,11 +181,10 @@ describe("requestOrgPhoneSetup$", () => {
     const { store, signal } = context;
 
     server.use(
-      http.post("*/api/zero/phone/setup", () => {
-        return HttpResponse.json(
-          { error: "Phone is only available on the Team plan" },
-          { status: 403 },
-        );
+      mockApi(zeroPhoneSetupContract.setup, ({ respond }) => {
+        return respond(403, {
+          error: "Phone is only available on the Team plan",
+        });
       }),
     );
 

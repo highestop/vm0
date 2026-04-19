@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { setMockOrgMembers } from "../../../mocks/handlers/api-org-members.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
 
 const context = testContext();
 
@@ -16,21 +16,17 @@ function mockChatAPI() {
 }
 
 function mockSubagentTeam() {
-  server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([
-        {
-          id: SUBAGENT_ID,
-          displayName: "Test Subagent",
-          description: null,
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_2",
-          updatedAt: "2024-01-02T00:00:00Z",
-        },
-      ]);
-    }),
-  );
+  setMockTeam([
+    {
+      id: SUBAGENT_ID,
+      displayName: "Test Subagent",
+      description: null,
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_2",
+      updatedAt: "2024-01-02T00:00:00Z",
+    },
+  ]);
 }
 
 describe("zero chat page - agent avatar link", () => {

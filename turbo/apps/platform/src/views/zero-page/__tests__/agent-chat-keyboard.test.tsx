@@ -15,7 +15,6 @@ import {
 const context = testContext();
 
 const AGENT_ID = "agent-alpha";
-
 function mockThreadList(threads: { id: string; title: string }[]) {
   server.use(
     mockApi(chatThreadsContract.list, ({ respond }) => {

@@ -1,25 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { setMockPhoneStatus } from "../../../mocks/handlers/api-phone.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import {
+  zeroPhoneSetupContract,
+  zeroPhoneLinkContract,
+  type PhoneStatusResponse,
+} from "@vm0/core";
 
 const context = testContext();
 
-function mockPhoneStatusAPI(overrides: Record<string, unknown> = {}) {
-  const defaults = {
-    userPhone: null,
-    userPhonePending: null,
-    orgPhone: null,
-  };
-
-  server.use(
-    http.get("*/api/zero/phone/status", () => {
-      return HttpResponse.json({ ...defaults, ...overrides });
-    }),
-  );
+function mockPhoneStatusAPI(overrides: Partial<PhoneStatusResponse> = {}) {
+  setMockPhoneStatus(overrides);
 }
 
 function renderPhonePage() {
@@ -81,9 +77,9 @@ describe("phone page - org phone not configured", () => {
 
     mockPhoneStatusAPI({ orgPhone: null });
     server.use(
-      http.post("*/api/zero/phone/setup", () => {
+      mockApi(zeroPhoneSetupContract.setup, ({ respond }) => {
         setupCalled = true;
-        return HttpResponse.json({
+        return respond(200, {
           phoneNumber: "+18001234567",
           agentId: "agent_123",
         });
@@ -164,9 +160,9 @@ describe("phone page - user phone not linked", () => {
 
     mockPhoneStatusAPI({ orgPhone: "+18001234567", userPhone: null });
     server.use(
-      http.post("*/api/zero/phone/link", () => {
+      mockApi(zeroPhoneLinkContract.link, ({ respond }) => {
         linkCalled = true;
-        return HttpResponse.json({ success: true });
+        return respond(200, { success: true });
       }),
     );
 
@@ -224,11 +220,10 @@ describe("phone page - error display", () => {
 
     mockPhoneStatusAPI({ orgPhone: "+18001234567", userPhone: null });
     server.use(
-      http.post("*/api/zero/phone/link", () => {
-        return HttpResponse.json(
-          { error: "Direct phone linking is not available for this org" },
-          { status: 403 },
-        );
+      mockApi(zeroPhoneLinkContract.link, ({ respond }) => {
+        return respond(403, {
+          error: "Direct phone linking is not available for this org",
+        });
       }),
     );
 

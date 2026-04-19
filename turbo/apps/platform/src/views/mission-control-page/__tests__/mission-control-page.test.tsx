@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import {
   FeatureSwitchKey,
+  tasksContract,
   logsByIdContract,
   zeroRunAgentEventsContract,
   zeroRunsByIdContract,
   zeroQueuePositionContract,
   chatThreadByIdContract,
   zeroVoiceChatContextContract,
+  type TaskItem,
   type RunStatus,
 } from "@vm0/core";
 import { server } from "../../../mocks/server.ts";
@@ -22,6 +23,9 @@ import {
   taskSignals$,
 } from "../../../signals/mission-control-page/mission-control-tasks.ts";
 import { createAndShowChatTask$ } from "../../../signals/mission-control-page/mission-control.ts";
+import { setMockTasks } from "../../../mocks/handlers/api-tasks.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+import { setMockOnboardingStatus } from "../../../mocks/handlers/api-onboarding.ts";
 
 const context = testContext();
 
@@ -34,34 +38,8 @@ function createAgent() {
   };
 }
 
-function mockTasksAPI(
-  tasks: {
-    id: string;
-    type: "chat" | "schedule" | "slack" | "email" | "voice_chat" | "agent";
-    title: string | null;
-    summary: string | null;
-    agent: {
-      id: string;
-      name: string;
-      displayName: string | null;
-      avatarUrl: string | null;
-    };
-    latestRunId: string | null;
-    status: string | null;
-    chatThreadId?: string;
-    scheduleId?: string;
-    slackThreadSessionId?: string;
-    emailThreadSessionId?: string;
-    voiceChatSessionId?: string;
-    createdAt: string;
-    updatedAt: string;
-  }[],
-) {
-  server.use(
-    http.get("*/api/zero/tasks", () => {
-      return HttpResponse.json({ tasks });
-    }),
-  );
+function mockTasksAPI(tasks: TaskItem[]) {
+  setMockTasks(tasks);
 }
 
 function mockActivityAPIs(_runId?: string, overrides?: { status?: RunStatus }) {
@@ -319,33 +297,25 @@ describe("mission control page", () => {
   it("should remove task from list when y key is pressed on focused card", async () => {
     let archiveRequestBody: unknown = null;
 
+    setMockTasks([
+      {
+        id: "task-key",
+        type: "chat",
+        title: "Keyboard Archive Task",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: "run-key-1",
+        status: "completed",
+        chatThreadId: "thread-key",
+        createdAt: "2026-04-10T10:00:00Z",
+        updatedAt: "2026-04-10T10:00:00Z",
+      },
+    ]);
     server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-key",
-              type: "chat",
-              title: "Keyboard Archive Task",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: "run-key-1",
-              status: "completed",
-              chatThreadId: "thread-key",
-              createdAt: "2026-04-10T10:00:00Z",
-              updatedAt: "2026-04-10T10:00:00Z",
-            },
-          ],
-        });
-      }),
-      http.post("*/api/zero/tasks/archive", async ({ request }) => {
-        archiveRequestBody = await request.json();
-        server.use(
-          http.get("*/api/zero/tasks", () => {
-            return HttpResponse.json({ tasks: [] });
-          }),
-        );
-        return HttpResponse.json({ ok: true });
+      mockApi(tasksContract.archive, ({ body, respond }) => {
+        archiveRequestBody = body;
+        setMockTasks([]);
+        return respond(200, { ok: true });
       }),
     );
 
@@ -380,28 +350,24 @@ describe("mission control page", () => {
   it("should not archive when y key is pressed on a card with no latestRunId", async () => {
     let archiveCalled = false;
 
+    setMockTasks([
+      {
+        id: "task-no-run",
+        type: "chat",
+        title: "No Run Task",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: null,
+        status: null,
+        chatThreadId: "thread-no-run",
+        createdAt: "2026-04-10T10:00:00Z",
+        updatedAt: "2026-04-10T10:00:00Z",
+      },
+    ]);
     server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-no-run",
-              type: "chat",
-              title: "No Run Task",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: null,
-              status: null,
-              chatThreadId: "thread-no-run",
-              createdAt: "2026-04-10T10:00:00Z",
-              updatedAt: "2026-04-10T10:00:00Z",
-            },
-          ],
-        });
-      }),
-      http.post("*/api/zero/tasks/archive", () => {
+      mockApi(tasksContract.archive, ({ respond }) => {
         archiveCalled = true;
-        return HttpResponse.json({ ok: true });
+        return respond(200, { ok: true });
       }),
     );
 
@@ -425,11 +391,7 @@ describe("mission control page", () => {
 
   it("should show task card immediately after creating a new chat via the c shortcut", async () => {
     // Start with empty task list
-    server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({ tasks: [] });
-      }),
-    );
+    setMockTasks([]);
 
     const user = userEvent.setup();
     detachedSetupPage({ context, path: "/_/mission-control" });
@@ -461,11 +423,7 @@ describe("mission control page", () => {
 
   it("should prune stale optimistic entry after TTL expires", async () => {
     // Tasks API always returns empty — no server confirmation arrives
-    server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({ tasks: [] });
-      }),
-    );
+    setMockTasks([]);
 
     detachedSetupPage({
       context,
@@ -512,24 +470,13 @@ describe("mission control page", () => {
 
   it("should return early from createAndShowChatTask$ when no agent is available", async () => {
     // Return empty agent list and no defaultAgentId so resolvedAgentId is undefined
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([]);
-      }),
-      http.get("*/api/zero/onboarding/status", () => {
-        return HttpResponse.json({
-          needsOnboarding: false,
-          isAdmin: true,
-          hasOrg: true,
-          hasDefaultAgent: false,
-          defaultAgentId: null,
-          defaultAgentMetadata: null,
-        });
-      }),
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({ tasks: [] });
-      }),
-    );
+    setMockTeam([]);
+    setMockOnboardingStatus({
+      hasDefaultAgent: false,
+      defaultAgentId: null,
+      defaultAgentMetadata: null,
+    });
+    setMockTasks([]);
 
     detachedSetupPage({
       context,
@@ -817,37 +764,27 @@ describe("mission control page", () => {
     let archiveRequestBody: unknown = null;
 
     // Initially return the task
-    server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-arc",
-              type: "chat",
-              title: "Archivable Task",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: "run-arc-1",
-              status: "completed",
-              chatThreadId: "thread-arc",
-              createdAt: "2026-04-10T10:00:00Z",
-              updatedAt: "2026-04-10T10:00:00Z",
-            },
-          ],
-        });
-      }),
-    );
+    setMockTasks([
+      {
+        id: "task-arc",
+        type: "chat",
+        title: "Archivable Task",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: "run-arc-1",
+        status: "completed",
+        chatThreadId: "thread-arc",
+        createdAt: "2026-04-10T10:00:00Z",
+        updatedAt: "2026-04-10T10:00:00Z",
+      },
+    ]);
 
     server.use(
-      http.post("*/api/zero/tasks/archive", async ({ request }) => {
-        archiveRequestBody = await request.json();
-        // After archive, update the tasks API to return empty list
-        server.use(
-          http.get("*/api/zero/tasks", () => {
-            return HttpResponse.json({ tasks: [] });
-          }),
-        );
-        return HttpResponse.json({ ok: true });
+      mockApi(tasksContract.archive, ({ body, respond }) => {
+        archiveRequestBody = body;
+        // After archive, update the tasks list to return empty
+        setMockTasks([]);
+        return respond(200, { ok: true });
       }),
     );
 
@@ -877,26 +814,20 @@ describe("mission control page", () => {
   });
 
   it("should render voice_chat task type with Voice Chat label", async () => {
-    server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-vc",
-              type: "voice_chat",
-              title: "Voice session with Zero",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: "run-vc-1",
-              status: "running",
-              // voice_chat tasks have no chatThreadId — omit optional fields
-              createdAt: "2026-04-13T10:00:00Z",
-              updatedAt: "2026-04-13T10:00:00Z",
-            },
-          ],
-        });
-      }),
-    );
+    setMockTasks([
+      {
+        id: "task-vc",
+        type: "voice_chat",
+        title: "Voice session with Zero",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: "run-vc-1",
+        status: "running",
+        // voice_chat tasks have no chatThreadId — omit optional fields
+        createdAt: "2026-04-13T10:00:00Z",
+        updatedAt: "2026-04-13T10:00:00Z",
+      },
+    ]);
 
     detachedSetupPage({ context, path: "/_/mission-control" });
 
@@ -1204,10 +1135,10 @@ describe("mission control page", () => {
     // First poll: task has latestRunId "run-v1" (unread)
     let pollCount = 0;
     server.use(
-      http.get("*/api/zero/tasks", () => {
+      mockApi(tasksContract.list, ({ respond }) => {
         pollCount++;
         const latestRunId = pollCount === 1 ? "run-v1" : "run-v2";
-        return HttpResponse.json({
+        return respond(200, {
           tasks: [
             {
               id: "task-poll-read",
@@ -1292,25 +1223,21 @@ describe("mission control page", () => {
   it("should swap activity panel to new run when latestRunId changes while panel is open", async () => {
     // Start with run-v1. After the panel opens we switch the mock to run-v2
     // so the next task-loop poll triggers refreshPanel$ to swap the entry.
+    setMockTasks([
+      {
+        id: "task-refresh",
+        type: "schedule",
+        title: "Refresh Panel Task",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: "run-refresh-v1",
+        status: "completed",
+        scheduleId: "sched-refresh",
+        createdAt: "2026-04-10T10:00:00Z",
+        updatedAt: "2026-04-10T10:00:00Z",
+      },
+    ]);
     server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-refresh",
-              type: "schedule",
-              title: "Refresh Panel Task",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: "run-refresh-v1",
-              status: "completed",
-              scheduleId: "sched-refresh",
-              createdAt: "2026-04-10T10:00:00Z",
-              updatedAt: "2026-04-10T10:00:00Z",
-            },
-          ],
-        });
-      }),
       mockApi(logsByIdContract.getById, ({ params, respond }) => {
         if (params.id === "run-refresh-v2") {
           return respond(200, {
@@ -1378,26 +1305,20 @@ describe("mission control page", () => {
     });
 
     // Switch the task API to return run-v2, simulating a new run arriving
-    server.use(
-      http.get("*/api/zero/tasks", () => {
-        return HttpResponse.json({
-          tasks: [
-            {
-              id: "task-refresh",
-              type: "schedule",
-              title: "Refresh Panel Task",
-              summary: null,
-              agent: createAgent(),
-              latestRunId: "run-refresh-v2",
-              status: "completed",
-              scheduleId: "sched-refresh",
-              createdAt: "2026-04-10T10:00:00Z",
-              updatedAt: "2026-04-10T10:00:00Z",
-            },
-          ],
-        });
-      }),
-    );
+    setMockTasks([
+      {
+        id: "task-refresh",
+        type: "schedule",
+        title: "Refresh Panel Task",
+        summary: null,
+        agent: createAgent(),
+        latestRunId: "run-refresh-v2",
+        status: "completed",
+        scheduleId: "sched-refresh",
+        createdAt: "2026-04-10T10:00:00Z",
+        updatedAt: "2026-04-10T10:00:00Z",
+      },
+    ]);
 
     // The tasks loop auto-polls — it discovers the new latestRunId and calls
     // refreshPanel$, swapping the panel entry to run-refresh-v2.

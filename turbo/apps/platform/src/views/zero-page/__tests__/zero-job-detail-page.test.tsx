@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
@@ -9,39 +8,39 @@ import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
   zeroAgentsByIdContract,
   zeroAgentInstructionsContract,
+  zeroSchedulesByNameContract,
+  zeroSchedulesEnableContract,
 } from "@vm0/core";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+import {
+  setMockSchedules,
+  createMockScheduleResponse,
+} from "../../../mocks/handlers/api-schedules.ts";
 
 const context = testContext();
 
 function mockAPIs() {
+  setMockTeam([
+    {
+      id: "c0000000-0000-4000-a000-000000000001",
+      displayName: null,
+      description: null,
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_1",
+      updatedAt: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "agent-detail-id",
+      displayName: "My Agent",
+      description: "A helpful agent",
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_2",
+      updatedAt: "2024-01-02T00:00:00Z",
+    },
+  ]);
   server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([
-        {
-          id: "c0000000-0000-4000-a000-000000000001",
-          name: "zero",
-          displayName: null,
-          description: null,
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_1",
-          updatedAt: "2024-01-01T00:00:00Z",
-        },
-        {
-          id: "agent-detail-id",
-          name: "my-agent",
-          displayName: "My Agent",
-          description: "A helpful agent",
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_2",
-          updatedAt: "2024-01-02T00:00:00Z",
-        },
-      ]);
-    }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
     mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
       return respond(200, {
         agentId: "e0000000-0000-4000-a000-000000000010",
@@ -56,9 +55,6 @@ function mockAPIs() {
     }),
     mockApi(zeroAgentInstructionsContract.get, ({ respond }) => {
       return respond(200, { content: null, filename: null });
-    }),
-    http.get("*/api/zero/schedules", () => {
-      return HttpResponse.json({ schedules: [] });
     }),
   );
 }
@@ -124,24 +120,18 @@ describe("zero job detail page", () => {
   });
 
   it("should show not-found error for unknown agent", async () => {
+    setMockTeam([
+      {
+        id: "c0000000-0000-4000-a000-000000000001",
+        displayName: null,
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "version_1",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+    ]);
     server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          {
-            id: "c0000000-0000-4000-a000-000000000001",
-            name: "zero",
-            displayName: null,
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "version_1",
-            updatedAt: "2024-01-01T00:00:00Z",
-          },
-        ]);
-      }),
-      http.get("*/api/zero/chat-threads", () => {
-        return HttpResponse.json({ threads: [] });
-      }),
       mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
         return respond(404, {
           error: { message: "Not found", code: "INTERNAL_SERVER_ERROR" },
@@ -174,34 +164,27 @@ describe("zero job detail page", () => {
 });
 
 function mockAPIsWithSchedules() {
+  setMockTeam([
+    {
+      id: "c0000000-0000-4000-a000-000000000001",
+      displayName: null,
+      description: null,
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_1",
+      updatedAt: "2024-01-01T00:00:00Z",
+    },
+    {
+      id: "agent-detail-id",
+      displayName: "My Agent",
+      description: "A helpful agent",
+      sound: null,
+      avatarUrl: null,
+      headVersionId: "version_2",
+      updatedAt: "2024-01-02T00:00:00Z",
+    },
+  ]);
   server.use(
-    http.get("*/api/zero/team", () => {
-      return HttpResponse.json([
-        {
-          id: "c0000000-0000-4000-a000-000000000001",
-          name: "zero",
-          displayName: null,
-          description: null,
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_1",
-          updatedAt: "2024-01-01T00:00:00Z",
-        },
-        {
-          id: "agent-detail-id",
-          name: "my-agent",
-          displayName: "My Agent",
-          description: "A helpful agent",
-          sound: null,
-          avatarUrl: null,
-          headVersionId: "version_2",
-          updatedAt: "2024-01-02T00:00:00Z",
-        },
-      ]);
-    }),
-    http.get("*/api/zero/chat-threads", () => {
-      return HttpResponse.json({ threads: [] });
-    }),
     mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
       return respond(200, {
         agentId: "e0000000-0000-4000-a000-000000000010",
@@ -217,40 +200,16 @@ function mockAPIsWithSchedules() {
     mockApi(zeroAgentInstructionsContract.get, ({ respond }) => {
       return respond(200, { content: null, filename: null });
     }),
-    http.get("*/api/zero/schedules", () => {
-      return HttpResponse.json({
-        schedules: [
-          {
-            id: "f0000002-0000-4000-a000-000000000001",
-            agentId: "e0000000-0000-4000-a000-000000000010",
-            displayName: null,
-            name: "morning-briefing",
-            triggerType: "cron",
-            cronExpression: "0 9 * * 1-5",
-            atTime: null,
-            intervalSeconds: null,
-            timezone: "UTC",
-            prompt: "Summarize yesterday's threads",
-            description: null,
-            enabled: true,
-            nextRunAt: null,
-            lastRunAt: null,
-            createdAt: "2026-03-01T00:00:00Z",
-            updatedAt: "2026-03-01T00:00:00Z",
-            userId: "test-user-123",
-            appendSystemPrompt: null,
-            vars: null,
-            secretNames: null,
-            artifactName: null,
-            artifactVersion: null,
-            volumeVersions: null,
-            retryStartedAt: null,
-            consecutiveFailures: 0,
-          },
-        ],
-      });
-    }),
   );
+  setMockSchedules([
+    createMockScheduleResponse({
+      id: "f0000002-0000-4000-a000-000000000001",
+      agentId: "e0000000-0000-4000-a000-000000000010",
+      name: "morning-briefing",
+      cronExpression: "0 9 * * 1-5",
+      prompt: "Summarize yesterday's threads",
+    }),
+  ]);
 }
 
 async function openScheduleMenuAndClick(
@@ -296,9 +255,9 @@ describe("zero job detail page - schedule card delete confirmation", () => {
 
     mockAPIsWithSchedules();
     server.use(
-      http.delete("*/api/zero/schedules/:name", () => {
+      mockApi(zeroSchedulesByNameContract.delete, ({ respond }) => {
         deleteCalled = true;
-        return new HttpResponse(null, { status: 204 });
+        return respond(204);
       }),
     );
 
@@ -330,9 +289,9 @@ describe("zero job detail page - schedule card delete confirmation", () => {
 
     mockAPIsWithSchedules();
     server.use(
-      http.delete("*/api/zero/schedules/:name", ({ params }) => {
-        deletedName = params["name"] as string;
-        return new HttpResponse(null, { status: 204 });
+      mockApi(zeroSchedulesByNameContract.delete, ({ params, respond }) => {
+        deletedName = params.name;
+        return respond(204);
       }),
     );
 
@@ -364,34 +323,18 @@ describe("zero job detail page - schedule tab toggle", () => {
     mockAPIsWithSchedules();
 
     server.use(
-      http.post("*/api/zero/schedules/:name/:action", () => {
-        return HttpResponse.json({
-          id: "f0000002-0000-4000-a000-000000000001",
-          agentId: "e0000000-0000-4000-a000-000000000010",
-          displayName: null,
-          name: "morning-briefing",
-          triggerType: "cron",
-          cronExpression: "0 9 * * 1-5",
-          atTime: null,
-          intervalSeconds: null,
-          timezone: "UTC",
-          prompt: "Summarize yesterday's threads",
-          description: null,
-          enabled: false,
-          nextRunAt: null,
-          lastRunAt: null,
-          createdAt: "2026-03-01T00:00:00Z",
-          updatedAt: "2026-03-01T00:00:00Z",
-          userId: "test-user-123",
-          appendSystemPrompt: null,
-          vars: null,
-          secretNames: null,
-          artifactName: null,
-          artifactVersion: null,
-          volumeVersions: null,
-          retryStartedAt: null,
-          consecutiveFailures: 0,
-        });
+      mockApi(zeroSchedulesEnableContract.disable, ({ respond }) => {
+        return respond(
+          200,
+          createMockScheduleResponse({
+            id: "f0000002-0000-4000-a000-000000000001",
+            agentId: "e0000000-0000-4000-a000-000000000010",
+            name: "morning-briefing",
+            cronExpression: "0 9 * * 1-5",
+            prompt: "Summarize yesterday's threads",
+            enabled: false,
+          }),
+        );
       }),
     );
 

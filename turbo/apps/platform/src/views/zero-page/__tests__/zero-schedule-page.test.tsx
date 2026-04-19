@@ -1,120 +1,81 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
 import { createDeferredPromise } from "../../../signals/utils.ts";
+import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
+import {
+  setMockSchedules,
+  createMockScheduleResponse,
+} from "../../../mocks/handlers/api-schedules.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import {
+  zeroSchedulesMainContract,
+  zeroSchedulesByNameContract,
+  zeroSchedulesEnableContract,
+  type ScheduleResponse,
+} from "@vm0/core";
 
 const context = testContext();
 
-function mockScheduleBase() {
-  return {
-    userId: "test-user-123",
-    appendSystemPrompt: null,
-    vars: null,
-    secretNames: null,
-    volumeVersions: null,
-    retryStartedAt: null,
-    consecutiveFailures: 0,
-  };
-}
-
-function createMockSchedules() {
+function createMockSchedules(): ScheduleResponse[] {
   return [
-    {
-      ...mockScheduleBase(),
+    createMockScheduleResponse({
       id: "f0000001-0000-4000-a000-000000000001",
-      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       name: "morning-briefing",
-      triggerType: "cron",
       cronExpression: "0 9 * * 1-5",
-      atTime: null,
-      intervalSeconds: null,
-      timezone: "UTC",
       prompt: "Summarize yesterday's threads",
-      description: null,
-      enabled: true,
-      nextRunAt: null,
-      lastRunAt: null,
       createdAt: "2026-03-01T00:00:00Z",
       updatedAt: "2026-03-01T00:00:00Z",
-    },
-    {
-      ...mockScheduleBase(),
+    }),
+    createMockScheduleResponse({
       id: "f0000001-0000-4000-a000-000000000002",
-      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       name: "check-inbox",
       triggerType: "loop",
       cronExpression: null,
-      atTime: null,
       intervalSeconds: 900,
-      timezone: "UTC",
       prompt: "Check inbox for urgent items",
-      description: null,
-      enabled: true,
-      nextRunAt: null,
-      lastRunAt: null,
       createdAt: "2026-03-02T00:00:00Z",
       updatedAt: "2026-03-02T00:00:00Z",
-    },
-    {
-      ...mockScheduleBase(),
+    }),
+    createMockScheduleResponse({
       id: "f0000001-0000-4000-a000-000000000003",
-      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       name: "disabled-schedule",
-      triggerType: "cron",
       cronExpression: "0 12 * * *",
-      atTime: null,
-      intervalSeconds: null,
-      timezone: "UTC",
       prompt: "Disabled daily task",
-      description: null,
       enabled: false,
-      nextRunAt: null,
-      lastRunAt: null,
       createdAt: "2026-02-28T00:00:00Z",
       updatedAt: "2026-02-28T00:00:00Z",
-    },
+    }),
   ];
 }
 
-function mockDeployResponse() {
+function mockDeployResponse(): {
+  schedule: ScheduleResponse;
+  created: boolean;
+} {
   return {
-    schedule: {
-      ...mockScheduleBase(),
+    schedule: createMockScheduleResponse({
       id: "d0000001-0000-4000-a000-000000000001",
-      agentId: "c0000000-0000-4000-a000-000000000001",
       displayName: "Zero",
       name: "new-schedule",
-      triggerType: "cron",
       cronExpression: "0 9 * * *",
-      atTime: null,
-      intervalSeconds: null,
-      timezone: "UTC",
       prompt: "Daily standup summary",
-      description: null,
-      enabled: true,
-      nextRunAt: null,
-      lastRunAt: null,
       createdAt: "2026-04-01T00:00:00Z",
       updatedAt: "2026-04-01T00:00:00Z",
-    },
+    }),
     created: true,
   };
 }
 
 function mockScheduleAPI(schedules = createMockSchedules()) {
-  server.use(
-    http.get("*/api/zero/schedules", () => {
-      return HttpResponse.json({ schedules });
-    }),
-  );
+  setMockSchedules(schedules);
 }
 
 function renderSchedulePage() {
@@ -148,59 +109,35 @@ async function openMenuAndClick(
 describe("zero schedule page - agent labels", () => {
   it("should display agent displayName for schedules belonging to sub-agents", async () => {
     // Mock team API with a sub-agent that has a displayName
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          {
-            id: "c0000000-0000-4000-a000-000000000001",
-            displayName: "Zero",
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "v1",
-            updatedAt: "2024-01-01T00:00:00Z",
-            userId: "test-user-123",
-            appendSystemPrompt: null,
-            vars: null,
-            secretNames: null,
-            artifactName: null,
-            artifactVersion: null,
-            volumeVersions: null,
-            retryStartedAt: null,
-            consecutiveFailures: 0,
-          },
-          {
-            id: "e0000000-0000-4000-a000-000000000002",
-            displayName: "Research Agent",
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "v2",
-            updatedAt: "2024-01-02T00:00:00Z",
-            userId: "test-user-123",
-            appendSystemPrompt: null,
-            vars: null,
-            secretNames: null,
-            artifactName: null,
-            artifactVersion: null,
-            volumeVersions: null,
-            retryStartedAt: null,
-            consecutiveFailures: 0,
-          },
-        ]);
+    setMockTeam([
+      {
+        id: "c0000000-0000-4000-a000-000000000001",
+        displayName: "Zero",
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "v1",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+      {
+        id: "e0000000-0000-4000-a000-000000000002",
+        displayName: "Research Agent",
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "v2",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    ]);
+    setMockSchedules([
+      createMockScheduleResponse({
+        agentId: "e0000000-0000-4000-a000-000000000002",
+        displayName: "Research Agent",
+        name: "morning-briefing",
+        cronExpression: "0 9 * * 1-5",
+        prompt: "Summarize yesterday's threads",
       }),
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({
-          schedules: [
-            {
-              ...createMockSchedules()[0],
-              agentId: "e0000000-0000-4000-a000-000000000002",
-              displayName: "Research Agent",
-            },
-          ],
-        });
-      }),
-    );
+    ]);
     await renderSchedulePage();
 
     // The agent column should show "Research Agent" (from schedule displayName)
@@ -210,59 +147,35 @@ describe("zero schedule page - agent labels", () => {
   });
 
   it("should fall back to agent id when displayName is null", async () => {
-    server.use(
-      http.get("*/api/zero/team", () => {
-        return HttpResponse.json([
-          {
-            id: "c0000000-0000-4000-a000-000000000001",
-            displayName: null,
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "v1",
-            updatedAt: "2024-01-01T00:00:00Z",
-            userId: "test-user-123",
-            appendSystemPrompt: null,
-            vars: null,
-            secretNames: null,
-            artifactName: null,
-            artifactVersion: null,
-            volumeVersions: null,
-            retryStartedAt: null,
-            consecutiveFailures: 0,
-          },
-          {
-            id: "e0000000-0000-4000-a000-000000000003",
-            displayName: null,
-            description: null,
-            sound: null,
-            avatarUrl: null,
-            headVersionId: "v2",
-            updatedAt: "2024-01-02T00:00:00Z",
-            userId: "test-user-123",
-            appendSystemPrompt: null,
-            vars: null,
-            secretNames: null,
-            artifactName: null,
-            artifactVersion: null,
-            volumeVersions: null,
-            retryStartedAt: null,
-            consecutiveFailures: 0,
-          },
-        ]);
+    setMockTeam([
+      {
+        id: "c0000000-0000-4000-a000-000000000001",
+        displayName: null,
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "v1",
+        updatedAt: "2024-01-01T00:00:00Z",
+      },
+      {
+        id: "e0000000-0000-4000-a000-000000000003",
+        displayName: null,
+        description: null,
+        sound: null,
+        avatarUrl: null,
+        headVersionId: "v2",
+        updatedAt: "2024-01-02T00:00:00Z",
+      },
+    ]);
+    setMockSchedules([
+      createMockScheduleResponse({
+        agentId: "e0000000-0000-4000-a000-000000000003",
+        displayName: null,
+        name: "morning-briefing",
+        cronExpression: "0 9 * * 1-5",
+        prompt: "Summarize yesterday's threads",
       }),
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({
-          schedules: [
-            {
-              ...createMockSchedules()[0],
-              agentId: "e0000000-0000-4000-a000-000000000003",
-              displayName: null,
-            },
-          ],
-        });
-      }),
-    );
+    ]);
     await renderSchedulePage();
 
     // Falls back to raw agent id when displayName is null
@@ -274,52 +187,27 @@ describe("zero schedule page - agent labels", () => {
   });
 
   it("should only show schedules belonging to the filtered agent (SCHED-D-001)", async () => {
-    server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({
-          schedules: [
-            {
-              ...mockScheduleBase(),
-              id: "f0000001-0000-4000-a000-000000000099",
-              agentId: "c0000000-0000-4000-a000-000000000001",
-              displayName: "Zero",
-              name: "alpha-only-task",
-              triggerType: "cron",
-              cronExpression: "0 9 * * 1-5",
-              atTime: null,
-              intervalSeconds: null,
-              timezone: "UTC",
-              prompt: "Alpha only task",
-              description: null,
-              enabled: true,
-              nextRunAt: null,
-              lastRunAt: null,
-              createdAt: "2026-03-01T00:00:00Z",
-              updatedAt: "2026-03-01T00:00:00Z",
-            },
-            {
-              ...mockScheduleBase(),
-              id: "f0000001-0000-4000-a000-000000000098",
-              agentId: "c0000000-0000-4000-a000-000000000002",
-              displayName: "Beta Agent",
-              name: "beta-only-task",
-              triggerType: "cron",
-              cronExpression: "0 10 * * 1-5",
-              atTime: null,
-              intervalSeconds: null,
-              timezone: "UTC",
-              prompt: "Beta only task",
-              description: null,
-              enabled: true,
-              nextRunAt: null,
-              lastRunAt: null,
-              createdAt: "2026-03-02T00:00:00Z",
-              updatedAt: "2026-03-02T00:00:00Z",
-            },
-          ],
-        });
+    setMockSchedules([
+      createMockScheduleResponse({
+        id: "f0000001-0000-4000-a000-000000000099",
+        displayName: "Zero",
+        name: "alpha-only-task",
+        cronExpression: "0 9 * * 1-5",
+        prompt: "Alpha only task",
+        createdAt: "2026-03-01T00:00:00Z",
+        updatedAt: "2026-03-01T00:00:00Z",
       }),
-    );
+      createMockScheduleResponse({
+        id: "f0000001-0000-4000-a000-000000000098",
+        agentId: "c0000000-0000-4000-a000-000000000002",
+        displayName: "Beta Agent",
+        name: "beta-only-task",
+        cronExpression: "0 10 * * 1-5",
+        prompt: "Beta only task",
+        createdAt: "2026-03-02T00:00:00Z",
+        updatedAt: "2026-03-02T00:00:00Z",
+      }),
+    ]);
     await renderSchedulePage();
     await waitFor(() => {
       expect(
@@ -335,52 +223,30 @@ describe("zero schedule page - agent labels", () => {
   });
 
   it("should display schedules from multiple agents with their respective agent labels (SCHED-D-006)", async () => {
-    server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({
-          schedules: [
-            {
-              ...mockScheduleBase(),
-              id: "f0000001-0000-4000-a000-000000000011",
-              agentId: "c0000000-0000-4000-a000-000000000011",
-              displayName: "Alpha Bot",
-              name: "alpha-schedule",
-              triggerType: "cron",
-              cronExpression: "0 9 * * 1-5",
-              atTime: null,
-              intervalSeconds: null,
-              timezone: "UTC",
-              prompt: "Alpha daily standup",
-              description: null,
-              enabled: true,
-              nextRunAt: null,
-              lastRunAt: null,
-              createdAt: "2026-03-01T00:00:00Z",
-              updatedAt: "2026-03-01T00:00:00Z",
-            },
-            {
-              ...mockScheduleBase(),
-              id: "f0000001-0000-4000-a000-000000000022",
-              agentId: "c0000000-0000-4000-a000-000000000022",
-              displayName: "Beta Bot",
-              name: "beta-schedule",
-              triggerType: "loop",
-              cronExpression: null,
-              atTime: null,
-              intervalSeconds: 1800,
-              timezone: "UTC",
-              prompt: "Beta monitoring check",
-              description: null,
-              enabled: true,
-              nextRunAt: null,
-              lastRunAt: null,
-              createdAt: "2026-03-02T00:00:00Z",
-              updatedAt: "2026-03-02T00:00:00Z",
-            },
-          ],
-        });
+    setMockSchedules([
+      createMockScheduleResponse({
+        id: "f0000001-0000-4000-a000-000000000011",
+        agentId: "c0000000-0000-4000-a000-000000000011",
+        displayName: "Alpha Bot",
+        name: "alpha-schedule",
+        cronExpression: "0 9 * * 1-5",
+        prompt: "Alpha daily standup",
+        createdAt: "2026-03-01T00:00:00Z",
+        updatedAt: "2026-03-01T00:00:00Z",
       }),
-    );
+      createMockScheduleResponse({
+        id: "f0000001-0000-4000-a000-000000000022",
+        agentId: "c0000000-0000-4000-a000-000000000022",
+        displayName: "Beta Bot",
+        name: "beta-schedule",
+        triggerType: "loop",
+        cronExpression: null,
+        intervalSeconds: 1800,
+        prompt: "Beta monitoring check",
+        createdAt: "2026-03-02T00:00:00Z",
+        updatedAt: "2026-03-02T00:00:00Z",
+      }),
+    ]);
     await renderSchedulePage();
     await waitFor(() => {
       expect(
@@ -534,15 +400,13 @@ describe("zero schedule page - create dialog", () => {
 
   it("should save a new schedule via API", async () => {
     const user = userEvent.setup();
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedPrompt: string | null = null;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.post("*/api/zero/schedules", async ({ request }) => {
-        capturedBody = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(mockDeployResponse());
+      mockApi(zeroSchedulesMainContract.deploy, ({ body, respond }) => {
+        capturedPrompt = body.prompt;
+        return respond(201, mockDeployResponse());
       }),
     );
 
@@ -571,9 +435,9 @@ describe("zero schedule page - create dialog", () => {
     await user.click(screen.getByText("Create"));
 
     await waitFor(() => {
-      expect(capturedBody).toBeTruthy();
+      expect(capturedPrompt).toBeTruthy();
     });
-    expect(capturedBody).toHaveProperty("prompt", "Daily standup summary");
+    expect(capturedPrompt).toBe("Daily standup summary");
   });
 });
 
@@ -582,13 +446,15 @@ describe("zero schedule page - toggle enabled", () => {
     const user = userEvent.setup();
     let capturedAction: string | null = null;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
+      mockApi(zeroSchedulesEnableContract.disable, ({ respond }) => {
+        capturedAction = "disable";
+        return respond(200, createMockSchedules()[0]);
       }),
-      http.post("*/api/zero/schedules/:name/:action", ({ params }) => {
-        capturedAction = params["action"] as string;
-        return HttpResponse.json(createMockSchedules()[0]);
+      mockApi(zeroSchedulesEnableContract.enable, ({ respond }) => {
+        capturedAction = "enable";
+        return respond(200, createMockSchedules()[0]);
       }),
     );
 
@@ -639,13 +505,11 @@ describe("zero schedule page - delete confirmation", () => {
     const user = userEvent.setup();
     let deleteCalled = false;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.delete("*/api/zero/schedules/:name", () => {
+      mockApi(zeroSchedulesByNameContract.delete, ({ respond }) => {
         deleteCalled = true;
-        return new HttpResponse(null, { status: 204 });
+        return respond(204);
       }),
     );
 
@@ -675,13 +539,11 @@ describe("zero schedule page - delete confirmation", () => {
     const user = userEvent.setup();
     let deletedName: string | null = null;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.delete("*/api/zero/schedules/:name", ({ params }) => {
-        deletedName = params["name"] as string;
-        return new HttpResponse(null, { status: 204 });
+      mockApi(zeroSchedulesByNameContract.delete, ({ params, respond }) => {
+        deletedName = params.name;
+        return respond(204);
       }),
     );
 
@@ -710,14 +572,12 @@ describe("zero schedule page - delete confirmation", () => {
     const user = userEvent.setup();
     let resolveDelete: (() => void) | null = null;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.delete("*/api/zero/schedules/:name", () => {
-        return new Promise<Response>((resolve) => {
+      mockApi(zeroSchedulesByNameContract.delete, ({ respond }) => {
+        return new Promise<ReturnType<typeof respond>>((resolve) => {
           resolveDelete = () => {
-            return resolve(new HttpResponse(null, { status: 204 }));
+            return resolve(respond(204));
           };
         });
       }),
@@ -759,13 +619,11 @@ describe("zero schedule page - delete confirmation", () => {
     const user = userEvent.setup();
     let deletedName: string | null = null;
 
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.delete("*/api/zero/schedules/:name", ({ params }) => {
-        deletedName = params["name"] as string;
-        return new HttpResponse(null, { status: 204 });
+      mockApi(zeroSchedulesByNameContract.delete, ({ params, respond }) => {
+        deletedName = params.name;
+        return respond(204);
       }),
     );
 
@@ -916,20 +774,15 @@ describe("zero schedule page - schedule dialog fields", () => {
 
   it("should surface save error via toast and keep dialog open", async () => {
     const user = userEvent.setup();
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.post("*/api/zero/schedules", () => {
-        return HttpResponse.json(
-          {
-            error: {
-              message: "Schedule limit reached",
-              code: "INTERNAL_SERVER_ERROR",
-            },
+      mockApi(zeroSchedulesMainContract.deploy, ({ respond }) => {
+        return respond(400, {
+          error: {
+            message: "Schedule limit reached",
+            code: "INTERNAL_SERVER_ERROR",
           },
-          { status: 400 },
-        );
+        });
       }),
     );
 
@@ -992,9 +845,9 @@ describe("zero schedule page - loading state", () => {
   it("should show skeleton while schedules are being fetched (SCHED-D-004)", async () => {
     const hangDeferred = createDeferredPromise<void>(context.signal);
     server.use(
-      http.get("*/api/zero/schedules", async () => {
+      mockApi(zeroSchedulesMainContract.list, async ({ respond }) => {
         await hangDeferred.promise;
-        return HttpResponse.json({ schedules: [] });
+        return respond(200, { schedules: [] });
       }),
     );
 
@@ -1013,14 +866,12 @@ describe("zero schedule page - create dialog timezone default", () => {
     const user = userEvent.setup();
     setMockUserPreferences({ timezone: "Asia/Tokyo" });
 
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedTimezone: string | null = null;
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.post("*/api/zero/schedules", async ({ request }) => {
-        capturedBody = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(mockDeployResponse());
+      mockApi(zeroSchedulesMainContract.deploy, ({ body, respond }) => {
+        capturedTimezone = body.timezone;
+        return respond(201, mockDeployResponse());
       }),
     );
 
@@ -1044,9 +895,9 @@ describe("zero schedule page - create dialog timezone default", () => {
     await user.click(screen.getByText("Create"));
 
     await waitFor(() => {
-      expect(capturedBody).toBeTruthy();
+      expect(capturedTimezone).toBeTruthy();
     });
-    expect(capturedBody).toHaveProperty("timezone", "Asia/Tokyo");
+    expect(capturedTimezone).toBe("Asia/Tokyo");
   });
 
   it("should fall back to local timezone in submitted request when preference not set", async () => {
@@ -1054,14 +905,12 @@ describe("zero schedule page - create dialog timezone default", () => {
     // timezone is null by default (reset via resetAllMockHandlers in afterEach)
     const localTimezone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedTimezone: string | null = null;
+    setMockSchedules(createMockSchedules());
     server.use(
-      http.get("*/api/zero/schedules", () => {
-        return HttpResponse.json({ schedules: createMockSchedules() });
-      }),
-      http.post("*/api/zero/schedules", async ({ request }) => {
-        capturedBody = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(mockDeployResponse());
+      mockApi(zeroSchedulesMainContract.deploy, ({ body, respond }) => {
+        capturedTimezone = body.timezone;
+        return respond(201, mockDeployResponse());
       }),
     );
 
@@ -1084,8 +933,8 @@ describe("zero schedule page - create dialog timezone default", () => {
     await user.click(screen.getByText("Create"));
 
     await waitFor(() => {
-      expect(capturedBody).toBeTruthy();
+      expect(capturedTimezone).toBeTruthy();
     });
-    expect(capturedBody).toHaveProperty("timezone", localTimezone);
+    expect(capturedTimezone).toBe(localTimezone);
   });
 });

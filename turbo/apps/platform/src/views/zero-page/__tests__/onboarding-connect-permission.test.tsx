@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
@@ -9,6 +8,8 @@ import { permissionDialogType$ } from "../../../signals/zero-page/settings/conne
 import {
   type ConnectorListResponse,
   zeroConnectorsMainContract,
+  onboardingStatusContract,
+  onboardingSetupContract,
 } from "@vm0/core";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 
@@ -47,8 +48,8 @@ function makeGithubConnectedResponse(): ConnectorListResponse {
 
 function mockAdminOnboarding() {
   server.use(
-    http.get("*/api/zero/onboarding/status", () => {
-      return HttpResponse.json({
+    mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
+      return respond(200, {
         needsOnboarding: true,
         isAdmin: true,
         hasOrg: true,
@@ -57,10 +58,8 @@ function mockAdminOnboarding() {
         defaultAgentMetadata: null,
       });
     }),
-    http.post("*/api/zero/onboarding/setup", () => {
-      return HttpResponse.json({
-        agentId: "d0000000-0000-4000-a000-000000000001",
-      });
+    mockApi(onboardingSetupContract.setup, ({ respond }) => {
+      return respond(200, { agentId: "d0000000-0000-4000-a000-000000000001" });
     }),
   );
 }

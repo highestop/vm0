@@ -117,6 +117,28 @@ describe("zero schedule status command", () => {
       expect(logCalls).toContain("0 9 * * 1");
     });
 
+    it("should display full prompt with --prompt flag", async () => {
+      const longPromptSchedule = {
+        ...mockSchedule,
+        prompt:
+          "This is a very long prompt that would normally be truncated in the status output but should be shown in full when using the --prompt flag",
+      };
+      server.use(
+        http.get("http://localhost:3000/api/agent/composes", () => {
+          return HttpResponse.json(mockCompose);
+        }),
+        http.get("http://localhost:3000/api/zero/schedules", () => {
+          return HttpResponse.json({ schedules: [longPromptSchedule] });
+        }),
+      );
+
+      await statusCommand.parseAsync(["node", "cli", "my-agent", "--prompt"]);
+
+      const logCalls = mockConsoleLog.mock.calls.flat().join("\n");
+      expect(logCalls).toContain(longPromptSchedule.prompt);
+      expect(logCalls).not.toContain("...");
+    });
+
     it("should display schedule when agent identifier is a UUID", async () => {
       const testUuid = "550e8400-e29b-41d4-a716-446655440000";
       const uuidCompose = { ...mockCompose, id: testUuid };

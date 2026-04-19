@@ -82,6 +82,7 @@ import { googleDriveFirewall } from "./google-drive.generated";
 import { googleMeetFirewall } from "./google-meet.generated";
 import { googleSheetsFirewall } from "./google-sheets.generated";
 import { granolaFirewall } from "./granola.generated";
+import { greenhouseFirewall } from "./greenhouse.generated";
 import { heygenFirewall } from "./heygen.generated";
 import { htmlcsstoimageFirewall } from "./htmlcsstoimage.generated";
 import { hubspotFirewall } from "./hubspot.generated";
@@ -243,6 +244,7 @@ const CONNECTOR_FIREWALLS = {
   "google-meet": googleMeetFirewall,
   "google-sheets": googleSheetsFirewall,
   granola: granolaFirewall,
+  greenhouse: greenhouseFirewall,
   heygen: heygenFirewall,
   htmlcsstoimage: htmlcsstoimageFirewall,
   hubspot: hubspotFirewall,

@@ -104,6 +104,7 @@ const CONNECTOR_ICON_COLORFUL = {
   "google-meet": true,
   "google-sheets": true,
   granola: true,
+  greenhouse: true,
   heygen: true,
   hubspot: true,
   "hugging-face": true,

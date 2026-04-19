@@ -255,6 +255,12 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
       "Replace the Invite people button in the agent chat page header with a New button that creates a new chat thread",
     enabled: false,
   },
+  [FeatureSwitchKey.ChatThreadReadIndicator]: {
+    maintainer: "ethan@vm0.ai",
+    description:
+      "Show the unread watermark dot and bold title for chat threads with unread messages in the sidebar",
+    enabled: false,
+  },
   [FeatureSwitchKey.InlineThinkingDot]: {
     maintainer: "ethan@vm0.ai",
     description:

@@ -16,6 +16,7 @@ import { notFound, badRequest } from "../../shared/errors";
 import { logger } from "../../shared/logger";
 import { getSecretValue, upsertSecretByOrg } from "../secret/secret-service";
 import { PROVIDER_HANDLERS } from "./provider-registry";
+import { publishUserSignal } from "../../infra/realtime/client";
 
 const log = logger("service:connector");
 
@@ -432,6 +433,10 @@ export async function upsertOAuthConnector(
   }
   log.debug("connector upserted", { connectorId: connectorRow.id, type });
 
+  // Notify the operating user's open tabs (e.g. the connector settings page
+  // waiting for the OAuth popup callback) that connector state changed.
+  await publishUserSignal([userId], "connector:changed");
+
   return {
     connector: {
       id: connectorRow.id,
@@ -628,7 +633,10 @@ export async function deleteConnector(
     deleted = true;
   }
 
-  if (deleted) return;
+  if (deleted) {
+    await publishUserSignal([userId], "connector:changed");
+    return;
+  }
 
   // No DB record — check if type supports api-token and delete secrets + variables
   const fields = getApiTokenFieldsByType(type);
@@ -666,6 +674,7 @@ export async function deleteConnector(
         orgId,
         type,
       });
+      await publishUserSignal([userId], "connector:changed");
       return;
     }
   }

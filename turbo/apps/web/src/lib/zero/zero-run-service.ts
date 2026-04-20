@@ -668,6 +668,8 @@ async function dispatchZeroRun(
     return dispatchResult;
   } catch (error) {
     await markRunFailed(record.run.id, error);
+    // drainOrgQueue always publishes queue:changed in its finally block —
+    // including the empty-queue case — so no explicit publish is needed here.
     await drainOrgQueue(orgId, dispatchQueuedZeroRun).catch((drainErr) => {
       log.error("Failed to drain org queue after run failure", { drainErr });
     });

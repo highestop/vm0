@@ -54,4 +54,5 @@ export enum FeatureSwitchKey {
   ZoomConnector = "zoomConnector",
   ModelProviderSelection = "modelProviderSelection",
   Vm0GlmModel = "vm0GlmModel",
+  RedeemCode = "redeemCode",
 }

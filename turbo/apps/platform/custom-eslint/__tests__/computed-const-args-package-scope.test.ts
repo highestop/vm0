@@ -10,57 +10,107 @@ const ruleTester = new RuleTester();
 
 ruleTester.run("computed-const-args-package-scope", rule, {
   valid: [
-    // computed() at package scope — allowed
+    // computed() at package scope — never a violation
     {
-      code: "const theme$ = computed(() => 'dark');",
-    },
-    // command() at package scope — allowed
-    {
-      code: "const load$ = command(async () => {});",
-    },
-    // computed() inside function but with non-constant argument — not flagged
-    {
-      code: "function setup(key) { const val$ = computed(() => key); }",
+      code: `const x$ = computed(() => 'value');`,
     },
     // computed() at package scope with literal arg — allowed (package scope)
     {
       code: "const a$ = computed('theme');",
     },
-    // Helper function returning Computed called inside function but with non-constant arg
+    // command() at package scope — allowed
     {
-      code: "function localStorageSignal(key) { return computed(() => key); } function setup(k) { const s$ = localStorageSignal(k); }",
+      code: "const load$ = command(async () => {});",
     },
-    // Package-scope helper returning computed called at package scope — allowed
+    // command() at package scope with get
     {
-      code: "function localStorageSignal(key) { return computed(() => key); } const s$ = localStorageSignal('theme');",
+      code: `const cmd$ = command(({ get }) => get(x$));`,
     },
-    // computed() inside function with zero arguments — not flagged (no literal args)
+    // computed() with variable argument inside function — not constant, no violation
     {
-      code: "function setup() { const val$ = computed(); }",
-    },
-    // Method call inside function — not a ccstate factory
-    {
-      code: "function setup() { const val$ = obj.computed('theme'); }",
+      code: `function setup(key) { const x$ = computed(() => key); }`,
     },
     // command() with non-constant argument inside function — not flagged
     {
       code: "function setup(name) { const cmd$ = command(name); }",
     },
+    // computed() inside function with zero arguments — not flagged (no literal args)
+    {
+      code: `function setup() { const x$ = computed(); }`,
+    },
+    // method calls are never flagged
+    {
+      code: `function setup() { const x$ = obj.computed('key'); }`,
+    },
+    // factory function called at package scope
+    {
+      code: `
+        function makeSignal(key) { return computed(() => key); }
+        const sig$ = makeSignal('theme');
+      `,
+    },
+    // Package-scope helper returning computed called at package scope — allowed
+    {
+      code: "function localStorageSignal(key) { return computed(() => key); } const s$ = localStorageSignal('theme');",
+    },
+    // factory function called with variable argument (not constant)
+    {
+      code: `
+        function makeSignal(key) { return computed(() => key); }
+        function setup(key) { const sig$ = makeSignal(key); }
+      `,
+    },
+    // Helper function returning Computed called inside function but with non-constant arg
+    {
+      code: "function localStorageSignal(key) { return computed(() => key); } function setup(k) { const s$ = localStorageSignal(k); }",
+    },
+    // factory function that returns plain value — not a signal factory
+    {
+      code: `
+        function getLabel(key) { return key + '_label'; }
+        function setup() { const label = getLabel('theme'); }
+      `,
+    },
+    // non-$ object returned — not a signal factory
+    {
+      code: `
+        function makeConfig(key) { return { value: key }; }
+        function setup() { const cfg = makeConfig('theme'); }
+      `,
+    },
   ],
   invalid: [
-    // computed() with literal arg inside a function — must be at package scope
+    // computed() with string literal arg inside function
     {
       code: "function setup() { const theme$ = computed('dark'); }",
       errors: [{ messageId: "mustBePackageScope" }],
     },
-    // command() with literal arg inside a function — must be at package scope
+    // computed() with string literal inside arrow function (wrapped)
+    {
+      code: `function setup() { const x$ = computed(() => 'value'); }`,
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed() with literal arg inside arrow function scope
+    {
+      code: "const init = () => { const s$ = computed('theme'); };",
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // command() with literal arg inside function
     {
       code: "function setup() { const load$ = command('myCmd'); }",
       errors: [{ messageId: "mustBePackageScope" }],
     },
-    // computed() with literal arg inside arrow function
+    // command() with string literal wrapped in arrow function inside function
     {
-      code: "const init = () => { const s$ = computed('theme'); };",
+      code: `function setup() { const x$ = command(() => 'value'); }`,
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // factory function (direct return computed) called inside function with literal
+    {
+      code: `
+        function makeSignal(key) { return computed(() => key); }
+        function setup() { const sig$ = makeSignal('theme'); }
+      `,
       errors: [{ messageId: "mustBePackageScope" }],
     },
     // Package-scope helper function returning computed, called inside function with literal arg
@@ -68,9 +118,12 @@ ruleTester.run("computed-const-args-package-scope", rule, {
       code: "function localStorageSignal(key) { return computed(() => key); } function setup() { const s$ = localStorageSignal('theme'); }",
       errors: [{ messageId: "mustBePackageScope" }],
     },
-    // computed() with numeric literal inside nested function
+    // factory function (object with $ keys) called inside function with literal
     {
-      code: "function outer() { function inner() { const n$ = computed(42); } }",
+      code: `
+        function makeSignals(key) { return { value$: computed(() => key) }; }
+        function setup() { const sigs = makeSignals('theme'); }
+      `,
       errors: [{ messageId: "mustBePackageScope" }],
     },
     // Package-scope helper with explicit Computed return type annotation
@@ -78,9 +131,43 @@ ruleTester.run("computed-const-args-package-scope", rule, {
       code: "function makeSignal(key: string): Computed<string> { return computed(() => key); } function setup() { const c$ = makeSignal('key'); }",
       errors: [{ messageId: "mustBePackageScope" }],
     },
-    // computed() with enum-member argument inside a function — must be at package scope
+    // computed with enum-like member expression (PascalCase.Member)
+    {
+      code: `function setup() { const x$ = computed(() => LocalStorageKey.Theme); }`,
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed() with enum-member argument inside a function
     {
       code: "function setup() { const theme$ = computed(LocalStorageKey.Theme); }",
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // nested function scope (arrow function)
+    {
+      code: `
+        const outer = () => {
+          const x$ = computed(() => 'value');
+        };
+      `,
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed() with numeric literal inside nested function
+    {
+      code: "function outer() { function inner() { const n$ = computed(42); } }",
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed with numeric literal (wrapped)
+    {
+      code: `function setup() { const x$ = computed(() => 42); }`,
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed with template literal (no expressions)
+    {
+      code: "function setup() { const x$ = computed(() => `value`); }",
+      errors: [{ messageId: "mustBePackageScope" }],
+    },
+    // computed with array of literals
+    {
+      code: `function setup() { const x$ = computed(() => ['a', 'b']); }`,
       errors: [{ messageId: "mustBePackageScope" }],
     },
   ],

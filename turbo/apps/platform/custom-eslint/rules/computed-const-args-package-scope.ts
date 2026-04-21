@@ -16,20 +16,47 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 import { createRule } from "../utils.ts";
 
-function isConstantTypeRef(typeNode: TSESTree.TypeNode): boolean {
-  if (typeNode.type === AST_NODE_TYPES.TSTypeReference) {
-    const name = typeNode.typeName;
-    if (name.type === AST_NODE_TYPES.Identifier) {
-      return name.name === "Computed" || name.name === "Command";
-    }
+// Functions that always return a constant ccstate type (Computed/Command).
+// No type checker needed — these are well-known ccstate primitives.
+const KNOWN_CONSTANT_FUNCTIONS = new Set(["computed", "command"]);
+
+function isKnownConstantCall(node: TSESTree.CallExpression): boolean {
+  return (
+    node.callee.type === AST_NODE_TYPES.Identifier &&
+    KNOWN_CONSTANT_FUNCTIONS.has(node.callee.name)
+  );
+}
+
+// An object literal is considered a "signal object" when at least one property
+// key ends with "$" — the project-wide convention for signal variables.
+function isSignalObject(node: TSESTree.ObjectExpression): boolean {
+  return node.properties.some(
+    (prop) =>
+      prop.type === AST_NODE_TYPES.Property &&
+      prop.key.type === AST_NODE_TYPES.Identifier &&
+      prop.key.name.endsWith("$"),
+  );
+}
+
+// A top-level return is "constant" if it directly returns computed()/command()
+// or an object whose keys follow the $-suffix signal convention.
+function isConstantReturnExpression(node: TSESTree.Expression): boolean {
+  if (node.type === AST_NODE_TYPES.CallExpression) {
+    return isKnownConstantCall(node);
   }
-  if (
-    typeNode.type === AST_NODE_TYPES.TSUnionType ||
-    typeNode.type === AST_NODE_TYPES.TSIntersectionType
-  ) {
-    return typeNode.types.some(isConstantTypeRef);
+  if (node.type === AST_NODE_TYPES.ObjectExpression) {
+    return isSignalObject(node);
   }
   return false;
+}
+
+function functionBodyHasConstantReturn(body: TSESTree.BlockStatement): boolean {
+  return body.body.some(
+    (stmt) =>
+      stmt.type === AST_NODE_TYPES.ReturnStatement &&
+      stmt.argument !== null &&
+      isConstantReturnExpression(stmt.argument),
+  );
 }
 
 function isConstantValue(node: TSESTree.Node): boolean {
@@ -57,16 +84,16 @@ function isConstantValue(node: TSESTree.Node): boolean {
     return false;
   }
   if (node.type === AST_NODE_TYPES.MemberExpression) {
-    // Heuristic: enum member access like LocalStorageKey.Theme
+    // Heuristic: PascalCase.Member → likely an enum (e.g. LocalStorageKey.Theme).
+    // Matches the project convention; non-standard const patterns are accepted
+    // as a known trade-off to avoid the TypeScript language service.
     const obj = node.object;
     const prop = node.property;
     if (
       obj.type === AST_NODE_TYPES.Identifier &&
       prop.type === AST_NODE_TYPES.Identifier
     ) {
-      return /^[A-Z][a-zA-Z]*Key$|^[A-Z][a-zA-Z]*Type$|^[A-Z][a-zA-Z]*$/.test(
-        obj.name,
-      );
+      return /^[A-Z][a-zA-Z]*$/.test(obj.name);
     }
     return false;
   }
@@ -121,46 +148,15 @@ export default createRule({
     },
   },
   create(context) {
-    // Non-package-scope calls grouped by callee name.
+    // Populated at package scope by FunctionDeclaration visitor.
+    // Pre-seeded with known ccstate primitives.
+    const packageScopeConstantFunctions = new Set<string>(
+      KNOWN_CONSTANT_FUNCTIONS,
+    );
+
+    // Non-package-scope calls grouped by callee name so Program:exit only
+    // iterates entries that match known constant function names.
     const deferredCallsByName = new Map<string, TSESTree.CallExpression[]>();
-
-    // Functions known to return Computed/Command: seeded with computed() itself,
-    // extended at declaration time for package-scope helper functions.
-    const packageScopeConstantFunctions = new Set<string>([
-      "computed",
-      "command",
-    ]);
-
-    function functionDeclarationHasConstantReturn(
-      node: TSESTree.FunctionDeclaration,
-    ): boolean {
-      // 1. Explicit return type annotation: ): Computed<...> or ): Command<...>
-      if (
-        node.returnType !== null &&
-        node.returnType !== undefined &&
-        isConstantTypeRef(node.returnType.typeAnnotation)
-      ) {
-        return true;
-      }
-      // 2. Return statement directly calls a known constant factory
-      return node.body.body.some((stmt) => {
-        if (
-          stmt.type !== AST_NODE_TYPES.ReturnStatement ||
-          stmt.argument === null ||
-          stmt.argument === undefined
-        ) {
-          return false;
-        }
-        const expr = stmt.argument;
-        if (expr.type !== AST_NODE_TYPES.CallExpression) {
-          return false;
-        }
-        if (expr.callee.type !== AST_NODE_TYPES.Identifier) {
-          return false;
-        }
-        return packageScopeConstantFunctions.has(expr.callee.name);
-      });
-    }
 
     function processCallsForName(name: string) {
       const calls = deferredCallsByName.get(name);
@@ -182,8 +178,7 @@ export default createRule({
       }
     }
 
-    // Depth counter for function-like scopes — O(1) alternative to isInPackageScope
-    // per-node parent-chain traversal. Incremented on enter, decremented on exit.
+    // O(1) scope depth counter — avoids per-node parent-chain traversal.
     let scopeDepth = 0;
 
     function enterScope() {
@@ -194,8 +189,9 @@ export default createRule({
     }
 
     return {
-      // Track function declarations that return constant types at package scope.
-      // Check depth BEFORE incrementing: depth===0 means the declaration is at package scope.
+      // Detect package-scope factory functions by AST shape.
+      // Check depth BEFORE incrementing: depth === 0 means the declaration is
+      // at package scope.
       FunctionDeclaration(node: TSESTree.FunctionDeclaration) {
         const atPackageScope = scopeDepth === 0 && node.id !== null;
         scopeDepth++;
@@ -204,7 +200,7 @@ export default createRule({
           return;
         }
 
-        if (functionDeclarationHasConstantReturn(node) && node.id !== null) {
+        if (functionBodyHasConstantReturn(node.body) && node.id !== null) {
           packageScopeConstantFunctions.add(node.id.name);
         }
       },
@@ -222,20 +218,19 @@ export default createRule({
       "ClassExpression:exit": exitScope,
 
       CallExpression(node: TSESTree.CallExpression) {
-        // Package-scope calls can never be violations — skip immediately (O(1) depth check)
+        // Package-scope calls are never violations.
         if (scopeDepth === 0) {
           return;
         }
-        // Method calls (obj.method()) are never ccstate factory functions
+        // Method calls (obj.method()) are never ccstate factory functions.
         if (node.callee.type !== AST_NODE_TYPES.Identifier) {
           return;
         }
-        const functionName = node.callee.name;
-        // Group by callee name so Program:exit can skip all irrelevant names in O(1)
-        let calls = deferredCallsByName.get(functionName);
+        const name = node.callee.name;
+        let calls = deferredCallsByName.get(name);
         if (calls === undefined) {
           calls = [];
-          deferredCallsByName.set(functionName, calls);
+          deferredCallsByName.set(name, calls);
         }
         calls.push(node);
       },

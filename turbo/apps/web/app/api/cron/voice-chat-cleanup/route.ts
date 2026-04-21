@@ -137,7 +137,7 @@ export async function GET(request: Request): Promise<Response> {
       and(
         eq(featureCandidateVoiceChatSessions.reasoningStatus, "running"),
         lt(
-          featureCandidateVoiceChatSessions.lastReasoningAt,
+          featureCandidateVoiceChatSessions.lastSummaryAt,
           reasonerStuckThreshold,
         ),
       ),
@@ -154,7 +154,7 @@ export async function GET(request: Request): Promise<Response> {
       and(
         eq(featureCandidateVoiceChatSessions.reasoningStatus, "running"),
         lt(
-          featureCandidateVoiceChatSessions.lastReasoningAt,
+          featureCandidateVoiceChatSessions.lastSummaryAt,
           reasonerStuckThreshold,
         ),
         inArray(featureCandidateVoiceChatSessions.id, stuckReasonerIds),

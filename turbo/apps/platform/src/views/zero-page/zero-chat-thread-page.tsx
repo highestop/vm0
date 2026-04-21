@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import {
   useGet,
   useSet,
@@ -9,7 +10,6 @@ import { pageSignal$ } from "../../signals/page-signal.ts";
 import { rootSignal$ } from "../../signals/root-signal.ts";
 import {
   IconAlertCircle,
-  IconLoader2,
   IconPhoto,
   IconChartLine,
   IconPlayerStop,
@@ -353,15 +353,12 @@ function ChatThreadComposer({
 }) {
   const groups = useLastResolved(thread.groupedChatMessages$) ?? [];
   const hasMessages = groups.length > 0;
-  const rawDisplayName = useLastResolved(thread.agentDisplayName$);
-  const displayName = rawDisplayName ?? "Zero";
+  const displayName = useLastResolved(thread.agentDisplayName$) ?? "Zero";
   const allFinishedLoadable = useLastLoadable(thread.allFinished$);
-  const hasAllFinished = allFinishedLoadable.state === "hasData";
-  const allFinished = hasAllFinished ? allFinishedLoadable.data : false;
+  const allFinished =
+    allFinishedLoadable.state === "hasData" ? allFinishedLoadable.data : false;
   const [sendLoadable, send] = useLoadableSet(thread.sendMessage$);
   const sending = !allFinished || sendLoadable.state === "loading";
-  const showWorking =
-    rawDisplayName !== undefined && hasAllFinished && !allFinished;
   const input = useGet(thread.draft.input$);
   const setInput = useSet(thread.draft.setInput$);
   const cancelRun = useSet(thread.cancelRun$);
@@ -441,21 +438,6 @@ function ChatThreadComposer({
               : undefined
           }
         />
-        <div
-          aria-hidden={!showWorking}
-          className={cn(
-            "flex items-center justify-end gap-1.5 mt-2 pr-1 transition-opacity",
-            !showWorking && "opacity-0",
-          )}
-        >
-          <IconLoader2
-            size={12}
-            className="animate-spin text-foreground/50 shrink-0"
-          />
-          <span className="zero-shimmer-text text-xs">
-            {displayName} is working...
-          </span>
-        </div>
       </div>
     </footer>
   );
@@ -498,18 +480,67 @@ function ChatSkeleton() {
 }
 
 // ---------------------------------------------------------------------------
-// Thinking indicator — shown when waiting for assistant response
+// Thinking indicator — shown the entire time a run is active
 // ---------------------------------------------------------------------------
 
 function ThinkingIndicator({ thread }: { thread: ChatThreadSignals }) {
   const groups = useLastResolved(thread.groupedChatMessages$) ?? [];
-  const lastGroup = groups[groups.length - 1];
-  const show = lastGroup && lastGroup.role !== "assistant";
+  const allFinishedLoadable = useLastLoadable(thread.allFinished$);
+  const runActive =
+    allFinishedLoadable.state === "hasData" && !allFinishedLoadable.data;
+  const [c1, c2, c3] = useGet(thread.blockColors$);
+  const blockStyle = {
+    "--zb-c1": c1,
+    "--zb-c2": c2,
+    "--zb-c3": c3,
+  } as CSSProperties;
 
-  if (!show) {
+  const lastGroup = groups[groups.length - 1];
+  const lastIsAssistant = lastGroup?.role === "assistant";
+  const waitingForAssistant = !!lastGroup && !lastIsAssistant;
+  const running = runActive || waitingForAssistant;
+  const label = useGet(thread.rotatingPhrase$);
+  const donePhrase = useGet(thread.donePhrase$);
+
+  if (!lastGroup) {
     return null;
   }
 
+  // Shared inline row with fixed h-5 to prevent layout jump on transition
+  if (lastIsAssistant || !running) {
+    return (
+      <div
+        data-role="assistant-thinking"
+        className="-mt-5 @[900px]:grid @[900px]:grid-cols-[36px_1fr] @[900px]:gap-2.5 @[900px]:-ml-[46px] @[900px]:items-start"
+      >
+        <div className="hidden @[900px]:block" />
+        <div className="min-w-0">
+          {running ? (
+            <div className="flex items-center gap-2 h-5">
+              <span className="zero-blocks shrink-0" style={blockStyle}>
+                <span />
+                <span />
+                <span />
+              </span>
+              <p className="zero-shimmer-text text-xs truncate">{label}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5 h-5 justify-center">
+              <div className="h-px w-full bg-border/40" />
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] italic text-muted-foreground/40 font-serif shrink-0">
+                  {donePhrase}
+                </p>
+                <div className="h-px flex-1 bg-border/40" />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Waiting for first assistant response — show bubble with avatar
   return (
     <div
       data-role="assistant"
@@ -519,11 +550,12 @@ function ThinkingIndicator({ thread }: { thread: ChatThreadSignals }) {
         <AssistantBubbleAvatar thread={thread} />
         <div className="zero-chat-bubble-assistant rounded-xl py-4 text-sm leading-relaxed min-w-0 overflow-hidden">
           <div className="flex items-center gap-2 min-w-0">
-            <IconLoader2
-              size={14}
-              className="animate-spin text-foreground/50 shrink-0"
-            />
-            <p className="zero-shimmer-text text-xs truncate">Thinking...</p>
+            <span className="zero-blocks shrink-0" style={blockStyle}>
+              <span />
+              <span />
+              <span />
+            </span>
+            <p className="zero-shimmer-text text-xs truncate">{label}</p>
           </div>
         </div>
       </div>
@@ -704,22 +736,52 @@ function PagedGroupRow({
   thread: ChatThreadSignals;
 }) {
   if (group.role === "user") {
-    return <PagedUserGroup group={group} />;
+    return <PagedUserGroup group={group} thread={thread} />;
   }
   return <PagedAssistantGroup group={group} thread={thread} />;
 }
 
-function PagedUserGroup({ group }: { group: GroupedChatMessageGroup }) {
+function PagedUserGroup({
+  group,
+  thread,
+}: {
+  group: GroupedChatMessageGroup;
+  thread: ChatThreadSignals;
+}) {
   return (
     <>
       {group.messages.map((msg) => {
-        return <PagedUserMessage key={msg.id} message={msg} />;
+        return <PagedUserMessage key={msg.id} message={msg} thread={thread} />;
       })}
     </>
   );
 }
 
-function PagedUserMessage({ message }: { message: PagedChatMessage }) {
+function resolveAttachments(
+  message: PagedChatMessage,
+  parsed: { filename: string; url: string }[],
+) {
+  const source =
+    message.attachFiles && message.attachFiles.length > 0
+      ? message.attachFiles
+      : parsed;
+  return source.map((f) => {
+    return {
+      filename: f.filename,
+      url: f.url,
+      isImage: isImageFilename(f.filename),
+      isVideo: isVideoFilename(f.filename),
+    };
+  });
+}
+
+function PagedUserMessage({
+  message,
+  thread,
+}: {
+  message: PagedChatMessage;
+  thread: ChatThreadSignals;
+}) {
   const content = message.content ?? "";
   // Two attachment sources coexist: the structured `attachFiles` field
   // (current flow) and legacy `[Attached file: ...](url)` inline lines left
@@ -736,32 +798,29 @@ function PagedUserMessage({ message }: { message: PagedChatMessage }) {
       ? ""
       : cleanContent;
   const displayContent = strippedContent.replace(/\n/g, "  \n");
+  const pageSignal = useGet(pageSignal$);
   const setLightboxUrl = useSet(setAttachmentLightboxUrl$);
   const openLightbox = (url: string) => {
     setLightboxUrl(url);
   };
+  const copiedId = useGet(thread.copiedMessageId$);
+  const copied = copiedId === message.id;
+  const copyMessage = useSet(thread.copyMessage$);
 
-  const allAttachments =
-    message.attachFiles && message.attachFiles.length > 0
-      ? message.attachFiles.map((f) => {
-          return {
-            filename: f.filename,
-            url: f.url,
-            isImage: isImageFilename(f.filename),
-            isVideo: isVideoFilename(f.filename),
-          };
-        })
-      : parsed.map((p) => {
-          return {
-            filename: p.filename,
-            url: p.url,
-            isImage: isImageFilename(p.filename),
-            isVideo: isVideoFilename(p.filename),
-          };
-        });
+  const handleCopy = () => {
+    if (!cleanContent) {
+      return;
+    }
+    detach(
+      copyMessage(message.id, cleanContent, pageSignal),
+      Reason.DomCallback,
+    );
+  };
+
+  const allAttachments = resolveAttachments(message, parsed);
 
   return (
-    <div data-role="user">
+    <div data-role="user" className="group">
       <div className="flex flex-col items-end min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300 @[900px]:grid @[900px]:grid-cols-[36px_minmax(0,1fr)] @[900px]:gap-2.5 @[900px]:-ml-[46px] @[900px]:items-start">
         <div className="hidden @[900px]:block @[900px]:w-9 @[900px]:h-9 @[900px]:shrink-0" />
         <div className="flex flex-col items-end w-full">
@@ -823,6 +882,22 @@ function PagedUserMessage({ message }: { message: PagedChatMessage }) {
               </div>
             )}
           </div>
+          {cleanContent && (
+            <div className="flex justify-end mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
+                aria-label="Copy message"
+              >
+                {copied ? (
+                  <IconCheck size={18} stroke={1.5} />
+                ) : (
+                  <IconCopy size={18} stroke={1.5} />
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -946,7 +1021,7 @@ function PagedGroupActions({
   return (
     <div className="@[900px]:grid @[900px]:grid-cols-[36px_minmax(0,1fr)] @[900px]:gap-2.5 @[900px]:-ml-[46px]">
       <div className="hidden @[900px]:block" />
-      <div className="flex items-center py-2 gap-1 -ml-1 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity duration-150">
+      <div className="flex items-center pt-2 pb-1 gap-1 -ml-1">
         {firstRunId && (
           <TooltipProvider delayDuration={300}>
             <Tooltip>

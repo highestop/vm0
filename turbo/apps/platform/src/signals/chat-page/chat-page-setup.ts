@@ -98,8 +98,8 @@ export const setupChatPage$ = command(
       return false;
     });
 
-    // Run both loops in parallel: loadPagedMessages$ and title update listener
     await Promise.all([
+      set(thread.runPhraseLoop$, signal),
       set(thread.loadPagedMessages$, signal),
       set(
         setAblyLoop$,

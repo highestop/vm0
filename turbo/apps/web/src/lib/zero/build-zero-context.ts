@@ -139,6 +139,7 @@ async function resolveSecretsAndEnvironment(
   selectedModel: string | undefined;
   connectorPermissionConfigs: ExpandedFirewallConfig[];
   mergedVars: Record<string, string> | undefined;
+  billableFirewalls: string[];
 }> {
   // Model provider secret injection
   const hasExplicitModelProviderConfig = MODEL_PROVIDER_ENV_VARS.some((v) => {
@@ -255,6 +256,13 @@ async function resolveSecretsAndEnvironment(
     ],
   );
 
+  // Only the vm0 meta-provider is platform-billable (runs on VM0 key pool).
+  // Every other resolvedModelProvider is user-paid (user supplied their own key).
+  const billableFirewalls =
+    modelProviderResult.resolvedModelProvider === "vm0" && modelProviderConfig
+      ? [modelProviderConfig.name]
+      : [];
+
   return {
     secrets,
     environment,
@@ -264,6 +272,7 @@ async function resolveSecretsAndEnvironment(
     selectedModel: modelProviderResult.selectedModel,
     connectorPermissionConfigs,
     mergedVars,
+    billableFirewalls,
   };
 }
 
@@ -340,6 +349,8 @@ interface ResolvedCliContext {
   // Model provider metadata (for zero_runs upsert)
   resolvedModelProvider?: ModelProviderType;
   selectedModel?: string;
+
+  billableFirewalls: string[];
 
   // Timings
   timings: {
@@ -425,6 +436,7 @@ export async function resolveCliRunContext(
     // No compose available — return only what we can resolve
     return {
       vars,
+      billableFirewalls: [],
       timings: {
         resolveSource: resolveEnd - resolveStart,
         resolveSecrets: 0,
@@ -483,6 +495,7 @@ export async function resolveCliRunContext(
     selectedModel,
     connectorPermissionConfigs,
     mergedVars,
+    billableFirewalls,
   } = secretsResult;
   const userTimezone = userPrefs?.timezone ?? undefined;
 
@@ -516,6 +529,7 @@ export async function resolveCliRunContext(
     userTimezone,
     resolvedModelProvider,
     selectedModel,
+    billableFirewalls,
     timings: {
       resolveSource: resolveEnd - resolveStart,
       resolveSecrets: resolveSecretsEnd - resolveSecretsStart,
@@ -655,6 +669,7 @@ export async function buildZeroExecutionContext(
     selectedModel,
     connectorPermissionConfigs,
     mergedVars,
+    billableFirewalls,
   } = secretsResult;
   const userTimezone =
     params.preloadedUserTimezone ?? userPrefs?.timezone ?? undefined;
@@ -707,6 +722,7 @@ export async function buildZeroExecutionContext(
       // Debug flag
       debugNoMockClaude: params.debugNoMockClaude,
       captureNetworkBodies: params.captureNetworkBodies,
+      billableFirewalls,
       // API start time for E2E timing metrics
       apiStartTime: params.apiStartTime,
     },

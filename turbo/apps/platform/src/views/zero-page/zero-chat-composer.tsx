@@ -551,10 +551,10 @@ function MicButton({
           <button
             type="button"
             className={cn(
-              "inline-flex shrink-0 items-center justify-center rounded-lg h-9 w-9 transition-colors",
-              recording
-                ? "bg-red-500/15 text-red-500 hover:bg-red-500/25"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              "inline-flex shrink-0 items-center justify-center rounded-lg transition-colors",
+              recording || transcribing
+                ? "gap-[3px] h-9 w-[52px] bg-[#2E9E9F] text-white hover:bg-[#279394]"
+                : "h-9 w-9 text-muted-foreground hover:bg-accent hover:text-foreground",
             )}
             onClick={handleClick}
             disabled={transcribing}
@@ -567,13 +567,21 @@ function MicButton({
             }
           >
             {transcribing ? (
-              <IconLoader2 size={18} stroke={1.5} className="animate-spin" />
+              <>
+                <span className="mic-eq-dot" />
+                <span className="mic-eq-dot" />
+                <span className="mic-eq-dot" />
+              </>
+            ) : recording ? (
+              <>
+                <span className="mic-eq-bar" />
+                <span className="mic-eq-bar" />
+                <IconMicrophone size={16} stroke={1.5} />
+                <span className="mic-eq-bar" />
+                <span className="mic-eq-bar" />
+              </>
             ) : (
-              <IconMicrophone
-                size={18}
-                stroke={1.5}
-                className={recording ? "animate-pulse" : undefined}
-              />
+              <IconMicrophone size={18} stroke={1.5} />
             )}
           </button>
         </TooltipTrigger>
@@ -910,7 +918,7 @@ export function ZeroChatComposer({
                 }
                 setInputRef?.(el);
               }}
-              className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm text-foreground placeholder:text-muted-foreground/40 border-0 min-h-[88px] focus:outline-none focus:ring-0"
+              className="w-full resize-none bg-transparent px-4 pt-4 pb-0 text-sm text-foreground placeholder:text-muted-foreground/40 border-0 min-h-[96px] focus:outline-none focus:ring-0"
               rows={3}
               placeholder={
                 sending
@@ -925,7 +933,7 @@ export function ZeroChatComposer({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
             />
-            <div className="flex items-center justify-between gap-2 px-4 py-3">
+            <div className="flex items-center justify-between gap-2 px-4 pb-3 pt-1">
               <div className="flex items-center gap-1 text-muted-foreground">
                 <button
                   type="button"
@@ -962,10 +970,7 @@ export function ZeroChatComposer({
                         onChange={modelPicker.onChange}
                         placeholder="Default"
                         triggerClassName={cn(
-                          // Resting state: borderless ghost — trigger reads like
-                          // plain text in the toolbar.
-                          "h-9 w-auto max-w-[12rem] gap-1 border-transparent bg-transparent px-2 text-sm text-muted-foreground transition-colors",
-                          // Discoverable affordance only when the user targets it.
+                          "h-8 w-auto max-w-[12rem] gap-1 border-transparent bg-transparent px-2 text-xs text-muted-foreground transition-colors",
                           "hover:bg-accent hover:text-foreground focus:bg-accent focus:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground",
                         )}
                         sessionProviderType={modelPicker.sessionProviderType}
@@ -977,6 +982,7 @@ export function ZeroChatComposer({
                         inheritLabel="agent"
                       />
                     )}
+                    <div className="mx-0.5 h-5 w-px bg-border/60" />
                     <MicButton
                       onTranscribed={(text) => {
                         const base = input;

@@ -12,7 +12,7 @@ import { logger } from "../../shared/logger";
 
 const log = logger("zero:voice-chat-candidate:task");
 
-export type SpawnRun = (taskId: string) => Promise<CreateZeroRunResult>;
+type SpawnRun = (taskId: string) => Promise<CreateZeroRunResult>;
 
 type TaskRow = typeof featureCandidateVoiceChatTasks.$inferSelect;
 type ItemRow = typeof featureCandidateVoiceChatItems.$inferSelect;
@@ -93,6 +93,9 @@ export async function completeVoiceChatCandidateTask(params: {
     const now = new Date();
 
     if (sessionRow.agentId !== params.agentId) {
+      // Defensive: task run callback arrived with the wrong agentId. Fail
+      // the task and emit a system note; the session itself stays put —
+      // sessions are stateless containers in the candidate model.
       const [failedTask] = await tx
         .update(featureCandidateVoiceChatTasks)
         .set({
@@ -108,16 +111,11 @@ export async function completeVoiceChatCandidateTask(params: {
         .values({
           sessionId: taskRow.sessionId,
           role: "system_note",
-          content: "agent mismatch — session ended",
+          content: "agent mismatch — task failed",
           taskId: taskRow.id,
           realtimeItemId: null,
         })
         .returning();
-
-      await tx
-        .update(featureCandidateVoiceChatSessions)
-        .set({ status: "ended", endedAt: now })
-        .where(eq(featureCandidateVoiceChatSessions.id, taskRow.sessionId));
 
       return {
         task: failedTask ?? taskRow,
@@ -205,7 +203,7 @@ export async function completeVoiceChatCandidateTask(params: {
   };
 }
 
-export async function listPendingVoiceChatCandidateTasks(
+async function listPendingVoiceChatCandidateTasks(
   sessionId: string,
 ): Promise<TaskRow[]> {
   const db = globalThis.services.db;
@@ -227,6 +225,51 @@ export async function listSessionTasks(sessionId: string): Promise<TaskRow[]> {
     .from(featureCandidateVoiceChatTasks)
     .where(eq(featureCandidateVoiceChatTasks.sessionId, sessionId))
     .orderBy(desc(featureCandidateVoiceChatTasks.createdAt));
+}
+
+/**
+ * Trinity task-card feed: every still-running task in createdAt ASC order,
+ * followed by up to the 3 most-recently-finished tasks in finishedAt DESC
+ * order. The combined list is full-replaced by the client on every Ably
+ * tick — there is no cursor.
+ */
+export async function listSessionTasksForCard(
+  sessionId: string,
+  recentFinishedLimit = 3,
+): Promise<TaskRow[]> {
+  const db = globalThis.services.db;
+  const active = await db
+    .select()
+    .from(featureCandidateVoiceChatTasks)
+    .where(
+      and(
+        eq(featureCandidateVoiceChatTasks.sessionId, sessionId),
+        inArray(featureCandidateVoiceChatTasks.status, [
+          "pending",
+          "queued",
+          "running",
+        ]),
+      ),
+    )
+    .orderBy(featureCandidateVoiceChatTasks.createdAt);
+
+  if (recentFinishedLimit <= 0) {
+    return active;
+  }
+
+  const finished = await db
+    .select()
+    .from(featureCandidateVoiceChatTasks)
+    .where(
+      and(
+        eq(featureCandidateVoiceChatTasks.sessionId, sessionId),
+        inArray(featureCandidateVoiceChatTasks.status, ["done", "failed"]),
+      ),
+    )
+    .orderBy(desc(featureCandidateVoiceChatTasks.finishedAt))
+    .limit(recentFinishedLimit);
+
+  return [...active, ...finished];
 }
 
 /**
@@ -302,7 +345,7 @@ export async function appendTaskAssistantResult(params: {
   return { sessionId: row.sessionId, userId: session.userId };
 }
 
-export async function cancelSessionPendingRuns(session: {
+async function cancelSessionPendingRuns(session: {
   id: string;
   orgId: string;
   userId: string;

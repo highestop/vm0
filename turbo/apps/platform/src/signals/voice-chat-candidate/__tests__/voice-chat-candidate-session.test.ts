@@ -13,8 +13,9 @@ import {
   vccStatus$,
   vccError$,
   vccSessionId$,
-  vccConversationItems$,
-  vccTasksById$,
+  vccLastAssistantMessage$,
+  vccLastUserMessage$,
+  vccActiveTasks$,
 } from "../voice-chat-candidate-session.ts";
 
 const context = testContext();
@@ -151,31 +152,6 @@ function mockTokenError() {
   );
 }
 
-function mockEndSessionOk() {
-  const calls: string[] = [];
-  server.use(
-    mockApi(
-      zeroVoiceChatCandidateContract.endSession,
-      ({ params, respond }) => {
-        calls.push(params.id);
-        return respond(200, { ok: true as const });
-      },
-    ),
-  );
-  return calls;
-}
-
-function mockHeartbeatOk() {
-  const calls: string[] = [];
-  server.use(
-    mockApi(zeroVoiceChatCandidateContract.heartbeat, ({ params, respond }) => {
-      calls.push(params.id);
-      return respond(200, { ok: true as const });
-    }),
-  );
-  return calls;
-}
-
 function mockAppendItemOk() {
   const calls: { role: string; content: string; realtimeItemId: string }[] = [];
   let nextSeq = 10;
@@ -197,7 +173,7 @@ function mockAppendItemOk() {
   return calls;
 }
 
-function mockReadItemsEmpty() {
+function mockTranscriptEmpty() {
   server.use(
     mockApi(zeroVoiceChatCandidateContract.readItems, ({ respond }) => {
       return respond(200, { items: [] });
@@ -219,7 +195,7 @@ function mockGetSessionOk() {
   );
 }
 
-function mockListTasksOk() {
+function mockListActiveTasksOk() {
   server.use(
     mockApi(zeroVoiceChatCandidateContract.listTasks, ({ respond }) => {
       return respond(200, { tasks: [] });
@@ -381,12 +357,15 @@ describe("voice-chat-candidate session", () => {
   async function startSuccessfully() {
     mockCreateSessionOk();
     mockTokenOk();
-    mockReadItemsEmpty();
+    mockTranscriptEmpty();
     mockGetSessionOk();
-    mockListTasksOk();
-    mockHeartbeatOk();
+    mockListActiveTasksOk();
     detach(
-      context.store.set(startVoiceChatCandidate$, undefined, context.signal),
+      context.store.set(
+        startVoiceChatCandidate$,
+        DEFAULT_AGENT_ID,
+        context.signal,
+      ),
       Reason.DomCallback,
     );
     await vi.waitFor(() => {
@@ -414,14 +393,27 @@ describe("voice-chat-candidate session", () => {
       expect(context.store.get(vccSessionId$)).toBe(SESSION_ID);
       expect(context.store.get(vccStatus$)).toBe("connected");
 
-      // First DC send is the session.update with instructions + tools.
+      // First DC send is the session.update with instructions + tools. All
+      // six emotion tools are registered so the Talker can pick whichever
+      // matches its impulse — they all dispatch to the same task endpoint.
       const sent = dcRef.current?.send.mock.calls[0]?.[0] as string;
       const parsed = JSON.parse(sent) as {
         type: string;
         session: { tools: { name: string }[] };
       };
       expect(parsed.type).toBe("session.update");
-      expect(parsed.session.tools[0]?.name).toBe("inform_slow_brain");
+      expect(
+        parsed.session.tools.map((t) => {
+          return t.name;
+        }),
+      ).toStrictEqual([
+        "inform_slow_brain",
+        "feel_confused",
+        "feel_unable",
+        "want_to_ask_user",
+        "want_to_reject",
+        "want_to_apologize",
+      ]);
     });
 
     it("surfaces create-session error in vccError$", async () => {
@@ -430,7 +422,7 @@ describe("voice-chat-candidate session", () => {
 
       await context.store.set(
         startVoiceChatCandidate$,
-        undefined,
+        DEFAULT_AGENT_ID,
         context.signal,
       );
 
@@ -445,7 +437,7 @@ describe("voice-chat-candidate session", () => {
 
       await context.store.set(
         startVoiceChatCandidate$,
-        undefined,
+        DEFAULT_AGENT_ID,
         context.signal,
       );
 
@@ -516,8 +508,8 @@ describe("voice-chat-candidate session", () => {
     });
   });
 
-  describe("inform_slow_brain tool", () => {
-    it("posts /tasks and sends function_call_output with truncated prompt", async () => {
+  describe("talker tool calls", () => {
+    it("posts /tasks with the raw prompt and echoes function_call_output", async () => {
       await setup();
       const taskCalls = mockCreateTaskOk();
       await startSuccessfully();
@@ -552,9 +544,55 @@ describe("voice-chat-candidate session", () => {
       expect(parsed.item.type).toBe("function_call_output");
       expect(parsed.item.call_id).toBe("call-abc");
       expect(parsed.item.output).toMatch(/slow brain/i);
+    });
 
-      const tasks = context.store.get(vccTasksById$);
-      expect(Object.values(tasks)).toHaveLength(1);
+    it.each([
+      ["feel_confused", "not sure what you want"],
+      ["feel_unable", "I don't have the github connector"],
+      ["want_to_ask_user", "which repo?"],
+      ["want_to_reject", "that seems out of scope"],
+      ["want_to_apologize", "sorry I can't do this"],
+    ])(
+      "routes %s through the same task-creation path with the raw prompt",
+      async (toolName, userPrompt) => {
+        await setup();
+        const taskCalls = mockCreateTaskOk();
+        await startSuccessfully();
+        dcRef.current?.send.mockClear();
+
+        dcRef.current?.emitMessage({
+          type: "response.function_call_arguments.done",
+          call_id: `call-${toolName}`,
+          name: toolName,
+          arguments: JSON.stringify({ prompt: userPrompt }),
+        });
+
+        await vi.waitFor(() => {
+          expect(taskCalls).toHaveLength(1);
+        });
+        expect(taskCalls[0]).toStrictEqual({
+          prompt: userPrompt,
+          callId: `call-${toolName}`,
+        });
+      },
+    );
+
+    it("ignores unknown tool names", async () => {
+      await setup();
+      const taskCalls = mockCreateTaskOk();
+      await startSuccessfully();
+      dcRef.current?.send.mockClear();
+
+      dcRef.current?.emitMessage({
+        type: "response.function_call_arguments.done",
+        call_id: "call-unknown",
+        name: "not_a_real_tool",
+        arguments: JSON.stringify({ prompt: "hi" }),
+      });
+
+      // Let any pending microtasks flush.
+      await Promise.resolve();
+      expect(taskCalls).toHaveLength(0);
     });
 
     it("sends error function_call_output when server rejects", async () => {
@@ -580,25 +618,92 @@ describe("voice-chat-candidate session", () => {
     });
   });
 
-  describe("ably poke triggers re-fetch", () => {
-    it("upserts new items into vccConversationItems$ on ably event", async () => {
+  describe("subtitle local state", () => {
+    it("populates vccLastUserMessage$ after a finalized user transcript (and leaves assistant untouched)", async () => {
+      await setup();
+      mockAppendItemOk();
+      await startSuccessfully();
+
+      expect(context.store.get(vccLastUserMessage$)).toBe("");
+      expect(context.store.get(vccLastAssistantMessage$)).toBe("");
+
+      dcRef.current?.emitMessage({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "rt-user-final",
+        transcript: "hi there",
+      });
+
+      await vi.waitFor(() => {
+        expect(context.store.get(vccLastUserMessage$)).toBe("hi there");
+      });
+      expect(context.store.get(vccLastAssistantMessage$)).toBe("");
+    });
+
+    it("populates vccLastAssistantMessage$ after a finalized assistant turn", async () => {
+      await setup();
+      mockAppendItemOk();
+      await startSuccessfully();
+
+      dcRef.current?.emitMessage({
+        type: "response.audio_transcript.done",
+        response_id: "resp-x",
+        item_id: "rt-asst-final",
+        transcript: "hello from Talker",
+      });
+
+      await vi.waitFor(() => {
+        expect(context.store.get(vccLastAssistantMessage$)).toBe(
+          "hello from Talker",
+        );
+      });
+      expect(context.store.get(vccLastUserMessage$)).toBe("");
+    });
+
+    it("ignores whitespace-only transcripts (guards against mis-fires blanking the line)", async () => {
+      await setup();
+      mockAppendItemOk();
+      await startSuccessfully();
+
+      dcRef.current?.emitMessage({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "rt-user-first",
+        transcript: "first",
+      });
+      await vi.waitFor(() => {
+        expect(context.store.get(vccLastUserMessage$)).toBe("first");
+      });
+
+      dcRef.current?.emitMessage({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "rt-user-blank",
+        transcript: "   ",
+      });
+      // Let any pending microtasks flush; the state should NOT be blanked.
+      await Promise.resolve();
+      expect(context.store.get(vccLastUserMessage$)).toBe("first");
+    });
+  });
+
+  describe("ably poke refreshes task state", () => {
+    it("re-runs listActiveTasks on ably event and updates vccActiveTasks$", async () => {
       await setup();
       mockCreateSessionOk();
       mockTokenOk();
       mockGetSessionOk();
-      mockListTasksOk();
-      mockHeartbeatOk();
-      let itemsBatch: ReturnType<typeof itemPayload>[] = [];
+      mockTranscriptEmpty();
+      let activeTasks: ReturnType<typeof taskPayload>[] = [];
       server.use(
-        mockApi(zeroVoiceChatCandidateContract.readItems, ({ respond }) => {
-          const batch = itemsBatch;
-          itemsBatch = [];
-          return respond(200, { items: batch });
+        mockApi(zeroVoiceChatCandidateContract.listTasks, ({ respond }) => {
+          return respond(200, { tasks: activeTasks });
         }),
       );
 
       detach(
-        context.store.set(startVoiceChatCandidate$, undefined, context.signal),
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
         Reason.DomCallback,
       );
       await vi.waitFor(() => {
@@ -608,39 +713,33 @@ describe("voice-chat-candidate session", () => {
       await vi.waitFor(() => {
         expect(context.store.get(vccStatus$)).toBe("connected");
       });
+      expect(context.store.get(vccActiveTasks$)).toHaveLength(0);
 
-      itemsBatch = [
-        itemPayload({
-          id: "99999999-9999-4999-8999-999999999999",
-          seq: 5,
-          role: "assistant",
-          content: "from server",
-          realtimeItemId: "rt-srv-1",
+      activeTasks = [
+        taskPayload({
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          callId: "call-new",
+          status: "running",
         }),
       ];
       triggerAblyEvent(`voice-chat-candidate:${SESSION_ID}`);
 
       await vi.waitFor(() => {
-        const items = context.store.get(vccConversationItems$).filter((e) => {
-          return e.kind === "server";
-        });
-        expect(items).toHaveLength(1);
+        expect(context.store.get(vccActiveTasks$)).toHaveLength(1);
       });
     });
   });
 
   describe("endVoiceChatCandidate$", () => {
-    it("posts /end and resets state to idle", async () => {
+    it("tears down WebRTC and resets state to idle without ending the session", async () => {
       await setup();
-      const endCalls = mockEndSessionOk();
       await startSuccessfully();
 
       context.store.set(endVoiceChatCandidate$);
 
       await vi.waitFor(() => {
-        expect(endCalls).toContain(SESSION_ID);
+        expect(context.store.get(vccStatus$)).toBe("idle");
       });
-      expect(context.store.get(vccStatus$)).toBe("idle");
       expect(context.store.get(vccSessionId$)).toBeNull();
     });
   });

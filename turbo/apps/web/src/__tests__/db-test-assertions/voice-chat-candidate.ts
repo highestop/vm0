@@ -1,4 +1,5 @@
 import { eq, and } from "drizzle-orm";
+import type { VoiceChatCandidateTaskResultEntry } from "@vm0/core";
 import { initServices } from "../../lib/init-services";
 import {
   featureCandidateVoiceChatItems,
@@ -49,13 +50,11 @@ export async function getTestVoiceChatCandidateSessionReasoningState(
 
 /**
  * Read a candidate voice-chat session's mutable state.
- * @why-db-direct Cron tests verify the timeout/reasoning state transitions
- * the route handler writes; no read API exists for the candidate table.
+ * @why-db-direct Cron tests verify the reasoner state transitions the route
+ * handler writes; no read API exists for those internals.
  */
 export async function getTestVoiceChatCandidateSession(id: string): Promise<
   | {
-      status: string;
-      endedAt: Date | null;
       reasoningStatus: string;
       lastSummaryAt: Date | null;
     }
@@ -64,36 +63,12 @@ export async function getTestVoiceChatCandidateSession(id: string): Promise<
   initServices();
   const [row] = await globalThis.services.db
     .select({
-      status: featureCandidateVoiceChatSessions.status,
-      endedAt: featureCandidateVoiceChatSessions.endedAt,
       reasoningStatus: featureCandidateVoiceChatSessions.reasoningStatus,
       lastSummaryAt: featureCandidateVoiceChatSessions.lastSummaryAt,
     })
     .from(featureCandidateVoiceChatSessions)
     .where(eq(featureCandidateVoiceChatSessions.id, id));
   return row;
-}
-
-/**
- * Count candidate sessions by `status`, scoped to a single org to keep
- * large-batch test assertions hermetic across a shared dev database.
- * @why-db-direct Aggregations across many seeded rows have no API surface.
- */
-export async function countTestVoiceChatCandidateSessionsByStatus(
-  orgId: string,
-  status: "active" | "ended" | "timeout",
-): Promise<number> {
-  initServices();
-  const rows = await globalThis.services.db
-    .select({ id: featureCandidateVoiceChatSessions.id })
-    .from(featureCandidateVoiceChatSessions)
-    .where(
-      and(
-        eq(featureCandidateVoiceChatSessions.orgId, orgId),
-        eq(featureCandidateVoiceChatSessions.status, status),
-      ),
-    );
-  return rows.length;
 }
 
 /**
@@ -154,6 +129,8 @@ export async function getTestVoiceChatCandidateTask(id: string): Promise<
       result: string | null;
       resultUpdatedAt: Date | null;
       status: string;
+      assistantMessages: VoiceChatCandidateTaskResultEntry[];
+      error: string | null;
     }
   | undefined
 > {
@@ -163,8 +140,30 @@ export async function getTestVoiceChatCandidateTask(id: string): Promise<
       result: featureCandidateVoiceChatTasks.result,
       resultUpdatedAt: featureCandidateVoiceChatTasks.resultUpdatedAt,
       status: featureCandidateVoiceChatTasks.status,
+      assistantMessages: featureCandidateVoiceChatTasks.assistantMessages,
+      error: featureCandidateVoiceChatTasks.error,
     })
     .from(featureCandidateVoiceChatTasks)
     .where(eq(featureCandidateVoiceChatTasks.id, id));
   return row;
+}
+
+/**
+ * Read all items for a session for callback side-effect assertions.
+ * @why-db-direct Callback tests need to assert task_result and system_note
+ * items written by the callback handler; there is no public list-items API
+ * that returns all roles for a session.
+ */
+export async function listTestVoiceChatCandidateItems(
+  sessionId: string,
+): Promise<{ id: string; role: string; content: string | null }[]> {
+  initServices();
+  return globalThis.services.db
+    .select({
+      id: featureCandidateVoiceChatItems.id,
+      role: featureCandidateVoiceChatItems.role,
+      content: featureCandidateVoiceChatItems.content,
+    })
+    .from(featureCandidateVoiceChatItems)
+    .where(eq(featureCandidateVoiceChatItems.sessionId, sessionId));
 }

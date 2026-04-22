@@ -3,8 +3,8 @@ import { randomUUID } from "crypto";
 import { testContext } from "../../../../../../../src/__tests__/test-helpers";
 import { mockClerk } from "../../../../../../../src/__tests__/clerk-mock";
 import { findTestZeroRun } from "../../../../../../../src/__tests__/db-test-assertions/runs";
+import { insertTestVoiceChatCandidateTask } from "../../../../../../../src/__tests__/db-test-seeders/voice-chat-candidate";
 import {
-  endCandidateSession,
   postRequest,
   getRequest,
   paramsFor,
@@ -94,19 +94,6 @@ describe("POST /api/zero/voice-chat-candidate/:id/tasks (createTask)", () => {
     expect(response.status).toBe(404);
   });
 
-  it("returns 400 when the session has ended", async () => {
-    const { agentId } = await seedCandidateAgent(userId, orgId);
-    const session = await seedCandidateSession({ orgId, userId, agentId });
-    await endCandidateSession(session.id);
-    const response = await POST(
-      postRequest(`/${session.id}/tasks`, taskBody()),
-      paramsFor(session.id),
-    );
-    const body = await response.json();
-    expect(response.status).toBe(400);
-    expect(body.error.code).toBe("BAD_REQUEST");
-  });
-
   it("returns 400 when prompt is missing", async () => {
     const { agentId } = await seedCandidateAgent(userId, orgId);
     const session = await seedCandidateSession({ orgId, userId, agentId });
@@ -151,7 +138,7 @@ describe("POST /api/zero/voice-chat-candidate/:id/tasks (createTask)", () => {
   });
 });
 
-describe("GET /api/zero/voice-chat-candidate/:id/tasks (listTasks)", () => {
+describe("GET /api/zero/voice-chat-candidate/:id/tasks (listTasksForCard)", () => {
   let orgId: string;
   let userId: string;
 
@@ -173,61 +160,99 @@ describe("GET /api/zero/voice-chat-candidate/:id/tasks (listTasks)", () => {
     expect(response.status).toBe(401);
   });
 
-  it("returns 404 when session does not exist", async () => {
+  it("returns 404 when the feature flag is disabled", async () => {
+    const { agentId } = await seedCandidateAgent(userId, orgId);
+    const session = await seedCandidateSession({ orgId, userId, agentId });
+    mockIsFeatureEnabled.mockReturnValue(false);
     const response = await GET(
-      getRequest(`/${randomUUID()}/tasks`),
-      paramsFor(randomUUID()),
+      getRequest(`/${session.id}/tasks`),
+      paramsFor(session.id),
     );
     expect(response.status).toBe(404);
   });
 
-  it("returns empty list for a session with no tasks", async () => {
+  it("returns 404 when the session belongs to a different user", async () => {
+    const other = await context.setupUser({ prefix: "other-user" });
+    const otherOrg = await setupCandidateOrg(other.userId);
+    const { agentId } = await seedCandidateAgent(other.userId, otherOrg.orgId);
+    const otherSession = await seedCandidateSession({
+      orgId: otherOrg.orgId,
+      userId: other.userId,
+      agentId,
+    });
+    mockClerk({ userId, orgId, orgRole: "org:admin" });
+    const response = await GET(
+      getRequest(`/${otherSession.id}/tasks`),
+      paramsFor(otherSession.id),
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it("returns an empty list when the session has no tasks", async () => {
     const { agentId } = await seedCandidateAgent(userId, orgId);
     const session = await seedCandidateSession({ orgId, userId, agentId });
     const response = await GET(
       getRequest(`/${session.id}/tasks`),
       paramsFor(session.id),
     );
-    expect(response.status).toBe(200);
     const body = await response.json();
+    expect(response.status).toBe(200);
     expect(body.tasks).toEqual([]);
   });
 
-  it("returns tasks in createdAt DESC order with result as an array", async () => {
+  it("returns active tasks before finished tasks", async () => {
     const { agentId } = await seedCandidateAgent(userId, orgId);
     const session = await seedCandidateSession({ orgId, userId, agentId });
-
-    await POST(
-      postRequest(
-        `/${session.id}/tasks`,
-        taskBody({ prompt: "older", callId: randomUUID() }),
-      ),
-      paramsFor(session.id),
-    );
-    await new Promise((r) => {
-      setTimeout(r, 5);
+    const doneId = await insertTestVoiceChatCandidateTask(session.id, {
+      status: "done",
     });
-    await POST(
-      postRequest(
-        `/${session.id}/tasks`,
-        taskBody({ prompt: "newer", callId: randomUUID() }),
-      ),
-      paramsFor(session.id),
-    );
-
+    const pendingId = await insertTestVoiceChatCandidateTask(session.id, {
+      status: "pending",
+    });
     const response = await GET(
       getRequest(`/${session.id}/tasks`),
       paramsFor(session.id),
     );
-    expect(response.status).toBe(200);
     const body = await response.json();
+    expect(response.status).toBe(200);
     expect(body.tasks).toHaveLength(2);
-    expect(body.tasks[0].prompt).toBe("newer");
-    expect(body.tasks[1].prompt).toBe("older");
-    expect(body.tasks[0].assistantMessages).toEqual([]);
+    // Active task comes first, finished task comes second
+    expect(body.tasks[0].id).toBe(pendingId);
+    expect(body.tasks[1].id).toBe(doneId);
   });
 
-  // Silence the "unused" warning for endCandidateSession — kept imported for
-  // symmetry with adjacent test files that share _helpers.
-  void endCandidateSession;
+  it("caps finished tasks at 3 and excludes the oldest one", async () => {
+    const { agentId } = await seedCandidateAgent(userId, orgId);
+    const session = await seedCandidateSession({ orgId, userId, agentId });
+    const now = Date.now();
+    // Insert 4 finished tasks with distinct finishedAt timestamps; the oldest
+    // should be excluded from the card feed (limit=3)
+    const oldestDoneId = await insertTestVoiceChatCandidateTask(session.id, {
+      status: "done",
+      finishedAt: new Date(now - 400_000),
+    });
+    await insertTestVoiceChatCandidateTask(session.id, {
+      status: "done",
+      finishedAt: new Date(now - 300_000),
+    });
+    await insertTestVoiceChatCandidateTask(session.id, {
+      status: "done",
+      finishedAt: new Date(now - 200_000),
+    });
+    await insertTestVoiceChatCandidateTask(session.id, {
+      status: "done",
+      finishedAt: new Date(now - 100_000),
+    });
+    const response = await GET(
+      getRequest(`/${session.id}/tasks`),
+      paramsFor(session.id),
+    );
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.tasks).toHaveLength(3);
+    const returnedIds = body.tasks.map((t: { id: string }) => {
+      return t.id;
+    });
+    expect(returnedIds).not.toContain(oldestDoneId);
+  });
 });

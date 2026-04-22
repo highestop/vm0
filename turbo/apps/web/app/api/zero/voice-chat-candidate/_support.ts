@@ -39,7 +39,6 @@ export function serializeVoiceChatCandidateSession(session: SessionRow) {
     userId: session.userId,
     agentId: session.agentId,
     mode: "chat" as const,
-    status: session.status,
     conversationSummary: session.conversationSummary,
     workingTasksSummary: session.workingTasksSummary,
     finishedTasksSummary: session.finishedTasksSummary,
@@ -49,8 +48,6 @@ export function serializeVoiceChatCandidateSession(session: SessionRow) {
       ? session.lastSummaryAt.toISOString()
       : null,
     createdAt: session.createdAt.toISOString(),
-    lastHeartbeatAt: session.lastHeartbeatAt.toISOString(),
-    endedAt: session.endedAt ? session.endedAt.toISOString() : null,
   };
 }
 
@@ -87,8 +84,10 @@ export function serializeVoiceChatCandidateTask(task: TaskRow) {
   };
 }
 
-// Reuse existing VoiceChat feature switch per epic decision — the candidate
-// tree intentionally has no dedicated flag.
+// Gate on Trinity — the candidate surface's dedicated flag introduced in
+// #10618. Trinity is the only UI entry point into these endpoints (the
+// standalone /voice-chat-candidate page was removed in #10627), so the
+// backend follows the same switch.
 export async function isVoiceChatCandidateEnabled(
   authCtx: AuthContext,
 ): Promise<boolean> {
@@ -96,7 +95,7 @@ export async function isVoiceChatCandidateEnabled(
     authCtx.orgId,
     authCtx.userId,
   );
-  return isFeatureEnabled(FeatureSwitchKey.VoiceChat, {
+  return isFeatureEnabled(FeatureSwitchKey.Trinity, {
     orgId: authCtx.orgId,
     userId: authCtx.userId,
     overrides,

@@ -28,8 +28,56 @@ export function resetMockVoiceChatCandidate(): void {
   mockTasks = new Map();
 }
 
+function mockTaskResultsHandler() {
+  return mockApi(
+    zeroVoiceChatCandidateContract.readItems,
+    ({ params, query, respond }) => {
+      const sessionId = params.id;
+      const session = mockSessions.get(sessionId);
+      if (!session) {
+        return respond(404, {
+          error: { code: "NOT_FOUND", message: "Session not found" },
+        });
+      }
+      const all = (mockItems.get(sessionId) ?? []).filter((i) => {
+        return i.role === "task_result";
+      });
+      if (query.sinceSeq === undefined) {
+        // Baseline probe: return at most the single latest task_result row.
+        const sortedDesc = [...all].sort((a, b) => {
+          return b.seq - a.seq;
+        });
+        return respond(200, { items: sortedDesc.slice(0, 1) });
+      }
+      const since = query.sinceSeq;
+      const items = all
+        .filter((i) => {
+          return i.seq > since;
+        })
+        .sort((a, b) => {
+          return a.seq - b.seq;
+        });
+      return respond(200, { items });
+    },
+  );
+}
+
 export const apiVoiceChatCandidateHandlers = [
   mockApi(zeroVoiceChatCandidateContract.createSession, ({ body, respond }) => {
+    // Get-or-create by (userId, agentId): if an existing mock session
+    // matches the agent, return it instead of creating a fresh row.
+    const existing = Array.from(mockSessions.values()).find((s) => {
+      return s.userId === MOCK_USER_ID && s.agentId === body.agentId;
+    });
+    if (existing) {
+      return respond(200, {
+        session: existing,
+        recentTaskLogs: "",
+        finishedTasksFullText: "",
+        talkerInstructions: "",
+        talkerInstructionTokens: 0,
+      });
+    }
     const now = new Date().toISOString();
     const session: VoiceChatCandidateSession = {
       id: crypto.randomUUID(),
@@ -37,7 +85,6 @@ export const apiVoiceChatCandidateHandlers = [
       userId: MOCK_USER_ID,
       agentId: body.agentId,
       mode: "chat",
-      status: "active",
       conversationSummary: null,
       workingTasksSummary: null,
       finishedTasksSummary: null,
@@ -45,8 +92,6 @@ export const apiVoiceChatCandidateHandlers = [
       summaryVersion: 0,
       lastSummaryAt: null,
       createdAt: now,
-      lastHeartbeatAt: now,
-      endedAt: null,
     };
     mockSessions.set(session.id, session);
     mockItems.set(session.id, []);
@@ -80,7 +125,7 @@ export const apiVoiceChatCandidateHandlers = [
   }),
 
   mockApi(
-    zeroVoiceChatCandidateContract.reenterSession,
+    zeroVoiceChatCandidateContract.triggerReasoning,
     ({ params, respond }) => {
       const session = mockSessions.get(params.id);
       if (!session) {
@@ -88,41 +133,9 @@ export const apiVoiceChatCandidateHandlers = [
           error: { code: "NOT_FOUND", message: "Session not found" },
         });
       }
-      session.status = "active";
-      session.endedAt = null;
-      session.lastHeartbeatAt = new Date().toISOString();
-      return respond(200, {
-        session,
-        recentTaskLogs: "",
-        finishedTasksFullText: "",
-        talkerInstructions: "",
-        talkerInstructionTokens: 0,
-      });
+      return respond(200, { ok: true });
     },
   ),
-
-  mockApi(zeroVoiceChatCandidateContract.endSession, ({ params, respond }) => {
-    const session = mockSessions.get(params.id);
-    if (!session) {
-      return respond(404, {
-        error: { code: "NOT_FOUND", message: "Session not found" },
-      });
-    }
-    session.status = "ended";
-    session.endedAt = new Date().toISOString();
-    return respond(200, { ok: true });
-  }),
-
-  mockApi(zeroVoiceChatCandidateContract.heartbeat, ({ params, respond }) => {
-    const session = mockSessions.get(params.id);
-    if (!session || session.status !== "active") {
-      return respond(404, {
-        error: { code: "NOT_FOUND", message: "Active session not found" },
-      });
-    }
-    session.lastHeartbeatAt = new Date().toISOString();
-    return respond(200, { ok: true });
-  }),
 
   mockApi(
     zeroVoiceChatCandidateContract.appendItem,
@@ -157,25 +170,7 @@ export const apiVoiceChatCandidateHandlers = [
     },
   ),
 
-  mockApi(
-    zeroVoiceChatCandidateContract.readItems,
-    ({ params, query, respond }) => {
-      const sessionId = params.id;
-      const session = mockSessions.get(sessionId);
-      if (!session) {
-        return respond(404, {
-          error: { code: "NOT_FOUND", message: "Session not found" },
-        });
-      }
-      const sessionItems = mockItems.get(sessionId) ?? [];
-      const after = query.after;
-      const items =
-        after !== undefined
-          ? sessionItems.filter((i) => i.seq > after)
-          : sessionItems;
-      return respond(200, { items });
-    },
-  ),
+  mockTaskResultsHandler(),
 
   mockApi(
     zeroVoiceChatCandidateContract.createTask,
@@ -215,14 +210,29 @@ export const apiVoiceChatCandidateHandlers = [
         error: { code: "NOT_FOUND", message: "Session not found" },
       });
     }
-    const tasks = Array.from(mockTasks.values())
+    const all = Array.from(mockTasks.values()).filter((t) => {
+      return t.sessionId === sessionId;
+    });
+    const active = all
       .filter((t) => {
-        return t.sessionId === sessionId;
+        return (
+          t.status === "pending" ||
+          t.status === "queued" ||
+          t.status === "running"
+        );
       })
       .sort((a, b) => {
-        return b.createdAt.localeCompare(a.createdAt);
+        return a.createdAt.localeCompare(b.createdAt);
       });
-    return respond(200, { tasks });
+    const finished = all
+      .filter((t) => {
+        return t.status === "done" || t.status === "failed";
+      })
+      .sort((a, b) => {
+        return (b.finishedAt ?? "").localeCompare(a.finishedAt ?? "");
+      })
+      .slice(0, 3);
+    return respond(200, { tasks: [...active, ...finished] });
   }),
 
   mockApi(zeroVoiceChatCandidateContract.token, ({ respond }) => {

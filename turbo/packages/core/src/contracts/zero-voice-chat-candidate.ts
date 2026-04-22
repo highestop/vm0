@@ -4,15 +4,6 @@ import { apiErrorSchema } from "./errors";
 
 const c = initContract();
 
-export const voiceChatCandidateSessionStatusSchema = z.enum([
-  "active",
-  "ended",
-  "timeout",
-]);
-export type VoiceChatCandidateSessionStatus = z.infer<
-  typeof voiceChatCandidateSessionStatusSchema
->;
-
 export const voiceChatCandidateItemRoleSchema = z.enum([
   "user",
   "assistant",
@@ -48,7 +39,6 @@ export const voiceChatCandidateSessionSchema = z.object({
   userId: z.string(),
   agentId: z.uuid().nullable(),
   mode: z.literal("chat"),
-  status: voiceChatCandidateSessionStatusSchema,
   conversationSummary: z.string().nullable(),
   workingTasksSummary: z.string().nullable(),
   finishedTasksSummary: z.string().nullable(),
@@ -56,8 +46,6 @@ export const voiceChatCandidateSessionSchema = z.object({
   summaryVersion: z.number().int(),
   lastSummaryAt: z.string().nullable(),
   createdAt: z.string(),
-  lastHeartbeatAt: z.string(),
-  endedAt: z.string().nullable(),
 });
 export type VoiceChatCandidateSession = z.infer<
   typeof voiceChatCandidateSessionSchema
@@ -196,56 +184,6 @@ export const zeroVoiceChatCandidateContract = c.router({
     summary: "List voice-chat-candidate sessions for the current user",
   },
 
-  reenterSession: {
-    method: "POST",
-    path: "/api/zero/voice-chat-candidate/:id/reenter",
-    headers: authHeadersSchema,
-    pathParams: z.object({ id: z.uuid() }),
-    body: z.object({}),
-    responses: {
-      200: z.object({
-        session: voiceChatCandidateSessionSchema,
-        recentTaskLogs: z.string(),
-        finishedTasksFullText: z.string(),
-        talkerInstructions: z.string(),
-        talkerInstructionTokens: z.number().int().nonnegative(),
-      }),
-      401: apiErrorSchema,
-      403: apiErrorSchema,
-      404: apiErrorSchema,
-    },
-    summary:
-      "Reactivate and load a voice-chat-candidate session, re-computing talker instructions",
-  },
-
-  endSession: {
-    method: "POST",
-    path: "/api/zero/voice-chat-candidate/:id/end",
-    headers: authHeadersSchema,
-    pathParams: z.object({ id: z.uuid() }),
-    body: z.object({}),
-    responses: {
-      200: okResponseSchema,
-      401: apiErrorSchema,
-      404: apiErrorSchema,
-    },
-    summary: "End a voice-chat-candidate session",
-  },
-
-  heartbeat: {
-    method: "POST",
-    path: "/api/zero/voice-chat-candidate/:id/heartbeat",
-    headers: authHeadersSchema,
-    pathParams: z.object({ id: z.uuid() }),
-    body: z.object({}),
-    responses: {
-      200: okResponseSchema,
-      401: apiErrorSchema,
-      404: apiErrorSchema,
-    },
-    summary: "Keep a voice-chat-candidate session alive",
-  },
-
   triggerReasoning: {
     method: "POST",
     path: "/api/zero/voice-chat-candidate/:id/trigger-reasoning",
@@ -276,18 +214,29 @@ export const zeroVoiceChatCandidateContract = c.router({
     summary: "Append a conversation item to a voice-chat-candidate session",
   },
 
+  /**
+   * task_result items are server-written when a tasker run completes. The
+   * client pulls them incrementally via `sinceSeq` (no cursor = baseline
+   * probe returning at most the latest row) and forwards them to the Talker
+   * so it can narrate slow-brain outcomes. User / assistant transcripts are
+   * NOT exposed via HTTP — the client holds the last utterance locally; the
+   * DB copy is server-side only and feeds the Reasoner's summary pipeline.
+   */
   readItems: {
     method: "GET",
-    path: "/api/zero/voice-chat-candidate/:id/items",
+    path: "/api/zero/voice-chat-candidate/:id/transcript/task-results",
     headers: authHeadersSchema,
     pathParams: z.object({ id: z.uuid() }),
-    query: z.object({ after: z.coerce.number().int().optional() }),
+    query: z.object({
+      sinceSeq: z.coerce.number().int().nonnegative().optional(),
+    }),
     responses: {
       200: z.object({ items: z.array(voiceChatCandidateItemSchema) }),
       401: apiErrorSchema,
       404: apiErrorSchema,
     },
-    summary: "Read conversation items from a voice-chat-candidate session",
+    summary:
+      "Read task_result items with seq cursor (for Talker injection only)",
   },
 
   createTask: {
@@ -305,6 +254,13 @@ export const zeroVoiceChatCandidateContract = c.router({
     summary: "Create a task from the Talker's createTask tool call",
   },
 
+  /**
+   * Task list for the Trinity sidebar. Returns every still-running task
+   * (pending / queued / running) in chronological ASC order, followed by up
+   * to the 3 most-recently-finished tasks (done / failed) in finishedAt DESC
+   * order. Full replace per Ably tick — no cursor. Older finished tasks drop
+   * off; the UI shows them briefly as context and then tidies itself.
+   */
   listTasks: {
     method: "GET",
     path: "/api/zero/voice-chat-candidate/:id/tasks",
@@ -315,7 +271,7 @@ export const zeroVoiceChatCandidateContract = c.router({
       401: apiErrorSchema,
       404: apiErrorSchema,
     },
-    summary: "List voice-chat-candidate tasks for a session",
+    summary: "List active + recently-finished tasks for a session",
   },
 
   token: {

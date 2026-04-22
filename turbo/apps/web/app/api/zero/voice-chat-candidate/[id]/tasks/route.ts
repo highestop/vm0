@@ -6,6 +6,7 @@ import { readVoiceChatCandidateItems } from "../../../../../../src/lib/zero/voic
 import {
   createVoiceChatCandidateTask,
   listSessionTasks,
+  listSessionTasksForCard,
 } from "../../../../../../src/lib/zero/voice-chat-candidate/task-service";
 import { buildSlowBrainAppendSystemPrompt } from "../../../../../../src/lib/zero/voice-chat-candidate/build-slow-brain-prompt";
 import {
@@ -51,9 +52,6 @@ export async function POST(
     session.userId !== authCtx.userId
   ) {
     return notFoundResponse("Voice-chat-candidate session not found");
-  }
-  if (session.status !== "active") {
-    return badRequestResponse("Session is not active");
   }
   if (!session.agentId) {
     // Null-agent sessions exist in schema (agentId is nullable) but cannot
@@ -140,7 +138,7 @@ export async function GET(
     return notFoundResponse("Voice-chat-candidate session not found");
   }
 
-  const tasks = await listSessionTasks(id);
+  const tasks = await listSessionTasksForCard(id);
   return NextResponse.json({
     tasks: tasks.map(serializeVoiceChatCandidateTask),
   });

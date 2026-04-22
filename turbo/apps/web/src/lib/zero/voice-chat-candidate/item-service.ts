@@ -1,25 +1,22 @@
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt } from "drizzle-orm";
 import {
   featureCandidateVoiceChatItems,
   featureCandidateVoiceChatSessions,
 } from "../../../db/schema/voice-chat-candidate";
-import { badRequest, notFound } from "../../shared/errors";
+import { notFound } from "../../shared/errors";
 
 type ItemRow = typeof featureCandidateVoiceChatItems.$inferSelect;
 type ItemRole = "user" | "assistant" | "task_result" | "system_note";
 
-async function assertSessionActive(sessionId: string): Promise<void> {
+async function assertSessionExists(sessionId: string): Promise<void> {
   const db = globalThis.services.db;
   const [session] = await db
-    .select({ status: featureCandidateVoiceChatSessions.status })
+    .select({ id: featureCandidateVoiceChatSessions.id })
     .from(featureCandidateVoiceChatSessions)
     .where(eq(featureCandidateVoiceChatSessions.id, sessionId))
     .limit(1);
   if (!session) {
     throw notFound("Voice-chat-candidate session not found");
-  }
-  if (session.status !== "active") {
-    throw badRequest("Session is not active");
   }
 }
 
@@ -31,7 +28,7 @@ export async function appendVoiceChatCandidateItem(params: {
   realtimeItemId?: string | null;
 }): Promise<ItemRow | null> {
   const db = globalThis.services.db;
-  await assertSessionActive(params.sessionId);
+  await assertSessionExists(params.sessionId);
 
   const [inserted] = await db
     .insert(featureCandidateVoiceChatItems)
@@ -70,9 +67,39 @@ export async function readVoiceChatCandidateItems(
     .orderBy(asc(featureCandidateVoiceChatItems.seq));
 }
 
-export async function readVoiceChatCandidateItemsSince(
+/**
+ * Role-scoped transcript read with seq cursor.
+ *
+ * - `sinceSeq` absent → baseline mode: returns at most the single latest row
+ *   of that role in the session. Caller uses it purely to seed its cursor;
+ *   the item is not meant to be displayed. This is what makes re-entry
+ *   suppress prior utterances in the UI.
+ * - `sinceSeq` provided → increment mode: returns every row of that role
+ *   with seq > sinceSeq, ordered ASC.
+ */
+export async function listTranscriptByRole(
   sessionId: string,
-  fromSeq: number,
+  role: ItemRole,
+  sinceSeq: number | undefined,
 ): Promise<ItemRow[]> {
-  return readVoiceChatCandidateItems(sessionId, fromSeq);
+  const db = globalThis.services.db;
+  const baseCondition = and(
+    eq(featureCandidateVoiceChatItems.sessionId, sessionId),
+    eq(featureCandidateVoiceChatItems.role, role),
+  );
+
+  if (sinceSeq === undefined) {
+    return db
+      .select()
+      .from(featureCandidateVoiceChatItems)
+      .where(baseCondition)
+      .orderBy(desc(featureCandidateVoiceChatItems.seq))
+      .limit(1);
+  }
+
+  return db
+    .select()
+    .from(featureCandidateVoiceChatItems)
+    .where(and(baseCondition, gt(featureCandidateVoiceChatItems.seq, sinceSeq)))
+    .orderBy(asc(featureCandidateVoiceChatItems.seq));
 }

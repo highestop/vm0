@@ -36,6 +36,7 @@ export async function insertTestVoiceChatCandidateTask(
   overrides: {
     result?: string;
     resultUpdatedAt?: Date;
+    finishedAt?: Date;
     status?: "pending" | "queued" | "running" | "done" | "failed";
   } = {},
 ): Promise<string> {
@@ -52,7 +53,7 @@ export async function insertTestVoiceChatCandidateTask(
       status,
       result: overrides.result ?? "A".repeat(500) + " important data",
       resultUpdatedAt: overrides.resultUpdatedAt ?? twoMinutesAgo,
-      finishedAt: isFinished ? twoMinutesAgo : null,
+      finishedAt: isFinished ? (overrides.finishedAt ?? twoMinutesAgo) : null,
     })
     .returning({ id: featureCandidateVoiceChatTasks.id });
   return row!.id;
@@ -93,18 +94,16 @@ export async function simulateConcurrentVoiceChatCandidateSessionWrite(
 
 /**
  * Insert a voice-chat-candidate session directly.
- * @why-db-direct Cron tests need to construct impossible states (stale
- * heartbeats, stuck reasoner) that no public API would produce.
+ * @why-db-direct Cron tests need to construct impossible states (stuck
+ * reasoner) that no public API would produce.
  */
 export async function insertTestVoiceChatCandidateSession(overrides: {
   orgId: string;
   userId: string;
   agentId?: string | null;
-  status?: "active" | "ended" | "timeout";
   reasoningStatus?: "idle" | "running";
   lastSummaryAt?: Date | null;
   createdAt?: Date;
-  lastHeartbeatAt?: Date;
 }): Promise<string> {
   initServices();
   const now = new Date();
@@ -114,11 +113,9 @@ export async function insertTestVoiceChatCandidateSession(overrides: {
       orgId: overrides.orgId,
       userId: overrides.userId,
       agentId: overrides.agentId ?? null,
-      status: overrides.status ?? "active",
       reasoningStatus: overrides.reasoningStatus ?? "idle",
       lastSummaryAt: overrides.lastSummaryAt ?? null,
       createdAt: overrides.createdAt ?? now,
-      lastHeartbeatAt: overrides.lastHeartbeatAt ?? now,
     })
     .returning({ id: featureCandidateVoiceChatSessions.id });
   return row!.id;

@@ -27,7 +27,10 @@ import {
   TooltipTrigger,
 } from "@vm0/ui";
 import { FeatureSwitchKey } from "@vm0/core";
-import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
+import {
+  featureSwitch$,
+  trinityEnabled$,
+} from "../../signals/external/feature-switch.ts";
 import {
   currentChatAgentId$,
   currentChatAgent$,
@@ -58,6 +61,7 @@ import {
 } from "../../signals/zero-page/zero-chat-page.ts";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { detachedNavigateTo$ } from "../../signals/route.ts";
+import { activeRoute$ } from "../../signals/active-route.ts";
 import { AgentAvatarImg } from "./zero-sidebar-shared.tsx";
 import { Link } from "../router/link.tsx";
 import {
@@ -67,8 +71,7 @@ import {
   startNewZeroSession$,
 } from "../../signals/chat-page/chat-message.ts";
 import { navigateToChat$ } from "../../signals/zero-page/zero-nav.ts";
-import { vcEnabled$ } from "../../signals/voice-chat/voice-chat-session.ts";
-import { ROUTES } from "../../signals/route-paths.ts";
+import { vccStatus$ } from "../../signals/voice-chat-candidate/voice-chat-candidate-session.ts";
 
 function getTagline(
   agentName: string,
@@ -224,7 +227,7 @@ function NewChatButton({ pageSignal }: { pageSignal: AbortSignal }) {
   );
 }
 
-function ChatHeaderAction({ pageSignal }: { pageSignal: AbortSignal }) {
+export function ChatHeaderAction({ pageSignal }: { pageSignal: AbortSignal }) {
   const features = useLastResolved(featureSwitch$);
   const newButtonEnabled =
     features?.[FeatureSwitchKey.ChatHeaderNewButton] ?? false;
@@ -271,36 +274,66 @@ function PinPill() {
   );
 }
 
-function VoiceChatLauncher() {
-  const vcEnabled = useLastResolved(vcEnabled$) ?? false;
+export function VoiceChatLauncher() {
+  const trinityEnabled = useLastResolved(trinityEnabled$) ?? false;
+  const vccStatus = useGet(vccStatus$);
+  const activeRoute = useGet(activeRoute$);
+  const currentChatAgentId = useLastResolved(currentChatAgentId$);
   const navigate = useSet(detachedNavigateTo$);
-  if (!vcEnabled) {
+
+  if (!trinityEnabled) {
     return null;
   }
+
+  const onTalk = activeRoute === "agentTalk";
+
+  const handleClick = () => {
+    if (!currentChatAgentId) {
+      return;
+    }
+    navigate(onTalk ? "/agents/:agentId/chat" : "/agents/:agentId/talk", {
+      pathParams: { agentId: currentChatAgentId },
+    });
+  };
+
+  const isConnecting = onTalk && vccStatus === "connecting";
+  const isConnected = onTalk && vccStatus === "connected";
+  const colorClass = isConnected
+    ? "text-green-600 hover:text-green-700"
+    : isConnecting
+      ? "text-primary animate-pulse"
+      : "text-muted-foreground hover:text-foreground";
+
+  const tooltipText = onTalk ? "Exit voice chat" : "Start voice chat";
+
   return (
     <TooltipProvider delayDuration={200}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={() => {
-              navigate(ROUTES.voiceChat);
-            }}
-            className="shrink-0 flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
-            aria-label="Start voice chat"
+            onClick={handleClick}
+            data-testid="voice-chat-launcher"
+            aria-label={tooltipText}
+            aria-pressed={onTalk}
+            className={`shrink-0 flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-accent cursor-pointer ${colorClass}`}
           >
             <IconMicrophone size={20} stroke={1.5} />
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          <p className="text-xs">Voice chat</p>
+          <p className="text-xs">{tooltipText}</p>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
 }
 
-function ChatAgentAvatar({ agentId }: { agentId: string | null | undefined }) {
+export function ChatAgentAvatar({
+  agentId,
+}: {
+  agentId: string | null | undefined;
+}) {
   return (
     <div className="relative shrink-0">
       {agentId ? (

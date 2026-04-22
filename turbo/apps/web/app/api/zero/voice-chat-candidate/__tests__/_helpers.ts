@@ -10,11 +10,6 @@ import {
   seedTestCompose,
 } from "../../../../../src/__tests__/db-test-seeders/agents";
 import { mockClerk } from "../../../../../src/__tests__/clerk-mock";
-import { initServices } from "../../../../../src/lib/init-services";
-import {
-  createVoiceChatCandidateSession,
-  endVoiceChatCandidateSession,
-} from "../../../../../src/lib/zero/voice-chat-candidate/session-service";
 
 const BASE_URL = "http://localhost:3000/api/zero/voice-chat-candidate";
 
@@ -56,14 +51,10 @@ export async function seedCandidateSession(opts: {
   userId: string;
   agentId: string;
 }): Promise<{ id: string }> {
-  initServices();
-  const session = await createVoiceChatCandidateSession(opts);
-  return { id: session.id };
-}
-
-export async function endCandidateSession(sessionId: string): Promise<void> {
-  initServices();
-  await endVoiceChatCandidateSession(sessionId);
+  const { POST } = await import("../route");
+  const response = await POST(postRequest("", { agentId: opts.agentId }));
+  const body = (await response.json()) as { session: { id: string } };
+  return { id: body.session.id };
 }
 
 export function postRequest(path: string, body?: unknown): NextRequest {

@@ -28,6 +28,7 @@ import { setupApiKeysPage$ } from "./api-keys-page/api-keys-page-setup.ts";
 import { setupSchedulePage$ } from "./schedule-page/schedule-page-setup.ts";
 import { setupScheduleDetailPage$ } from "./schedule-page/schedule-detail-page-setup.ts";
 import { setupAgentChatPage$ } from "./zero-page/agent-chat-page-setup.ts";
+import { setupAgentTalkPage$ } from "./zero-page/agent-talk-page-setup.ts";
 import { setupHomePage$ } from "./zero-page/home-page-setup.ts";
 import { setupChatPage$ } from "./chat-page/chat-page-setup.ts";
 import { setupInternalConnectorLogos$ } from "./internal-connector-logos-setup.ts";
@@ -43,7 +44,6 @@ import { setupChatListPage$ } from "./zero-page/chat-list-page-setup.ts";
 import { setupLabPage$ } from "./lab-page/lab-page-setup.ts";
 import { setupPhonePage$ } from "./phone-page/phone-page-setup.ts";
 import { setupVoiceChatPage$ } from "./voice-chat/voice-chat-setup.ts";
-import { setupVoiceChatCandidatePage$ } from "./voice-chat-candidate/voice-chat-candidate-setup.ts";
 import { setupNetworkInsightsPage$ } from "./network-insights/network-insights-page-setup.ts";
 import { setupUsagePage$ } from "./usage-page/usage-page-setup.ts";
 import { initSlackOrg$ as handleSlackRedirect$ } from "./zero-page/zero-slack.ts";
@@ -130,6 +130,10 @@ const ROUTE_CONFIG = [
     setup: setupAuthPageWrapper(setupAgentChatPage$),
   },
   {
+    path: ROUTES.agentTalk,
+    setup: setupAuthPageWrapper(setupAgentTalkPage$),
+  },
+  {
     path: ROUTES.agentPermissions,
     setup: setupAuthPageWrapper(setupPermissionAllowPage$),
   },
@@ -196,10 +200,6 @@ const ROUTE_CONFIG = [
   {
     path: ROUTES.voiceChat,
     setup: setupAuthPageWrapper(setupVoiceChatPage$),
-  },
-  {
-    path: ROUTES.voiceChatCandidate,
-    setup: setupAuthPageWrapper(setupVoiceChatCandidatePage$),
   },
   {
     path: ROUTES.usage,

@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import type { UsageInsightResponse } from "@vm0/core";
 
 interface UsageInsightOptions {
-  range: "24h" | "7d" | "28d";
+  range: "today" | "yesterday" | "7d" | "28d";
   groupBy: "source" | "agent";
   tz: string;
 }
@@ -16,17 +16,142 @@ interface SqlParams {
   tzLit: string;
 }
 
-function rangeToTruncAndMs(range: "24h" | "7d" | "28d"): {
-  trunc: string;
-  ms: number;
-} {
+export function startOfDayInTz(date: Date, tz: string): Date {
+  const timeParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const hour = parseInt(
+    timeParts.find((p) => {
+      return p.type === "hour";
+    })?.value ?? "0",
+  );
+  const minute = parseInt(
+    timeParts.find((p) => {
+      return p.type === "minute";
+    })?.value ?? "0",
+  );
+  const second = parseInt(
+    timeParts.find((p) => {
+      return p.type === "second";
+    })?.value ?? "0",
+  );
+
+  const dateParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(date);
+  const targetYear = parseInt(
+    dateParts.find((p) => {
+      return p.type === "year";
+    })?.value ?? "0",
+  );
+  const targetMonth = parseInt(
+    dateParts.find((p) => {
+      return p.type === "month";
+    })?.value ?? "1",
+  );
+  const targetDay = parseInt(
+    dateParts.find((p) => {
+      return p.type === "day";
+    })?.value ?? "1",
+  );
+
+  const elapsed = ((hour * 60 + minute) * 60 + second) * 1000;
+  let result = new Date(date.getTime() - elapsed);
+
+  const verify = (d: Date): boolean => {
+    const dp = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+    const y = parseInt(
+      dp.find((p) => {
+        return p.type === "year";
+      })?.value ?? "0",
+    );
+    const m = parseInt(
+      dp.find((p) => {
+        return p.type === "month";
+      })?.value ?? "1",
+    );
+    const day = parseInt(
+      dp.find((p) => {
+        return p.type === "day";
+      })?.value ?? "1",
+    );
+    const h = parseInt(
+      dp.find((p) => {
+        return p.type === "hour";
+      })?.value ?? "0",
+    );
+    const min = parseInt(
+      dp.find((p) => {
+        return p.type === "minute";
+      })?.value ?? "0",
+    );
+    const s = parseInt(
+      dp.find((p) => {
+        return p.type === "second";
+      })?.value ?? "0",
+    );
+    return (
+      y === targetYear &&
+      m === targetMonth &&
+      day === targetDay &&
+      h === 0 &&
+      min === 0 &&
+      s === 0
+    );
+  };
+
+  if (!verify(result)) {
+    const baseTime = result.getTime();
+    for (const delta of [3600000, -3600000, 7200000, -7200000]) {
+      const candidate = new Date(baseTime + delta);
+      if (verify(candidate)) {
+        result = candidate;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+function rangeToWindow(
+  range: "today" | "yesterday" | "7d" | "28d",
+  tz: string,
+): { trunc: string; startTs: Date; endTs: Date } {
+  const now = new Date();
+  const todayStart = startOfDayInTz(now, tz);
+
   switch (range) {
-    case "24h":
-      return { trunc: "hour", ms: 24 * 60 * 60 * 1000 };
-    case "7d":
-      return { trunc: "day", ms: 7 * 24 * 60 * 60 * 1000 };
-    case "28d":
-      return { trunc: "day", ms: 28 * 24 * 60 * 60 * 1000 };
+    case "today":
+      return { trunc: "hour", startTs: todayStart, endTs: now };
+    case "yesterday": {
+      const yesterdayStart = new Date(todayStart.getTime() - 86400000);
+      return { trunc: "hour", startTs: yesterdayStart, endTs: todayStart };
+    }
+    case "7d": {
+      const start = new Date(todayStart.getTime() - 6 * 86400000);
+      return { trunc: "day", startTs: start, endTs: now };
+    }
+    case "28d": {
+      const start = new Date(todayStart.getTime() - 27 * 86400000);
+      return { trunc: "day", startTs: start, endTs: now };
+    }
   }
 }
 
@@ -425,9 +550,7 @@ export async function getUsageInsight(
   options: UsageInsightOptions,
 ): Promise<UsageInsightResponse> {
   const db = globalThis.services.db;
-  const { trunc, ms } = rangeToTruncAndMs(options.range);
-  const endTs = new Date();
-  const startTs = new Date(endTs.getTime() - ms);
+  const { trunc, startTs, endTs } = rangeToWindow(options.range, options.tz);
 
   const p: SqlParams = {
     userIdLit: pgLit(userId),

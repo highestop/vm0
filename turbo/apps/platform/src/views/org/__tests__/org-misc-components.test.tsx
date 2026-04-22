@@ -14,7 +14,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import {
   CONNECTOR_TYPES,
   type ConnectorType,
@@ -23,7 +22,11 @@ import {
 } from "@vm0/core";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { setMockOrg, resetMockOrg } from "../../../mocks/handlers/api-org.ts";
 import { setMockSchedules } from "../../../mocks/handlers/api-schedules.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
@@ -94,7 +97,6 @@ describe("internal connector logos - interaction (ORG-I-121)", () => {
   it(
     "size selection buttons change the displayed icon size",
     async () => {
-      const user = userEvent.setup();
       detachedSetupPage({ context, path: "/__internal-connector-logos" });
       // Default size button is "128" — clicking "16" should switch to a smaller size
       await waitFor(() => {
@@ -107,7 +109,7 @@ describe("internal connector logos - interaction (ORG-I-121)", () => {
       const btn16 = screen.getAllByRole("button").find((el) => {
         return /^16$/.test(el.textContent ?? "");
       });
-      await user.click(btn16!);
+      click(btn16!);
       // After clicking "16", the icons container should reflect the smaller size;
       // verify the page still renders connector icon images (alt="" so role="presentation")
       await waitFor(() => {
@@ -260,7 +262,6 @@ describe("zero unsaved bar - display (ORG-D-111)", () => {
 
 describe("zero unsaved bar - interaction (ORG-I-113)", () => {
   it("clicking Discard reverts unsaved changes", async () => {
-    const user = userEvent.setup();
     await openScheduleSettings();
     const descInput = screen.getByPlaceholderText(
       "Leave blank to auto-generate",
@@ -275,7 +276,7 @@ describe("zero unsaved bar - interaction (ORG-I-113)", () => {
         }),
       ).toBeInTheDocument();
     });
-    await user.click(
+    click(
       screen.getAllByRole("button").find((el) => {
         return /^Discard$/.test(el.textContent ?? "");
       })!,
@@ -292,7 +293,6 @@ describe("zero unsaved bar - interaction (ORG-I-113)", () => {
 
 describe("zero unsaved bar - interaction (ORG-I-114)", () => {
   it("clicking Save persists changes and hides the unsaved bar", async () => {
-    const user = userEvent.setup();
     await openScheduleSettings();
     server.use(
       mockApi(zeroSchedulesMainContract.deploy, ({ respond }) => {
@@ -313,7 +313,7 @@ describe("zero unsaved bar - interaction (ORG-I-114)", () => {
         }),
       ).toBeInTheDocument();
     });
-    await user.click(
+    click(
       screen.getAllByRole("button").find((el) => {
         return /^Save$/.test(el.textContent ?? "");
       })!,
@@ -332,7 +332,7 @@ describe("zero unsaved bar - interaction (ORG-I-114)", () => {
 // ClaudeCodeSetupPrompt (ORG-D-105, ORG-I-106, ORG-S-107)
 // ---------------------------------------------------------------------------
 
-async function openSetupPrompt(user: ReturnType<typeof userEvent.setup>) {
+async function openSetupPrompt() {
   detachedSetupPage({ context, path: "/?settings=providers" });
   await waitFor(() => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -344,7 +344,7 @@ async function openSetupPrompt(user: ReturnType<typeof userEvent.setup>) {
       }),
     ).toBeInTheDocument();
   });
-  await user.click(
+  click(
     screen.getAllByRole("button").find((el) => {
       return /add provider/i.test(el.textContent ?? "");
     })!,
@@ -354,9 +354,7 @@ async function openSetupPrompt(user: ReturnType<typeof userEvent.setup>) {
       screen.getByTestId("org-provider-card-claude-code-oauth-token"),
     ).toBeInTheDocument();
   });
-  await user.click(
-    screen.getByTestId("org-provider-card-claude-code-oauth-token"),
-  );
+  click(screen.getByTestId("org-provider-card-claude-code-oauth-token"));
   await waitFor(() => {
     expect(screen.getByText("claude setup-token")).toBeInTheDocument();
   });
@@ -364,8 +362,7 @@ async function openSetupPrompt(user: ReturnType<typeof userEvent.setup>) {
 
 describe("setup prompt - display (ORG-D-105)", () => {
   it("displays 'claude setup-token' command in a code element", async () => {
-    const user = userEvent.setup();
-    await openSetupPrompt(user);
+    await openSetupPrompt();
     const codeEl = screen.getByText("claude setup-token");
     expect(codeEl.tagName.toLowerCase()).toBe("code");
   });
@@ -373,10 +370,9 @@ describe("setup prompt - display (ORG-D-105)", () => {
 
 describe("setup prompt - interaction (ORG-I-106)", () => {
   it("clicking the code element triggers the copied state", async () => {
-    const user = userEvent.setup();
     vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
-    await openSetupPrompt(user);
-    await user.click(screen.getByText("claude setup-token"));
+    await openSetupPrompt();
+    click(screen.getByText("claude setup-token"));
     // The original command text should be replaced by the "copied!" state
     await waitFor(() => {
       expect(screen.queryByText("claude setup-token")).not.toBeInTheDocument();
@@ -386,10 +382,9 @@ describe("setup prompt - interaction (ORG-I-106)", () => {
 
 describe("setup prompt - state (ORG-S-107)", () => {
   it("text changes to 'copied!' after click", async () => {
-    const user = userEvent.setup();
     vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
-    await openSetupPrompt(user);
-    await user.click(screen.getByText("claude setup-token"));
+    await openSetupPrompt();
+    click(screen.getByText("claude setup-token"));
     await waitFor(() => {
       expect(screen.getByText("copied!")).toBeInTheDocument();
     });

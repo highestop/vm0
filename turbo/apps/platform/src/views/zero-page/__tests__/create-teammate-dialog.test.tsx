@@ -3,7 +3,11 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
   type ZeroAgentRequest,
@@ -37,14 +41,14 @@ function mockTeamWithSubagent() {
   ]);
 }
 
-async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
+async function openCreateDialog() {
   detachedSetupPage({ context, path: "/agents" });
 
   await waitFor(() => {
     expect(screen.getByText("Research Agent")).toBeInTheDocument();
   });
 
-  await user.click(screen.getByText("New agent"));
+  click(screen.getByText("New agent"));
   await waitFor(() => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
@@ -52,16 +56,14 @@ async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
 
 describe("create agent dialog - avatar", () => {
   it("should show a preset avatar when dialog opens", async () => {
-    const user = userEvent.setup();
     mockTeamWithSubagent();
-    await openCreateDialog(user);
+    await openCreateDialog();
 
     const avatar = screen.getByRole("img", { name: "New agent" });
     expect(avatar).toBeInTheDocument();
   });
 
   it("should send chosen avatar when creating agent", async () => {
-    const user = userEvent.setup();
     let capturedPayload: ZeroAgentRequest | null = null;
 
     mockTeamWithSubagent();
@@ -93,11 +95,11 @@ describe("create agent dialog - avatar", () => {
       }),
     );
 
-    await openCreateDialog(user);
+    await openCreateDialog();
 
     const input = screen.getByPlaceholderText("e.g. Research Assistant");
     await fill(input, "My New Agent");
-    await user.click(screen.getByText("Create"));
+    click(screen.getByText("Create"));
 
     await waitFor(() => {
       expect(capturedPayload).toBeTruthy();
@@ -141,7 +143,7 @@ describe("create agent dialog - avatar", () => {
       }),
     );
 
-    await openCreateDialog(user);
+    await openCreateDialog();
 
     const input = screen.getByPlaceholderText("e.g. Research Assistant");
     await fill(input, "Enter Agent");

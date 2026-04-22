@@ -5,8 +5,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
@@ -55,8 +54,7 @@ describe("link component", () => {
       return screen.getByText("Agents").closest("a")!;
     });
 
-    const user = userEvent.setup();
-    await user.click(link!);
+    fireEvent.click(link!);
 
     await waitFor(() => {
       expect(pathname()).toBe("/agents");
@@ -78,12 +76,8 @@ describe("link component", () => {
       return screen.getByText("Agents").closest("a")!;
     });
 
-    const user = userEvent.setup();
-
     // meta click
-    await user.keyboard("{Meta>}");
-    await user.click(link!);
-    await user.keyboard("{/Meta}");
+    fireEvent.click(link!, { metaKey: true });
 
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
@@ -95,9 +89,7 @@ describe("link component", () => {
     openSpy.mockClear();
 
     // ctrl click
-    await user.keyboard("{Control>}");
-    await user.click(link!);
-    await user.keyboard("{/Control}");
+    fireEvent.click(link!, { ctrlKey: true });
 
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
@@ -109,9 +101,7 @@ describe("link component", () => {
     openSpy.mockClear();
 
     // shift click
-    await user.keyboard("{Shift>}");
-    await user.click(link!);
-    await user.keyboard("{/Shift}");
+    fireEvent.click(link!, { shiftKey: true });
 
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(

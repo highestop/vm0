@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
 import { pathname } from "../../../signals/location.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
 import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
@@ -81,11 +81,11 @@ function mockAPIsWithSubagents({
   );
 }
 
-async function openChatListDialog(user: ReturnType<typeof userEvent.setup>) {
+async function openChatListDialog() {
   const openButton = await waitFor(() => {
     return screen.getByLabelText("Open a conversation");
   });
-  await user.click(openButton);
+  click(openButton);
   await waitFor(() => {
     expect(screen.getByText("Talk to")).toBeInTheDocument();
   });
@@ -98,11 +98,10 @@ function openManagePinnedDialog() {
 
 describe("chatListDialog", () => {
   it("should navigate to chat when clicking a pinned agent", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
 
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     // Wait for the "Pinned" section label to appear, then find the chat button
     await waitFor(() => {
@@ -115,7 +114,7 @@ describe("chatListDialog", () => {
     const pinnedAgentText = within(dialog).getByText("Pinned Agent");
     const pinnedAgentButton = pinnedAgentText.closest("button")!;
 
-    await user.click(pinnedAgentButton);
+    click(pinnedAgentButton);
 
     // Should navigate to /chat/:threadId
     await waitFor(() => {
@@ -124,11 +123,10 @@ describe("chatListDialog", () => {
   });
 
   it("should navigate to chat when clicking an unpinned agent", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
 
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     // Find the unpinned agent button and click it
     const dialog = screen.getByRole("dialog");
@@ -142,7 +140,7 @@ describe("chatListDialog", () => {
       })!;
     const unpinnedAgentButton = unpinnedAgentText.closest("button")!;
 
-    await user.click(unpinnedAgentButton);
+    click(unpinnedAgentButton);
 
     await waitFor(() => {
       expect(pathname()).toBe("/chats/new-thread-from-dialog");
@@ -150,11 +148,10 @@ describe("chatListDialog", () => {
   });
 
   it("should render unpinned agent avatars without reduced opacity", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
 
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     // Wait for the "Others" section to render with the unpinned agent
     const dialog = screen.getByRole("dialog");
@@ -170,11 +167,10 @@ describe("chatListDialog", () => {
   });
 
   it("should navigate to chat when clicking the lead agent", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
 
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     // The lead agent section should have a clickable button
     const leadButton = await waitFor(() => {
@@ -183,7 +179,7 @@ describe("chatListDialog", () => {
         .closest("button")!;
     });
 
-    await user.click(leadButton);
+    click(leadButton);
 
     await waitFor(() => {
       expect(pathname()).toBe("/chats/new-thread-from-dialog");
@@ -244,7 +240,7 @@ describe("chatListDialog - agent search results filter (SIDEBAR-D-029)", () => {
     const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     const dialog = screen.getByRole("dialog");
     const searchInput = within(dialog).getByPlaceholderText("Search agents...");
@@ -347,7 +343,6 @@ describe("managePinnedAgentsDialog - drag-and-drop reorders pinned agents (SIDEB
 
 describe("managePinnedAgentsDialog - unpin button removes agent from pinned (SIDEBAR-D-034)", () => {
   it("moves the agent from pinned to available when unpin is clicked", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
     openManagePinnedDialog();
@@ -361,7 +356,7 @@ describe("managePinnedAgentsDialog - unpin button removes agent from pinned (SID
       ).toBeInTheDocument();
     });
 
-    await user.click(within(dialog).getByLabelText("Unpin Pinned Agent"));
+    click(within(dialog).getByLabelText("Unpin Pinned Agent"));
 
     await waitFor(() => {
       // Should no longer be in pinned section
@@ -376,7 +371,6 @@ describe("managePinnedAgentsDialog - unpin button removes agent from pinned (SID
 
 describe("managePinnedAgentsDialog - pin button adds agent to pinned (SIDEBAR-D-035)", () => {
   it("moves the agent from available to pinned when pin is clicked", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
     // Start with no agents pinned
@@ -392,7 +386,7 @@ describe("managePinnedAgentsDialog - pin button adds agent to pinned (SIDEBAR-D-
 
     // Click pin button for an agent in available list
     const pinButton = within(dialog).getAllByLabelText("Pin to sidebar")[0]!;
-    await user.click(pinButton);
+    click(pinButton);
 
     await waitFor(() => {
       // The agent should now appear in pinned section with unpin button
@@ -408,10 +402,9 @@ describe("managePinnedAgentsDialog - pin button adds agent to pinned (SIDEBAR-D-
 
 describe("chatListDialog - agent list item opens chat on click (SIDEBAR-D-036)", () => {
   it("opens a chat session when a pinned agent is clicked in the dialog", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     await waitFor(() => {
       expect(
@@ -422,7 +415,7 @@ describe("chatListDialog - agent list item opens chat on click (SIDEBAR-D-036)",
     const pinnedAgentBtn = within(screen.getByRole("dialog"))
       .getByText("Pinned Agent")
       .closest("button")!;
-    await user.click(pinnedAgentBtn);
+    click(pinnedAgentBtn);
 
     await waitFor(() => {
       expect(pathname()).toBe("/chats/new-thread-from-dialog");
@@ -435,7 +428,7 @@ describe("chatListDialog - search input accepts text (SIDEBAR-D-037)", () => {
     const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     const dialog = screen.getByRole("dialog");
     const searchInput = within(dialog).getByPlaceholderText("Search agents...");
@@ -450,7 +443,7 @@ describe("chatListDialog - clear search button resets dialog search (SIDEBAR-D-0
     const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     const dialog = screen.getByRole("dialog");
     const searchInput = within(dialog).getByPlaceholderText("Search agents...");
@@ -464,7 +457,7 @@ describe("chatListDialog - clear search button resets dialog search (SIDEBAR-D-0
     });
 
     const clearButton = within(dialog).getByLabelText("Clear search");
-    await user.click(clearButton);
+    click(clearButton);
 
     await waitFor(() => {
       expect(within(dialog).getByText("Pinned Agent")).toBeInTheDocument();
@@ -475,7 +468,6 @@ describe("chatListDialog - clear search button resets dialog search (SIDEBAR-D-0
 
 describe("managePinnedAgentsDialog - save button persists changes (SIDEBAR-D-039)", () => {
   it("saves the new pinned order and closes the dialog when Save is clicked", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
     openManagePinnedDialog();
@@ -484,7 +476,7 @@ describe("managePinnedAgentsDialog - save button persists changes (SIDEBAR-D-039
       return screen.getByRole("dialog");
     });
     const saveButton = within(dialog).getByText("Save");
-    await user.click(saveButton);
+    click(saveButton);
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -494,7 +486,6 @@ describe("managePinnedAgentsDialog - save button persists changes (SIDEBAR-D-039
 
 describe("managePinnedAgentsDialog - cancel button discards changes (SIDEBAR-D-040)", () => {
   it("closes the dialog without saving when Cancel is clicked", async () => {
-    const user = userEvent.setup();
     mockAPIsWithSubagents();
     detachedSetupPage({ context, path: "/agents" });
     openManagePinnedDialog();
@@ -503,7 +494,7 @@ describe("managePinnedAgentsDialog - cancel button discards changes (SIDEBAR-D-0
       return screen.getByRole("dialog");
     });
     const cancelButton = within(dialog).getByText("Cancel");
-    await user.click(cancelButton);
+    click(cancelButton);
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -530,7 +521,6 @@ describe("managePinnedAgentsDialog - reorder handle is present (SIDEBAR-D-041)",
 
 describe("chatListDialog - pin buttons disabled during save (SIDEBAR-D-042)", () => {
   it("disables pin and reorder buttons while save is in progress and re-enables after completion", async () => {
-    const user = userEvent.setup();
     let resolvePost: (() => void) | undefined;
     const postPromise = new Promise<void>((resolve) => {
       resolvePost = resolve;
@@ -550,7 +540,7 @@ describe("chatListDialog - pin buttons disabled during save (SIDEBAR-D-042)", ()
     );
 
     detachedSetupPage({ context, path: "/agents" });
-    await openChatListDialog(user);
+    await openChatListDialog();
 
     const dialog = screen.getByRole("dialog");
 
@@ -562,7 +552,7 @@ describe("chatListDialog - pin buttons disabled during save (SIDEBAR-D-042)", ()
 
     // Click the pin button for the unpinned agent to trigger a save
     const pinButton = within(dialog).getByLabelText("Pin to sidebar");
-    await user.click(pinButton);
+    click(pinButton);
 
     // While save is pending, existing pin/unpin/reorder buttons should be disabled
     await waitFor(() => {

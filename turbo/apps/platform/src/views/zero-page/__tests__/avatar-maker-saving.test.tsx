@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
   zeroAgentsByIdContract,
@@ -53,18 +52,18 @@ function mockAPIs() {
   );
 }
 
-async function openAvatarMaker(user: ReturnType<typeof userEvent.setup>) {
+async function openAvatarMaker() {
   detachedSetupPage({ context, path: "/agents/my-agent" });
   await waitFor(() => {
     expect(
       screen.getByRole("heading", { name: "My Agent" }),
     ).toBeInTheDocument();
   });
-  await user.click(screen.getByText(/Profile/i));
+  click(screen.getByText(/Profile/i));
   await waitFor(() => {
     expect(screen.getByLabelText("Create custom avatar")).toBeInTheDocument();
   });
-  await user.click(screen.getByLabelText("Create custom avatar"));
+  click(screen.getByLabelText("Create custom avatar"));
   await waitFor(() => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
@@ -72,7 +71,6 @@ async function openAvatarMaker(user: ReturnType<typeof userEvent.setup>) {
 
 describe("avatar maker - saving state", () => {
   it("resets saving state when onConfirm rejects", async () => {
-    const user = userEvent.setup();
     mockAPIs();
     server.use(
       // mockApi cannot return 500 (not in contract responses); 404 triggers
@@ -83,12 +81,12 @@ describe("avatar maker - saving state", () => {
         });
       }),
     );
-    await openAvatarMaker(user);
+    await openAvatarMaker();
 
     const applyBtn = screen.getByText(/Use this avatar/i);
     expect(applyBtn.closest("button")).not.toBeDisabled();
 
-    await user.click(applyBtn);
+    click(applyBtn);
 
     // After the error, the button should become clickable again
     await waitFor(() => {

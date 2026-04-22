@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { PLACEHOLDER } from "./chat-test-helpers.ts";
 import { pathname } from "../../../signals/location.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
@@ -55,17 +58,14 @@ function mockMemberOnboarding() {
 }
 
 /** Walk through onboarding steps up to the "Where would you like to work" step. */
-async function walkToWhereStep(
-  user: ReturnType<typeof userEvent.setup>,
-  isMember: boolean,
-) {
+async function walkToWhereStep(isMember: boolean) {
   if (isMember) {
     // Member lands on step 2 (Choose your tools) under the unified flow
     await waitFor(() => {
       expect(screen.getByText("Choose your tools")).toBeInTheDocument();
     });
     // Advance without selecting a connector — skips step 3, lands on step 4
-    await user.click(screen.getByText("Next"));
+    click(screen.getByText("Next"));
 
     await waitFor(() => {
       expect(
@@ -79,19 +79,19 @@ async function walkToWhereStep(
 
     const input = screen.getByPlaceholderText("e.g. Acme Corp");
     await fill(input, "Test Workspace");
-    await user.click(screen.getByText("Next"));
+    click(screen.getByText("Next"));
 
     await waitFor(() => {
       expect(screen.getByText("Choose your tools")).toBeInTheDocument();
     });
     // Select a connector so step 3 is reachable (#9129)
-    await user.click(screen.getByTestId("connector-card-github"));
-    await user.click(screen.getByText("Next"));
+    click(screen.getByTestId("connector-card-github"));
+    click(screen.getByText("Next"));
 
     await waitFor(() => {
       expect(screen.getByText("Connect your apps")).toBeInTheDocument();
     });
-    await user.click(screen.getByText("Next"));
+    click(screen.getByText("Next"));
 
     await waitFor(() => {
       expect(
@@ -103,11 +103,10 @@ async function walkToWhereStep(
 
 describe("onboarding → chat page (no auto-intro)", () => {
   it("should navigate to /agents/:id/chat after admin completes onboarding", async () => {
-    const user = userEvent.setup();
     mockAdminOnboarding();
 
     detachedSetupPage({ context, path: "/onboarding" });
-    await walkToWhereStep(user, false);
+    await walkToWhereStep(false);
 
     // Switch onboarding status so post-navigate route doesn't redirect back
     server.use(
@@ -123,7 +122,7 @@ describe("onboarding → chat page (no auto-intro)", () => {
       }),
     );
 
-    await user.click(screen.getByText(/Continue in web/));
+    click(screen.getByText(/Continue in web/));
 
     // Should navigate directly to the agent chat page
     await waitFor(() => {
@@ -138,11 +137,10 @@ describe("onboarding → chat page (no auto-intro)", () => {
   });
 
   it("should navigate to /agents/:id/chat after member completes onboarding", async () => {
-    const user = userEvent.setup();
     mockMemberOnboarding();
 
     detachedSetupPage({ context, path: "/onboarding" });
-    await walkToWhereStep(user, true);
+    await walkToWhereStep(true);
 
     server.use(
       mockApi(onboardingStatusContract.getStatus, ({ respond }) => {
@@ -157,7 +155,7 @@ describe("onboarding → chat page (no auto-intro)", () => {
       }),
     );
 
-    await user.click(screen.getByText(/Continue in web/));
+    click(screen.getByText(/Continue in web/));
 
     await waitFor(() => {
       expect(pathname()).toBe(`/agents/${MOCK_MEMBER_AGENT_ID}/chat`);

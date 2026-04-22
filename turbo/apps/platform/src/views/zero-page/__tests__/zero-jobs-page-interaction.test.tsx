@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { pathname } from "../../../signals/location.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
@@ -39,11 +42,11 @@ function mockTeamAPI(
   setMockTeam([DEFAULT_AGENT, ...extraAgents]);
 }
 
-async function openDialog(user: ReturnType<typeof userEvent.setup>) {
+async function openDialog() {
   await waitFor(() => {
     expect(screen.getByText("New agent")).toBeInTheDocument();
   });
-  await user.click(screen.getByText("New agent"));
+  click(screen.getByText("New agent"));
   await waitFor(() => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
@@ -51,14 +54,13 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
 
 describe("zero jobs page - create agent dialog", () => {
   it("opens the dialog when create agent button is clicked (AGENT-D-008)", async () => {
-    const user = userEvent.setup();
     mockTeamAPI();
     detachedSetupPage({ context, path: "/agents" });
 
     await waitFor(() => {
       expect(screen.getByText("New agent")).toBeInTheDocument();
     });
-    await user.click(screen.getByText("New agent"));
+    click(screen.getByText("New agent"));
 
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -66,7 +68,6 @@ describe("zero jobs page - create agent dialog", () => {
   });
 
   it("creates agent and shows it in the grid (AGENT-D-014)", async () => {
-    const user = userEvent.setup();
     const NEW_AGENT = {
       id: "new-agent-id",
       displayName: "Marketing Bot",
@@ -112,12 +113,12 @@ describe("zero jobs page - create agent dialog", () => {
     );
 
     detachedSetupPage({ context, path: "/agents" });
-    await openDialog(user);
+    await openDialog();
 
     const input = screen.getByPlaceholderText("e.g. Research Assistant");
     await fill(input, "Marketing Bot");
 
-    await user.click(screen.getByText("Create"));
+    click(screen.getByText("Create"));
 
     await waitFor(() => {
       expect(screen.getByText("Marketing Bot")).toBeInTheDocument();
@@ -125,13 +126,12 @@ describe("zero jobs page - create agent dialog", () => {
   });
 
   it("closes the dialog when cancel is clicked (AGENT-D-015)", async () => {
-    const user = userEvent.setup();
     mockTeamAPI();
     detachedSetupPage({ context, path: "/agents" });
 
-    await openDialog(user);
+    await openDialog();
 
-    await user.click(screen.getByText("Cancel"));
+    click(screen.getByText("Cancel"));
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -190,7 +190,6 @@ describe("zero jobs page - avatar display", () => {
 
 describe("zero jobs page - navigation", () => {
   it("navigates to agent detail when an agent card is clicked (AGENT-D-009)", async () => {
-    const user = userEvent.setup();
     setMockTeam([
       DEFAULT_AGENT,
       {
@@ -208,7 +207,7 @@ describe("zero jobs page - navigation", () => {
     const card = await waitFor(() => {
       return screen.getByText("Nav Agent");
     });
-    await user.click(card);
+    click(card);
 
     await waitFor(() => {
       expect(pathname()).toBe("/agents/nav-agent-id");

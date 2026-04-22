@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import {
   type ScheduleResponse,
   zeroAgentsByIdContract,
@@ -10,7 +9,11 @@ import {
 } from "@vm0/core";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { createDeferredPromise } from "../../../signals/utils.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
@@ -98,14 +101,13 @@ function navigateToScheduleTab() {
 }
 
 async function openMenuAndClick(
-  user: ReturnType<typeof userEvent.setup>,
   timeLabel: string,
   action: "Edit" | "Delete" | "Run now",
 ) {
   const menuTrigger = screen.getAllByLabelText(
     `More actions for ${timeLabel}`,
   )[0];
-  await user.click(menuTrigger);
+  click(menuTrigger);
   await waitFor(() => {
     expect(
       screen.getAllByRole("menuitem").find((el) => {
@@ -117,7 +119,7 @@ async function openMenuAndClick(
     return el.textContent?.includes(action);
   });
   expect(item).toBeDefined();
-  await user.click(item as HTMLElement);
+  click(item as HTMLElement);
 }
 
 describe("zero-schedule-card - schedule list", () => {
@@ -193,7 +195,6 @@ describe("zero-schedule-card - view mode", () => {
   });
 
   it("switches to calendar view when Calendar tab is clicked (SCHED-D-040)", async () => {
-    const user = userEvent.setup();
     mockBaseAPIs([defaultSchedule()]);
     await navigateToScheduleTab();
 
@@ -207,7 +208,7 @@ describe("zero-schedule-card - view mode", () => {
       return /Calendar/i.test(el.textContent ?? "");
     });
     expect(calendarTab).toBeDefined();
-    await user.click(calendarTab as HTMLElement);
+    click(calendarTab as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByText("Week view")).toBeInTheDocument();
@@ -217,7 +218,6 @@ describe("zero-schedule-card - view mode", () => {
 
 describe("zero-schedule-card - add schedule dialog", () => {
   it("opens schedule form dialog when Add schedule button is clicked (SCHED-D-039)", async () => {
-    const user = userEvent.setup();
     mockBaseAPIs([defaultSchedule()]);
     await navigateToScheduleTab();
 
@@ -227,7 +227,7 @@ describe("zero-schedule-card - add schedule dialog", () => {
       ).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Add schedule"));
+    click(screen.getByText("Add schedule"));
 
     await waitFor(() => {
       expect(
@@ -240,7 +240,6 @@ describe("zero-schedule-card - add schedule dialog", () => {
 
 describe("zero-schedule-card - save error", () => {
   it("surfaces save error via toast when schedule save fails (SCHED-D-038)", async () => {
-    const user = userEvent.setup();
     mockBaseAPIs([defaultSchedule()]);
     server.use(
       mockApi(zeroSchedulesMainContract.deploy, ({ respond }) => {
@@ -260,14 +259,14 @@ describe("zero-schedule-card - save error", () => {
       ).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Add schedule"));
+    click(screen.getByText("Add schedule"));
 
     await waitFor(() => {
       expect(screen.getByLabelText("Prompt")).toBeInTheDocument();
     });
 
     await fill(screen.getByLabelText("Prompt"), "New task");
-    await user.click(screen.getByText("Create"));
+    click(screen.getByText("Create"));
 
     await waitFor(() => {
       expect(screen.getByText(/Schedule limit reached/)).toBeInTheDocument();
@@ -278,7 +277,6 @@ describe("zero-schedule-card - save error", () => {
 
 describe("zero-schedule-card - delete", () => {
   it("closing delete dialog preserves the schedule entry (SCHED-D-041)", async () => {
-    const user = userEvent.setup();
     let deleteCalled = false;
     mockBaseAPIs([defaultSchedule()]);
     server.use(
@@ -296,13 +294,13 @@ describe("zero-schedule-card - delete", () => {
       ).toBeInTheDocument();
     });
 
-    await openMenuAndClick(user, "Every weekday at 9:00 AM", "Delete");
+    await openMenuAndClick("Every weekday at 9:00 AM", "Delete");
 
     await waitFor(() => {
       expect(screen.getByText("Delete schedule?")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Cancel"));
+    click(screen.getByText("Cancel"));
 
     await waitFor(() => {
       expect(screen.queryByText("Delete schedule?")).not.toBeInTheDocument();
@@ -314,7 +312,6 @@ describe("zero-schedule-card - delete", () => {
   });
 
   it("calls delete API when delete is confirmed (SCHED-D-042)", async () => {
-    const user = userEvent.setup();
     let deletedName: string | null = null;
     mockBaseAPIs([defaultSchedule()]);
     server.use(
@@ -332,13 +329,13 @@ describe("zero-schedule-card - delete", () => {
       ).toBeInTheDocument();
     });
 
-    await openMenuAndClick(user, "Every weekday at 9:00 AM", "Delete");
+    await openMenuAndClick("Every weekday at 9:00 AM", "Delete");
 
     await waitFor(() => {
       expect(screen.getByText("Delete schedule?")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Delete"));
+    click(screen.getByText("Delete"));
 
     await waitFor(() => {
       expect(deletedName).toBe("morning-briefing");

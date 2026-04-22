@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import {
   zeroAgentsByIdContract,
@@ -155,7 +155,7 @@ describe("zero instructions tab - display", () => {
     const editorEl = document.querySelector(
       '[contenteditable="true"]',
     ) as HTMLElement;
-    await user.click(editorEl);
+    click(editorEl);
     await user.type(editorEl, "edited content");
 
     // After typing, the unsaved changes bar should show Discard and Save buttons
@@ -177,13 +177,13 @@ describe("zero instructions tab - display", () => {
     const editorEl = document.querySelector(
       '[contenteditable="true"]',
     ) as HTMLElement;
-    await user.click(editorEl);
+    click(editorEl);
     await user.type(editorEl, "some edit");
 
     await waitFor(() => {
       expect(screen.getByText(/Discard/i)).toBeInTheDocument();
     });
-    await user.click(screen.getByText(/Discard/i));
+    click(screen.getByText(/Discard/i));
 
     // After discarding, the unsaved bar should disappear
     await waitFor(() => {
@@ -220,13 +220,13 @@ describe("zero instructions tab - display", () => {
     const editorEl = document.querySelector(
       '[contenteditable="true"]',
     ) as HTMLElement;
-    await user.click(editorEl);
+    click(editorEl);
     await user.type(editorEl, "my instructions");
 
     await waitFor(() => {
       expect(screen.getByText(/^Save$/i)).toBeInTheDocument();
     });
-    await user.click(screen.getByText(/^Save$/i));
+    click(screen.getByText(/^Save$/i));
 
     await waitFor(() => {
       expect(putCallCount).toBe(1);

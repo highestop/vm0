@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ScheduleResponse } from "@vm0/core";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
 import { pathname } from "../../../signals/location.ts";
 import { setCalendarSelectedDay$ } from "../../../signals/schedule-page/schedule-page-ui.ts";
 import { setMockSchedules } from "../../../mocks/handlers/api-schedules.ts";
@@ -150,7 +150,7 @@ function mockScheduleAPI(schedules: ScheduleResponse[]) {
   setMockSchedules(schedules);
 }
 
-async function switchToCalendarView(user: ReturnType<typeof userEvent.setup>) {
+async function switchToCalendarView() {
   // Wait for the page to finish loading (schedule list or empty state is visible)
   await waitFor(() => {
     const hasScheduled =
@@ -167,7 +167,7 @@ async function switchToCalendarView(user: ReturnType<typeof userEvent.setup>) {
     return /Calendar/i.test(el.textContent ?? "");
   });
   expect(calendarTab).toBeDefined();
-  await user.click(calendarTab!);
+  click(calendarTab!);
   await waitFor(() => {
     expect(
       screen.getByRole("heading", { name: "Week view" }),
@@ -177,10 +177,9 @@ async function switchToCalendarView(user: ReturnType<typeof userEvent.setup>) {
 
 describe("schedule calendar view - schedule entries in cells (SCHED-D-068)", () => {
   it("shows schedule entries in their corresponding time slots", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([weekdaySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     await waitFor(() => {
       expect(screen.getAllByLabelText(/Morning briefing/i)[0]).toBeDefined();
@@ -190,7 +189,6 @@ describe("schedule calendar view - schedule entries in cells (SCHED-D-068)", () 
 
 describe("schedule calendar view - agent labels with color coding (SCHED-D-069)", () => {
   it("shows agent label on each entry button aria-label", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([
       weekdaySchedule({
         id: "f0000002-0000-4000-a000-000000000001",
@@ -208,7 +206,7 @@ describe("schedule calendar view - agent labels with color coding (SCHED-D-069)"
       }),
     ]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     await waitFor(() => {
       expect(screen.getAllByLabelText(/Alpha:/i)[0]).toBeDefined();
@@ -219,10 +217,9 @@ describe("schedule calendar view - agent labels with color coding (SCHED-D-069)"
 
 describe("schedule calendar view - loop/monthly/once sections (SCHED-D-071)", () => {
   it("renders loop, monthly, and once schedule entries in their respective sections", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([loopSchedule(), monthlySchedule(), onceSchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     await waitFor(() => {
       // Each schedule type renders its own section heading
@@ -239,10 +236,9 @@ describe("schedule calendar view - loop/monthly/once sections (SCHED-D-071)", ()
 
 describe("schedule calendar view - mobile single day view (SCHED-D-072)", () => {
   it("shows previous day and next day navigation buttons for mobile view", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([weekdaySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     await waitFor(() => {
       expect(screen.getByLabelText("Previous day")).toBeDefined();
@@ -253,10 +249,9 @@ describe("schedule calendar view - mobile single day view (SCHED-D-072)", () => 
 
 describe("schedule calendar view - previous day navigation (SCHED-D-075)", () => {
   it("shifts to the previous day when Previous day button is clicked", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([weekdaySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     const navBar = await screen.findByRole("navigation", {
       name: "Day navigation",
@@ -264,7 +259,7 @@ describe("schedule calendar view - previous day navigation (SCHED-D-075)", () =>
     const initialLabel = navBar.textContent;
 
     const prevDayBtn = screen.getByLabelText("Previous day");
-    await user.click(prevDayBtn);
+    click(prevDayBtn);
 
     await waitFor(() => {
       expect(navBar.textContent).not.toBe(initialLabel);
@@ -274,10 +269,9 @@ describe("schedule calendar view - previous day navigation (SCHED-D-075)", () =>
 
 describe("schedule calendar view - next day navigation (SCHED-D-076)", () => {
   it("shifts to the next day when Next day button is clicked", async () => {
-    const user = userEvent.setup();
     mockScheduleAPI([weekdaySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     const navBar = await screen.findByRole("navigation", {
       name: "Day navigation",
@@ -285,7 +279,7 @@ describe("schedule calendar view - next day navigation (SCHED-D-076)", () => {
     const initialLabel = navBar.textContent;
 
     const nextDayBtn = screen.getByLabelText("Next day");
-    await user.click(nextDayBtn);
+    click(nextDayBtn);
 
     await waitFor(() => {
       expect(navBar.textContent).not.toBe(initialLabel);
@@ -303,7 +297,7 @@ describe("schedule calendar view - entry popover on hover (SCHED-D-077)", () => 
     mockScheduleAPI([mondayOnlySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
     context.store.set(setCalendarSelectedDay$, 4); // Friday — no Monday entry in mobile
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     const entryBtn = await waitFor(() => {
       return screen.getAllByLabelText(/Morning briefing/i)[0];
@@ -323,7 +317,7 @@ describe("schedule calendar view - double-click opens edit (SCHED-D-078)", () =>
     const user = userEvent.setup();
     mockScheduleAPI([weekdaySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     const entryBtns = await waitFor(() => {
       const btns = screen.getAllByLabelText(/Morning briefing/i);
@@ -348,7 +342,7 @@ describe("schedule calendar view - edit button in popover (SCHED-D-079)", () => 
     mockScheduleAPI([mondayOnlySchedule()]);
     detachedSetupPage({ context, path: "/schedules" });
     context.store.set(setCalendarSelectedDay$, 4); // Friday — no Monday entry in mobile
-    await switchToCalendarView(user);
+    await switchToCalendarView();
 
     const entryBtn = await waitFor(() => {
       return screen.getAllByLabelText(/Morning briefing/i)[0];

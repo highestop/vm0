@@ -1,3 +1,7 @@
+// Dynamic imports are required throughout this file: Next.js instrumentation
+// runs in a restricted module scope before the full app bundle is loaded.
+// Top-level imports from app code would cause build-time circular dependency
+// errors; dynamic imports are the recommended pattern for this hook.
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("./sentry.server.config");
@@ -14,6 +18,14 @@ export async function register() {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+
+      // Locally emulate Vercel's cron scheduler by reading vercel.json and
+      // self-fetching each cron path on schedule. Production uses Vercel's
+      // managed crons — this block is dev-only.
+      const { startDevCronScheduler } =
+        await import("./src/lib/dev/cron-scheduler");
+      const vercelConfig = await import("./vercel.json");
+      startDevCronScheduler(vercelConfig.default ?? vercelConfig);
     }
   }
 

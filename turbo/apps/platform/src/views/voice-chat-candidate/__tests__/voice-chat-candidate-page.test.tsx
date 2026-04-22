@@ -92,6 +92,8 @@ describe("voice-candidate-item-bubble dispatcher", () => {
       id: string;
       prompt: string;
       status: "pending" | "queued" | "running" | "done" | "failed";
+      result: string | null;
+      resultUpdatedAt: string | null;
       assistantMessages: {
         type: "assistant";
         content: string;
@@ -107,6 +109,8 @@ describe("voice-candidate-item-bubble dispatcher", () => {
       callId: "call-1",
       prompt: "do the thing",
       status: "done" as const,
+      result: null,
+      resultUpdatedAt: null,
       assistantMessages: [],
       error: null,
       createdAt: "2026-04-20T00:00:00Z",
@@ -250,7 +254,7 @@ describe("voiceCandidateToolCallBubble", () => {
     );
     expect(screen.getByText("book me a flight")).toBeInTheDocument();
     expect(screen.getByText("calling")).toBeInTheDocument(); // pending → "calling"
-    expect(screen.getByText("create_task")).toBeInTheDocument();
+    expect(screen.getByText("inform_slow_brain")).toBeInTheDocument();
   });
 
   it("renders queued status label", () => {

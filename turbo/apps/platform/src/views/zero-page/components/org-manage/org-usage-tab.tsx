@@ -1,8 +1,14 @@
 import { useGet, useLoadable, useSet } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
-import type { OrgMember, MemberUsage } from "@vm0/core";
+import type { OrgMember, MemberUsage, BillingStatusResponse } from "@vm0/core";
 import { IconUsers } from "@tabler/icons-react";
 import { Input } from "@vm0/ui";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@vm0/ui/components/ui/tooltip";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { UnsavedBar } from "./unsaved-bar.tsx";
 import { pageSignal$ } from "../../../../signals/page-signal.ts";
@@ -31,6 +37,137 @@ import {
 function displayName(m: OrgMember): string {
   const parts = [m.firstName, m.lastName].filter(Boolean);
   return parts.length > 0 ? parts.join(" ") : "";
+}
+
+// ---------------------------------------------------------------------------
+// Credit breakdown bar chart
+// ---------------------------------------------------------------------------
+
+type CreditSegment = BillingStatusResponse["creditBreakdown"][number];
+
+// Segment swatches map to theme tokens defined in
+// `turbo/apps/platform/src/views/css/index.css` under `@theme`. Keep the
+// mapping here purely symbolic so branding/dark-mode tweaks happen in CSS.
+const CATEGORY_COLORS: Readonly<
+  Record<Exclude<CreditSegment["category"], "plan">, string>
+> = {
+  free: "bg-credit-free",
+  promotional: "bg-credit-promotional",
+  payAsYouGo: "bg-credit-pay-as-you-go",
+};
+
+const PLAN_COLORS: Readonly<
+  Record<NonNullable<CreditSegment["tier"]>, string>
+> = {
+  pro: "bg-credit-plan-pro",
+  team: "bg-credit-plan-team",
+};
+
+function colorForSegment(seg: CreditSegment): string {
+  if (seg.category === "plan") {
+    return seg.tier ? PLAN_COLORS[seg.tier] : "bg-credit-plan-pro";
+  }
+  return CATEGORY_COLORS[seg.category];
+}
+
+const CATEGORY_DESCRIPTIONS: Readonly<
+  Record<Exclude<CreditSegment["category"], "plan">, string>
+> = {
+  free: "Starter credits, use until depleted",
+  promotional: "Campaign credits, expires after a set period",
+  payAsYouGo: "Auto-recharge credits, never expire",
+};
+
+function segmentKey(seg: CreditSegment): string {
+  // `buildCreditBreakdown` keys segments by `category:tier`, so the same
+  // composite is stable and unique across the array.
+  return seg.tier ? `${seg.category}:${seg.tier}` : seg.category;
+}
+
+function descriptionForSegment(
+  seg: CreditSegment,
+  currentTier: string,
+): string {
+  if (seg.category !== "plan") {
+    return CATEGORY_DESCRIPTIONS[seg.category];
+  }
+  if (seg.tier === currentTier) {
+    return "Monthly plan credits, resets each billing cycle";
+  }
+  return "Leftover credits from previous plan";
+}
+
+function CreditBalanceChart({ billing }: { billing: BillingStatusResponse }) {
+  const segments = billing.creditBreakdown.filter((s) => {
+    return s.credits > 0;
+  });
+  const total = billing.credits;
+
+  return (
+    <div className="px-5 py-4" data-testid="credit-balance-info">
+      <p className="text-sm font-medium tabular-nums text-foreground">
+        {total.toLocaleString()}
+      </p>
+
+      {total > 0 && segments.length > 0 && (
+        <div className="mt-3 flex flex-col gap-2">
+          {/* Bar */}
+          <TooltipProvider delayDuration={100}>
+            <div className="flex h-2.5 w-full rounded-full bg-muted/40">
+              {segments.map((s) => {
+                const color = colorForSegment(s);
+                const desc = descriptionForSegment(s, billing.tier);
+                return (
+                  <Tooltip key={segmentKey(s)}>
+                    <TooltipTrigger asChild>
+                      <div
+                        className={`h-2.5 ${color} cursor-default first:rounded-l-full last:rounded-r-full ring-0 hover:ring-2 hover:ring-foreground/30 hover:z-10 transition-shadow`}
+                        style={{
+                          width: `${(s.credits / total) * 100}%`,
+                        }}
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      sideOffset={8}
+                      style={{ backgroundColor: "white", color: "inherit" }}
+                      className="border shadow-md"
+                    >
+                      <div className="font-medium text-foreground">
+                        {s.label} — {s.credits.toLocaleString()}
+                      </div>
+                      <div className="text-muted-foreground mt-0.5">{desc}</div>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </TooltipProvider>
+
+          {/* Legend */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {segments.map((s) => {
+              const color = colorForSegment(s);
+              return (
+                <div
+                  key={segmentKey(s)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <span
+                    className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`}
+                  />
+                  <span>{s.label}</span>
+                  <span className="tabular-nums">
+                    {s.credits.toLocaleString()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -170,11 +307,7 @@ function OverviewSection() {
               <div className="h-1.5 w-full rounded-full bg-muted/40 animate-pulse" />
             </div>
           ) : billing ? (
-            <div className="px-5 py-4" data-testid="credit-balance-info">
-              <p className="text-sm font-medium tabular-nums text-foreground">
-                {billing.credits.toLocaleString()}
-              </p>
-            </div>
+            <CreditBalanceChart billing={billing} />
           ) : (
             <div className="px-5 py-4">
               <p className="text-sm text-muted-foreground">

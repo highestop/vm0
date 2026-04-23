@@ -152,8 +152,8 @@ pub async fn execute_job_reuse(
 }
 
 /// Emit a single telemetry event capturing the outcome of the reuse decision.
-/// `Reused` emits `sandbox_reuse_hit`; every miss variant (including
-/// `FeatureDisabled`) emits `sandbox_reuse_miss`. Firing on every job makes
+/// `Reused` emits `sandbox_reuse_hit`; every miss variant emits
+/// `sandbox_reuse_miss`. Firing on every job makes
 /// the reuse success rate queryable in Axiom as
 /// `countif(op_type == "sandbox_reuse_hit") / countif(op_type startswith "sandbox_reuse_")`.
 /// Miss-reason breakdown lives on the `agent_runs.sandbox_reuse_result`
@@ -162,8 +162,7 @@ pub async fn execute_job_reuse(
 fn record_reuse_result(telemetry: &mut JobTelemetry, result: SandboxReuseResult) {
     let action_type = match result {
         SandboxReuseResult::Reused => "sandbox_reuse_hit",
-        SandboxReuseResult::FeatureDisabled
-        | SandboxReuseResult::NoSessionId
+        SandboxReuseResult::NoSessionId
         | SandboxReuseResult::PoolMiss
         | SandboxReuseResult::ProfileMismatch
         | SandboxReuseResult::UnparkFailed => "sandbox_reuse_miss",
@@ -3274,7 +3273,6 @@ mod tests {
     #[test]
     fn record_reuse_result_emits_miss_for_every_miss_variant() {
         let variants = [
-            SandboxReuseResult::FeatureDisabled,
             SandboxReuseResult::NoSessionId,
             SandboxReuseResult::PoolMiss,
             SandboxReuseResult::ProfileMismatch,

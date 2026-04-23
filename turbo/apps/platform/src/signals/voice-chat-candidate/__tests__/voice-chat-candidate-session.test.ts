@@ -15,7 +15,7 @@ import {
   vccSessionId$,
   vccLastAssistantMessage$,
   vccLastUserMessage$,
-  vccActiveTasks$,
+  vccTaskFeed$,
 } from "../voice-chat-candidate-session.ts";
 
 const context = testContext();
@@ -133,13 +133,16 @@ function mockCreateSessionError(
 }
 
 function mockTokenOk() {
+  const calls: { noiseReduction?: string }[] = [];
   server.use(
-    mockApi(zeroVoiceChatCandidateContract.token, ({ respond }) => {
+    mockApi(zeroVoiceChatCandidateContract.token, ({ body, respond }) => {
+      calls.push({ noiseReduction: body.noiseReduction });
       return respond(200, {
         client_secret: { value: "ek_test", expires_at: 9_999_999_999 },
       });
     }),
   );
+  return calls;
 }
 
 function mockTokenError() {
@@ -173,13 +176,7 @@ function mockAppendItemOk() {
   return calls;
 }
 
-function mockTranscriptEmpty() {
-  server.use(
-    mockApi(zeroVoiceChatCandidateContract.readItems, ({ respond }) => {
-      return respond(200, { items: [] });
-    }),
-  );
-}
+const TALKER_INSTRUCTIONS = "You are a helpful voice assistant.";
 
 function mockGetSessionOk() {
   server.use(
@@ -188,7 +185,7 @@ function mockGetSessionOk() {
         session: sessionPayload(),
         recentTaskLogs: "",
         finishedTasksFullText: "",
-        talkerInstructions: "",
+        talkerInstructions: TALKER_INSTRUCTIONS,
         talkerInstructionTokens: 0,
       });
     }),
@@ -247,7 +244,12 @@ describe("voice-chat-candidate session", () => {
     current: { pause: ReturnType<typeof vi.fn>; currentTime: number } | null;
   } = { current: null };
 
-  function stubWebRTC() {
+  function stubWebRTC(
+    devices: Partial<MediaDeviceInfo>[] = [
+      { kind: "audiooutput", deviceId: "default" },
+      { kind: "audiooutput", deviceId: "bt-headset-1" },
+    ],
+  ) {
     const mediaStreamStub = {
       getAudioTracks() {
         return [{ enabled: true }];
@@ -258,7 +260,12 @@ describe("voice-chat-candidate session", () => {
     } as unknown as MediaStream;
 
     Object.defineProperty(navigator, "mediaDevices", {
-      value: { getUserMedia: vi.fn().mockResolvedValue(mediaStreamStub) },
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(mediaStreamStub),
+        enumerateDevices: vi
+          .fn()
+          .mockResolvedValue(devices as MediaDeviceInfo[]),
+      },
       writable: true,
       configurable: true,
     });
@@ -365,7 +372,6 @@ describe("voice-chat-candidate session", () => {
   async function startSuccessfully() {
     mockCreateSessionOk();
     mockTokenOk();
-    mockTranscriptEmpty();
     mockGetSessionOk();
     mockListActiveTasksOk();
     detach(
@@ -401,27 +407,20 @@ describe("voice-chat-candidate session", () => {
       expect(context.store.get(vccSessionId$)).toBe(SESSION_ID);
       expect(context.store.get(vccStatus$)).toBe("connected");
 
-      // First DC send is the session.update with instructions + tools. All
-      // six emotion tools are registered so the Talker can pick whichever
-      // matches its impulse — they all dispatch to the same task endpoint.
+      // Session config (tools / VAD / modalities) is preset server-side when
+      // minting the ephemeral token; dc.open no longer emits session.update.
+      // The Ably loop's baseline tick calls syncTalkerInstructions$ which
+      // fetches getSession and pushes the talkerInstructions to the live DC.
+      // Assert on the observable instructions value, not the wire-format type.
+      await vi.waitFor(() => {
+        expect(dcRef.current?.send.mock.calls.length ?? 0).toBeGreaterThan(0);
+      });
       const sent = dcRef.current?.send.mock.calls[0]?.[0] as string;
       const parsed = JSON.parse(sent) as {
         type: string;
-        session: { tools: { name: string }[] };
+        session: { instructions: string };
       };
-      expect(parsed.type).toBe("session.update");
-      expect(
-        parsed.session.tools.map((t) => {
-          return t.name;
-        }),
-      ).toStrictEqual([
-        "inform_slow_brain",
-        "feel_confused",
-        "feel_unable",
-        "want_to_ask_user",
-        "want_to_reject",
-        "want_to_apologize",
-      ]);
+      expect(parsed.session.instructions).toBe(TALKER_INSTRUCTIONS);
     });
 
     it("surfaces create-session error in vccError$", async () => {
@@ -451,6 +450,36 @@ describe("voice-chat-candidate session", () => {
 
       expect(context.store.get(vccStatus$)).toBe("error");
       expect(context.store.get(vccError$)).toBe("token failed");
+    });
+
+    it("sends near_field noiseReduction when mobile speakerphone is detected", async () => {
+      // Simulate a mobile device with no external audio output (speakerphone).
+      // resolveAudioConfig() should return near_field, which must be threaded
+      // through to the token request body.
+      vi.spyOn(navigator, "maxTouchPoints", "get").mockReturnValue(5);
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        "Mozilla/5.0 (Linux; Android 13) Mobile Safari/537.36",
+      );
+      stubWebRTC([{ kind: "audiooutput", deviceId: "default" }]);
+
+      await setup();
+      const tokenCalls = mockTokenOk();
+      mockCreateSessionOk();
+      mockGetSessionOk();
+      mockListActiveTasksOk();
+
+      detach(
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
+        Reason.DomCallback,
+      );
+      await vi.waitFor(() => {
+        expect(tokenCalls).toHaveLength(1);
+      });
+      expect(tokenCalls[0]?.noiseReduction).toBe("near_field");
     });
   });
 
@@ -577,7 +606,8 @@ describe("voice-chat-candidate session", () => {
       const taskCalls = mockCreateTaskOk();
       await startSuccessfully();
 
-      // Clear session.update from first DC open
+      // Reset any DC writes queued during setup so assertions below measure
+      // only the tool-call response.
       dcRef.current?.send.mockClear();
 
       dcRef.current?.emitMessage({
@@ -748,12 +778,11 @@ describe("voice-chat-candidate session", () => {
   });
 
   describe("ably poke refreshes task state", () => {
-    it("re-runs listActiveTasks on ably event and updates vccActiveTasks$", async () => {
+    it("re-runs listTasks on ably event and updates vccTaskFeed$", async () => {
       await setup();
       mockCreateSessionOk();
       mockTokenOk();
       mockGetSessionOk();
-      mockTranscriptEmpty();
       let activeTasks: ReturnType<typeof taskPayload>[] = [];
       server.use(
         mockApi(zeroVoiceChatCandidateContract.listTasks, ({ respond }) => {
@@ -776,7 +805,7 @@ describe("voice-chat-candidate session", () => {
       await vi.waitFor(() => {
         expect(context.store.get(vccStatus$)).toBe("connected");
       });
-      expect(context.store.get(vccActiveTasks$)).toHaveLength(0);
+      await expect(context.store.get(vccTaskFeed$)).resolves.toHaveLength(0);
 
       activeTasks = [
         taskPayload({
@@ -787,8 +816,8 @@ describe("voice-chat-candidate session", () => {
       ];
       triggerAblyEvent(`voice-chat-candidate:${SESSION_ID}`);
 
-      await vi.waitFor(() => {
-        expect(context.store.get(vccActiveTasks$)).toHaveLength(1);
+      await vi.waitFor(async () => {
+        await expect(context.store.get(vccTaskFeed$)).resolves.toHaveLength(1);
       });
     });
   });

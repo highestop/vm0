@@ -147,6 +147,7 @@ const appendItem$ = command(
       client.appendItem({
         params: { id: sid },
         body: { role, content, realtimeItemId },
+        fetchOptions: { signal },
       }),
       [200, 400, 401, 404],
       { toast: false },
@@ -207,6 +208,7 @@ const handleTalkerToolCall$ = command(
       client.createTask({
         params: { id: sid },
         body: { prompt, callId },
+        fetchOptions: { signal },
       }),
       [200, 400, 401, 404],
       { toast: false },
@@ -533,7 +535,7 @@ const syncTalkerInstructions$ = command(
     const createClient = get(zeroClient$);
     const client = createClient(zeroVoiceChatCandidateContract);
     const res = await accept(
-      client.getSession({ params: { id: sid } }),
+      client.getSession({ params: { id: sid }, fetchOptions: { signal } }),
       [200, 401, 404],
       { toast: false },
     );
@@ -557,7 +559,8 @@ const syncTalkerInstructions$ = command(
 const startAblyLoop$ = command(
   async ({ set }, sessionId: string, signal: AbortSignal) => {
     const pollBody$ = command(async ({ get, set }, loopSignal: AbortSignal) => {
-      if (!get(internalSessionId$)) {
+      const sid = get(internalSessionId$);
+      if (!sid) {
         return true;
       }
       // One signal drives two things: bump the counter so async computeds
@@ -683,7 +686,10 @@ export const startVoiceChatCandidate$ = command(
     // createSession is get-or-create on the server side: same (userId,
     // agentId) returns the existing session row, so this doubles as resume.
     const res = await accept(
-      client.createSession({ body: { agentId } }),
+      client.createSession({
+        body: { agentId },
+        fetchOptions: { signal },
+      }),
       [200, 400, 401, 403],
       { toast: false },
     );
@@ -709,6 +715,7 @@ export const startVoiceChatCandidate$ = command(
 
     const tokenRes = await accept(
       client.token({
+        fetchOptions: { signal },
         body: {
           sessionId: session.id,
           noiseReduction: audioConfig.noiseReduction,

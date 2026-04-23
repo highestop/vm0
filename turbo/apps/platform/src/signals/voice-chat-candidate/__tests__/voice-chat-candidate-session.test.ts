@@ -8,15 +8,15 @@ import { setupPage } from "../../../__tests__/page-helper.ts";
 import { triggerAblyEvent } from "../../../mocks/ably.ts";
 import { detach, Reason } from "../../utils.ts";
 import {
-  startVoiceChat$,
-  endVoiceChat$,
-  voiceChatStatus$,
-  voiceChatError$,
-  voiceChatSessionId$,
-  voiceChatLastAssistantMessage$,
-  voiceChatLastUserMessage$,
-  voiceChatTaskFeed$,
-} from "../voice-chat-session.ts";
+  startVoiceChatCandidate$,
+  endVoiceChatCandidate$,
+  vccStatus$,
+  vccError$,
+  vccSessionId$,
+  vccLastAssistantMessage$,
+  vccLastUserMessage$,
+  vccTaskFeed$,
+} from "../voice-chat-candidate-session.ts";
 
 const context = testContext();
 const mockApi = createMockApi(context);
@@ -227,7 +227,7 @@ function mockCreateTaskError() {
 async function setup() {
   await setupPage({
     context,
-    path: "/voice-chat",
+    path: "/voice-chat-candidate",
     withoutRender: true,
   });
 }
@@ -236,7 +236,7 @@ async function setup() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("voice-chat session", () => {
+describe("voice-chat-candidate session", () => {
   const dcRef: { current: FakeDC | null } = { current: null };
   const audioRef: {
     current: { pause: ReturnType<typeof vi.fn>; currentTime: number } | null;
@@ -422,7 +422,11 @@ describe("voice-chat session", () => {
     mockGetSessionOk();
     mockListActiveTasksOk();
     detach(
-      context.store.set(startVoiceChat$, DEFAULT_AGENT_ID, context.signal),
+      context.store.set(
+        startVoiceChatCandidate$,
+        DEFAULT_AGENT_ID,
+        context.signal,
+      ),
       Reason.DomCallback,
     );
     await vi.waitFor(() => {
@@ -430,7 +434,7 @@ describe("voice-chat session", () => {
     });
     dcRef.current?.emitOpen();
     await vi.waitFor(() => {
-      expect(context.store.get(voiceChatStatus$)).toBe("connected");
+      expect(context.store.get(vccStatus$)).toBe("connected");
     });
   }
 
@@ -442,13 +446,13 @@ describe("voice-chat session", () => {
     clearWebRTC();
   });
 
-  describe("startVoiceChat$", () => {
+  describe("startVoiceChatCandidate$", () => {
     it("transitions to connected on happy path", async () => {
       await setup();
       await startSuccessfully();
 
-      expect(context.store.get(voiceChatSessionId$)).toBe(SESSION_ID);
-      expect(context.store.get(voiceChatStatus$)).toBe("connected");
+      expect(context.store.get(vccSessionId$)).toBe(SESSION_ID);
+      expect(context.store.get(vccStatus$)).toBe("connected");
 
       // Session config (tools / VAD / modalities) is preset server-side when
       // minting the ephemeral token; dc.open no longer emits session.update.
@@ -466,33 +470,33 @@ describe("voice-chat session", () => {
       expect(parsed.session.instructions).toBe(TALKER_INSTRUCTIONS);
     });
 
-    it("surfaces create-session error in voiceChatError$", async () => {
+    it("surfaces create-session error in vccError$", async () => {
       await setup();
       mockCreateSessionError(400, "forbidden");
 
       await context.store.set(
-        startVoiceChat$,
+        startVoiceChatCandidate$,
         DEFAULT_AGENT_ID,
         context.signal,
       );
 
-      expect(context.store.get(voiceChatStatus$)).toBe("error");
-      expect(context.store.get(voiceChatError$)).toBe("forbidden");
+      expect(context.store.get(vccStatus$)).toBe("error");
+      expect(context.store.get(vccError$)).toBe("forbidden");
     });
 
-    it("surfaces token error in voiceChatError$", async () => {
+    it("surfaces token error in vccError$", async () => {
       await setup();
       mockCreateSessionOk();
       mockTokenError();
 
       await context.store.set(
-        startVoiceChat$,
+        startVoiceChatCandidate$,
         DEFAULT_AGENT_ID,
         context.signal,
       );
 
-      expect(context.store.get(voiceChatStatus$)).toBe("error");
-      expect(context.store.get(voiceChatError$)).toBe("token failed");
+      expect(context.store.get(vccStatus$)).toBe("error");
+      expect(context.store.get(vccError$)).toBe("token failed");
     });
 
     it("sends near_field noiseReduction when mobile speakerphone is detected", async () => {
@@ -512,7 +516,11 @@ describe("voice-chat session", () => {
       mockListActiveTasksOk();
 
       detach(
-        context.store.set(startVoiceChat$, DEFAULT_AGENT_ID, context.signal),
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
         Reason.DomCallback,
       );
       await vi.waitFor(() => {
@@ -828,13 +836,13 @@ describe("voice-chat session", () => {
   });
 
   describe("subtitle local state", () => {
-    it("populates voiceChatLastUserMessage$ after a finalized user transcript (and leaves assistant untouched)", async () => {
+    it("populates vccLastUserMessage$ after a finalized user transcript (and leaves assistant untouched)", async () => {
       await setup();
       mockAppendItemOk();
       await startSuccessfully();
 
-      expect(context.store.get(voiceChatLastUserMessage$)).toBe("");
-      expect(context.store.get(voiceChatLastAssistantMessage$)).toBe("");
+      expect(context.store.get(vccLastUserMessage$)).toBe("");
+      expect(context.store.get(vccLastAssistantMessage$)).toBe("");
 
       dcRef.current?.emitMessage({
         type: "conversation.item.input_audio_transcription.completed",
@@ -843,12 +851,12 @@ describe("voice-chat session", () => {
       });
 
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatLastUserMessage$)).toBe("hi there");
+        expect(context.store.get(vccLastUserMessage$)).toBe("hi there");
       });
-      expect(context.store.get(voiceChatLastAssistantMessage$)).toBe("");
+      expect(context.store.get(vccLastAssistantMessage$)).toBe("");
     });
 
-    it("populates voiceChatLastAssistantMessage$ after a finalized assistant turn", async () => {
+    it("populates vccLastAssistantMessage$ after a finalized assistant turn", async () => {
       await setup();
       mockAppendItemOk();
       await startSuccessfully();
@@ -861,11 +869,11 @@ describe("voice-chat session", () => {
       });
 
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatLastAssistantMessage$)).toBe(
+        expect(context.store.get(vccLastAssistantMessage$)).toBe(
           "hello from Talker",
         );
       });
-      expect(context.store.get(voiceChatLastUserMessage$)).toBe("");
+      expect(context.store.get(vccLastUserMessage$)).toBe("");
     });
 
     it("ignores whitespace-only transcripts (guards against mis-fires blanking the line)", async () => {
@@ -879,7 +887,7 @@ describe("voice-chat session", () => {
         transcript: "first",
       });
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatLastUserMessage$)).toBe("first");
+        expect(context.store.get(vccLastUserMessage$)).toBe("first");
       });
 
       dcRef.current?.emitMessage({
@@ -889,12 +897,12 @@ describe("voice-chat session", () => {
       });
       // Let any pending microtasks flush; the state should NOT be blanked.
       await Promise.resolve();
-      expect(context.store.get(voiceChatLastUserMessage$)).toBe("first");
+      expect(context.store.get(vccLastUserMessage$)).toBe("first");
     });
   });
 
   describe("ably poke refreshes task state", () => {
-    it("re-runs listTasks on ably event and updates voiceChatTaskFeed$", async () => {
+    it("re-runs listTasks on ably event and updates vccTaskFeed$", async () => {
       await setup();
       mockCreateSessionOk();
       mockTokenOk();
@@ -907,7 +915,11 @@ describe("voice-chat session", () => {
       );
 
       detach(
-        context.store.set(startVoiceChat$, DEFAULT_AGENT_ID, context.signal),
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
         Reason.DomCallback,
       );
       await vi.waitFor(() => {
@@ -915,11 +927,9 @@ describe("voice-chat session", () => {
       });
       dcRef.current?.emitOpen();
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatStatus$)).toBe("connected");
+        expect(context.store.get(vccStatus$)).toBe("connected");
       });
-      await expect(context.store.get(voiceChatTaskFeed$)).resolves.toHaveLength(
-        0,
-      );
+      await expect(context.store.get(vccTaskFeed$)).resolves.toHaveLength(0);
 
       activeTasks = [
         taskPayload({
@@ -928,27 +938,25 @@ describe("voice-chat session", () => {
           status: "running",
         }),
       ];
-      triggerAblyEvent(`voice-chat:${SESSION_ID}`);
+      triggerAblyEvent(`voice-chat-candidate:${SESSION_ID}`);
 
       await vi.waitFor(async () => {
-        await expect(
-          context.store.get(voiceChatTaskFeed$),
-        ).resolves.toHaveLength(1);
+        await expect(context.store.get(vccTaskFeed$)).resolves.toHaveLength(1);
       });
     });
   });
 
-  describe("endVoiceChat$", () => {
+  describe("endVoiceChatCandidate$", () => {
     it("tears down WebRTC and resets state to idle without ending the session", async () => {
       await setup();
       await startSuccessfully();
 
-      context.store.set(endVoiceChat$);
+      context.store.set(endVoiceChatCandidate$);
 
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatStatus$)).toBe("idle");
+        expect(context.store.get(vccStatus$)).toBe("idle");
       });
-      expect(context.store.get(voiceChatSessionId$)).toBeNull();
+      expect(context.store.get(vccSessionId$)).toBeNull();
     });
   });
 
@@ -1011,7 +1019,11 @@ describe("voice-chat session", () => {
       mockGetSessionOk();
       mockListActiveTasksOk();
       detach(
-        context.store.set(startVoiceChat$, DEFAULT_AGENT_ID, context.signal),
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
         Reason.DomCallback,
       );
       await vi.waitFor(() => {
@@ -1019,7 +1031,7 @@ describe("voice-chat session", () => {
       });
       dcRef.current?.emitOpen();
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatStatus$)).toBe("connected");
+        expect(context.store.get(vccStatus$)).toBe("connected");
       });
 
       // Simulate screen unlock: document becomes visible again.
@@ -1067,10 +1079,10 @@ describe("voice-chat session", () => {
       await Promise.resolve();
 
       expect(getUserMedia.mock.calls).toHaveLength(0);
-      expect(context.store.get(voiceChatStatus$)).toBe("connected");
+      expect(context.store.get(vccStatus$)).toBe("connected");
     });
 
-    it("sets voiceChatError$ when getUserMedia is denied during recovery", async () => {
+    it("sets vccError$ when getUserMedia is denied during recovery", async () => {
       await setup();
 
       const stoppedTrack = {
@@ -1111,7 +1123,11 @@ describe("voice-chat session", () => {
       mockGetSessionOk();
       mockListActiveTasksOk();
       detach(
-        context.store.set(startVoiceChat$, DEFAULT_AGENT_ID, context.signal),
+        context.store.set(
+          startVoiceChatCandidate$,
+          DEFAULT_AGENT_ID,
+          context.signal,
+        ),
         Reason.DomCallback,
       );
       await vi.waitFor(() => {
@@ -1119,7 +1135,7 @@ describe("voice-chat session", () => {
       });
       dcRef.current?.emitOpen();
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatStatus$)).toBe("connected");
+        expect(context.store.get(vccStatus$)).toBe("connected");
       });
 
       Object.defineProperty(document, "visibilityState", {
@@ -1129,9 +1145,9 @@ describe("voice-chat session", () => {
       document.dispatchEvent(new Event("visibilitychange"));
 
       await vi.waitFor(() => {
-        expect(context.store.get(voiceChatStatus$)).toBe("error");
+        expect(context.store.get(vccStatus$)).toBe("error");
       });
-      expect(context.store.get(voiceChatError$)).toBe(
+      expect(context.store.get(vccError$)).toBe(
         "Microphone access lost. Please reconnect.",
       );
     });
@@ -1174,7 +1190,7 @@ describe("voice-chat session", () => {
         replaceTrack: ReturnType<typeof vi.fn>;
       };
       expect(sender.replaceTrack).toHaveBeenCalledWith(freshTrack);
-      expect(context.store.get(voiceChatStatus$)).toBe("connected");
+      expect(context.store.get(vccStatus$)).toBe("connected");
     });
 
     it("re-attaches ended listener after recovery so a second interruption also triggers recovery", async () => {
@@ -1258,7 +1274,7 @@ describe("voice-chat session", () => {
         replaceTrack: ReturnType<typeof vi.fn>;
       };
       expect(sender.replaceTrack).toHaveBeenLastCalledWith(secondFreshTrack);
-      expect(context.store.get(voiceChatStatus$)).toBe("connected");
+      expect(context.store.get(vccStatus$)).toBe("connected");
     });
   });
 });

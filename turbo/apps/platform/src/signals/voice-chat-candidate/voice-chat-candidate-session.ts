@@ -155,6 +155,11 @@ const internalPc$ = state<RTCPeerConnection | null>(null);
 const internalDc$ = state<RTCDataChannel | null>(null);
 const internalStream$ = state<MediaStream | null>(null);
 const internalAudioEl$ = state<HTMLAudioElement | null>(null);
+const internalCurrentAssistantAudioItem$ = state<{
+  itemId: string;
+  startedAtMs: number;
+  transcript: string;
+} | null>(null);
 const internalWakeLock$ = state<WakeLockSentinel | null>(null);
 const internalParentSignal$ = state<AbortSignal | null>(null);
 
@@ -328,11 +333,12 @@ type RealtimeDCEvent = {
 };
 
 const handleAudioTranscriptDone$ = command(
-  async ({ set }, event: RealtimeDCEvent, signal: AbortSignal) => {
+  async ({ get, set }, event: RealtimeDCEvent, signal: AbortSignal) => {
     const finalText = event.transcript ?? "";
     const responseId = event.response_id ?? "";
     const itemId =
       event.item_id ??
+      get(internalCurrentAssistantAudioItem$)?.itemId ??
       (responseId ? `${responseId}:${finalText.length.toString()}` : null);
     if (finalText.trim() && itemId) {
       await set(appendItem$, "assistant", finalText, itemId, signal);
@@ -348,13 +354,103 @@ const handleInputAudioTranscriptionCompleted$ = command(
   },
 );
 
+const handleAudioTranscriptDelta$ = command(
+  ({ set }, event: RealtimeDCEvent) => {
+    const deltaText = event.delta ?? "";
+    if (!deltaText) {
+      return;
+    }
+    set(internalCurrentAssistantAudioItem$, (prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        transcript: prev.transcript + deltaText,
+      };
+    });
+  },
+);
+
+function currentAudioPositionMs(audioEl: HTMLAudioElement | null): number {
+  if (!audioEl || !Number.isFinite(audioEl.currentTime)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(audioEl.currentTime * 1000));
+}
+
+const handleConversationItemCreated$ = command(
+  ({ get, set }, event: RealtimeDCEvent) => {
+    if (event.item?.role !== "assistant" || event.item.type !== "message") {
+      return;
+    }
+    set(internalCurrentAssistantAudioItem$, {
+      itemId: event.item.id,
+      startedAtMs: currentAudioPositionMs(get(internalAudioEl$)),
+      transcript: "",
+    });
+  },
+);
+
+const truncateCurrentAssistantAudio$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    const dc = get(internalDc$);
+    const audioEl = get(internalAudioEl$);
+    const current = get(internalCurrentAssistantAudioItem$);
+    if (!dc || dc.readyState !== "open" || !audioEl || !current) {
+      return;
+    }
+
+    const playedMs = Math.max(
+      0,
+      currentAudioPositionMs(audioEl) - current.startedAtMs,
+    );
+
+    audioEl.pause();
+    dc.send(
+      JSON.stringify({
+        type: "conversation.item.truncate",
+        item_id: current.itemId,
+        content_index: 0,
+        audio_end_ms: playedMs,
+      }),
+    );
+    const note = JSON.stringify({
+      type: "assistant_interrupted",
+      assistantRealtimeItemId: current.itemId,
+      heardText: current.transcript.trim(),
+      audioEndMs: playedMs,
+    });
+    await set(
+      appendItem$,
+      "system_note",
+      note,
+      `truncate:${current.itemId}`,
+      signal,
+    );
+    set(internalCurrentAssistantAudioItem$, null);
+  },
+);
+
 const handleDCMessage$ = command(
   async ({ set }, data: string, signal: AbortSignal) => {
     const event = JSON.parse(data) as RealtimeDCEvent;
 
     switch (event.type) {
+      case "conversation.item.created": {
+        set(handleConversationItemCreated$, event);
+        break;
+      }
       case "conversation.item.input_audio_transcription.completed": {
         await set(handleInputAudioTranscriptionCompleted$, event, signal);
+        break;
+      }
+      case "response.audio_transcript.delta": {
+        set(handleAudioTranscriptDelta$, event);
+        break;
+      }
+      case "input_audio_buffer.speech_started": {
+        await set(truncateCurrentAssistantAudio$, signal);
         break;
       }
       case "response.audio_transcript.done": {
@@ -717,6 +813,7 @@ export const startVoiceChatCandidate$ = command(
     set(internalLastAssistantMessage$, "");
     set(internalTalkerInstructions$, "");
     set(internalMuted$, false);
+    set(internalCurrentAssistantAudioItem$, null);
     set(internalSessionId$, null);
     set(internalParentSignal$, signal);
 
@@ -871,6 +968,7 @@ export const endVoiceChatCandidate$ = command(({ get, set }) => {
   set(internalLastUserMessage$, "");
   set(internalLastAssistantMessage$, "");
   set(internalTalkerInstructions$, "");
+  set(internalCurrentAssistantAudioItem$, null);
   set(internalParentSignal$, null);
   set(internalStatus$, "idle");
 });

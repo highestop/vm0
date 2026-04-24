@@ -13,7 +13,11 @@ import type {
   AgentComposeSnapshot,
   VolumeVersionsSnapshot,
 } from "./types";
-import { isEmptyArtifactPayload } from "./decode-artifact-snapshots";
+import {
+  decodeToContextArtifacts,
+  isEmptyArtifactPayload,
+} from "./decode-artifact-snapshots";
+import { extractWorkingDir } from "../run/utils/extract-working-dir";
 
 const log = logger("checkpoint");
 
@@ -144,14 +148,23 @@ export async function createCheckpoint(
       }
     : null;
 
-  // Persist the artifactSnapshots payload verbatim to the JSONB column —
-  // accepts both the legacy Record<name, version> shape and the canonical
-  // Array<{name, version, mountPath}> shape. Empty payloads (null, {}, [])
-  // collapse to NULL so "no artifacts" has a single on-disk representation.
+  // Normalise the artifactSnapshots payload before persisting — legacy
+  // Record<name, version> inputs get converted to the canonical
+  // Array<{name, version, mountPath}> shape via a mountPath heuristic
+  // (memory → AUTO_MEMORY_MOUNT_PATH, else → compose workingDir). Array-shape
+  // inputs already carry their own mountPath, so we skip the workingDir
+  // lookup — this keeps the writer tolerant of malformed compose content
+  // for canonical-shape payloads. Empty payloads (null, {}, []) collapse to
+  // NULL so "no artifacts" has a single on-disk representation.
   const rawPayload = request.artifactSnapshots ?? null;
   const artifactSnapshotsForDb = isEmptyArtifactPayload(rawPayload)
     ? null
-    : rawPayload;
+    : decodeToContextArtifacts(
+        rawPayload,
+        Array.isArray(rawPayload)
+          ? undefined
+          : extractWorkingDir(version.content),
+      );
 
   const snapshotFields = {
     conversationId: conversation.id,
@@ -202,11 +215,29 @@ export async function createCheckpoint(
   // Use volume versions from snapshot for return value
   const volumes = volumeSnapshot?.versions;
 
+  // Echo back the normalised canonical shape that was persisted so the
+  // response matches the on-disk representation — not the caller's raw
+  // input shape. Writer inputs always carry a concrete `version` string
+  // (Record values are strings, Array entries require version), so we
+  // assert it here to satisfy the response schema's non-optional version.
+  const responseArtifacts = artifactSnapshotsForDb?.map((entry) => {
+    if (entry.version === undefined) {
+      throw new Error(
+        `Invalid checkpoint: artifact "${entry.name}" missing version after normalisation`,
+      );
+    }
+    return {
+      name: entry.name,
+      version: entry.version,
+      mountPath: entry.mountPath,
+    };
+  });
+
   return {
     checkpointId: checkpoint.id,
     agentSessionId: agentSession.id,
     conversationId: conversation.id,
-    artifacts: artifactSnapshotsForDb ?? undefined,
+    artifacts: responseArtifacts,
     volumes,
   };
 }

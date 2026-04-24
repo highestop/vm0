@@ -341,10 +341,22 @@ describe("POST /api/webhooks/agent/checkpoints", () => {
       expect(data.checkpointId).toBeDefined();
       expect(data.agentSessionId).toBeDefined();
       expect(data.conversationId).toBeDefined();
-      expect(data.artifacts).toEqual(artifactSnapshots);
+      // Response echoes the normalised canonical shape persisted to the DB,
+      // not the caller's raw Record input.
+      expect(data.artifacts).toEqual([
+        {
+          name: "test-artifact",
+          version: "version-123-456",
+          mountPath: "/home/user/workspace",
+        },
+      ]);
     });
 
-    it("should persist artifactSnapshots map", async () => {
+    it("should persist legacy Record payload as canonical Array via mountPath heuristic", async () => {
+      // Legacy Record input: the writer normalises to canonical
+      // Array<{name, version, mountPath}> via the name heuristic — non-"memory"
+      // entries resolve mountPath to the compose working_dir
+      // (/home/user/workspace for claude-code).
       const artifactSnapshots = {
         "artifact-a": "version-aaa",
         "artifact-b": "version-bbb",
@@ -372,11 +384,25 @@ describe("POST /api/webhooks/agent/checkpoints", () => {
 
       expect(response.status).toBe(200);
       const data = await response.json();
-      expect(data.artifacts).toEqual(artifactSnapshots);
+      // Response echoes the normalised canonical Array shape, matching the
+      // on-disk representation rather than the caller's raw Record input.
+      const expectedCanonical = [
+        {
+          name: "artifact-a",
+          version: "version-aaa",
+          mountPath: "/home/user/workspace",
+        },
+        {
+          name: "artifact-b",
+          version: "version-bbb",
+          mountPath: "/home/user/workspace",
+        },
+      ];
+      expect(data.artifacts).toEqual(expectedCanonical);
 
       const checkpoint = await findTestCheckpoint(testRunId);
       expect(checkpoint).toBeDefined();
-      expect(checkpoint!.artifactSnapshots).toEqual(artifactSnapshots);
+      expect(checkpoint!.artifactSnapshots).toEqual(expectedCanonical);
     });
 
     it("should persist canonical array-shape artifactSnapshots verbatim", async () => {

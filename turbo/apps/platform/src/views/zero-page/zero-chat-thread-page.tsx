@@ -39,7 +39,7 @@ import {
   toggleAutoRead$,
 } from "../../signals/voice-io/voice-io-settings.ts";
 import { Markdown } from "../components/markdown.tsx";
-import { detach, Reason } from "../../signals/utils.ts";
+import { detach, Reason, onDomEventFn } from "../../signals/utils.ts";
 import {
   AttachmentLightbox,
   FileAttachmentChip,
@@ -73,6 +73,7 @@ import {
   currentChatThreadSignals$,
   type ChatThreadSignals,
 } from "../../signals/chat-page/create-chat-thread.ts";
+import type { ChatThread } from "../../signals/agent-chat.ts";
 import { ATTACH_ONLY_PLACEHOLDER } from "../../signals/chat-page/resolve-draft-attachments.ts";
 import type { ChatClipboardAttachment } from "../../signals/zero-page/clipboard.ts";
 import { ZeroChatComposer } from "./zero-chat-composer.tsx";
@@ -113,7 +114,7 @@ function HeaderAgentAvatar({ thread }: { thread: ChatThreadSignals }) {
   const agentId = useLastResolved(thread.agentId$);
 
   if (!agentId) {
-    return null;
+    return <Skeleton className="h-8 w-8 rounded-xl" />;
   }
 
   return (
@@ -200,7 +201,11 @@ function ChatThreadHeader({ thread }: { thread: ChatThreadSignals }) {
           <HeaderAgentAvatar thread={thread} />
           <PinPillButton thread={thread} />
         </div>
-        <span className="font-semibold text-foreground">{displayName}</span>
+        {displayName ? (
+          <span className="font-semibold text-foreground">{displayName}</span>
+        ) : (
+          <Skeleton className="h-5 w-32 rounded" />
+        )}
       </div>
       <div className="hidden sm:flex items-center gap-0.5">
         {audioOutputEnabled && (
@@ -261,6 +266,28 @@ export function ZeroChatThreadPage() {
   );
 }
 
+type LoadableValue<T> =
+  | { state: "loading" }
+  | { state: "hasData"; data: T }
+  | { state: "hasError"; error: unknown };
+
+function resolveSessionError(
+  threadDataLoadable: LoadableValue<ChatThread | null>,
+  groupsLoadable: LoadableValue<GroupedChatMessageGroup[]>,
+): string | null {
+  if (threadDataLoadable.state === "hasError") {
+    return threadDataLoadable.error instanceof Error
+      ? threadDataLoadable.error.message
+      : "Failed to load chat";
+  }
+  if (groupsLoadable.state === "hasError") {
+    return groupsLoadable.error instanceof Error
+      ? groupsLoadable.error.message
+      : "Failed to load messages";
+  }
+  return null;
+}
+
 function ZeroChatThreadPageInner({
   thread,
   autoFocus = true,
@@ -268,25 +295,26 @@ function ZeroChatThreadPageInner({
   thread: ChatThreadSignals;
   autoFocus?: boolean;
 }) {
+  const features = useLastResolved(featureSwitch$);
   const groupsLoadable = useLastLoadable(thread.groupedChatMessages$);
+  const hasOlderHistory = useLastResolved(thread.hasOlderHistory$) ?? false;
+  const [loadHistoryLoadable, loadHistory] = useLoadableSet(
+    thread.loadHistory$,
+  );
   const threadDataLoadable = useLastLoadable(thread.threadData$);
-  const sessionError =
-    threadDataLoadable.state === "hasError"
-      ? threadDataLoadable.error instanceof Error
-        ? threadDataLoadable.error.message
-        : "Failed to load chat"
-      : groupsLoadable.state === "hasError"
-        ? groupsLoadable.error instanceof Error
-          ? groupsLoadable.error.message
-          : "Failed to load messages"
-        : null;
+  const sessionError = resolveSessionError(threadDataLoadable, groupsLoadable);
   const messagesLoading = groupsLoadable.state === "loading";
   const groups = groupsLoadable.state === "hasData" ? groupsLoadable.data : [];
   const setScrollContainer = useSet(thread.setScrollContainer$);
   const skeletonVisible = useGet(thread.skeletonVisible$);
   const lightboxUrl = useGet(attachmentLightboxUrl$);
-  const hasOlderMessages = useGet(thread.hasOlderMessages$);
-  const setTopSentinelRef = useSet(thread.setTopSentinelRef$);
+  const manualHistoryEnabled =
+    features?.[FeatureSwitchKey.ChatManualHistory] ?? false;
+  const loadingHistory = loadHistoryLoadable.state === "loading";
+  const pageSignal = useGet(pageSignal$);
+  const onLoadHistory = onDomEventFn(() => {
+    return loadHistory(pageSignal);
+  });
 
   return (
     <div className="flex flex-1 flex-col min-h-0 bg-transparent">
@@ -304,17 +332,21 @@ function ZeroChatThreadPageInner({
               className="w-full max-w-[900px] mx-auto flex flex-col gap-6 pb-4 overflow-visible"
               style={{ visibility: skeletonVisible ? "hidden" : "visible" }}
             >
-              {hasOlderMessages && (
-                <div
-                  ref={setTopSentinelRef}
-                  className="flex justify-center py-2"
-                >
-                  <div className="flex items-center gap-2 text-muted-foreground text-xs">
-                    <Skeleton className="h-3 w-3 rounded-full" />
-                    <span>Loading older messages…</span>
+              {!sessionError &&
+                !skeletonVisible &&
+                manualHistoryEnabled &&
+                hasOlderHistory && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      disabled={loadingHistory}
+                      onClick={onLoadHistory}
+                      className="inline-flex h-8 items-center rounded-lg border border-border bg-background px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Load history
+                    </button>
                   </div>
-                </div>
-              )}
+                )}
               {sessionError && (
                 <div className="flex-1 flex items-center justify-center py-16">
                   <div className="flex items-center gap-2 text-destructive">

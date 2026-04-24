@@ -209,6 +209,12 @@ export interface ChatThreadSignals {
 // Sub-factory: thread data fetching
 // ---------------------------------------------------------------------------
 
+// Note: `agent-chat.ts` exposes a route-scoped `currentChatThread$` with the
+// same `[200, 404]` + `{ toast: false }` shape for sidebar title merging.
+// This per-thread `threadData$` is scoped to a single signal factory so it
+// can be reloaded independently via `reloadThread$`. Keep the accept list
+// aligned so missing-thread redirects (see `chat-page-setup.ts`) and title
+// merging (see `chatThreads$`) both treat 404s the same way.
 function createThreadData(threadId: string) {
   const internalReload$ = state(0);
 
@@ -217,8 +223,12 @@ function createThreadData(threadId: string) {
     const threadClient = get(zeroClient$)(chatThreadByIdContract);
     const threadResult = await accept(
       threadClient.get({ params: { id: threadId } }),
-      [200],
+      [200, 404],
+      { toast: false },
     );
+    if (threadResult.status === 404) {
+      return null;
+    }
     const body = threadResult.body;
     return {
       id: threadId,
@@ -736,6 +746,7 @@ function createTopSentinelRef(
 function createPagedMessages(
   threadId: string,
   recordScrollHeightForPrepend$: RecordScrollHeightForPrepend$,
+  threadData$: Computed<Promise<ChatThread | null>>,
 ) {
   // Initial page — anchored at the last user message so the UI opens at the
   // start of the latest conversation turn. Returns both the message list and
@@ -744,6 +755,10 @@ function createPagedMessages(
     async (
       get,
     ): Promise<{ messages: PagedChatMessage[]; hasMore: boolean }> => {
+      const thread = await get(threadData$);
+      if (!thread) {
+        return { messages: [], hasMore: false };
+      }
       const client = get(zeroClient$)(chatThreadMessagesContract);
       const result = await accept(
         client.list({ params: { threadId }, query: { limit: 50 } }),
@@ -804,6 +819,12 @@ function createPagedMessages(
   );
 
   const fetchNextPage$ = command(async ({ get, set }, signal: AbortSignal) => {
+    const thread = await get(threadData$);
+    signal.throwIfAborted();
+    if (!thread) {
+      return true;
+    }
+
     const sinceId = await get(latestChatMessageId$);
     signal.throwIfAborted();
     const client = get(zeroClient$)(chatThreadMessagesContract);
@@ -1259,7 +1280,7 @@ function createChatThreadSignals(
     syncInitialHasMore$,
     fetchNextPage$,
     insertOptimisticMessage$,
-  } = createPagedMessages(threadId, recordScrollHeightForPrepend$);
+  } = createPagedMessages(threadId, recordScrollHeightForPrepend$, threadData$);
 
   const { scheduleDraftSync$, cancelDraftSync$, flushDraftClear$ } =
     createDraftSync(threadId, draft);

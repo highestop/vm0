@@ -190,7 +190,7 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     maintainer: "lancy@vm0.ai",
     description:
       "Enable voice input (microphone + STT) in chat — gates the mic button and the /api/zero/voice-io/stt route",
-    enabled: false,
+    enabled: true,
   },
   [FeatureSwitchKey.AudioOutput]: {
     maintainer: "lancy@vm0.ai",

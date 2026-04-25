@@ -1,7 +1,7 @@
 import { pgTable, uuid, jsonb, timestamp } from "drizzle-orm/pg-core";
 import { agentRuns } from "./agent-run";
 import { conversations } from "./conversation";
-import type { ContextArtifact } from "../../lib/infra/run/types";
+import type { ContextArtifact } from "../types";
 
 /**
  * Checkpoints table

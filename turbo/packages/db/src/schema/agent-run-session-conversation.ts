@@ -9,8 +9,8 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { agentComposeVersions } from "./agent-compose";
-import { agentSessions } from "./agent-session";
+import { agentComposes, agentComposeVersions } from "./agent-compose";
+import type { ContextArtifact } from "../types";
 
 /**
  * Agent Runs table
@@ -96,3 +96,79 @@ export const agentRuns = pgTable(
     ];
   },
 );
+
+/**
+ * Agent Sessions table
+ * Lightweight compose to conversation association for continue operations
+ * Sessions always use HEAD compose version at runtime, with no snapshotting.
+ */
+export const agentSessions = pgTable(
+  "agent_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    orgId: text("org_id").notNull(),
+    agentComposeId: uuid("agent_compose_id")
+      .references(
+        () => {
+          return agentComposes.id;
+        },
+        { onDelete: "cascade" },
+      )
+      .notNull(),
+    conversationId: uuid("conversation_id").references(
+      (): AnyPgColumn => {
+        return conversations.id;
+      },
+      {
+        onDelete: "set null",
+      },
+    ),
+    artifacts: jsonb("artifacts")
+      .$type<ContextArtifact[]>()
+      .notNull()
+      .default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => {
+    return [
+      index("idx_agent_sessions_user_compose").on(
+        table.userId,
+        table.agentComposeId,
+      ),
+      index("idx_agent_sessions_org").on(table.orgId),
+    ];
+  },
+);
+
+/**
+ * Conversations table
+ * Stores CLI agent conversation history for checkpoint resumption
+ *
+ * Session history storage strategy:
+ * - New records use cliAgentSessionHistoryHash (R2 blob reference)
+ * - Legacy records use cliAgentSessionHistory (TEXT field)
+ * - Read logic: prioritize hash, fallback to TEXT
+ */
+export const conversations = pgTable("conversations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id")
+    .references(
+      (): AnyPgColumn => {
+        return agentRuns.id;
+      },
+      { onDelete: "cascade" },
+    )
+    .notNull()
+    .unique(),
+  cliAgentType: varchar("cli_agent_type", { length: 64 }).notNull(),
+  cliAgentSessionId: varchar("cli_agent_session_id", { length: 255 }).notNull(),
+  /** @deprecated Legacy TEXT storage - new records use hash instead */
+  cliAgentSessionHistory: text("cli_agent_session_history"),
+  /** SHA-256 hash reference to R2 blob storage */
+  cliAgentSessionHistoryHash: varchar("cli_agent_session_history_hash", {
+    length: 64,
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});

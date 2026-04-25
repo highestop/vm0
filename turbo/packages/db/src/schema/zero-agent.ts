@@ -11,7 +11,7 @@ import {
 import type {
   RawPermissionPolicies,
   FirewallPolicyValue,
-} from "@vm0/core/contracts/firewalls";
+} from "@vm0/api-contracts/contracts/firewalls";
 import { agentComposes } from "./agent-compose";
 import { modelProviders } from "./model-provider";
 

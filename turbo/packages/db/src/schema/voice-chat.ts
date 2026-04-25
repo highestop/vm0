@@ -11,7 +11,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { VoiceChatTaskResultEntry } from "@vm0/core/contracts/zero-voice-chat";
+import type { VoiceChatTaskResultEntry } from "@vm0/api-contracts/contracts/zero-voice-chat";
 import { agentComposes } from "./agent-compose";
 import { agentRuns } from "./agent-run";
 

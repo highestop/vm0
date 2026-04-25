@@ -7,7 +7,7 @@ import {
   jsonb,
   varchar,
 } from "drizzle-orm/pg-core";
-import type { PersistedAttachment } from "@vm0/core/contracts/chat-threads";
+import type { PersistedAttachment } from "@vm0/api-contracts/contracts/chat-threads";
 import { agentComposes } from "./agent-compose";
 import { modelProviders } from "./model-provider";
 

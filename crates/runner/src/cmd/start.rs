@@ -1137,6 +1137,8 @@ fn spawn_job(
     let sandbox_token = context.sandbox_token.clone();
     let exec_config_for_deferred = Arc::clone(&exec_config);
 
+    let reused = reuse_entry.is_some();
+
     jobs.spawn(async move {
         // Inner spawn isolates panics: if execute_job panics, the outer task
         // still reports completion and releases budget.
@@ -1178,7 +1180,6 @@ fn spawn_job(
                 )
             }
             Err(e) => {
-                error!(run_id = %run_id, error = %e, "executor task panicked");
                 // Panic lost the in-flight telemetry buffer; substitute an
                 // empty collector so the post-complete flush path stays
                 // unconditional. `flush` early-returns on empty pending_ops.
@@ -1189,7 +1190,7 @@ fn spawn_job(
                 );
                 (
                     1,
-                    Some(format!("internal error: {e}")),
+                    Some(format!("executor task panicked: {e}")),
                     None,
                     String::new(),
                     None,
@@ -1197,6 +1198,18 @@ fn spawn_job(
                 )
             }
         };
+
+        // Single sink for any claimed job's terminal state. Cancellation gets
+        // its own info marker; everything else with `err` set is a failure
+        // (panics, executor internal errors, non-zero exits with
+        // stderr/guest error file); otherwise the job finished normally.
+        match (job_cancel.is_cancelled(), err.as_deref()) {
+            (true, _) => info!(run_id = %run_id, exit_code, reused, "job cancelled"),
+            (false, Some(e)) => {
+                error!(run_id = %run_id, exit_code, reused, error = %e, "job execution failed");
+            }
+            (false, None) => info!(run_id = %run_id, exit_code, reused, "job finished"),
+        }
 
         // Decide: park sandbox for reuse, or stop + destroy.
         let parked = if let Some(mut sandbox) = sandbox {

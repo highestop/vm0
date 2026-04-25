@@ -51,9 +51,10 @@ export const currentChatThreadId$ = computed((get): string | null => {
 
 export interface ChatThread {
   id: string;
-  agentId?: string;
+  agentId: string;
   title: string | null;
   latestSessionId: string | null;
+  lastReadMessageId: string | null;
   /**
    * Provider type of the latest run in this thread. Null when the thread has
    * no runs yet. The composer picker uses this to disable options whose base

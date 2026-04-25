@@ -4,7 +4,6 @@ import {
   useLastResolved,
   useLastLoadable,
 } from "ccstate-react";
-import { useLoadableSet } from "ccstate-react/experimental";
 import {
   IconSearch,
   IconX,
@@ -32,16 +31,19 @@ import {
 } from "@vm0/ui/components/ui/dialog";
 import { Skeleton } from "@vm0/ui/components/ui/skeleton";
 import { pageSignal$ } from "../../signals/page-signal.ts";
+import { rootSignal$ } from "../../signals/root-signal.ts";
 import { detach, Reason } from "../../signals/utils.ts";
 import {
   chatThreads$,
   deleteChatThread$,
-  createNewChatThread$,
 } from "../../signals/chat-page/chat-message.ts";
 import {
-  currentChatAgentId$,
-  currentChatThreadId$,
-} from "../../signals/agent-chat.ts";
+  createNewChatThreadOptimistically$,
+  optimisticChatThread$,
+  pendingOptimisticChatThreads$,
+} from "../../signals/chat-page/optimistic-chat-thread-page.ts";
+import { currentChatAgentId$ } from "../../signals/agent-chat.ts";
+import { pathParams$ } from "../../signals/route.ts";
 import {
   navigateToChat$,
   setSidebarExpanded$,
@@ -85,6 +87,8 @@ function ChatThreadItem({
       <Link
         pathname="/chats/:threadId"
         options={{ pathParams: { threadId: session.id } }}
+        aria-current={isSelected ? "page" : undefined}
+        data-chat-thread-id={session.id}
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey) {
             return;
@@ -112,11 +116,9 @@ function ChatThreadItem({
             aria-label="Unread"
           />
         )}
-        {session.title ? (
-          <span className="truncate min-w-0 flex-1">{session.title}</span>
-        ) : (
-          <Skeleton className="h-3 flex-1 min-w-0 rounded" />
-        )}
+        <span className="truncate min-w-0 flex-1">
+          {session.title ?? "New chat"}
+        </span>
       </Link>
       <div className="absolute right-0 top-0 flex h-8 w-8 items-center justify-center">
         <TooltipProvider delayDuration={200}>
@@ -146,7 +148,9 @@ function ChatThreadItem({
 }
 
 function ChatThreads() {
-  const currentChatThreadId = useGet(currentChatThreadId$);
+  const pathParams = useGet(pathParams$);
+  const selectedThreadId =
+    typeof pathParams?.threadId === "string" ? pathParams.threadId : null;
   const navigateToChat = useSet(navigateToChat$);
   const setSidebarExpanded = useSet(setSidebarExpanded$);
   const pendingDeleteThreadId = useGet(pendingDeleteThreadId$);
@@ -155,6 +159,8 @@ function ChatThreads() {
   const pageSignal = useGet(pageSignal$);
 
   const chatThreads = useLastResolved(chatThreads$) ?? [];
+  const optimisticChatThreads =
+    useLastResolved(pendingOptimisticChatThreads$) ?? [];
   const features = useLastResolved(featureSwitch$);
   const showReadIndicator =
     features?.[FeatureSwitchKey.ChatThreadReadIndicator] ?? false;
@@ -165,6 +171,11 @@ function ChatThreads() {
         return (s.title ?? "").toLowerCase().includes(trimmedTerm);
       })
     : chatThreads;
+  const filteredOptimisticChatThreads = trimmedTerm
+    ? optimisticChatThreads.filter((s) => {
+        return (s.title ?? "").toLowerCase().includes(trimmedTerm);
+      })
+    : optimisticChatThreads;
 
   const onRecentSelect = (chatThreadId: string) => {
     navigateToChat(chatThreadId);
@@ -180,7 +191,10 @@ function ChatThreads() {
     detach(deleteChatThread(threadId, pageSignal), Reason.DomCallback);
   }
 
-  if (filteredChatThreads.length === 0) {
+  if (
+    filteredOptimisticChatThreads.length === 0 &&
+    filteredChatThreads.length === 0
+  ) {
     return (
       <p className="px-2 py-2 text-xs text-muted-foreground/70 leading-relaxed">
         {trimmedTerm
@@ -191,12 +205,23 @@ function ChatThreads() {
   }
   return (
     <>
+      {filteredOptimisticChatThreads.map((session) => {
+        return (
+          <ChatThreadItem
+            key={session.id}
+            session={session}
+            isSelected={selectedThreadId === session.id}
+            onSelect={onRecentSelect}
+            showReadIndicator={showReadIndicator}
+          />
+        );
+      })}
       {filteredChatThreads.map((session) => {
         return (
           <ChatThreadItem
             key={session.id}
             session={session}
-            isSelected={currentChatThreadId === session.id}
+            isSelected={selectedThreadId === session.id}
             onSelect={onRecentSelect}
             showReadIndicator={showReadIndicator}
           />
@@ -239,23 +264,14 @@ function ChatThreads() {
 
 function ChatThreadsTitle() {
   const currentChatAgentId = useLastResolved(currentChatAgentId$) ?? null;
-  const [creatingLoadable, createNewChat] =
-    useLoadableSet(createNewChatThread$);
+  const createNewChat = useSet(createNewChatThreadOptimistically$);
   const setExpanded = useSet(setSidebarExpanded$);
-  const pageSignal = useGet(pageSignal$);
+  const { signal: rootSignal } = useGet(rootSignal$);
   const { titleLabel, searchPlaceholder, newChatAriaLabel } =
     useChatThreadsTitleLabels();
-  const newChatDisabled = creatingLoadable.state === "loading";
-  const navigateToChat = useSet(navigateToChat$);
+  const newChatDisabled = useGet(optimisticChatThread$) !== null;
   const onNewChat = () => {
-    detach(
-      createNewChat(currentChatAgentId, pageSignal).then((threadId) => {
-        if (threadId) {
-          navigateToChat(threadId);
-        }
-      }),
-      Reason.DomCallback,
-    );
+    detach(createNewChat(currentChatAgentId, rootSignal), Reason.DomCallback);
     setExpanded(false);
   };
   const searchOpen = useGet(threadSearchOpen$);
@@ -345,7 +361,7 @@ function ChatThreadsTitle() {
                   onNewChat();
                 }}
                 disabled={newChatDisabled}
-                className="relative z-10 flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-[hsl(var(--gray-200))] transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="relative z-10 flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-[hsl(var(--gray-200))] transition-colors disabled:opacity-50"
                 aria-label={newChatAriaLabel}
               >
                 <IconPlus size={15} stroke={2.5} />

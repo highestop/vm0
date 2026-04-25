@@ -28,10 +28,12 @@ export async function createChatThread(
   userId: string,
   agentComposeId: string,
   title?: string | null,
+  id?: string,
 ): Promise<{ id: string; createdAt: Date }> {
   const [thread] = await globalThis.services.db
     .insert(chatThreads)
     .values({
+      ...(id ? { id } : {}),
       userId,
       agentComposeId,
       title: title ?? null,
@@ -192,6 +194,7 @@ export async function getChatThread(
   draftAttachments: PersistedAttachment[] | null;
   modelProviderId: string | null;
   selectedModel: string | null;
+  lastReadMessageId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }> {
@@ -216,6 +219,7 @@ export async function getChatThread(
       .parse(thread.draftAttachments ?? null),
     modelProviderId: thread.modelProviderId ?? null,
     selectedModel: thread.selectedModel ?? null,
+    lastReadMessageId: thread.lastReadMessageId ?? null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
   };

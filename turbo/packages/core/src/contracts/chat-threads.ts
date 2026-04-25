@@ -105,6 +105,12 @@ const chatThreadDetailSchema = z.object({
   chatMessages: z.array(storedChatMessageSchema),
   latestSessionId: z.string().nullable(),
   /**
+   * ID of the latest message this user has marked read in this thread.
+   * Null when the thread has never been explicitly marked read. Optional for
+   * back-compat with fixtures/tests that predate the read marker field.
+   */
+  lastReadMessageId: z.string().nullable().optional(),
+  /**
    * Provider type of the latest run in this thread, if any. Used by the
    * composer's model picker to disable options whose base URL differs from
    * the current session — switching mid-session would break continuity.
@@ -154,6 +160,7 @@ export const chatThreadsContract = c.router({
     headers: authHeadersSchema,
     body: z.object({
       agentId: z.string().min(1),
+      clientThreadId: z.string().uuid().optional(),
       title: z.string().optional(),
     }),
     responses: {
@@ -270,6 +277,7 @@ export const chatMessagesContract = c.router({
       agentId: z.string().min(1),
       prompt: z.string().min(1),
       threadId: z.string().optional(),
+      clientThreadId: z.string().uuid().optional(),
       modelProvider: z.string().optional(),
       /**
        * Per-run model override; persisted on the thread so subsequent runs

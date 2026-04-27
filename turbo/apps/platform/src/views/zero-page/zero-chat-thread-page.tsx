@@ -935,13 +935,18 @@ function AssistantErrorContent({ error }: { error: string }) {
 function AssistantBubbleAvatar({ thread }: { thread: ChatThreadSignals }) {
   const agentId = useLastResolved(thread.agentId$) ?? "";
   return (
-    <div className="h-7 w-7 @[900px]:h-9 @[900px]:w-9 shrink-0 @[900px]:mt-0.5 overflow-hidden rounded-xl">
+    <Link
+      pathname="/agents/:agentId"
+      options={{ pathParams: { agentId } }}
+      className="h-7 w-7 @[900px]:h-9 @[900px]:w-9 shrink-0 @[900px]:mt-0.5 overflow-hidden rounded-xl transition-colors duration-150 hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      aria-label="View agent profile"
+    >
       <AgentAvatarImg
         name={agentId}
         alt=""
         className="h-7 w-7 @[900px]:h-9 @[900px]:w-9 rounded-full object-cover object-top"
       />
-    </div>
+    </Link>
   );
 }
 

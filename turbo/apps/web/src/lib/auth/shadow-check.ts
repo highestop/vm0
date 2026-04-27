@@ -1,6 +1,5 @@
 import { env } from "../../env";
 import { logger } from "../shared/logger";
-import { DATASETS, getDatasetName, ingestToAxiom } from "../shared/axiom";
 
 import type { AuthContext } from "./get-auth-context";
 
@@ -15,6 +14,7 @@ type WebResult = AuthContext | AuthErrorResponse;
 
 interface ShadowOptions {
   readonly authHeader: string | undefined;
+  readonly cookieHeader?: string;
   readonly route?: string;
 }
 
@@ -51,11 +51,16 @@ type ApiResponse = ApiResponseSuccess | ApiResponseError | ApiResponseNetwork;
 async function probeApi(
   apiUrl: string,
   authHeader: string,
+  cookieHeader?: string,
 ): Promise<ApiResponse> {
   const target = new URL("/health/auth", apiUrl).toString();
+  const headers: Record<string, string> = { authorization: authHeader };
+  if (cookieHeader) {
+    headers.cookie = cookieHeader;
+  }
   const response = await fetch(target, {
     method: "GET",
-    headers: { authorization: authHeader },
+    headers,
     signal: AbortSignal.timeout(2000),
   }).catch((err: unknown) => {
     return err instanceof Error ? err : new Error(String(err));
@@ -211,13 +216,11 @@ function compare(
 
 /**
  * Shadow-call the new `/health/auth` probe with the same Bearer credential
- * the caller already presented and report any divergence to Axiom.
+ * the caller already presented and log a warning on any divergence.
  *
- * Session-cookie auth is intentionally not shadowed: forwarding the
- * Clerk session cookie would require reading `next/headers` (banned by
- * `no-restricted-imports`) or threading the cookie through every caller.
- * Bearer auth (PAT / sandbox / zero) covers the surface that the new
- * api app is meant to take over.
+ * When a cookie is available, it is forwarded to the API so the probe can
+ * fall through to Clerk session auth for requests where the Bearer token
+ * is not self-sufficient.
  */
 export async function shadowCompareAuth(
   webResult: WebResult,
@@ -231,7 +234,11 @@ export async function shadowCompareAuth(
     return;
   }
 
-  const apiResponse = await probeApi(apiUrl, options.authHeader);
+  const apiResponse = await probeApi(
+    apiUrl,
+    options.authHeader,
+    options.cookieHeader,
+  );
   const event = compare(webResult, apiResponse, options.route);
 
   if (!event.consistent) {
@@ -240,8 +247,4 @@ export async function shadowCompareAuth(
       differences: event.differences,
     });
   }
-
-  ingestToAxiom(getDatasetName(DATASETS.AUTH_SHADOW), [
-    event as unknown as Record<string, unknown>,
-  ]);
 }

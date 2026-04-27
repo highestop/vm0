@@ -10,6 +10,7 @@ import {
   IconSwitchHorizontal,
   IconDatabaseExport,
   IconKey,
+  IconChartBar,
 } from "@tabler/icons-react";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import {
@@ -212,7 +213,7 @@ export function AccountDropdown({
           </>
         )}
 
-        {/* Preferences (standalone) */}
+        {/* Preferences + Usage group */}
         {!hidePreferences && (
           <>
             <DropdownMenuItem
@@ -227,6 +228,19 @@ export function AccountDropdown({
                 className="text-muted-foreground"
               />
               <span>Preferences</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                return handleAccountAction("usage");
+              }}
+              className="gap-3 px-3 py-2.5 rounded-lg"
+            >
+              <IconChartBar
+                size={18}
+                stroke={1.5}
+                className="text-muted-foreground"
+              />
+              <span>Usage</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
           </>

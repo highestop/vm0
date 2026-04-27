@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { http, HttpResponse } from "msw";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
+import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
 import { setMockUserPreferences } from "../../../mocks/handlers/api-user-preferences.ts";
+import { mockApi } from "../../../mocks/msw-contract.ts";
+import { chatThreadArtifactsContract } from "@vm0/api-contracts/contracts/chat-threads";
 import {
   mockChatLifecycle,
   mockSubagentThread,
@@ -611,6 +613,129 @@ describe("zero chat thread page display - header agent avatar flicker fix", () =
       'a[aria-label="View agent profile"]',
     );
     expect(avatarLinks).toHaveLength(1);
+  });
+});
+
+describe("zero chat thread page display - artifacts drawer", () => {
+  it("opens a drawer with uploaded files grouped by run when enabled", async () => {
+    const user = userEvent.setup();
+    let artifactsRequests = 0;
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: "See attached",
+          runId: "run-artifacts-1",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    server.use(
+      http.get("https://example.com/chart.png", () => {
+        return new HttpResponse(new Blob(["img"], { type: "image/png" }), {
+          headers: { "Content-Type": "image/png" },
+        });
+      }),
+      http.get("https://example.com/data.csv", () => {
+        return new HttpResponse("label,value\nalpha,1\n", {
+          headers: { "Content-Type": "text/csv" },
+        });
+      }),
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        artifactsRequests += 1;
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-artifacts-1",
+              files: [
+                {
+                  id: "file-1",
+                  filename: "chart.png",
+                  contentType: "image/png",
+                  size: 4096,
+                  url: "https://example.com/chart.png",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+                {
+                  id: "file-2",
+                  filename: "data.csv",
+                  contentType: "text/csv",
+                  size: 2048,
+                  url: "https://example.com/data.csv",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+    );
+    const createObjectURLSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:artifact-download");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: { [FeatureSwitchKey.ChatArtifactsDrawer]: true },
+    });
+
+    const button = await waitFor(() => {
+      return screen.getByLabelText("Open artifacts");
+    });
+    expect(artifactsRequests).toBe(0);
+    click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText("Artifacts")).toBeInTheDocument();
+    });
+    expect(artifactsRequests).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Preview chart.png")).toBeInTheDocument();
+    const downloadButtons = screen.getAllByLabelText("Download chart.png");
+    expect(downloadButtons[0]!.tagName).toBe("BUTTON");
+    await user.click(downloadButtons[0]!);
+    await waitFor(() => {
+      expect(createObjectURLSpy).toHaveBeenCalledOnce();
+      expect(anchorClickSpy).toHaveBeenCalledOnce();
+    });
+    expect(screen.getAllByText("chart.png").length).toBeGreaterThan(0);
+    expect(screen.getByText("data.csv")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Preview chart.png"));
+
+    const lightbox = await screen.findByTestId("attachment-lightbox");
+    await user.click(within(lightbox).getByLabelText("Close"));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("attachment-lightbox"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Artifacts")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Select data.csv"));
+    expect(screen.getByTitle("Preview data.csv")).toBeInTheDocument();
+  });
+
+  it("hides the artifacts button when the feature switch is off", async () => {
+    mockChatLifecycle();
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: { [FeatureSwitchKey.ChatArtifactsDrawer]: false },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Send a message to start the conversation"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("Open artifacts")).not.toBeInTheDocument();
   });
 });
 

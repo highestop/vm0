@@ -18,9 +18,19 @@ import {
   IconPin,
   IconVolume2,
   IconArrowBarToUp,
+  IconDownload,
+  IconEye,
+  IconFile,
+  IconFiles,
+  IconVideo,
 } from "@tabler/icons-react";
 import {
   cn,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
   Skeleton,
   Tooltip,
   TooltipContent,
@@ -29,6 +39,12 @@ import {
 } from "@vm0/ui";
 import { RUN_ERROR_GUIDANCE } from "@vm0/api-contracts/contracts/errors";
 import emptyChatImg from "./assets/empty-chat.webp";
+import docCsvIcon from "./assets/doc-csv.svg";
+import docDocIcon from "./assets/doc-doc.svg";
+import docHtmlIcon from "./assets/doc-html.svg";
+import docJsonIcon from "./assets/doc-json.svg";
+import docPdfIcon from "./assets/doc-pdf.svg";
+import docTxtIcon from "./assets/doc-txt.svg";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import {
@@ -44,6 +60,7 @@ import { Markdown } from "../components/markdown.tsx";
 import { detach, Reason, onDomEventFn } from "../../signals/utils.ts";
 import {
   AttachmentLightbox,
+  downloadAttachmentUrl,
   FileAttachmentChip,
   PreviewableFileAttachmentChip,
 } from "./zero-attachment-chips.tsx";
@@ -71,6 +88,7 @@ import type {
   GroupedChatMessageGroup,
   PagedChatMessage,
 } from "../../signals/chat-page/chat-message.ts";
+import type { ChatThreadArtifactFile } from "@vm0/api-contracts/contracts/chat-threads";
 import type { ChatThreadSignals } from "../../signals/chat-page/create-chat-thread.ts";
 import type { ChatThread } from "../../signals/agent-chat.ts";
 import { ATTACH_ONLY_PLACEHOLDER } from "../../signals/chat-page/resolve-draft-attachments.ts";
@@ -186,6 +204,48 @@ function PinPillButton({ thread }: { thread: ChatThreadSignals }) {
   );
 }
 
+function ArtifactsButton({ thread }: { thread: ChatThreadSignals }) {
+  const features = useLastResolved(featureSwitch$);
+  const enabled = features?.[FeatureSwitchKey.ChatArtifactsDrawer] ?? false;
+
+  if (!enabled) {
+    return null;
+  }
+
+  return <ArtifactsButtonInner thread={thread} />;
+}
+
+function ArtifactsButtonInner({ thread }: { thread: ChatThreadSignals }) {
+  const open = useGet(thread.artifactsDrawerOpen$);
+  const setOpen = useSet(thread.setArtifactsDrawerOpen$);
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(true);
+            }}
+            className={cn(
+              "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-150",
+              open
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground/70 hover:bg-accent hover:text-foreground",
+            )}
+            aria-label="Open artifacts"
+            aria-pressed={open}
+          >
+            <IconFiles size={17} stroke={1.5} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Open artifacts</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function ChatThreadHeader({ thread }: { thread: ChatThreadSignals }) {
   const displayName = useLastResolved(thread.agentDisplayName$);
   const autoRead = useGet(autoReadEnabled$);
@@ -207,6 +267,7 @@ function ChatThreadHeader({ thread }: { thread: ChatThreadSignals }) {
         )}
       </div>
       <div className="hidden sm:flex items-center gap-0.5">
+        <ArtifactsButton thread={thread} />
         {audioOutputEnabled && (
           <TooltipProvider delayDuration={300}>
             <Tooltip>
@@ -243,6 +304,474 @@ interface ZeroChatThreadPageProps {
   thread: ChatThreadSignals;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB"] as const;
+  let value = bytes / 1024;
+  for (let i = 0; i < units.length; i++) {
+    const unit = units[i]!;
+    if (value < 1024 || i === units.length - 1) {
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+    value = value / 1024;
+  }
+  return `${bytes} B`;
+}
+
+function formatArtifactTime(value: string): string {
+  return new Date(value).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+type ChatArtifactItem = {
+  runId: string;
+  file: ChatThreadArtifactFile;
+};
+
+type ArtifactPreviewKind = "image" | "video" | "document" | "file";
+
+function artifactItemKey(item: ChatArtifactItem): string {
+  return `${item.runId}:${item.file.id}:${item.file.url}`;
+}
+
+function getFileExtension(filename: string): string {
+  const ext = filename.split(".").pop();
+  return ext && ext !== filename ? ext.toUpperCase() : "FILE";
+}
+
+function getArtifactPreviewKind(
+  file: ChatThreadArtifactFile,
+): ArtifactPreviewKind {
+  const contentType = file.contentType.toLowerCase();
+  const filename = file.filename.toLowerCase();
+
+  if (contentType.startsWith("image/") || isImageFilename(filename)) {
+    return "image";
+  }
+  if (contentType.startsWith("video/") || isVideoFilename(filename)) {
+    return "video";
+  }
+  if (
+    contentType === "application/pdf" ||
+    contentType === "application/json" ||
+    contentType === "text/csv" ||
+    (contentType.startsWith("text/") && contentType !== "text/html") ||
+    /\.(pdf|txt|md|csv|json|log)$/i.test(filename)
+  ) {
+    return "document";
+  }
+  return "file";
+}
+
+function flattenArtifactRuns(
+  runs: { runId: string; files: ChatThreadArtifactFile[] }[],
+): ChatArtifactItem[] {
+  return runs.flatMap((run) => {
+    return run.files.map((file) => {
+      return { runId: run.runId, file };
+    });
+  });
+}
+
+function getArtifactFileIconSrc(file: ChatThreadArtifactFile): string | null {
+  const kind = classifyChatAttachment({
+    filename: file.filename,
+    url: file.url,
+    contentType: file.contentType,
+  });
+
+  if (kind === "pdf") {
+    return docPdfIcon;
+  }
+  if (kind === "html") {
+    return docHtmlIcon;
+  }
+  if (kind === "csv") {
+    return docCsvIcon;
+  }
+  if (kind === "json") {
+    return docJsonIcon;
+  }
+  if (kind === "text") {
+    return docTxtIcon;
+  }
+  if (kind === "markdown") {
+    return docDocIcon;
+  }
+  return null;
+}
+
+function ArtifactFileIcon({
+  file,
+  className,
+}: {
+  file: ChatThreadArtifactFile;
+  className?: string;
+}) {
+  const iconSrc = getArtifactFileIconSrc(file);
+  if (iconSrc) {
+    return (
+      <img
+        alt=""
+        aria-hidden="true"
+        src={iconSrc}
+        className={cn("h-5 w-5 object-contain opacity-90", className)}
+      />
+    );
+  }
+
+  const previewKind = getArtifactPreviewKind(file);
+  if (previewKind === "image") {
+    return <IconPhoto size={18} stroke={1.5} />;
+  }
+  if (previewKind === "video") {
+    return <IconVideo size={18} stroke={1.5} />;
+  }
+  return <IconFile size={18} stroke={1.5} />;
+}
+
+function ArtifactDownloadAction({
+  file,
+  className,
+}: {
+  file: ChatThreadArtifactFile;
+  className: string;
+}) {
+  const pageSignal = useGet(pageSignal$);
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        detach(
+          downloadAttachmentUrl(file.url, pageSignal, file.filename),
+          Reason.DomCallback,
+          "artifact download",
+        );
+      }}
+      className={className}
+      aria-label={`Download ${file.filename}`}
+    >
+      <IconDownload size={16} stroke={1.5} />
+    </button>
+  );
+}
+
+function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
+  const openImageLightbox = useSet(openAttachmentImageLightbox$);
+  const previewKind = getArtifactPreviewKind(file);
+
+  if (previewKind === "image") {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          openImageLightbox(file.url);
+        }}
+        className="group relative flex h-full w-full items-center justify-center overflow-hidden bg-muted"
+        aria-label={`Preview ${file.filename}`}
+      >
+        <img
+          src={file.url}
+          alt={`Preview ${file.filename}`}
+          className="h-full w-full object-contain"
+        />
+        <span className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-150 group-hover:bg-black/25 group-hover:opacity-100">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white shadow-lg">
+            <IconEye size={18} stroke={1.8} />
+          </span>
+        </span>
+      </button>
+    );
+  }
+
+  if (previewKind === "video") {
+    return (
+      <video
+        src={file.url}
+        controls
+        preload="metadata"
+        className="h-full w-full bg-black object-contain"
+      />
+    );
+  }
+
+  if (previewKind === "document") {
+    return (
+      <iframe
+        src={file.url}
+        title={`Preview ${file.filename}`}
+        className="h-full w-full bg-background"
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-muted/40 p-8 text-center">
+      <span className="flex h-16 w-16 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-sm">
+        <ArtifactFileIcon file={file} className="h-10 w-10" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-medium uppercase text-muted-foreground">
+          {getFileExtension(file.filename)}
+        </p>
+        <p className="mt-1 max-w-[260px] truncate text-sm text-foreground">
+          {file.filename}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ArtifactPreviewPanel({ item }: { item: ChatArtifactItem }) {
+  const { file } = item;
+  const actionClass =
+    "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm">
+      <div className="h-[260px] border-b border-border/60 bg-muted/30">
+        <ArtifactPreviewFrame file={file} />
+      </div>
+      <div className="flex items-start gap-3 px-3 py-3">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <ArtifactFileIcon file={file} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">
+            {file.filename}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{formatBytes(file.size)}</span>
+            <span aria-hidden>·</span>
+            <span>{getFileExtension(file.filename)}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <ArtifactDownloadAction file={file} className={actionClass} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArtifactThumbnail({
+  file,
+  selected,
+}: {
+  file: ChatThreadArtifactFile;
+  selected: boolean;
+}) {
+  const previewKind = getArtifactPreviewKind(file);
+
+  return (
+    <div
+      className={cn(
+        "relative flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/60 transition-colors",
+        selected
+          ? "border-primary/60 ring-2 ring-primary/15"
+          : "border-border/70 hover:border-foreground/25",
+      )}
+      aria-hidden="true"
+    >
+      {previewKind === "image" ? (
+        <img
+          src={file.url}
+          alt=""
+          className="h-full w-full object-cover"
+          aria-hidden="true"
+        />
+      ) : (
+        <span className="flex flex-col items-center gap-0.5 text-muted-foreground">
+          <ArtifactFileIcon file={file} />
+          <span className="max-w-14 truncate text-[10px] font-medium">
+            {getFileExtension(file.filename)}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ArtifactFileRow({
+  item,
+  selected,
+  onPreview,
+}: {
+  item: ChatArtifactItem;
+  selected: boolean;
+  onPreview: () => void;
+}) {
+  const { file } = item;
+  const actionClass =
+    "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
+  return (
+    <div
+      className={cn(
+        "flex rounded-lg border transition-colors",
+        selected
+          ? "border-primary/40 bg-primary/5"
+          : "border-border/60 bg-background/70 hover:bg-muted/25",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onPreview}
+        className="flex min-w-0 flex-1 items-start gap-3 rounded-l-lg px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        aria-label={`Select ${file.filename}`}
+      >
+        <ArtifactThumbnail file={file} selected={selected} />
+        <div className="min-w-0 flex-1">
+          <span
+            className="block max-w-full truncate text-sm font-medium text-foreground"
+            title={file.filename}
+          >
+            {file.filename}
+          </span>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{formatBytes(file.size)}</span>
+            <span aria-hidden>·</span>
+            <span>{getFileExtension(file.filename)}</span>
+            <span aria-hidden>·</span>
+            <span>{formatArtifactTime(file.createdAt)}</span>
+          </div>
+        </div>
+      </button>
+      <div className="flex shrink-0 items-center pr-3">
+        <ArtifactDownloadAction file={file} className={actionClass} />
+      </div>
+    </div>
+  );
+}
+
+function ChatArtifactsDrawerContent({ thread }: { thread: ChatThreadSignals }) {
+  const loadable = useLastLoadable(thread.artifacts$);
+  const selectedArtifactKey = useGet(thread.artifactPreviewKey$);
+  const setSelectedArtifactKey = useSet(thread.setArtifactPreviewKey$);
+
+  if (loadable.state === "loading") {
+    return (
+      <div className="flex flex-col gap-3">
+        {Array.from({ length: 4 }, (_, i) => {
+          return <Skeleton key={i} className="h-16 rounded-lg" />;
+        })}
+      </div>
+    );
+  }
+
+  if (loadable.state === "hasError") {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+        Failed to load artifacts
+      </div>
+    );
+  }
+
+  if (loadable.state !== "hasData") {
+    return null;
+  }
+
+  const runs = loadable.data;
+  const items = flattenArtifactRuns(runs);
+  const selectedItem =
+    items.find((item) => {
+      return artifactItemKey(item) === selectedArtifactKey;
+    }) ?? items[0];
+  const totalFiles = runs.reduce((sum, run) => {
+    return sum + run.files.length;
+  }, 0);
+
+  if (totalFiles === 0) {
+    return (
+      <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+        No uploaded files in this chat yet.
+      </div>
+    );
+  }
+
+  const selectedKey = selectedItem ? artifactItemKey(selectedItem) : null;
+
+  return (
+    <div className="flex flex-col gap-5">
+      {selectedItem && <ArtifactPreviewPanel item={selectedItem} />}
+      <div className="flex items-center justify-between border-b border-border/60 pb-3 text-xs text-muted-foreground">
+        <span>
+          {totalFiles} file{totalFiles === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {items.map((item) => {
+          const itemKey = artifactItemKey(item);
+          return (
+            <ArtifactFileRow
+              key={itemKey}
+              item={item}
+              selected={selectedKey === itemKey}
+              onPreview={() => {
+                setSelectedArtifactKey(itemKey);
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChatArtifactsDrawer({ thread }: { thread: ChatThreadSignals }) {
+  const open = useGet(thread.artifactsDrawerOpen$);
+  const setOpen = useSet(thread.setArtifactsDrawerOpen$);
+  const lightboxUrl = useGet(attachmentLightboxUrl$);
+
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(value) => {
+        setOpen(value);
+      }}
+    >
+      <SheetContent
+        side="right"
+        className="w-[420px] sm:max-w-[420px] flex flex-col"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (lightboxUrl) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (lightboxUrl) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <SheetHeader className="shrink-0">
+          <SheetTitle>Artifacts</SheetTitle>
+          <SheetDescription>
+            Uploaded files from runs in this chat thread.
+          </SheetDescription>
+        </SheetHeader>
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-6 px-6 -mb-6 pb-6">
+          {open && <ChatArtifactsDrawerContent thread={thread} />}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ZeroSessionChatPage — real conversation backed by agent runs
+// ---------------------------------------------------------------------------
+
 export function ZeroChatThreadPage({ thread }: ZeroChatThreadPageProps) {
   const shortcutHelpOpen = useGet(chatShortcutHelpOpen$);
   const setShortcutHelpOpen = useSet(setChatShortcutHelpOpen$);
@@ -250,6 +779,7 @@ export function ZeroChatThreadPage({ thread }: ZeroChatThreadPageProps) {
   return (
     <>
       <ZeroChatThreadPageInner thread={thread} />
+      <ChatArtifactsDrawer thread={thread} />
       <ShortcutHelpDialog
         open={shortcutHelpOpen}
         onOpenChange={setShortcutHelpOpen}

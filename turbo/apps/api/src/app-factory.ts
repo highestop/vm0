@@ -1,10 +1,12 @@
 import * as Sentry from "@sentry/node";
+import type { AppRoute } from "@ts-rest/core";
 import { type Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 
 import { logger } from "./lib/log";
 import { honoSignalHandler } from "./signals/context/route";
-import { type RouteDefinition, ROUTES } from "./signals/route";
+import { ROUTES, type SignalRouteHandler } from "./signals/route";
+import { isAbortError } from "./signals/utils";
 
 const L = logger("App");
 
@@ -19,6 +21,10 @@ function captureError(error: Error): void {
 }
 
 function handleError(error: Error, context: Context): Response {
+  if (isAbortError(error)) {
+    return context.json({ error: "Internal server error" }, 500);
+  }
+
   captureError(error);
 
   if (error instanceof HTTPException) {
@@ -31,20 +37,20 @@ function handleError(error: Error, context: Context): Response {
 
 interface CreateAppOptions {
   readonly signal: AbortSignal;
-  readonly routes?: ReadonlyArray<RouteDefinition<unknown>>;
+  readonly routes?: ReadonlyMap<AppRoute, SignalRouteHandler<unknown>>;
 }
 
 export function createApp({ routes = ROUTES, signal }: CreateAppOptions): Hono {
   const app = new Hono();
   app.onError(handleError);
 
-  routes.forEach((route: RouteDefinition<unknown>) => {
+  for (const [contract, handler] of routes) {
     app.on(
-      route.contract.method,
-      route.contract.path,
-      honoSignalHandler(route.handler, route.contract, signal),
+      contract.method,
+      contract.path,
+      honoSignalHandler(handler, contract, signal),
     );
-  });
+  }
 
   return app;
 }

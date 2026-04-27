@@ -3,7 +3,6 @@ import { computed } from "ccstate";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 
-import { contractRoute } from "../signals/route";
 import { accept, setupApp, testContext } from "./test-helpers";
 
 const c = initContract();
@@ -30,6 +29,13 @@ const errorTestContract = c.router({
       503: z.string(),
     },
   },
+  aborted: {
+    method: "GET",
+    path: "/__test/aborted",
+    responses: {
+      500: z.object({ error: z.string() }),
+    },
+  },
 });
 
 describe("createApp", () => {
@@ -40,14 +46,11 @@ describe("createApp", () => {
     const client = setupApp({
       context,
       contract: errorTestContract,
-      routesExtend: [
-        contractRoute({
-          contract: errorTestContract.boom,
-          handler: computed((): never => {
-            throw error;
-          }),
+      handlers: {
+        boom: computed((): never => {
+          throw error;
         }),
-      ],
+      },
     });
 
     const response = await accept(client.boom(), [500]);
@@ -61,17 +64,32 @@ describe("createApp", () => {
     const client = setupApp({
       context,
       contract: errorTestContract,
-      routesExtend: [
-        contractRoute({
-          contract: errorTestContract.missing,
-          handler: computed((): never => {
-            throw error;
-          }),
+      handlers: {
+        missing: computed((): never => {
+          throw error;
         }),
-      ],
+      },
     });
 
     await accept(client.missing(), [404]);
+
+    expect(context.mocks.sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("does not capture AbortError", async () => {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    const client = setupApp({
+      context,
+      contract: errorTestContract,
+      handlers: {
+        aborted: computed((): never => {
+          throw error;
+        }),
+      },
+    });
+
+    await accept(client.aborted(), [500]);
 
     expect(context.mocks.sentry.captureException).not.toHaveBeenCalled();
   });
@@ -81,14 +99,11 @@ describe("createApp", () => {
     const client = setupApp({
       context,
       contract: errorTestContract,
-      routesExtend: [
-        contractRoute({
-          contract: errorTestContract.unavailable,
-          handler: computed((): never => {
-            throw error;
-          }),
+      handlers: {
+        unavailable: computed((): never => {
+          throw error;
         }),
-      ],
+      },
     });
 
     await accept(client.unavailable(), [503]);

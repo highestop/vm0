@@ -29,6 +29,13 @@ pub(crate) const DESTROY_RETRY_DELAY: std::time::Duration = std::time::Duration:
 /// panics after sandbox creation, which is an exceptional path.
 const LEAK_CHANNEL_CAPACITY: usize = 32;
 
+/// Maximum time to wait for leaked-resource cleanup during normal shutdown.
+///
+/// Shutdown is the graceful path, so already-queued leak reports should drain
+/// before the pool Arcs are unwrapped. If cleanup gets stuck, fall back to
+/// aborting and let the next `runner gc` clean leftovers.
+const LEAK_CLEANUP_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Resources that require async cleanup when a sandbox is dropped without
 /// going through `factory.destroy()` (e.g. executor task panic).
 ///
@@ -40,6 +47,159 @@ pub(crate) struct LeakedResources {
     pub(crate) network: PooledNetns,
     pub(crate) sock_dir: PathBuf,
     pub(crate) workspace: PathBuf,
+}
+
+/// Owns the leaked-resource cleanup channel and its background drain task.
+///
+/// Normal factory shutdown signals the drain task to close the receiver, drain
+/// already-queued resources, and finish. `Drop` cannot await, so it aborts as a
+/// best-effort fallback.
+struct LeakCleaner {
+    tx: Option<tokio::sync::mpsc::Sender<LeakedResources>>,
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl LeakCleaner {
+    fn spawn(
+        device_pool: std::sync::Arc<tokio::sync::Mutex<nbd_cow::pool::DevicePool>>,
+        netns_pool: std::sync::Arc<tokio::sync::Mutex<NetnsPool>>,
+    ) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(LEAK_CHANNEL_CAPACITY);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(drain_leaked_resources(
+            rx,
+            shutdown_rx,
+            device_pool,
+            netns_pool,
+        ));
+        Self {
+            tx: Some(tx),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        }
+    }
+
+    fn sender(&self) -> Option<tokio::sync::mpsc::Sender<LeakedResources>> {
+        self.tx.clone()
+    }
+
+    async fn shutdown(mut self) {
+        self.tx.take();
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        let Some(mut handle) = self.handle.take() else {
+            return;
+        };
+
+        tokio::select! {
+            result = &mut handle => {
+                if let Err(e) = result {
+                    warn!(error = %e, "leak cleanup task exited unexpectedly");
+                }
+            }
+            () = tokio::time::sleep(LEAK_CLEANUP_SHUTDOWN_TIMEOUT) => {
+                warn!(
+                    timeout_ms = LEAK_CLEANUP_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                    "timed out waiting for leak cleanup task; aborting"
+                );
+                handle.abort();
+                if let Err(e) = handle.await
+                    && !e.is_cancelled()
+                {
+                    warn!(error = %e, "leak cleanup task failed after abort");
+                }
+            }
+        }
+    }
+
+    fn abort(&mut self) {
+        // Drop handles first, then abort immediately as a synchronous Drop backstop.
+        self.tx.take();
+        self.shutdown_tx.take();
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl Drop for LeakCleaner {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+/// Background task that receives leaked sandbox resources from `Drop`
+/// impls and releases them asynchronously (pool indices, namespaces, dirs).
+async fn drain_leaked_resources(
+    rx: tokio::sync::mpsc::Receiver<LeakedResources>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    device_pool: std::sync::Arc<tokio::sync::Mutex<nbd_cow::pool::DevicePool>>,
+    netns_pool: std::sync::Arc<tokio::sync::Mutex<NetnsPool>>,
+) {
+    drain_leaked_resources_with_cleanup(rx, shutdown_rx, move |leaked| {
+        let device_pool = std::sync::Arc::clone(&device_pool);
+        let netns_pool = std::sync::Arc::clone(&netns_pool);
+        async move {
+            cleanup_leaked_resource(leaked, &device_pool, &netns_pool).await;
+        }
+    })
+    .await;
+}
+
+async fn drain_leaked_resources_with_cleanup<C, Fut>(
+    mut rx: tokio::sync::mpsc::Receiver<LeakedResources>,
+    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    mut cleanup: C,
+) where
+    C: FnMut(LeakedResources) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown_rx => {
+                rx.close();
+                while let Some(leaked) = rx.recv().await {
+                    cleanup(leaked).await;
+                }
+                break;
+            }
+            maybe_leaked = rx.recv() => {
+                let Some(leaked) = maybe_leaked else {
+                    break;
+                };
+                cleanup(leaked).await;
+            }
+        }
+    }
+}
+
+async fn cleanup_leaked_resource(
+    leaked: LeakedResources,
+    device_pool: &tokio::sync::Mutex<nbd_cow::pool::DevicePool>,
+    netns_pool: &tokio::sync::Mutex<NetnsPool>,
+) {
+    warn!(
+        id = %leaked.sandbox_id,
+        device_index = leaked.device_index,
+        "cleaning up leaked sandbox resources"
+    );
+    device_pool.lock().await.release(leaked.device_index);
+    {
+        let mut pool = netns_pool.lock().await;
+        if let Err(e) = pool.release(leaked.network).await {
+            warn!(id = %leaked.sandbox_id, error = %e, "failed to release leaked netns");
+        }
+    }
+    if let Err(e) = tokio::fs::remove_dir_all(&leaked.sock_dir).await {
+        warn!(id = %leaked.sandbox_id, error = %e, "failed to delete leaked sock dir");
+    }
+    if let Err(e) = tokio::fs::remove_dir_all(&leaked.workspace).await {
+        warn!(id = %leaked.sandbox_id, error = %e, "failed to delete leaked workspace");
+    }
+    info!(id = %leaked.sandbox_id, "leaked sandbox resources cleaned up");
 }
 
 /// Shell command executed during snapshot creation to pre-warm guest state.
@@ -150,11 +310,8 @@ pub struct FirecrackerFactory {
     /// Pre-warming pool for COW files.
     cow_pool: Option<tokio::sync::Mutex<crate::cow_pool::CowPool>>,
     started: bool,
-    /// Channel for receiving leaked sandbox resources from `Drop` impls.
-    /// Created during `startup()`, cloned into each sandbox at `create()`.
-    leak_tx: Option<tokio::sync::mpsc::Sender<LeakedResources>>,
-    /// Background task that drains `leak_tx` and releases pool resources.
-    leak_cleanup_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Owns the channel/task that drains leaked sandbox resources from Drop.
+    leak_cleaner: Option<LeakCleaner>,
 }
 
 impl FirecrackerFactory {
@@ -198,8 +355,7 @@ impl FirecrackerFactory {
             base_image_size: 0,
             cow_pool: None,
             started: false,
-            leak_tx: None,
-            leak_cleanup_handle: None,
+            leak_cleaner: None,
         })
     }
 
@@ -220,36 +376,6 @@ impl FirecrackerFactory {
     #[allow(clippy::expect_used)]
     fn cow_pool(&self) -> &tokio::sync::Mutex<crate::cow_pool::CowPool> {
         self.cow_pool.as_ref().expect("factory not started")
-    }
-
-    /// Background task that receives leaked sandbox resources from `Drop`
-    /// impls and releases them asynchronously (pool indices, namespaces, dirs).
-    async fn drain_leaked_resources(
-        mut rx: tokio::sync::mpsc::Receiver<LeakedResources>,
-        device_pool: std::sync::Arc<tokio::sync::Mutex<nbd_cow::pool::DevicePool>>,
-        netns_pool: std::sync::Arc<tokio::sync::Mutex<NetnsPool>>,
-    ) {
-        while let Some(leaked) = rx.recv().await {
-            warn!(
-                id = %leaked.sandbox_id,
-                device_index = leaked.device_index,
-                "cleaning up leaked sandbox resources"
-            );
-            device_pool.lock().await.release(leaked.device_index);
-            {
-                let mut pool = netns_pool.lock().await;
-                if let Err(e) = pool.release(leaked.network).await {
-                    warn!(id = %leaked.sandbox_id, error = %e, "failed to release leaked netns");
-                }
-            }
-            if let Err(e) = tokio::fs::remove_dir_all(&leaked.sock_dir).await {
-                warn!(id = %leaked.sandbox_id, error = %e, "failed to delete leaked sock dir");
-            }
-            if let Err(e) = tokio::fs::remove_dir_all(&leaked.workspace).await {
-                warn!(id = %leaked.sandbox_id, error = %e, "failed to delete leaked workspace");
-            }
-            info!(id = %leaked.sandbox_id, "leaked sandbox resources cleaned up");
-        }
     }
 }
 
@@ -324,13 +450,10 @@ impl SandboxFactory for FirecrackerFactory {
 
         // Spawn background task to clean up resources leaked by sandbox Drop
         // impls that fire without going through factory.destroy().
-        let (leak_tx, leak_rx) = tokio::sync::mpsc::channel(LEAK_CHANNEL_CAPACITY);
-        self.leak_tx = Some(leak_tx);
-        self.leak_cleanup_handle = Some(tokio::spawn(Self::drain_leaked_resources(
-            leak_rx,
+        self.leak_cleaner = Some(LeakCleaner::spawn(
             std::sync::Arc::clone(&self.device_pool),
             self.netns_pool().clone(),
-        )));
+        ));
 
         self.started = true;
 
@@ -460,7 +583,7 @@ impl SandboxFactory for FirecrackerFactory {
             sock_paths,
             network,
             cow_device,
-            self.leak_tx.clone(),
+            self.leak_cleaner.as_ref().and_then(LeakCleaner::sender),
         );
 
         Ok(Box::new(sandbox))
@@ -548,13 +671,10 @@ impl SandboxFactory for FirecrackerFactory {
     }
 
     async fn shutdown(&mut self) {
-        // Close the leak channel and abort the drain task.  Any in-flight
-        // leaked resources will be cleaned by `runner gc` on the next start.
-        // We abort (rather than await) so the task immediately releases its
-        // Arc refs to the pools — required for Arc::try_unwrap below.
-        self.leak_tx.take();
-        if let Some(h) = self.leak_cleanup_handle.take() {
-            h.abort();
+        // Close the leak channel and let the drain task finish queued cleanup
+        // before we unwrap the shared pool Arcs below.
+        if let Some(cleaner) = self.leak_cleaner.take() {
+            cleaner.shutdown().await;
         }
 
         // Clean up COW pool (delete pre-warmed COW files).
@@ -580,23 +700,19 @@ impl SandboxFactory for FirecrackerFactory {
 }
 
 impl Drop for FirecrackerFactory {
-    /// Abort the leak cleanup task if `shutdown()` was never called.
-    ///
-    /// Safety net for abnormal paths (e.g., panic during startup).
-    /// Harmless if `shutdown()` already ran — the handle is `None`.
     fn drop(&mut self) {
-        // Mirror shutdown(): close the sender first so the drain task's
-        // rx.recv() returns None, then abort as the immediate backstop.
-        self.leak_tx.take();
-        if let Some(h) = self.leak_cleanup_handle.take() {
-            h.abort();
-        }
+        // Safety net for abnormal paths (e.g. panic before shutdown()).
+        self.leak_cleaner.take();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn config_hash_is_deterministic() {
@@ -651,6 +767,16 @@ mod tests {
         }
     }
 
+    fn test_leaked_resource(sandbox_id: &str, device_index: u32) -> LeakedResources {
+        LeakedResources {
+            sandbox_id: sandbox_id.into(),
+            device_index,
+            network: test_network(),
+            sock_dir: PathBuf::from("/nonexistent"),
+            workspace: PathBuf::from("/nonexistent"),
+        }
+    }
+
     fn test_config(base_dir: PathBuf) -> FirecrackerConfig {
         FirecrackerConfig {
             binary_path: PathBuf::from("/tmp/firecracker"),
@@ -677,8 +803,7 @@ mod tests {
             base_image_size: 0,
             cow_pool: None,
             started,
-            leak_tx: None,
-            leak_cleanup_handle: None,
+            leak_cleaner: None,
         }
     }
 
@@ -770,23 +895,180 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel::<LeakedResources>(1);
 
         // Fill the channel.
-        tx.try_send(LeakedResources {
-            sandbox_id: "first".into(),
-            device_index: 0,
-            network: test_network(),
-            sock_dir: PathBuf::from("/nonexistent"),
-            workspace: PathBuf::from("/nonexistent"),
-        })
-        .unwrap();
+        tx.try_send(test_leaked_resource("first", 0)).unwrap();
 
         // Second send should fail gracefully.
-        let result = tx.try_send(LeakedResources {
-            sandbox_id: "second".into(),
-            device_index: 1,
-            network: test_network(),
-            sock_dir: PathBuf::from("/nonexistent"),
-            workspace: PathBuf::from("/nonexistent"),
-        });
+        let result = tx.try_send(test_leaked_resource("second", 1));
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn drain_leaked_resources_shutdown_closes_receiver_and_drains_buffer() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<LeakedResources>(4);
+        let live_sender_clone = tx.clone();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        tx.send(test_leaked_resource("first", 0)).await.unwrap();
+        tx.send(test_leaked_resource("second", 1)).await.unwrap();
+
+        let cleaned = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let cleaned_clone = Arc::clone(&cleaned);
+        let handle = tokio::spawn(drain_leaked_resources_with_cleanup(
+            rx,
+            shutdown_rx,
+            move |leaked| {
+                let cleaned = Arc::clone(&cleaned_clone);
+                async move {
+                    cleaned.lock().await.push(leaked.sandbox_id);
+                }
+            },
+        ));
+
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            *cleaned.lock().await,
+            vec!["first".to_string(), "second".to_string()]
+        );
+        assert!(matches!(
+            live_sender_clone.try_send(test_leaked_resource("late", 2)),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn drain_leaked_resources_exits_after_sender_close() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<LeakedResources>(4);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        tx.send(test_leaked_resource("first", 0)).await.unwrap();
+        tx.send(test_leaked_resource("second", 1)).await.unwrap();
+        drop(tx);
+
+        let cleaned = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let cleaned_clone = Arc::clone(&cleaned);
+        drain_leaked_resources_with_cleanup(rx, shutdown_rx, move |leaked| {
+            let cleaned = Arc::clone(&cleaned_clone);
+            async move {
+                cleaned.lock().await.push(leaked.sandbox_id);
+            }
+        })
+        .await;
+
+        assert_eq!(
+            *cleaned.lock().await,
+            vec!["first".to_string(), "second".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn leak_cleaner_shutdown_signals_drain_with_live_sender_clone() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<LeakedResources>(1);
+        let _live_sender_clone = tx.clone();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        let drained = Arc::new(AtomicBool::new(false));
+        let drained_clone = Arc::clone(&drained);
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    rx.close();
+                    while rx.recv().await.is_some() {}
+                    drained_clone.store(true, Ordering::SeqCst);
+                }
+                _ = rx.recv() => {
+                    panic!("leak cleaner did not signal shutdown before receiver completion");
+                }
+            }
+        });
+
+        let cleaner = LeakCleaner {
+            tx: Some(tx),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        };
+        cleaner.shutdown().await;
+
+        assert!(drained.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn leak_cleaner_shutdown_aborts_after_timeout() {
+        struct AbortFlag(Arc<AtomicBool>);
+
+        impl Drop for AbortFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let (tx, _rx) = tokio::sync::mpsc::channel::<LeakedResources>(1);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = Arc::clone(&aborted);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _flag = AbortFlag(aborted_clone);
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let cleaner = LeakCleaner {
+            tx: Some(tx),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        };
+
+        started_rx.await.unwrap();
+        let shutdown = cleaner.shutdown();
+        tokio::pin!(shutdown);
+        tokio::task::yield_now().await;
+        tokio::time::advance(LEAK_CLEANUP_SHUTDOWN_TIMEOUT).await;
+        shutdown.await;
+
+        assert!(aborted.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn leak_cleaner_abort_closes_sender_and_aborts_task() {
+        struct AbortFlag(Arc<AtomicBool>);
+
+        impl Drop for AbortFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let (tx, _rx) = tokio::sync::mpsc::channel::<LeakedResources>(1);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = Arc::clone(&aborted);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _flag = AbortFlag(aborted_clone);
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let mut cleaner = LeakCleaner {
+            tx: Some(tx),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        };
+
+        started_rx.await.unwrap();
+        cleaner.abort();
+
+        assert!(cleaner.tx.is_none());
+        assert!(cleaner.shutdown_tx.is_none());
+        assert!(cleaner.handle.is_none());
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !aborted.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }

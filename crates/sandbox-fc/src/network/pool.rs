@@ -42,6 +42,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 
 use nix::fcntl::{Flock, FlockArg};
+use sandbox::SandboxError;
 use tracing::{error, info, trace, warn};
 
 use crate::command::{exec, exec_ignore_errors};
@@ -102,6 +103,19 @@ pub struct NetnsPoolConfig {
     pub proxy_port: Option<u16>,
     /// DNS proxy port for DNS query redirect (only adds redirect rules when set).
     pub dns_port: Option<u16>,
+}
+
+/// Network pool config after host network prerequisites have been validated.
+pub(crate) struct CheckedNetnsPoolConfig {
+    inner: NetnsPoolConfig,
+}
+
+impl NetnsPoolConfig {
+    /// Validate host tools required by [`NetnsPool::create`].
+    pub(crate) fn into_checked(self) -> std::result::Result<CheckedNetnsPoolConfig, SandboxError> {
+        crate::prerequisites::check_network_prerequisites()?;
+        Ok(CheckedNetnsPoolConfig { inner: self })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +696,14 @@ impl NetnsPool {
     /// host IP forwarding and reconciles orphaned resources from any idle
     /// pool index before creating new namespaces.
     pub async fn create(config: NetnsPoolConfig) -> Result<Self> {
+        let config = config
+            .into_checked()
+            .map_err(|e| NetworkError::Prerequisite(e.to_string()))?;
+        Self::create_checked(config).await
+    }
+
+    pub(crate) async fn create_checked(config: CheckedNetnsPoolConfig) -> Result<Self> {
+        let config = config.inner;
         let lock_paths = LockPaths::new();
         let (index, lock) = acquire_pool_lock(&lock_paths)?;
 

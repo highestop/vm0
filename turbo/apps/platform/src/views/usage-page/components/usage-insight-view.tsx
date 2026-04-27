@@ -28,6 +28,7 @@ import { UsageInsightBarChart } from "./usage-insight-bar-chart.tsx";
 import { UsageInsightSchedulesTable } from "./usage-insight-schedules-table.tsx";
 import { UsageInsightChatsTable } from "./usage-insight-chats-table.tsx";
 import { UsageInsightTotalsBar } from "./usage-insight-totals-bar.tsx";
+import { UsageInsightEmptyState } from "./usage-insight-empty-state.tsx";
 
 export function UsageInsightView() {
   const range = useGet(range$);
@@ -43,6 +44,10 @@ export function UsageInsightView() {
   const isLoading = loadable.state === "loading";
   const isError = loadable.state === "hasError";
   const data = loadable.state === "hasData" ? loadable.data : null;
+  const isEmpty =
+    data !== null &&
+    data.grandTotalCredits === 0 &&
+    data.grandTotalTokens === 0;
 
   const handleRangeChange = (val: string) => {
     setRange(val as InsightRange);
@@ -108,7 +113,7 @@ export function UsageInsightView() {
       </div>
 
       {/* Totals bar (100% stacked) */}
-      {data && (
+      {data && !isEmpty && (
         <UsageInsightTotalsBar
           data={data}
           metric={metric}
@@ -129,7 +134,8 @@ export function UsageInsightView() {
           Failed to load usage insights. Please try again later.
         </div>
       )}
-      {data && (
+      {isEmpty && <UsageInsightEmptyState />}
+      {data && !isEmpty && (
         <UsageInsightBarChart
           buckets={data.buckets}
           metric={metric}
@@ -139,7 +145,7 @@ export function UsageInsightView() {
       )}
 
       {/* Detail tabs: Schedules / Chats */}
-      {data && (
+      {data && !isEmpty && (
         <Tabs
           value={detailTab}
           onValueChange={handleDetailTabChange}

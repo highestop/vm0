@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Args;
+use futures_util::FutureExt;
 use sandbox::{RuntimeProvider, Sandbox, SandboxFactory, SandboxId, SandboxRuntime};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -18,7 +20,9 @@ use crate::error::{RunnerError, RunnerResult};
 use crate::executor::{self, ExecutorConfig};
 use crate::host;
 use crate::http::HttpClient;
-use crate::idle_pool::{IdleEntry, IdlePool, IdlePoolConfig, ParkResult};
+use crate::idle_pool::{
+    IdleDestroyPayload, IdleEntry, IdlePool, IdlePoolConfig, ParkResult, ReusableIdleSandbox,
+};
 use crate::kmsg_log;
 use crate::lock;
 use crate::network_logs;
@@ -26,7 +30,7 @@ use crate::paths::{HomePaths, LogPaths, RunnerPaths, touch_mtime};
 use crate::prefetch;
 use crate::provider::{ApiProvider, JobProvider, LocalProvider};
 use crate::proxy;
-use crate::resource_budget::ResourceBudget;
+use crate::resource_budget::{BudgetLease, ResourceBudget};
 use crate::retry::{RetryState, recv_retry, sleep_until_retry};
 use crate::status::{RunnerMode, StatusTracker};
 use crate::telemetry::JobTelemetry;
@@ -550,7 +554,6 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
     let mut spawn_ctx = SpawnContext {
         provider: Arc::clone(&provider),
         exec_config: Arc::clone(&exec_config),
-        budget: Arc::clone(&budget),
         idle_pool: Arc::clone(&idle_pool),
         status: Arc::clone(&status),
         mode: current_mode,
@@ -576,7 +579,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                     // Soft drain entry. Destroy the idle pool once (releases
                     // budget — matches pre-split teardown behavior), then keep
                     // servicing the shared reactor while jobs finish.
-                    drain_idle_pool(&idle_pool, &budget, &status, "draining").await;
+                    drain_idle_pool(&idle_pool, &status, "draining").await;
                     draining_idle_pool_drained = true;
                 }
                 if jobs.is_empty() {
@@ -621,8 +624,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                         count = expired.len(),
                         "reclaiming expired idle VMs for resource pressure"
                     );
-                    destroy_idle_entries_and_wait(expired, &budget, "budget_pressure_expired")
-                        .await;
+                    destroy_idle_entries_and_wait(expired, "budget_pressure_expired").await;
                     continue;
                 }
 
@@ -634,14 +636,13 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                     info!(
                         session_id = %evicted.session_id,
                         profile = %evicted.profile_name,
+                        vcpu = evicted.budget_lease.vcpu(),
+                        memory_mb = evicted.budget_lease.memory_mb(),
                         "evicting idle VM for resource pressure"
                     );
-                    // Inline destroy so budget.release() happens synchronously
-                    // before the loop re-checks can_afford().
-                    let vcpu = evicted.vcpu;
-                    let memory_mb = evicted.memory_mb;
-                    evicted.stop_and_destroy().await;
-                    budget.release(vcpu, memory_mb);
+                    // Wait for the destroy task so the idle entry's lease is
+                    // dropped before the loop re-checks can_afford().
+                    destroy_idle_entries_and_wait(vec![evicted], "budget_pressure_oldest").await;
                     continue;
                 }
             }
@@ -713,8 +714,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                 drop(pool);
                 status.set_idle_info(idle_vms).await;
                 for entry in expired {
-                    let b = Arc::clone(&budget);
-                    destroy_tasks.spawn(destroy_idle_entry(entry, b));
+                    spawn_destroy_idle_entry(&mut destroy_tasks, entry, "idle_expired");
                 }
             }
             // Heartbeat: report runner state to the server
@@ -743,7 +743,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
     // Drain idle pool first — these VMs hold budget reservations. This
     // also clears `idle_vms` in status.json so the final snapshot is
     // consistent with the empty pool.
-    drain_idle_pool(&idle_pool, &budget, &status, "shutdown").await;
+    drain_idle_pool(&idle_pool, &status, "shutdown").await;
 
     provider.shutdown().await;
 
@@ -880,9 +880,10 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
     };
     // Reserve resources before claiming so we don't waste a job that another
     // runner could handle.
-    if !ctx.budget.try_reserve(job_vcpu, job_memory) {
+    let Some(job_lease) = ResourceBudget::try_reserve_lease(ctx.budget, job_vcpu, job_memory)
+    else {
         return;
-    }
+    };
     // Insert cancel token before claiming so it is available when discover()
     // next processes a buffered Ably cancel event. Skip duplicates from push +
     // poll races; overwriting would break cancel delivery for the executor.
@@ -890,7 +891,7 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
     {
         let mut tokens = ctx.cancel_tokens.lock().await;
         if tokens.contains_key(&run_id) {
-            ctx.budget.release(job_vcpu, job_memory);
+            drop(job_lease);
             return;
         }
         tokens.insert(run_id, job_cancel.clone());
@@ -908,20 +909,13 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
         // runner, or the provider rejected the job. Release the reservation and
         // cancel token so the runner can continue.
         ctx.cancel_tokens.lock().await.remove(&run_id);
-        ctx.budget.release(job_vcpu, job_memory);
+        drop(job_lease);
         return;
     };
     info!(run_id = %run_id, profile = %profile_name, "job claimed, spawning executor");
 
-    let (reuse_entry, reuse_result) = try_reuse_from_pool(
-        run_id,
-        &profile_name,
-        job_vcpu,
-        job_memory,
-        &context,
-        &mut ctx,
-    )
-    .await;
+    let (reuse_entry, active_lease, reuse_result) =
+        try_reuse_from_pool(run_id, &profile_name, &context, job_lease, &mut ctx).await;
 
     // Determine sandbox_id after the reuse decision. On reuse, the sandbox keeps
     // its original identity; on a fresh create, allocate a new UUID for the
@@ -936,6 +930,7 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
         profile_name,
         vcpu: job_vcpu,
         memory_mb: job_memory,
+        budget_lease: active_lease,
         restore_guest_state: *restore_guest_state,
         factory: Arc::clone(factory),
         cancel: job_cancel,
@@ -954,13 +949,12 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
 async fn try_reuse_from_pool(
     run_id: RunId,
     profile_name: &str,
-    job_vcpu: u32,
-    job_memory: u32,
     context: &ExecutionContext,
+    job_lease: BudgetLease,
     ctx: &mut DiscoveredJobContext<'_>,
-) -> (Option<IdleEntry>, SandboxReuseResult) {
+) -> (Option<ReusableIdleSandbox>, BudgetLease, SandboxReuseResult) {
     let Some(session_id) = context.session_id() else {
-        return (None, SandboxReuseResult::NoSessionId);
+        return (None, job_lease, SandboxReuseResult::NoSessionId);
     };
 
     // Take the entry under the pool lock, then drop the lock before any awaits
@@ -971,16 +965,19 @@ async fn try_reuse_from_pool(
     };
     match taken {
         Some(mut entry) if entry.profile_name == profile_name => {
-            match entry.sandbox.unpark().await {
+            match unpark_sandbox_panic_safe(entry.sandbox.as_mut()).await {
                 Ok(()) => {
                     info!(
                         run_id = %run_id,
                         session_id,
                         "reusing idle VM for session"
                     );
-                    // Idle entry already holds budget — release the new reservation.
-                    ctx.budget.release(job_vcpu, job_memory);
-                    (Some(entry), SandboxReuseResult::Reused)
+                    // Idle entry already holds budget. Drop the speculative
+                    // fresh-job lease and move the idle lease to the outer job
+                    // task before handing the sandbox to the executor.
+                    drop(job_lease);
+                    let (idle_sandbox, idle_lease) = entry.into_reuse_parts();
+                    (Some(idle_sandbox), idle_lease, SandboxReuseResult::Reused)
                 }
                 Err(e) => {
                     warn!(
@@ -989,9 +986,8 @@ async fn try_reuse_from_pool(
                         error = %e,
                         "unpark failed, destroying idle VM and falling through to fresh create"
                     );
-                    let b = Arc::clone(ctx.budget);
-                    ctx.destroy_tasks.spawn(destroy_idle_entry(entry, b));
-                    (None, SandboxReuseResult::UnparkFailed)
+                    spawn_destroy_idle_entry(ctx.destroy_tasks, entry, "reuse_unpark_failed");
+                    (None, job_lease, SandboxReuseResult::UnparkFailed)
                 }
             }
         }
@@ -1003,9 +999,8 @@ async fn try_reuse_from_pool(
                 new_profile = %profile_name,
                 "idle VM profile mismatch, destroying"
             );
-            let b = Arc::clone(ctx.budget);
-            ctx.destroy_tasks.spawn(destroy_idle_entry(stale, b));
-            (None, SandboxReuseResult::ProfileMismatch)
+            spawn_destroy_idle_entry(ctx.destroy_tasks, stale, "reuse_profile_mismatch");
+            (None, job_lease, SandboxReuseResult::ProfileMismatch)
         }
         None => {
             info!(
@@ -1013,7 +1008,7 @@ async fn try_reuse_from_pool(
                 session_id,
                 "no idle VM found for session"
             );
-            (None, SandboxReuseResult::PoolMiss)
+            (None, job_lease, SandboxReuseResult::PoolMiss)
         }
     }
 }
@@ -1023,6 +1018,7 @@ struct JobProfile {
     profile_name: String,
     vcpu: u32,
     memory_mb: u32,
+    budget_lease: BudgetLease,
     restore_guest_state: bool,
     factory: SharedFactory,
     cancel: CancellationToken,
@@ -1049,7 +1045,6 @@ type SharedIdlePool = Arc<tokio::sync::Mutex<IdlePool>>;
 struct SpawnContext {
     provider: Arc<dyn JobProvider>,
     exec_config: Arc<ExecutorConfig>,
-    budget: Arc<ResourceBudget>,
     idle_pool: SharedIdlePool,
     status: Arc<StatusTracker>,
     /// Snapshot of [`RunnerMode`] at spawn time. Each `jobs.spawn` captures
@@ -1084,7 +1079,7 @@ fn spawn_job(
     context: ExecutionContext,
     sandbox_id: SandboxId,
     job_profile: JobProfile,
-    reuse_entry: Option<IdleEntry>,
+    reuse_entry: Option<ReusableIdleSandbox>,
     reuse_result: SandboxReuseResult,
     ctx: &SpawnContext,
     jobs: &mut JoinSet<Option<RunId>>,
@@ -1093,6 +1088,7 @@ fn spawn_job(
     let session_id = context.session_id().map(String::from);
     let vcpu = job_profile.vcpu;
     let memory_mb = job_profile.memory_mb;
+    let active_lease = job_profile.budget_lease;
     let profile_name = job_profile.profile_name;
     let factory = job_profile.factory;
     let job_cancel = job_profile.cancel;
@@ -1110,7 +1106,6 @@ fn spawn_job(
 
     let provider = Arc::clone(&ctx.provider);
     let exec_config = Arc::clone(&ctx.exec_config);
-    let budget = Arc::clone(&ctx.budget);
     let status = Arc::clone(&ctx.status);
     let idle_pool = Arc::clone(&ctx.idle_pool);
     let park_notify = Arc::clone(&ctx.park_notify);
@@ -1128,6 +1123,8 @@ fn spawn_job(
     let reused = reuse_entry.is_some();
 
     jobs.spawn(async move {
+        let mut active_lease = Some(active_lease);
+
         // Inner spawn isolates panics: if execute_job panics, the outer task
         // still reports completion and releases budget.
         let cancel = job_cancel.clone();
@@ -1214,7 +1211,7 @@ fn spawn_job(
                 // Inflate the guest balloon BEFORE acquiring the pool lock —
                 // the HTTP call to Firecracker can take milliseconds, and we
                 // must not block other take/park operations on it.
-                if let Err(e) = sandbox.park().await {
+                if let Err(e) = park_sandbox_panic_safe(sandbox.as_mut()).await {
                     warn!(
                         run_id = %run_id,
                         session_id,
@@ -1224,63 +1221,75 @@ fn spawn_job(
                     stop_and_destroy_sandbox(sandbox, &**factory_for_cleanup).await;
                     false
                 } else {
-                    let mut pool = idle_pool.lock().await;
-                    let idle_timeout = pool.default_timeout();
-                    let entry = IdleEntry {
-                        sandbox,
-                        factory: factory_for_cleanup,
-                        session_id: session_id.to_string(),
-                        sandbox_id,
-                        profile_name,
-                        vcpu,
-                        memory_mb,
-                        source_ip,
-                        parked_at: std::time::Instant::now(),
-                        idle_timeout,
-                        storage_fingerprints,
-                    };
-                    match pool.park(session_id.to_string(), entry) {
-                        ParkResult::Parked => {
-                            info!(run_id = %run_id, session_id, "VM parked for reuse");
-                            // Push fresh idle state to status.json BEFORE
-                            // `status.remove_run` (below) clears the run_id
-                            // from active_runs. Without this, doctor would
-                            // briefly see the FC as unknown (neither active
-                            // nor idle) until the next idle_cleanup tick
-                            // (~10s), producing transient false-positive
-                            // FirecrackerNotInStatus warnings.
-                            let idle_vms = pool.held_snapshot();
-                            drop(pool);
-                            status.set_idle_info(idle_vms).await;
-                            park_notify.notify_one();
-                            true
+                    match active_lease.take() {
+                        Some(lease) => {
+                            let mut pool = idle_pool.lock().await;
+                            let idle_timeout = pool.default_timeout();
+                            let entry = IdleEntry {
+                                sandbox,
+                                factory: factory_for_cleanup,
+                                session_id: session_id.to_string(),
+                                sandbox_id,
+                                profile_name,
+                                budget_lease: lease,
+                                source_ip,
+                                parked_at: std::time::Instant::now(),
+                                idle_timeout,
+                                storage_fingerprints,
+                            };
+                            match pool.park(session_id.to_string(), entry) {
+                                ParkResult::Parked => {
+                                    info!(run_id = %run_id, session_id, "VM parked for reuse");
+                                    // Push fresh idle state to status.json BEFORE
+                                    // `status.remove_run` (below) clears the run_id
+                                    // from active_runs. Without this, doctor would
+                                    // briefly see the FC as unknown (neither active
+                                    // nor idle) until the next idle_cleanup tick
+                                    // (~10s), producing transient false-positive
+                                    // FirecrackerNotInStatus warnings.
+                                    let idle_vms = pool.held_snapshot();
+                                    drop(pool);
+                                    status.set_idle_info(idle_vms).await;
+                                    park_notify.notify_one();
+                                    true
+                                }
+                                ParkResult::Evicted(evicted) => {
+                                    info!(run_id = %run_id, session_id, "VM parked, evicting previous");
+                                    let idle_vms = pool.held_snapshot();
+                                    drop(pool);
+                                    status.set_idle_info(idle_vms).await;
+                                    // Notify immediately — session is already in pool.
+                                    // Don't wait for stop_and_destroy which can be slow.
+                                    park_notify.notify_one();
+                                    // The evicted entry was park()ed when it entered the
+                                    // pool; destroying a parked sandbox is safe — Drop
+                                    // aborts any leftover handles and the FC process is
+                                    // killed regardless of balloon state.
+                                    destroy_idle_entries_and_wait(vec![evicted], "park_replaced")
+                                        .await;
+                                    true
+                                }
+                                ParkResult::PoolFull(rejected) => {
+                                    info!(run_id = %run_id, session_id, "idle pool full, destroying VM");
+                                    drop(pool);
+                                    // Pool unchanged (park rejected) — no status
+                                    // update needed. The rejected sandbox was just
+                                    // park()ed above; destroying a parked sandbox is
+                                    // safe — see Evicted arm for rationale.
+                                    let (payload, lease) = rejected.into_destroy_parts();
+                                    active_lease = Some(lease);
+                                    destroy_idle_payload_and_wait(payload, "park_rejected").await;
+                                    false
+                                }
+                            }
                         }
-                        ParkResult::Evicted(evicted) => {
-                            info!(run_id = %run_id, session_id, "VM parked, evicting previous");
-                            let idle_vms = pool.held_snapshot();
-                            drop(pool);
-                            status.set_idle_info(idle_vms).await;
-                            // Notify immediately — session is already in pool.
-                            // Don't wait for stop_and_destroy which can be slow.
-                            park_notify.notify_one();
-                            let evict_vcpu = evicted.vcpu;
-                            let evict_mem = evicted.memory_mb;
-                            // The evicted entry was park()ed when it entered the
-                            // pool; destroying a parked sandbox is safe — Drop
-                            // aborts any leftover handles and the FC process is
-                            // killed regardless of balloon state.
-                            evicted.stop_and_destroy().await;
-                            budget.release(evict_vcpu, evict_mem);
-                            true
-                        }
-                        ParkResult::PoolFull(rejected) => {
-                            info!(run_id = %run_id, session_id, "idle pool full, destroying VM");
-                            drop(pool);
-                            // Pool unchanged (park rejected) — no status
-                            // update needed. The rejected sandbox was just
-                            // park()ed above; destroying a parked sandbox is
-                            // safe — see Evicted arm for rationale.
-                            rejected.stop_and_destroy().await;
+                        None => {
+                            error!(
+                                run_id = %run_id,
+                                session_id,
+                                "active budget lease missing before parking"
+                            );
+                            stop_and_destroy_sandbox(sandbox, &**factory_for_cleanup).await;
                             false
                         }
                     }
@@ -1308,7 +1317,7 @@ fn spawn_job(
 
         // Release budget only if sandbox was NOT parked (parked VMs hold their budget).
         if !parked {
-            budget.release(vcpu, memory_mb);
+            drop(active_lease.take());
         }
 
         // Best-effort telemetry, deferred past `provider.complete` so the
@@ -1333,6 +1342,22 @@ fn spawn_job(
     });
 }
 
+async fn park_sandbox_panic_safe(sandbox: &mut dyn Sandbox) -> Result<(), String> {
+    match AssertUnwindSafe(sandbox.park()).catch_unwind().await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("sandbox park panicked".into()),
+    }
+}
+
+async fn unpark_sandbox_panic_safe(sandbox: &mut dyn Sandbox) -> Result<(), String> {
+    match AssertUnwindSafe(sandbox.unpark()).catch_unwind().await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("sandbox unpark panicked".into()),
+    }
+}
+
 /// Drain the idle pool: destroy every entry in parallel and wait for all
 /// destroys to complete before returning (budgets released, `status.json`
 /// `idle_vms` cleared). Called from both the Draining mode (soft-drain
@@ -1343,7 +1368,6 @@ fn spawn_job(
 /// (e.g. "draining" vs "shutdown").
 async fn drain_idle_pool(
     idle_pool: &SharedIdlePool,
-    budget: &Arc<ResourceBudget>,
     status: &StatusTracker,
     context: &'static str,
 ) {
@@ -1352,7 +1376,7 @@ async fn drain_idle_pool(
         return;
     }
     info!(count = entries.len(), context, "destroying idle VMs");
-    destroy_idle_entries_and_wait(entries, budget, context).await;
+    destroy_idle_entries_and_wait(entries, context).await;
     status.set_idle_info(Vec::new()).await;
 }
 
@@ -1385,18 +1409,22 @@ async fn evict_oldest_idle_entry(
     Some(evicted)
 }
 
-/// Destroy idle entries in parallel and wait until their budgets are released.
-async fn destroy_idle_entries_and_wait(
-    entries: Vec<IdleEntry>,
-    budget: &Arc<ResourceBudget>,
+fn spawn_destroy_idle_entry(
+    destroy_tasks: &mut JoinSet<()>,
+    entry: IdleEntry,
     context: &'static str,
 ) {
+    destroy_tasks.spawn(destroy_idle_entry(entry, context));
+}
+
+/// Destroy idle entries in parallel and wait until their leases are dropped.
+async fn destroy_idle_entries_and_wait(entries: Vec<IdleEntry>, context: &'static str) {
     // Destroy in parallel — each `stop_and_destroy` is ~1–3s (FC shutdown +
     // cgroup/NBD/netns teardown). Serial destroy blows past shutdown and
     // budget-pressure recovery budgets on multi-VM cleanup.
     let mut set = tokio::task::JoinSet::new();
     for entry in entries {
-        set.spawn(destroy_idle_entry(entry, Arc::clone(budget)));
+        set.spawn(destroy_idle_entry(entry, context));
     }
     while let Some(result) = set.join_next().await {
         if let Err(e) = result {
@@ -1405,20 +1433,33 @@ async fn destroy_idle_entries_and_wait(
     }
 }
 
-/// Destroy an idle sandbox entry and release its budget.
-async fn destroy_idle_entry(entry: IdleEntry, budget: Arc<ResourceBudget>) {
-    let vcpu = entry.vcpu;
-    let memory_mb = entry.memory_mb;
+/// Destroy an idle sandbox entry. Its budget lease is released by Drop.
+async fn destroy_idle_entry(entry: IdleEntry, _context: &'static str) {
     entry.stop_and_destroy().await;
-    budget.release(vcpu, memory_mb);
+}
+
+async fn destroy_idle_payload_and_wait(payload: IdleDestroyPayload, context: &'static str) {
+    let handle = tokio::spawn(payload.stop_and_destroy());
+    match handle.await {
+        Ok(()) => {}
+        Err(e) => warn!(context, error = %e, "idle payload destroy task panicked"),
+    }
 }
 
 /// Stop a sandbox and destroy it via its factory.
 async fn stop_and_destroy_sandbox(mut sandbox: Box<dyn Sandbox>, factory: &dyn SandboxFactory) {
-    if let Err(e) = sandbox.stop().await {
-        warn!(error = %e, "sandbox stop failed");
+    match AssertUnwindSafe(sandbox.stop()).catch_unwind().await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!(error = %e, "sandbox stop failed"),
+        Err(_) => warn!("sandbox stop panicked"),
     }
-    factory.destroy(sandbox).await;
+    if AssertUnwindSafe(factory.destroy(sandbox))
+        .catch_unwind()
+        .await
+        .is_err()
+    {
+        warn!("sandbox destroy panicked");
+    }
 }
 
 /// Handle a completed job from the JoinSet, cleaning up cancel tokens.
@@ -1526,12 +1567,14 @@ fn collect_heartbeat_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // -----------------------------------------------------------------------
     // collect_heartbeat_state: running_count excludes idle VMs
     // -----------------------------------------------------------------------
 
     use crate::idle_pool::{IdleEntry, IdlePool, IdlePoolConfig, ParkResult};
+    use async_trait::async_trait;
     use sandbox_mock::{MockSandbox, MockSandboxFactory};
 
     fn test_profiles() -> BTreeMap<String, config::ProfileConfig> {
@@ -1550,19 +1593,164 @@ mod tests {
     }
 
     fn make_idle_entry(session_id: &str) -> IdleEntry {
+        let budget = Arc::new(ResourceBudget::new(1, 1, 1.0, 0));
         IdleEntry {
             sandbox: Box::new(MockSandbox::new("test")),
             factory: Arc::new(Box::new(MockSandboxFactory::new()) as Box<dyn SandboxFactory>),
             session_id: session_id.into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 4096,
+            budget_lease: ResourceBudget::try_reserve_lease(&budget, 2, 4096).unwrap(),
             source_ip: "10.0.0.1".into(),
             parked_at: std::time::Instant::now(),
             idle_timeout: Duration::from_secs(300),
             storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
         }
+    }
+
+    struct PanickingDestroyFactory;
+
+    #[async_trait]
+    impl SandboxFactory for PanickingDestroyFactory {
+        fn name(&self) -> &str {
+            "panic-destroy"
+        }
+
+        fn config_hash(&self) -> String {
+            "panic-destroy".into()
+        }
+
+        async fn startup(&mut self) -> sandbox::Result<()> {
+            Ok(())
+        }
+
+        async fn create(
+            &self,
+            config: sandbox::SandboxConfig,
+        ) -> sandbox::Result<Box<dyn Sandbox>> {
+            Ok(Box::new(MockSandbox::new(config.id.to_string())))
+        }
+
+        async fn destroy(&self, _sandbox: Box<dyn Sandbox>) {
+            panic!("simulated destroy panic");
+        }
+
+        async fn shutdown(&mut self) {}
+    }
+
+    struct PanickingDestroyRuntime;
+
+    #[async_trait]
+    impl SandboxRuntime for PanickingDestroyRuntime {
+        async fn create_factory(
+            &self,
+            _config: sandbox::FactoryConfig,
+        ) -> sandbox::Result<Box<dyn SandboxFactory>> {
+            Ok(Box::new(PanickingDestroyFactory))
+        }
+
+        async fn shutdown(&mut self) {}
+    }
+
+    struct RecordingDestroyFactory {
+        destroy_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SandboxFactory for RecordingDestroyFactory {
+        fn name(&self) -> &str {
+            "recording-destroy"
+        }
+
+        fn config_hash(&self) -> String {
+            "recording-destroy".into()
+        }
+
+        async fn startup(&mut self) -> sandbox::Result<()> {
+            Ok(())
+        }
+
+        async fn create(
+            &self,
+            config: sandbox::SandboxConfig,
+        ) -> sandbox::Result<Box<dyn Sandbox>> {
+            Ok(Box::new(MockSandbox::new(config.id.to_string())))
+        }
+
+        async fn destroy(&self, _sandbox: Box<dyn Sandbox>) {
+            self.destroy_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        async fn shutdown(&mut self) {}
+    }
+
+    #[derive(Clone)]
+    struct BlockingDestroyHooks {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        destroy_count: Arc<AtomicUsize>,
+    }
+
+    impl BlockingDestroyHooks {
+        fn new() -> Self {
+            Self {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+                destroy_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    struct BlockingDestroyRuntime {
+        hooks: BlockingDestroyHooks,
+    }
+
+    #[async_trait]
+    impl SandboxRuntime for BlockingDestroyRuntime {
+        async fn create_factory(
+            &self,
+            _config: sandbox::FactoryConfig,
+        ) -> sandbox::Result<Box<dyn SandboxFactory>> {
+            Ok(Box::new(BlockingDestroyFactory {
+                hooks: self.hooks.clone(),
+            }))
+        }
+
+        async fn shutdown(&mut self) {}
+    }
+
+    struct BlockingDestroyFactory {
+        hooks: BlockingDestroyHooks,
+    }
+
+    #[async_trait]
+    impl SandboxFactory for BlockingDestroyFactory {
+        fn name(&self) -> &str {
+            "blocking-destroy"
+        }
+
+        fn config_hash(&self) -> String {
+            "blocking-destroy".into()
+        }
+
+        async fn startup(&mut self) -> sandbox::Result<()> {
+            Ok(())
+        }
+
+        async fn create(
+            &self,
+            config: sandbox::SandboxConfig,
+        ) -> sandbox::Result<Box<dyn Sandbox>> {
+            Ok(Box::new(MockSandbox::new(config.id.to_string())))
+        }
+
+        async fn destroy(&self, _sandbox: Box<dyn Sandbox>) {
+            self.hooks.destroy_count.fetch_add(1, Ordering::SeqCst);
+            self.hooks.entered.notify_waiters();
+            self.hooks.release.notified().await;
+        }
+
+        async fn shutdown(&mut self) {}
     }
 
     #[test]
@@ -1670,6 +1858,68 @@ mod tests {
         );
         // saturating_sub prevents underflow: 0 - 1 → 0
         assert_eq!(state.running_count, 0);
+    }
+
+    #[tokio::test]
+    async fn idle_destroy_panic_releases_budget_lease() {
+        let budget = Arc::new(ResourceBudget::new(2, 4096, 1.0, 0));
+        let lease = ResourceBudget::try_reserve_lease(&budget, 2, 4096).unwrap();
+        let entry = IdleEntry {
+            sandbox: Box::new(MockSandbox::new("panic-destroy")),
+            factory: Arc::new(Box::new(PanickingDestroyFactory) as Box<dyn SandboxFactory>),
+            session_id: "sess-panic".into(),
+            sandbox_id: SandboxId::new_v4(),
+            profile_name: "vm0/default".into(),
+            budget_lease: lease,
+            source_ip: "10.0.0.1".into(),
+            parked_at: std::time::Instant::now(),
+            idle_timeout: Duration::from_secs(300),
+            storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
+        };
+
+        destroy_idle_entries_and_wait(vec![entry], "test_destroy_panic").await;
+
+        assert_eq!(budget.allocated(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn idle_stop_panic_still_attempts_destroy_and_releases_budget_lease() {
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
+        overrides.push_stop_panic("simulated idle stop panic");
+        let sandbox_factory = MockSandboxFactory::with_overrides(overrides);
+        let sandbox = sandbox_factory
+            .create(sandbox::SandboxConfig {
+                id: SandboxId::new_v4(),
+                resources: sandbox::ResourceLimits {
+                    cpu_count: 2,
+                    memory_mb: 4096,
+                },
+            })
+            .await
+            .expect("create sandbox");
+
+        let budget = Arc::new(ResourceBudget::new(2, 4096, 1.0, 0));
+        let lease = ResourceBudget::try_reserve_lease(&budget, 2, 4096).unwrap();
+        let destroy_count = Arc::new(AtomicUsize::new(0));
+        let entry = IdleEntry {
+            sandbox,
+            factory: Arc::new(Box::new(RecordingDestroyFactory {
+                destroy_count: Arc::clone(&destroy_count),
+            }) as Box<dyn SandboxFactory>),
+            session_id: "sess-stop-panic".into(),
+            sandbox_id: SandboxId::new_v4(),
+            profile_name: "vm0/default".into(),
+            budget_lease: lease,
+            source_ip: "10.0.0.1".into(),
+            parked_at: std::time::Instant::now(),
+            idle_timeout: Duration::from_secs(300),
+            storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
+        };
+
+        entry.stop_and_destroy().await;
+
+        assert_eq!(destroy_count.load(Ordering::SeqCst), 1);
+        assert_eq!(budget.allocated(), (0, 0, 0));
     }
 
     // =======================================================================
@@ -3205,8 +3455,7 @@ mod tests {
     fn make_test_idle_entry(
         session_id: &str,
         profile_name: &str,
-        vcpu: u32,
-        memory_mb: u32,
+        budget_lease: BudgetLease,
         parked_at: std::time::Instant,
         idle_timeout: Duration,
     ) -> IdleEntry {
@@ -3216,8 +3465,7 @@ mod tests {
             session_id: session_id.into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: profile_name.into(),
-            vcpu,
-            memory_mb,
+            budget_lease,
             source_ip: "10.0.0.1".into(),
             parked_at,
             idle_timeout,
@@ -3230,18 +3478,17 @@ mod tests {
     /// to the completion payload.
     async fn seed_idle_pool(
         pool: &SharedIdlePool,
-        budget: &ResourceBudget,
+        budget: &Arc<ResourceBudget>,
         session_id: &str,
         profile_name: &str,
         vcpu: u32,
         memory_mb: u32,
     ) -> SandboxId {
-        assert!(budget.try_reserve(vcpu, memory_mb));
+        let budget_lease = ResourceBudget::try_reserve_lease(budget, vcpu, memory_mb).unwrap();
         let entry = make_test_idle_entry(
             session_id,
             profile_name,
-            vcpu,
-            memory_mb,
+            budget_lease,
             std::time::Instant::now(),
             Duration::from_secs(300),
         );
@@ -3252,11 +3499,69 @@ mod tests {
         sandbox_id
     }
 
+    async fn seed_idle_pool_with_overrides(
+        pool: &SharedIdlePool,
+        budget: &Arc<ResourceBudget>,
+        overrides: &Arc<sandbox_mock::MockSandboxOverrides>,
+        session_id: &str,
+        profile_name: &str,
+        vcpu: u32,
+        memory_mb: u32,
+    ) -> SandboxId {
+        let runtime = sandbox_mock::MockSandboxRuntime::with_overrides(Arc::clone(overrides));
+        let mut factory = runtime
+            .create_factory(sandbox::FactoryConfig {
+                profile: profile_name.into(),
+                binary_path: PathBuf::new(),
+                kernel_path: PathBuf::new(),
+                rootfs_path: PathBuf::new(),
+                base_dir: PathBuf::new(),
+                snapshot: None,
+            })
+            .await
+            .expect("create factory");
+        factory.startup().await.expect("startup");
+        let factory_arc: Arc<Box<dyn sandbox::SandboxFactory>> = Arc::new(factory);
+        let sandbox_id = SandboxId::new_v4();
+        let sandbox = factory_arc
+            .create(sandbox::SandboxConfig {
+                id: sandbox_id,
+                resources: sandbox::ResourceLimits {
+                    cpu_count: vcpu,
+                    memory_mb,
+                },
+            })
+            .await
+            .expect("create sandbox");
+        let budget_lease =
+            ResourceBudget::try_reserve_lease(budget, vcpu, memory_mb).expect("reserve budget");
+
+        let mut guard = pool.lock().await;
+        let result = guard.park(
+            session_id.to_string(),
+            IdleEntry {
+                sandbox,
+                factory: factory_arc,
+                session_id: session_id.to_string(),
+                sandbox_id,
+                profile_name: profile_name.into(),
+                budget_lease,
+                source_ip: "10.0.0.1".into(),
+                parked_at: std::time::Instant::now(),
+                idle_timeout: Duration::from_secs(300),
+                storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
+            },
+        );
+        assert!(matches!(result, ParkResult::Parked));
+        sandbox_id
+    }
+
     /// Poll until `budget.allocated().2` (running_count) reaches `expected`.
     ///
-    /// `budget.release()` runs after `provider.complete()` in the spawned job
-    /// task, so `wait_completion()` returning does NOT guarantee the budget has
-    /// been released yet. This helper avoids fixed sleeps as synchronization.
+    /// The active budget lease is dropped after `provider.complete()` in the
+    /// spawned job task, so `wait_completion()` returning does NOT guarantee
+    /// the budget has been released yet. This helper avoids fixed sleeps as
+    /// synchronization.
     async fn wait_budget_count(budget: &ResourceBudget, expected: usize, timeout: Duration) {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
@@ -3291,18 +3596,17 @@ mod tests {
     /// Pre-populate idle pool with an expired entry (parked 400s ago, timeout 300s).
     async fn seed_idle_pool_expired(
         pool: &SharedIdlePool,
-        budget: &ResourceBudget,
+        budget: &Arc<ResourceBudget>,
         session_id: &str,
         profile_name: &str,
         vcpu: u32,
         memory_mb: u32,
     ) {
-        assert!(budget.try_reserve(vcpu, memory_mb));
+        let budget_lease = ResourceBudget::try_reserve_lease(budget, vcpu, memory_mb).unwrap();
         let entry = make_test_idle_entry(
             session_id,
             profile_name,
-            vcpu,
-            memory_mb,
+            budget_lease,
             std::time::Instant::now() - Duration::from_secs(400),
             Duration::from_secs(300),
         );
@@ -3322,15 +3626,15 @@ mod tests {
 
     async fn seed_idle_pool_with_timing(
         pool: &SharedIdlePool,
-        budget: &ResourceBudget,
+        budget: &Arc<ResourceBudget>,
         spec: TestIdleEntrySpec<'_>,
     ) {
-        assert!(budget.try_reserve(spec.vcpu, spec.memory_mb));
+        let budget_lease =
+            ResourceBudget::try_reserve_lease(budget, spec.vcpu, spec.memory_mb).unwrap();
         let entry = make_test_idle_entry(
             spec.session_id,
             spec.profile_name,
-            spec.vcpu,
-            spec.memory_mb,
+            budget_lease,
             spec.parked_at,
             spec.idle_timeout,
         );
@@ -3426,13 +3730,46 @@ mod tests {
         assert!(completion.is_some(), "job should complete");
         assert_eq!(completion.unwrap().exit_code, 0);
 
-        // budget.release() runs after provider.complete() in the spawned task,
-        // so wait_completion returning doesn't guarantee it has executed yet.
+        // The active budget lease is dropped after provider.complete() in the
+        // spawned task, so wait_completion returning doesn't guarantee it has
+        // executed yet.
         // Poll until budget is fully released rather than using a fixed sleep.
         wait_budget_count(&budget, 0, Duration::from_secs(5)).await;
 
         // No parking — pool empty, budget fully released.
         assert_eq!(idle_pool.lock().await.len(), 0, "pool should be empty");
+
+        shutdown(&env, run_handle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn active_destroy_panic_still_reports_completion_and_releases_budget() {
+        let (config, env) = build_mock_run_config_with_runtime(
+            test_profiles(),
+            8,
+            32768,
+            4,
+            MockJobProvider::new,
+            Box::new(PanickingDestroyRuntime),
+            "http://localhost:0",
+        );
+        let budget = Arc::clone(&config.budget);
+        let run_handle = tokio::spawn(run(config));
+
+        let run_id = RunId::new_v4();
+        push_job(&env, run_id, "vm0/default", Some(minimal_context(run_id)));
+
+        let completion = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(
+            completion.is_some(),
+            "destroy panic must not skip provider.complete"
+        );
+        assert_eq!(completion.unwrap().exit_code, 0);
+
+        wait_budget_count(&budget, 0, Duration::from_secs(5)).await;
 
         shutdown(&env, run_handle).await;
     }
@@ -3656,7 +3993,7 @@ mod tests {
         // perspective. Advance 11s to ensure at least one full tick fires.
         tokio::time::sleep(Duration::from_secs(11)).await;
 
-        // Eviction spawns a destroy_task that calls budget.release() async.
+        // Eviction spawns a destroy_task that releases the idle entry lease.
         // Poll until it completes.
         wait_budget_count(&budget, 0, Duration::from_secs(5)).await;
 
@@ -4459,6 +4796,115 @@ mod tests {
         shutdown(&env, run_handle).await;
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn park_panic_destroys_sandbox_reports_completion_and_releases_budget() {
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
+        overrides.push_park_panic("simulated park panic");
+        let counter = Arc::clone(&overrides);
+        let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 16384, 4, overrides);
+        let budget = Arc::clone(&config.budget);
+        let idle_pool = Arc::clone(&config.idle_pool);
+        let run_handle = tokio::spawn(run(config));
+
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-park-panic")),
+        );
+
+        let c = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(c.is_some(), "park panic must not skip provider.complete");
+        assert_eq!(c.unwrap().exit_code, 0);
+
+        wait_budget_count(&budget, 0, Duration::from_secs(2)).await;
+        assert_eq!(idle_pool.lock().await.len(), 0);
+        assert_eq!(counter.park_call_count(), 1);
+
+        shutdown(&env, run_handle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pool_full_rejected_vm_keeps_budget_until_destroy_and_completion() {
+        let hooks = BlockingDestroyHooks::new();
+        let (config, env) = build_mock_run_config_with_runtime(
+            test_profiles(),
+            8,
+            16384,
+            4,
+            MockJobProvider::new,
+            Box::new(BlockingDestroyRuntime {
+                hooks: hooks.clone(),
+            }),
+            "http://localhost:0",
+        );
+        let budget = Arc::clone(&config.budget);
+        let idle_pool = Arc::clone(&config.idle_pool);
+        {
+            let mut pool = idle_pool.lock().await;
+            *pool = IdlePool::new(IdlePoolConfig {
+                default_timeout: Duration::from_secs(300),
+                max_idle: 1,
+            });
+        }
+        seed_idle_pool(&idle_pool, &budget, "sess-existing", "vm0/default", 2, 4096).await;
+        assert_eq!(budget.allocated().2, 1, "seeded idle entry holds budget");
+
+        let destroy_entered = hooks.entered.notified();
+        tokio::pin!(destroy_entered);
+        destroy_entered.as_mut().enable();
+        let run_handle = tokio::spawn(run(config));
+
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-rejected")),
+        );
+
+        tokio::time::timeout(Duration::from_secs(5), destroy_entered)
+            .await
+            .expect("pool-full destroy should start");
+        assert_eq!(
+            hooks.destroy_count.load(Ordering::SeqCst),
+            1,
+            "rejected VM should be sent to destroy"
+        );
+        assert_eq!(
+            budget.allocated().2,
+            2,
+            "rejected active VM must retain its budget while destroy is in-flight"
+        );
+        {
+            let completions = env.handle.completions.lock().unwrap();
+            assert!(
+                !completions.iter().any(|c| c.run_id == run_id),
+                "provider.complete must wait until rejected VM destroy finishes"
+            );
+        }
+
+        hooks.release.notify_waiters();
+        let c = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(c.is_some(), "job should complete after rejected VM destroy");
+        assert_eq!(c.unwrap().exit_code, 0);
+
+        wait_budget_count(&budget, 1, Duration::from_secs(2)).await;
+        let pool = idle_pool.lock().await;
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.held_sessions(), vec!["sess-existing"]);
+        drop(pool);
+
+        shutdown(&env, run_handle).await;
+    }
+
     /// When the runner takes a sandbox out of the idle pool for reuse and
     /// `Sandbox::unpark()` returns an error, the idle entry is destroyed
     /// and the runner falls through to a fresh sandbox create.
@@ -4480,50 +4926,16 @@ mod tests {
 
         // Pre-seed via the factory so the seeded MockSandbox shares the
         // override set (and consumes the queued unpark error).
-        {
-            let mut pool = idle_pool.lock().await;
-            let runtime = sandbox_mock::MockSandboxRuntime::with_overrides(Arc::clone(&counter));
-            let mut factory = runtime
-                .create_factory(sandbox::FactoryConfig {
-                    profile: "vm0/default".into(),
-                    binary_path: PathBuf::new(),
-                    kernel_path: PathBuf::new(),
-                    rootfs_path: PathBuf::new(),
-                    base_dir: PathBuf::new(),
-                    snapshot: None,
-                })
-                .await
-                .expect("create factory");
-            factory.startup().await.expect("startup");
-            let factory_arc: Arc<Box<dyn sandbox::SandboxFactory>> = Arc::new(factory);
-            let sandbox = factory_arc
-                .create(sandbox::SandboxConfig {
-                    id: SandboxId::new_v4(),
-                    resources: sandbox::ResourceLimits {
-                        cpu_count: 2,
-                        memory_mb: 4096,
-                    },
-                })
-                .await
-                .expect("create sandbox");
-            assert!(budget.try_reserve(2, 4096), "reserve seeded budget");
-            let _ = pool.park(
-                "sess-unpark-fail".to_string(),
-                IdleEntry {
-                    sandbox,
-                    factory: factory_arc,
-                    session_id: "sess-unpark-fail".to_string(),
-                    sandbox_id: SandboxId::new_v4(),
-                    profile_name: "vm0/default".into(),
-                    vcpu: 2,
-                    memory_mb: 4096,
-                    source_ip: "10.0.0.1".into(),
-                    parked_at: std::time::Instant::now(),
-                    idle_timeout: Duration::from_secs(300),
-                    storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
-                },
-            );
-        }
+        seed_idle_pool_with_overrides(
+            &idle_pool,
+            &budget,
+            &counter,
+            "sess-unpark-fail",
+            "vm0/default",
+            2,
+            4096,
+        )
+        .await;
         assert_eq!(idle_pool.lock().await.len(), 1, "pool seeded");
 
         let run_handle = tokio::spawn(run(config));
@@ -4564,6 +4976,52 @@ mod tests {
             1,
             "expected exactly one park (the fresh-create's)"
         );
+
+        shutdown(&env, run_handle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unpark_panic_destroys_idle_entry_and_falls_through() {
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
+        let counter = Arc::clone(&overrides);
+        overrides.push_unpark_panic("simulated unpark panic");
+        let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 16384, 4, overrides);
+        let budget = Arc::clone(&config.budget);
+        let idle_pool = Arc::clone(&config.idle_pool);
+
+        seed_idle_pool_with_overrides(
+            &idle_pool,
+            &budget,
+            &counter,
+            "sess-unpark-panic",
+            "vm0/default",
+            2,
+            4096,
+        )
+        .await;
+
+        let run_handle = tokio::spawn(run(config));
+
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-unpark-panic")),
+        );
+
+        let c = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await
+            .expect("fresh-create job should still complete");
+        assert_eq!(c.exit_code, 0);
+        assert_eq!(c.reuse_result, Some(SandboxReuseResult::UnparkFailed));
+
+        wait_budget_count(&budget, 1, Duration::from_secs(2)).await;
+        assert_eq!(counter.unpark_call_count(), 1);
+        assert_eq!(counter.park_call_count(), 1);
+        assert_eq!(idle_pool.lock().await.len(), 1);
 
         shutdown(&env, run_handle).await;
     }

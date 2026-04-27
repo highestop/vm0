@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
+use futures_util::FutureExt;
 use sandbox::{ExecRequest, Sandbox, SandboxConfig, SandboxFactory, SandboxId};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -18,7 +20,7 @@ const DEFAULT_EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 
 use crate::error::{RunnerError, RunnerResult};
 use crate::http::HttpClient;
-use crate::idle_pool::IdleEntry;
+use crate::idle_pool::ReusableIdleSandbox;
 use crate::kmsg_log;
 use crate::paths::{HomePaths, LogPaths, guest};
 use crate::proxy::{self, ProxyRegistryHandle};
@@ -114,7 +116,7 @@ pub async fn execute_job(
 /// flush telemetry after firing `provider.complete` (see [`execute_job`] for
 /// rationale).
 pub async fn execute_job_reuse(
-    idle_entry: IdleEntry,
+    idle_sandbox: ReusableIdleSandbox,
     context: ExecutionContext,
     config: &ExecutorConfig,
     cancel: CancellationToken,
@@ -126,9 +128,9 @@ pub async fn execute_job_reuse(
     record_reuse_result(&mut telemetry, SandboxReuseResult::Reused);
     record_api_latency("api_to_vm_start", &context, &mut telemetry);
 
-    let source_ip = idle_entry.source_ip.clone();
-    let prev_storage = idle_entry.storage_fingerprints;
-    let sandbox = idle_entry.sandbox;
+    let source_ip = idle_sandbox.source_ip;
+    let prev_storage = idle_sandbox.storage_fingerprints;
+    let sandbox = idle_sandbox.sandbox;
 
     // execute_reused_sandbox never returns Err — it always returns the sandbox
     // in the outcome so the caller can stop + destroy it on failure.
@@ -232,7 +234,7 @@ async fn execute_new_sandbox(
     if let Err(e) = sandbox.start().await {
         telemetry.record("vm_create", t.elapsed(), false, Some(&e.to_string()));
         unregister_proxy(config, context, &source_ip).await;
-        factory.destroy(sandbox).await;
+        destroy_sandbox_panic_safe(factory, sandbox).await;
         return Err(e.into());
     }
     telemetry.record("vm_create", t.elapsed(), true, None);
@@ -279,6 +281,16 @@ async fn execute_new_sandbox(
         source_ip,
         guest_session_id,
     })
+}
+
+async fn destroy_sandbox_panic_safe(factory: &dyn SandboxFactory, sandbox: Box<dyn Sandbox>) {
+    if AssertUnwindSafe(factory.destroy(sandbox))
+        .catch_unwind()
+        .await
+        .is_err()
+    {
+        warn!("sandbox destroy panicked after start failure");
+    }
 }
 
 /// Run a job inside a reused (kept-alive) sandbox.
@@ -1321,8 +1333,41 @@ mod tests {
     use super::*;
     use crate::ids::RunId;
     use crate::types::{ArtifactEntry, ResumeSession, StorageEntry, StorageManifest};
+    use async_trait::async_trait;
     use sandbox_mock::MockSandboxFactory;
     use std::sync::Arc;
+
+    struct DestroyPanicFactory {
+        inner: MockSandboxFactory,
+    }
+
+    #[async_trait]
+    impl SandboxFactory for DestroyPanicFactory {
+        fn name(&self) -> &str {
+            "destroy-panic"
+        }
+
+        fn config_hash(&self) -> String {
+            "destroy-panic".into()
+        }
+
+        async fn startup(&mut self) -> sandbox::Result<()> {
+            self.inner.startup().await
+        }
+
+        async fn create(&self, config: SandboxConfig) -> sandbox::Result<Box<dyn Sandbox>> {
+            self.inner.create(config).await
+        }
+
+        #[allow(clippy::panic)]
+        async fn destroy(&self, _sandbox: Box<dyn Sandbox>) {
+            panic!("simulated destroy panic");
+        }
+
+        async fn shutdown(&mut self) {
+            self.inner.shutdown().await;
+        }
+    }
 
     fn build_env_for_test(ctx: &ExecutionContext, api_url: &str) -> HashMap<String, String> {
         let sid = SandboxId::new_v4().to_string();
@@ -2455,6 +2500,11 @@ mod tests {
         }
     }
 
+    fn test_budget_lease() -> crate::resource_budget::BudgetLease {
+        let budget = Arc::new(crate::resource_budget::ResourceBudget::new(1, 1, 1.0, 0));
+        crate::resource_budget::ResourceBudget::try_reserve_lease(&budget, 2, 2048).unwrap()
+    }
+
     fn test_telemetry(config: &ExecutorConfig, ctx: &ExecutionContext) -> JobTelemetry {
         crate::telemetry::JobTelemetry::new(
             config.http.clone(),
@@ -2600,6 +2650,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_inner_start_failure_destroy_panic_returns_start_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
+        overrides.push_start_result(Err(SandboxError::Start {
+            message: "boot failed".into(),
+        }));
+        let mut factory = DestroyPanicFactory {
+            inner: MockSandboxFactory::with_overrides(overrides),
+        };
+        factory.startup().await.unwrap();
+
+        let ctx = minimal_context();
+        let mut telemetry = test_telemetry(&config, &ctx);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let result = execute_new_sandbox(
+            &factory,
+            &ctx,
+            NewSandboxDispatch {
+                id: SandboxId::new_v4(),
+                reuse_result: SandboxReuseResult::PoolMiss,
+            },
+            &config,
+            &default_params(),
+            &mut telemetry,
+            cancel,
+        )
+        .await;
+
+        assert!(result.is_err(), "start failure must return an error");
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("boot failed"), "got: {err}");
+    }
+
+    #[tokio::test]
     async fn execute_job_wraps_execute_inner() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
@@ -2687,8 +2772,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: outcome.source_ip,
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2696,9 +2780,10 @@ mod tests {
         };
 
         // Reuse the sandbox for a second turn
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
         let cancel = tokio_util::sync::CancellationToken::new();
         let (reuse_outcome, _telemetry) =
-            execute_job_reuse(idle_entry, minimal_context(), &config, cancel).await;
+            execute_job_reuse(idle_sandbox, minimal_context(), &config, cancel).await;
         assert_eq!(reuse_outcome.exit_code, 0);
         assert!(reuse_outcome.error.is_none());
         assert!(reuse_outcome.sandbox.is_some());
@@ -2744,8 +2829,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: outcome.source_ip,
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2763,8 +2847,9 @@ mod tests {
         });
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
         let (reuse_outcome, _telemetry) =
-            execute_job_reuse(idle_entry, ctx2, &config, cancel).await;
+            execute_job_reuse(idle_sandbox, ctx2, &config, cancel).await;
         assert_eq!(reuse_outcome.exit_code, 0);
         assert!(reuse_outcome.sandbox.is_some());
     }
@@ -2809,8 +2894,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: outcome.source_ip,
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2828,8 +2912,9 @@ mod tests {
 
         // Execute reuse
         let cancel = tokio_util::sync::CancellationToken::new();
+        let (idle_sandbox, _lease) = reuse_entry.into_reuse_parts();
         let (reuse_outcome, _telemetry) =
-            execute_job_reuse(reuse_entry, minimal_context(), &config, cancel).await;
+            execute_job_reuse(idle_sandbox, minimal_context(), &config, cancel).await;
         assert_eq!(reuse_outcome.exit_code, 0);
         assert!(reuse_outcome.sandbox.is_some());
     }
@@ -2852,8 +2937,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: "10.0.0.1".into(),
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2887,8 +2971,7 @@ mod tests {
             session_id: "sess-1".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: "10.0.0.1".into(),
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2896,8 +2979,9 @@ mod tests {
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
         let (outcome, _telemetry) =
-            execute_job_reuse(idle_entry, minimal_context(), &config, cancel).await;
+            execute_job_reuse(idle_sandbox, minimal_context(), &config, cancel).await;
 
         assert_eq!(outcome.exit_code, 1);
         assert!(outcome.error.unwrap().contains("vsock broken"));
@@ -2930,8 +3014,7 @@ mod tests {
             session_id: "sess-1".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: "10.0.0.1".into(),
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2939,8 +3022,9 @@ mod tests {
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
         let (outcome, _telemetry) =
-            execute_job_reuse(idle_entry, minimal_context(), &config, cancel).await;
+            execute_job_reuse(idle_sandbox, minimal_context(), &config, cancel).await;
 
         assert_eq!(outcome.exit_code, 1);
         assert!(outcome.error.unwrap().contains("reseed timeout"));
@@ -2975,8 +3059,7 @@ mod tests {
             session_id: "sess-abc".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: "10.0.0.1".into(),
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -2984,7 +3067,8 @@ mod tests {
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let (outcome, _telemetry) = execute_job_reuse(idle_entry, ctx, &config, cancel).await;
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
+        let (outcome, _telemetry) = execute_job_reuse(idle_sandbox, ctx, &config, cancel).await;
 
         assert_eq!(outcome.exit_code, 1);
         assert!(outcome.error.unwrap().contains("disk full"));
@@ -3479,8 +3563,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
-            vcpu: 2,
-            memory_mb: 2048,
+            budget_lease: test_budget_lease(),
             source_ip: outcome.source_ip,
             parked_at: std::time::Instant::now(),
             idle_timeout: std::time::Duration::from_secs(300),
@@ -3488,8 +3571,9 @@ mod tests {
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let (idle_sandbox, _lease) = idle_entry.into_reuse_parts();
         let (_outcome, telemetry) =
-            execute_job_reuse(idle_entry, minimal_context(), &config, cancel).await;
+            execute_job_reuse(idle_sandbox, minimal_context(), &config, cancel).await;
 
         let ops = telemetry.pending_ops_snapshot();
         let reuse_events: Vec<_> = ops

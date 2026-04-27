@@ -13,7 +13,7 @@ import { ZeroCapability } from "@vm0/api-contracts";
 import { AuthContext, CliAuth, ZeroAuthContext } from "../../types/auth";
 import {
   cliTokenRecord,
-  memberRole,
+  getMemberRoleAndUpdateCache$,
   updateCliTokenLastUsedAt$,
 } from "../services/auth.service";
 import { authorization$, cookie$ } from "../context/hono";
@@ -57,7 +57,12 @@ const cliAuth$ = command(
 
     waitUntil(set(updateCliTokenLastUsedAt$, cliAuth.tokenId, signal));
 
-    const membership = await get(memberRole(resolved.orgId, resolved.userId));
+    const membership = await set(
+      getMemberRoleAndUpdateCache$,
+      resolved.orgId,
+      resolved.userId,
+      signal,
+    );
     if (!membership) {
       return null;
     }
@@ -92,11 +97,13 @@ function resolveSandboxAuth(
   return null;
 }
 
-function zeroAuth(
-  token: string,
-  options: AuthOptions,
-): Computed<Promise<AuthContext | null>> {
-  return computed(async (get): Promise<AuthContext | null> => {
+const zeroAuth$ = command(
+  async (
+    { set },
+    token: string,
+    options: AuthOptions,
+    signal: AbortSignal,
+  ): Promise<AuthContext | null> => {
     const zeroAuth = verifyZeroToken(token);
     if (!zeroAuth) {
       return null;
@@ -119,30 +126,39 @@ function zeroAuth(
       capabilities: [...zeroAuth.capabilities],
     };
 
-    const membership = await get(memberRole(zeroAuth.orgId, zeroAuth.userId));
+    const membership = await set(
+      getMemberRoleAndUpdateCache$,
+      zeroAuth.orgId,
+      zeroAuth.userId,
+      signal,
+    );
     if (!membership) {
       return result;
     }
 
     return { ...result, orgRole: membership.role };
-  });
-}
+  },
+);
 
-function sandboxTokenAuth(
-  token: string,
-  options: AuthOptions,
-): Computed<Promise<AuthContext | null>> {
-  return computed(async (get): Promise<AuthContext | null> => {
+const sandboxTokenAuth$ = command(
+  async (
+    { set },
+    token: string,
+    options: AuthOptions,
+    signal: AbortSignal,
+  ): Promise<AuthContext | null> => {
     if (!options.requiredCapability && !options.acceptAnySandboxCapability) {
       return null;
     }
 
-    return (
-      resolveSandboxAuth(token, options) ??
-      (await get(zeroAuth(token, options)))
-    );
-  });
-}
+    const sandboxAuth = resolveSandboxAuth(token, options);
+    if (sandboxAuth) {
+      return sandboxAuth;
+    }
+
+    return await set(zeroAuth$, token, options, signal);
+  },
+);
 
 const resolvedAuthContext$ = command(
   async (
@@ -173,23 +189,13 @@ const resolvedAuthContext$ = command(
     if (isSandboxToken(token)) {
       const cliAuth = verifyCliToken(token);
       if (!cliAuth) {
-        return await get(sandboxTokenAuth(token, options));
+        return await set(sandboxTokenAuth$, token, options, signal);
       }
 
       return await set(cliAuth$, cliAuth, signal);
     }
 
     return null;
-  },
-);
-
-export const createAuthContext$ = command(
-  async (
-    { set },
-    options: AuthOptions,
-    signal: AbortSignal,
-  ): Promise<AuthContext | null> => {
-    return await set(resolvedAuthContext$, options, signal);
   },
 );
 
@@ -259,36 +265,5 @@ export const requiredAuthContext$ = command(
         error: { message: "Not authenticated", code: "UNAUTHORIZED" },
       },
     };
-  },
-);
-
-export const apiKeyAuthContext$ = command(
-  async (
-    { get, set },
-    signal: AbortSignal,
-  ): Promise<AuthContext | AuthErrorResponse> => {
-    const UNAUTHORIZED: AuthErrorResponse = {
-      status: 401,
-      body: {
-        error: { message: "API key required", code: "UNAUTHORIZED" },
-      },
-    };
-
-    const authHeader = get(authorization$);
-    if (!authHeader?.startsWith("Bearer ")) {
-      return UNAUTHORIZED;
-    }
-
-    const token = authHeader.substring(7);
-    if (!isPatToken(token)) {
-      return UNAUTHORIZED;
-    }
-
-    const authContext = await set(resolvedAuthContext$, {}, signal);
-    if (!authContext || authContext.tokenType !== "pat") {
-      return UNAUTHORIZED;
-    }
-
-    return authContext;
   },
 );

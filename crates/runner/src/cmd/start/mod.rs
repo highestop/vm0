@@ -21,7 +21,8 @@ use crate::executor::{self, ExecutorConfig};
 use crate::host;
 use crate::http::HttpClient;
 use crate::idle_pool::{
-    IdleDestroyPayload, IdleEntry, IdlePool, IdlePoolConfig, ParkResult, ReusableIdleSandbox,
+    IdleDestroyPayload, IdleEntry, IdlePool, IdlePoolConfig, IdlePoolSnapshot, ParkResult,
+    ParkingGate, ReusableIdleSandbox,
 };
 use crate::kmsg_log;
 use crate::lock;
@@ -46,9 +47,6 @@ use mitm_restart::{
     finish_mitm_restart_before_shutdown, handle_mitm_restart_result, maybe_spawn_mitm_restart,
 };
 use signals::{EarlySignals, SignalController};
-
-#[cfg(test)]
-use signals::{handle_drain_signal, handle_resume_signal, handle_stopping_signal};
 
 /// Period between routine heartbeat ticks sent to the server. First
 /// tick is deferred by one period via `interval_at` — see the comment
@@ -260,10 +258,14 @@ pub async fn run_start(
     );
 
     // Idle sandbox pool for VM reuse across conversation turns.
-    let idle_pool = Arc::new(tokio::sync::Mutex::new(IdlePool::new(IdlePoolConfig {
-        default_timeout: Duration::from_secs(idle_timeout_secs),
-        max_idle,
-    })));
+    let parking_gate = ParkingGate::new_open();
+    let idle_pool = Arc::new(tokio::sync::Mutex::new(IdlePool::new_with_parking_gate(
+        IdlePoolConfig {
+            default_timeout: Duration::from_secs(idle_timeout_secs),
+            max_idle,
+        },
+        parking_gate.clone(),
+    )));
 
     // Estimated capacity for status reporting.
     // Derived from the smallest profile to cover the worst case.
@@ -346,6 +348,7 @@ pub async fn run_start(
         home,
         budget,
         idle_pool,
+        parking_gate,
         status,
         mitm,
         mitm_crash_rx,
@@ -374,6 +377,7 @@ struct RunConfig {
     home: HomePaths,
     budget: Arc<ResourceBudget>,
     idle_pool: SharedIdlePool,
+    parking_gate: ParkingGate,
     status: Arc<StatusTracker>,
     mitm: proxy::MitmProxy,
     mitm_crash_rx: tokio::sync::mpsc::Receiver<()>,
@@ -392,7 +396,7 @@ struct RunConfig {
     /// How the run's mode channel is driven. Production supplies the signal
     /// streams registered at the top of `run_start`; tests supply a
     /// pre-built `SignalController` so they can drive mode transitions
-    /// directly.
+    /// through the lifecycle controller.
     signal_source: SignalSource,
 }
 
@@ -417,6 +421,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
         home,
         budget,
         idle_pool,
+        parking_gate,
         status,
         mut mitm,
         mut mitm_crash_rx,
@@ -488,13 +493,16 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
     // Signal handling / mode channel
     // -----------------------------------------------------------------------
     let signal = match signal_source {
-        SignalSource::Real(signals) => {
-            SignalController::spawn(cancel.clone(), Arc::clone(&cancel_tokens), signals)
-        }
+        SignalSource::Real(signals) => SignalController::spawn(
+            cancel.clone(),
+            Arc::clone(&cancel_tokens),
+            signals,
+            parking_gate.clone(),
+        ),
         SignalSource::Override(controller) => controller,
     };
     let mut mode_rx = signal.mode_rx;
-    let mode_tx = signal.mode_tx;
+    let lifecycle = signal.lifecycle;
     let signal_handler_abort = signal.handler_abort;
 
     // -----------------------------------------------------------------------
@@ -551,12 +559,12 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
     let mut discover_fut = Box::pin(provider.discover());
 
     let mut current_mode = RunnerMode::Running;
-    let mut spawn_ctx = SpawnContext {
+    let spawn_ctx = SpawnContext {
         provider: Arc::clone(&provider),
         exec_config: Arc::clone(&exec_config),
         idle_pool: Arc::clone(&idle_pool),
         status: Arc::clone(&status),
-        mode: current_mode,
+        parking_gate: parking_gate.clone(),
         park_notify: Arc::clone(&park_notify),
     };
     let mut draining_idle_pool_drained = false;
@@ -564,7 +572,6 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
         let mode = *mode_rx.borrow_and_update();
         if mode != current_mode {
             current_mode = mode;
-            spawn_ctx.mode = mode;
             status.set_mode(mode).await;
         }
         match mode {
@@ -588,15 +595,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                     // transition on `mode == Draining` so a concurrent SIGUSR2
                     // resume wins instead of being overwritten.
                     info!("draining: jobs drained, transitioning to Stopping");
-                    let transitioned = mode_tx.send_if_modified(|v| {
-                        if *v == RunnerMode::Draining {
-                            *v = RunnerMode::Stopping;
-                            true
-                        } else {
-                            // SIGUSR2 raced us to Running — keep that.
-                            false
-                        }
-                    });
+                    let transitioned = lifecycle.stop_after_natural_drain();
                     if transitioned {
                         // Live observability: fire an immediate "stopping"
                         // heartbeat before teardown removes the runner.
@@ -606,9 +605,6 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                 }
             }
             RunnerMode::Running => {
-                if draining_idle_pool_drained {
-                    idle_pool.lock().await.resume_after_soft_drain();
-                }
                 draining_idle_pool_drained = false;
             }
         }
@@ -710,9 +706,9 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
                     );
                 }
                 // Update status with current idle pool state
-                let idle_vms = pool.held_snapshot();
+                let snapshot = pool.status_snapshot();
                 drop(pool);
-                status.set_idle_info(idle_vms).await;
+                set_idle_status_snapshot(&status, snapshot).await;
                 for entry in expired {
                     spawn_destroy_idle_entry(&mut destroy_tasks, entry, "idle_expired");
                 }
@@ -743,6 +739,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
     // Drain idle pool first — these VMs hold budget reservations. This
     // also clears `idle_vms` in status.json so the final snapshot is
     // consistent with the empty pool.
+    lifecycle.close_parking();
     drain_idle_pool(&idle_pool, &status, "shutdown").await;
 
     provider.shutdown().await;
@@ -921,7 +918,7 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
     };
     info!(run_id = %run_id, profile = %profile_name, "job claimed, spawning executor");
 
-    let (reuse_entry, active_lease, reuse_result) =
+    let (reuse_entry, active_lease, reuse_result, idle_snapshot) =
         try_reuse_from_pool(run_id, &profile_name, &context, job_lease, &mut ctx).await;
 
     // Determine sandbox_id after the reuse decision. On reuse, the sandbox keeps
@@ -931,7 +928,11 @@ async fn handle_discovered_job(job: DiscoveredJob, mut ctx: DiscoveredJobContext
         Some(entry) => entry.sandbox_id,
         None => SandboxId::new_v4(),
     };
-    ctx.status.add_run(run_id, sandbox_id).await;
+    if let Some(snapshot) = idle_snapshot {
+        add_run_with_idle_status_snapshot(ctx.status, run_id, sandbox_id, snapshot).await;
+    } else {
+        ctx.status.add_run(run_id, sandbox_id).await;
+    }
 
     let job_profile = JobProfile {
         profile_name,
@@ -959,16 +960,23 @@ async fn try_reuse_from_pool(
     context: &ExecutionContext,
     job_lease: BudgetLease,
     ctx: &mut DiscoveredJobContext<'_>,
-) -> (Option<ReusableIdleSandbox>, BudgetLease, SandboxReuseResult) {
+) -> (
+    Option<ReusableIdleSandbox>,
+    BudgetLease,
+    SandboxReuseResult,
+    Option<IdlePoolSnapshot>,
+) {
     let Some(session_id) = context.session_id() else {
-        return (None, job_lease, SandboxReuseResult::NoSessionId);
+        return (None, job_lease, SandboxReuseResult::NoSessionId, None);
     };
 
     // Take the entry under the pool lock, then drop the lock before any awaits
     // so unpark does not block other take/park operations.
-    let taken = {
+    let (taken, snapshot) = {
         let mut pool = ctx.idle_pool.lock().await;
-        pool.take(session_id)
+        let taken = pool.take(session_id);
+        let snapshot = taken.as_ref().map(|_| pool.status_snapshot());
+        (taken, snapshot)
     };
     match taken {
         Some(mut entry) if entry.profile_name == profile_name => {
@@ -984,7 +992,12 @@ async fn try_reuse_from_pool(
                     // task before handing the sandbox to the executor.
                     drop(job_lease);
                     let (idle_sandbox, idle_lease) = entry.into_reuse_parts();
-                    (Some(idle_sandbox), idle_lease, SandboxReuseResult::Reused)
+                    (
+                        Some(idle_sandbox),
+                        idle_lease,
+                        SandboxReuseResult::Reused,
+                        snapshot,
+                    )
                 }
                 Err(e) => {
                     warn!(
@@ -994,7 +1007,7 @@ async fn try_reuse_from_pool(
                         "unpark failed, destroying idle VM and falling through to fresh create"
                     );
                     spawn_destroy_idle_entry(ctx.destroy_tasks, entry, "reuse_unpark_failed");
-                    (None, job_lease, SandboxReuseResult::UnparkFailed)
+                    (None, job_lease, SandboxReuseResult::UnparkFailed, snapshot)
                 }
             }
         }
@@ -1007,7 +1020,12 @@ async fn try_reuse_from_pool(
                 "idle VM profile mismatch, destroying"
             );
             spawn_destroy_idle_entry(ctx.destroy_tasks, stale, "reuse_profile_mismatch");
-            (None, job_lease, SandboxReuseResult::ProfileMismatch)
+            (
+                None,
+                job_lease,
+                SandboxReuseResult::ProfileMismatch,
+                snapshot,
+            )
         }
         None => {
             info!(
@@ -1015,7 +1033,7 @@ async fn try_reuse_from_pool(
                 session_id,
                 "no idle VM found for session"
             );
-            (None, job_lease, SandboxReuseResult::PoolMiss)
+            (None, job_lease, SandboxReuseResult::PoolMiss, None)
         }
     }
 }
@@ -1054,17 +1072,10 @@ struct SpawnContext {
     exec_config: Arc<ExecutorConfig>,
     idle_pool: SharedIdlePool,
     status: Arc<StatusTracker>,
-    /// Snapshot of [`RunnerMode`] at spawn time. Each `jobs.spawn` captures
-    /// this value, so the post-exec park decision uses the mode that was
-    /// current **when the job was claimed**, not when it finished. Only
-    /// jobs spawned in `Running` are eligible for parking.
-    ///
-    /// Consequence: a job spawned in `Running` that completes during
-    /// `Draining` may park — the entry is cleaned up by the teardown
-    /// drain, so this wastes work rather than leaking. On `Stopping` the
-    /// per-job cancel token fires, taking the cancelled branch and skipping
-    /// park entirely.
-    mode: RunnerMode,
+    /// Current lifecycle parking permission. This is checked at job
+    /// completion so soft-drain/resume races do not depend on a stale
+    /// spawn-time mode snapshot.
+    parking_gate: ParkingGate,
     /// Notifies the main loop to send an immediate heartbeat after parking a VM.
     /// This eliminates the up-to-10s blind spot where the server doesn't know
     /// which runner holds a newly-parked session.
@@ -1116,7 +1127,7 @@ fn spawn_job(
     let status = Arc::clone(&ctx.status);
     let idle_pool = Arc::clone(&ctx.idle_pool);
     let park_notify = Arc::clone(&ctx.park_notify);
-    let mode = ctx.mode;
+    let parking_gate = ctx.parking_gate.clone();
     let factory_for_cleanup = Arc::clone(&factory);
 
     // Captured for the post-complete deferred work below: the panic-arm
@@ -1206,7 +1217,7 @@ fn spawn_job(
         // Decide: park sandbox for reuse, or stop + destroy.
         let parked = if let Some(mut sandbox) = sandbox {
             let parkable_session =
-                if exit_code == 0 && !job_cancel.is_cancelled() && mode == RunnerMode::Running {
+                if exit_code == 0 && !job_cancel.is_cancelled() && parking_gate.is_open() {
                     // Prefer context session_id (from resume_session), fall back to
                     // guest-reported session ID (first run — CLI generated it).
                     session_id.as_deref().or(guest_session_id.as_deref())
@@ -1265,17 +1276,17 @@ fn spawn_job(
                                     // nor idle) until the next idle_cleanup tick
                                     // (~10s), producing transient false-positive
                                     // FirecrackerNotInStatus warnings.
-                                    let idle_vms = pool.held_snapshot();
+                                    let snapshot = pool.status_snapshot();
                                     drop(pool);
-                                    status.set_idle_info(idle_vms).await;
+                                    set_idle_status_snapshot(&status, snapshot).await;
                                     park_notify.notify_one();
                                     true
                                 }
                                 ParkResult::Evicted(evicted) => {
                                     info!(run_id = %run_id, session_id, "VM parked, evicting previous");
-                                    let idle_vms = pool.held_snapshot();
+                                    let snapshot = pool.status_snapshot();
                                     drop(pool);
-                                    status.set_idle_info(idle_vms).await;
+                                    set_idle_status_snapshot(&status, snapshot).await;
                                     // Notify immediately — session is already in pool.
                                     // Don't wait for stop_and_destroy which can be slow.
                                     park_notify.notify_one();
@@ -1336,7 +1347,7 @@ fn spawn_job(
                         reason: active_cleanup_reason(
                             exit_code,
                             job_cancel.is_cancelled(),
-                            mode,
+                            parking_gate.is_open(),
                             session_id.as_deref(),
                             guest_session_id.as_deref(),
                         ),
@@ -1407,7 +1418,7 @@ async fn unpark_sandbox_panic_safe(sandbox: &mut dyn Sandbox) -> Result<(), Stri
 fn active_cleanup_reason(
     exit_code: i32,
     cancelled: bool,
-    mode: RunnerMode,
+    parking_open: bool,
     context_session_id: Option<&str>,
     guest_session_id: Option<&str>,
 ) -> &'static str {
@@ -1415,8 +1426,8 @@ fn active_cleanup_reason(
         "cancelled"
     } else if exit_code != 0 {
         "nonzero_exit"
-    } else if mode != RunnerMode::Running {
-        "runner_not_running"
+    } else if !parking_open {
+        "parking_closed"
     } else if context_session_id.is_none() && guest_session_id.is_none() {
         "no_session"
     } else {
@@ -1424,11 +1435,13 @@ fn active_cleanup_reason(
     }
 }
 
-/// Drain the idle pool: destroy every entry in parallel and wait for all
-/// destroys to complete before returning (budgets released, `status.json`
-/// `idle_vms` cleared). Called from both the Draining mode (soft-drain
-/// entry) and teardown — both need the final state consistent with an
-/// empty pool before proceeding.
+/// Drain the idle pool: destroy every entry captured at drain start in parallel
+/// and wait for all destroys to complete before returning (budgets released).
+/// Called from both Draining mode (soft-drain entry) and teardown.
+///
+/// A SIGUSR2 resume can reopen parking while a soft-drain destroy is still in
+/// progress, so write the current post-destroy pool snapshot rather than
+/// blindly clearing `idle_vms`.
 ///
 /// `context` is logged alongside the destroyed count for operator clarity
 /// (e.g. "draining" vs "shutdown").
@@ -1438,12 +1451,12 @@ async fn drain_idle_pool(
     context: &'static str,
 ) {
     let entries = idle_pool.lock().await.drain();
-    if entries.is_empty() {
-        return;
+    if !entries.is_empty() {
+        info!(count = entries.len(), context, "destroying idle VMs");
+        destroy_idle_entries_and_wait(entries, context).await;
     }
-    info!(count = entries.len(), context, "destroying idle VMs");
-    destroy_idle_entries_and_wait(entries, context).await;
-    status.set_idle_info(Vec::new()).await;
+    let snapshot = idle_pool.lock().await.status_snapshot();
+    set_idle_status_snapshot(status, snapshot).await;
 }
 
 /// Remove expired idle entries and update status to match the new pool state.
@@ -1456,9 +1469,9 @@ async fn evict_expired_idle_entries(
     if expired.is_empty() {
         return expired;
     }
-    let idle_vms = pool.held_snapshot();
+    let snapshot = pool.status_snapshot();
     drop(pool);
-    status.set_idle_info(idle_vms).await;
+    set_idle_status_snapshot(status, snapshot).await;
     expired
 }
 
@@ -1469,10 +1482,44 @@ async fn evict_oldest_idle_entry(
 ) -> Option<IdleEntry> {
     let mut pool = idle_pool.lock().await;
     let evicted = pool.evict_oldest()?;
-    let idle_vms = pool.held_snapshot();
+    let snapshot = pool.status_snapshot();
     drop(pool);
-    status.set_idle_info(idle_vms).await;
+    set_idle_status_snapshot(status, snapshot).await;
     Some(evicted)
+}
+
+async fn set_idle_status_snapshot(status: &StatusTracker, snapshot: IdlePoolSnapshot) {
+    let applied = status
+        .set_idle_info_at_revision(snapshot.revision, snapshot.idle_vms)
+        .await;
+    if !applied {
+        debug!(
+            revision = snapshot.revision,
+            "ignored stale idle pool status snapshot"
+        );
+    }
+}
+
+async fn add_run_with_idle_status_snapshot(
+    status: &StatusTracker,
+    run_id: RunId,
+    sandbox_id: SandboxId,
+    snapshot: IdlePoolSnapshot,
+) {
+    let applied = status
+        .add_run_with_idle_info_at_revision(
+            run_id,
+            sandbox_id,
+            snapshot.revision,
+            snapshot.idle_vms,
+        )
+        .await;
+    if !applied {
+        debug!(
+            revision = snapshot.revision,
+            "ignored stale idle pool status snapshot while adding active run"
+        );
+    }
 }
 
 fn spawn_destroy_idle_entry(
@@ -1667,6 +1714,9 @@ fn collect_heartbeat_state(
 
 #[cfg(test)]
 mod tests {
+    use super::signals::{
+        LifecycleController, handle_drain_signal, handle_resume_signal, handle_stopping_signal,
+    };
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1674,7 +1724,7 @@ mod tests {
     // collect_heartbeat_state: running_count excludes idle VMs
     // -----------------------------------------------------------------------
 
-    use crate::idle_pool::{IdleEntry, IdlePool, IdlePoolConfig, ParkResult};
+    use crate::idle_pool::{IdleEntry, IdlePool, IdlePoolConfig, ParkResult, ParkingState};
     use async_trait::async_trait;
     use sandbox_mock::{MockSandbox, MockSandboxFactory};
 
@@ -2035,6 +2085,8 @@ mod tests {
         handle: MockProviderHandle,
         provider: Arc<MockJobProvider>,
         idle_pool: SharedIdlePool,
+        lifecycle: LifecycleController,
+        parking_gate: ParkingGate,
         mode_tx: tokio::sync::watch::Sender<RunnerMode>,
         cancel_tokens: Arc<tokio::sync::Mutex<HashMap<RunId, CancellationToken>>>,
         cancel: CancellationToken,
@@ -2046,19 +2098,20 @@ mod tests {
         /// tests exercise the same state-guard path production does
         /// (ignored unless current mode is Running).
         fn drain(&self) {
-            handle_drain_signal(&self.mode_tx);
+            handle_drain_signal(&self.lifecycle);
         }
 
         /// Simulate SIGUSR2 via the real `handle_resume_signal` — only
         /// transitions when current mode is Draining.
         fn resume(&self) {
-            handle_resume_signal(&self.mode_tx);
+            handle_resume_signal(&self.lifecycle);
         }
 
         /// Simulate SIGTERM by driving the real `handle_stopping_signal`.
         /// Keeps the test path in sync with production.
         async fn trigger_stopping(&self) {
-            handle_stopping_signal("TEST", &self.cancel, &self.cancel_tokens, &self.mode_tx).await;
+            handle_stopping_signal("TEST", &self.cancel, &self.cancel_tokens, &self.lifecycle)
+                .await;
         }
     }
 
@@ -2148,6 +2201,8 @@ mod tests {
         let provider_ref = Arc::clone(&provider);
 
         let (mode_tx, mode_rx) = tokio::sync::watch::channel(RunnerMode::Running);
+        let parking_gate = ParkingGate::new_open();
+        let lifecycle = LifecycleController::new(mode_tx, parking_gate.clone());
         let cancel_tokens: Arc<tokio::sync::Mutex<HashMap<RunId, CancellationToken>>> =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
@@ -2165,10 +2220,13 @@ mod tests {
         let min_vcpu = profiles_min_vcpu(&profiles);
         let min_memory_mb = profiles_min_memory(&profiles);
         let idle_pool: SharedIdlePool =
-            Arc::new(tokio::sync::Mutex::new(IdlePool::new(IdlePoolConfig {
-                default_timeout: Duration::from_secs(300),
-                max_idle: 10,
-            })));
+            Arc::new(tokio::sync::Mutex::new(IdlePool::new_with_parking_gate(
+                IdlePoolConfig {
+                    default_timeout: Duration::from_secs(300),
+                    max_idle: 10,
+                },
+                parking_gate.clone(),
+            )));
 
         let config = RunConfig {
             id: "test-runner".into(),
@@ -2184,6 +2242,7 @@ mod tests {
                 max_concurrent,
             )),
             idle_pool: Arc::clone(&idle_pool),
+            parking_gate: parking_gate.clone(),
             status: Arc::new(StatusTracker::new(
                 temp_dir.path().join("status.json"),
                 max_concurrent,
@@ -2214,7 +2273,7 @@ mod tests {
             dns_handle: crate::dns::DnsProxy::noop(),
             signal_source: SignalSource::Override(SignalController {
                 mode_rx,
-                mode_tx: mode_tx.clone(),
+                lifecycle: lifecycle.clone(),
                 handler_abort: None,
             }),
         };
@@ -2223,7 +2282,9 @@ mod tests {
             handle,
             provider: provider_ref,
             idle_pool,
-            mode_tx,
+            lifecycle: lifecycle.clone(),
+            parking_gate,
+            mode_tx: lifecycle.mode_tx().clone(),
             cancel_tokens,
             cancel,
             _temp_dir: temp_dir,
@@ -2287,7 +2348,7 @@ mod tests {
 
     /// Trigger graceful shutdown and wait for run() to exit.
     async fn shutdown(env: &MockRunEnv, run_handle: tokio::task::JoinHandle<RunnerResult<()>>) {
-        let _ = env.mode_tx.send(RunnerMode::Draining);
+        env.drain();
         env.cancel.cancel();
         let result = tokio::time::timeout(Duration::from_secs(10), run_handle)
             .await
@@ -2607,11 +2668,16 @@ mod tests {
         let _token = wait_cancel_token(&env.cancel_tokens, run_id, Duration::from_secs(5)).await;
 
         env.drain();
-        wait_idle_pool_drained(&idle_pool, true, Duration::from_secs(5)).await;
+        wait_parking_state(
+            &idle_pool,
+            ParkingState::SoftDraining,
+            Duration::from_secs(5),
+        )
+        .await;
         assert_eq!(*env.mode_tx.borrow(), RunnerMode::Draining);
 
         env.resume();
-        wait_idle_pool_drained(&idle_pool, false, Duration::from_secs(5)).await;
+        wait_parking_state(&idle_pool, ParkingState::Open, Duration::from_secs(5)).await;
         assert_eq!(*env.mode_tx.borrow(), RunnerMode::Running);
 
         gate.notify_one();
@@ -2893,6 +2959,7 @@ mod tests {
         .expect("run() did not enter discover_fut select! within 2s");
 
         // Flip the watch value to Stopping without firing changed().
+        env.parking_gate.close();
         env.mode_tx.send_if_modified(|v| {
             *v = RunnerMode::Stopping;
             false
@@ -2917,6 +2984,7 @@ mod tests {
 
         // Let run() exit — fire changed() now so the main loop observes
         // Stopping at loop top and breaks to teardown.
+        env.parking_gate.close();
         env.mode_tx.send_modify(|v| {
             *v = RunnerMode::Stopping;
         });
@@ -2949,7 +3017,7 @@ mod tests {
         env.trigger_stopping().await;
 
         // handle_resume_signal refuses any transition except from Draining.
-        handle_resume_signal(&env.mode_tx);
+        handle_resume_signal(&env.lifecycle);
         assert_eq!(
             *env.mode_tx.borrow(),
             RunnerMode::Stopping,
@@ -3013,7 +3081,7 @@ mod tests {
     }
 
     /// Draining auto-transitions to Stopping when jobs drain naturally.
-    /// Verifies the internal `mode_tx.send(Stopping)` in Draining mode.
+    /// Verifies the internal lifecycle transition from Draining to Stopping.
     #[tokio::test]
     async fn drain_with_jobs_transitions_to_stopping_when_empty() {
         let (config, env) = mock_run_config(test_profiles(), 8, 32768, 4);
@@ -3045,6 +3113,7 @@ mod tests {
             RunnerMode::Stopping,
             "mode_tx must reflect Stopping after natural drain transition"
         );
+        assert_eq!(env.parking_gate.state(), ParkingState::Closed);
 
         // Observability pin: the Draining → Stopping auto-transition must
         // emit a one-shot heartbeat with mode="stopping" before teardown,
@@ -3105,6 +3174,7 @@ mod tests {
         // `changed()`, so the arm does not wake on a mode transition. The
         // guard will only observe the new value on its next iteration's
         // send_if_modified closure.
+        env.parking_gate.open_after_soft_drain();
         env.mode_tx.send_if_modified(|v| {
             *v = RunnerMode::Running;
             false
@@ -3678,17 +3748,32 @@ mod tests {
         }
     }
 
-    /// Poll until the idle pool drain flag reaches `expected`.
-    async fn wait_idle_pool_drained(pool: &SharedIdlePool, expected: bool, timeout: Duration) {
+    async fn wait_idle_pool_len(pool: &SharedIdlePool, expected: usize, timeout: Duration) {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let actual = pool.lock().await.is_drained();
+            let actual = pool.lock().await.len();
             if actual == expected {
                 return;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "idle pool drained flag did not reach {expected} within {timeout:?} (actual: {actual})",
+                "idle pool length did not reach {expected} within {timeout:?} (actual: {actual})",
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Poll until the idle pool parking state reaches `expected`.
+    async fn wait_parking_state(pool: &SharedIdlePool, expected: ParkingState, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let actual = pool.lock().await.parking_state();
+            if actual == expected {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "idle pool parking state did not reach {expected:?} within {timeout:?} (actual: {actual:?})",
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -3744,7 +3829,9 @@ mod tests {
         assert!(matches!(result, ParkResult::Parked));
     }
 
-    async fn status_idle_sessions(status_path: &std::path::Path) -> Vec<String> {
+    async fn status_idle_sessions_and_active_runs(
+        status_path: &std::path::Path,
+    ) -> (Vec<String>, Vec<String>) {
         let raw = tokio::fs::read_to_string(status_path).await.unwrap();
         let status: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let mut sessions: Vec<String> = status
@@ -3762,7 +3849,52 @@ mod tests {
             })
             .unwrap_or_default();
         sessions.sort_unstable();
-        sessions
+        let mut run_ids: Vec<String> = status["active_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|run| {
+                run.get("run_id")
+                    .and_then(|run_id| run_id.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        run_ids.sort_unstable();
+        (sessions, run_ids)
+    }
+
+    async fn status_idle_sessions(status_path: &std::path::Path) -> Vec<String> {
+        status_idle_sessions_and_active_runs(status_path).await.0
+    }
+
+    async fn publish_idle_status(pool: &SharedIdlePool, status: &StatusTracker) {
+        let snapshot = pool.lock().await.status_snapshot();
+        assert!(
+            status
+                .set_idle_info_at_revision(snapshot.revision, snapshot.idle_vms)
+                .await
+        );
+    }
+
+    async fn wait_status_idle_empty_with_active_run(
+        status_path: &std::path::Path,
+        run_id: RunId,
+        timeout: Duration,
+    ) {
+        let expected = run_id.to_string();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let (idle_sessions, active_runs) =
+                status_idle_sessions_and_active_runs(status_path).await;
+            if idle_sessions.is_empty() && active_runs.iter().any(|id| id == &expected) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "status did not atomically clear idle_vms and add active run {expected} within {timeout:?} (idle: {idle_sessions:?}, active: {active_runs:?})",
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3976,6 +4108,67 @@ mod tests {
         shutdown(&env, run_handle).await;
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn reuse_take_clears_idle_status_while_job_is_active() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+            Arc::clone(&gate),
+        ));
+        let (config, env) =
+            mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, Arc::clone(&overrides));
+        let idle_pool = Arc::clone(&config.idle_pool);
+        let budget = Arc::clone(&config.budget);
+        let status = Arc::clone(&config.status);
+        let status_path = env._temp_dir.path().join("status.json");
+
+        let _seeded_sandbox_id = seed_idle_pool_with_overrides(
+            &idle_pool,
+            &budget,
+            &overrides,
+            "sess-reuse-status",
+            "vm0/default",
+            2,
+            4096,
+        )
+        .await;
+        let snapshot = idle_pool.lock().await.status_snapshot();
+        assert!(
+            status
+                .set_idle_info_at_revision(snapshot.revision, snapshot.idle_vms)
+                .await
+        );
+        assert_eq!(
+            status_idle_sessions(&status_path).await,
+            vec!["sess-reuse-status".to_string()],
+            "pre-run status should list the seeded idle VM",
+        );
+
+        let run_handle = tokio::spawn(run(config));
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-reuse-status")),
+        );
+
+        wait_idle_pool_len(&idle_pool, 0, Duration::from_secs(5)).await;
+        wait_status_idle_empty_with_active_run(&status_path, run_id, Duration::from_secs(5)).await;
+
+        gate.notify_one();
+        let completion = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(completion.is_some(), "reused job should complete");
+        assert_eq!(
+            completion.unwrap().reuse_result,
+            Some(SandboxReuseResult::Reused),
+        );
+
+        shutdown(&env, run_handle).await;
+    }
+
     // -----------------------------------------------------------------------
     // Test 13b: Job with no session reports NoSessionId
     // -----------------------------------------------------------------------
@@ -4063,6 +4256,60 @@ mod tests {
         assert_eq!(alloc_count, 1, "only new VM should hold budget");
         assert_eq!(alloc_vcpu, 4, "new VM is vm0/large (4 vcpu)");
         assert_eq!(alloc_mem, 8192, "new VM is vm0/large (8192 MB)");
+
+        shutdown(&env, run_handle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn profile_mismatch_status_switches_from_idle_to_active_while_job_runs() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+            Arc::clone(&gate),
+        ));
+        let (config, env) = mock_run_config_with_overrides(two_profiles(), 16, 32768, 4, overrides);
+        let idle_pool = Arc::clone(&config.idle_pool);
+        let budget = Arc::clone(&config.budget);
+        let status = Arc::clone(&config.status);
+        let status_path = env._temp_dir.path().join("status.json");
+
+        seed_idle_pool(
+            &idle_pool,
+            &budget,
+            "sess-mm-status",
+            "vm0/default",
+            2,
+            4096,
+        )
+        .await;
+        publish_idle_status(&idle_pool, &status).await;
+        assert_eq!(
+            status_idle_sessions(&status_path).await,
+            vec!["sess-mm-status".to_string()],
+            "pre-run status should list the stale idle VM",
+        );
+
+        let run_handle = tokio::spawn(run(config));
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/large",
+            Some(context_with_session(run_id, "sess-mm-status")),
+        );
+
+        wait_idle_pool_len(&idle_pool, 0, Duration::from_secs(5)).await;
+        wait_status_idle_empty_with_active_run(&status_path, run_id, Duration::from_secs(5)).await;
+
+        gate.notify_one();
+        let completion = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await
+            .expect("fresh-create job should still complete");
+        assert_eq!(
+            completion.reuse_result,
+            Some(SandboxReuseResult::ProfileMismatch),
+        );
 
         shutdown(&env, run_handle).await;
     }
@@ -4361,15 +4608,11 @@ mod tests {
         assert_eq!(count, 0, "all budget should be released after drain");
     }
 
-    /// Regression (G1): a job spawned in Running but completing during
-    /// Draining captures `mode = Running` in its spawn snapshot, so the
-    /// post-exec path still calls `park()`. The resulting pool entry
-    /// lands *after* Draining mode's initial drain — teardown's final
-    /// `drain_idle_pool` is the only safety net that prevents a VM leak.
-    /// Without it, the late-parked VM would remain in the pool and its
-    /// budget would never be released.
+    /// Active soft drain closes parking for successful jobs that complete
+    /// before SIGUSR2 resume. The sandbox is destroyed and budget is released
+    /// instead of late-parking into an already-drained pool.
     #[tokio::test]
-    async fn late_park_during_draining_cleaned_by_teardown() {
+    async fn job_completing_during_active_draining_is_not_parked() {
         let gate = Arc::new(tokio::sync::Notify::new());
         let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
             Arc::clone(&gate),
@@ -4379,8 +4622,7 @@ mod tests {
         let budget = Arc::clone(&config.budget);
         let run_handle = tokio::spawn(run(config));
 
-        // Claim a gated job with session + reuse — the spawn-time snapshot
-        // captures `mode = Running`.
+        // Claim a gated job with a reusable session while Running.
         let run_id = RunId::new_v4();
         push_job(
             &env,
@@ -4393,16 +4635,20 @@ mod tests {
         // Enter Draining. The Draining path drains an empty pool and waits for the
         // gated job.
         env.drain();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_parking_state(
+            &idle_pool,
+            ParkingState::SoftDraining,
+            Duration::from_secs(5),
+        )
+        .await;
         assert_eq!(
             idle_pool.lock().await.len(),
             0,
             "Draining mode should have drained an empty pool",
         );
 
-        // Release the gate: the job completes, post-exec parks the sandbox
-        // (snapshot says Running), and the entry lands in the already-
-        // drained pool.
+        // Release the gate while still Draining: parking is closed, so the
+        // successful job destroys its sandbox instead of parking it.
         gate.notify_one();
         let c = env
             .handle
@@ -4411,26 +4657,101 @@ mod tests {
         assert!(c.is_some(), "job should complete");
         assert_eq!(c.unwrap().exit_code, 0);
 
-        // Draining mode observes jobs.is_empty → auto-Stop → teardown → the second
-        // `drain_idle_pool` call cleans the late-parked VM.
+        assert_eq!(
+            idle_pool.lock().await.len(),
+            0,
+            "active draining must reject post-job parking",
+        );
+
+        // Draining mode observes jobs.is_empty → auto-Stop → teardown.
         match tokio::time::timeout(Duration::from_secs(5), run_handle).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(e))) => panic!("run() returned error: {e}"),
             Ok(Err(e)) => panic!("task panicked: {e}"),
-            Err(_) => panic!("natural drain + late park should exit within 5s"),
+            Err(_) => panic!("natural drain should exit within 5s"),
         }
 
         // Leak proof: pool empty, budget fully released.
         assert_eq!(
             idle_pool.lock().await.len(),
             0,
-            "teardown must clean the late-parked VM",
+            "teardown must leave no idle VM",
         );
         assert_eq!(
             budget.allocated().2,
             0,
             "budget must be fully released (no held entries, no stray reservations)",
         );
+    }
+
+    /// Regression for #11162: once SIGUSR2 has logically resumed the runner,
+    /// parking is open even if the main loop has not yet processed the Running
+    /// tick. The silent mode flip keeps the main loop in the pre-ack window
+    /// deterministically.
+    #[tokio::test]
+    async fn soft_drain_resume_opens_parking_before_running_ack() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+            Arc::clone(&gate),
+        ));
+        let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
+        let idle_pool = Arc::clone(&config.idle_pool);
+        let budget = Arc::clone(&config.budget);
+        let run_handle = tokio::spawn(run(config));
+
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-soft-resume-race")),
+        );
+        let _token = wait_cancel_token(&env.cancel_tokens, run_id, Duration::from_secs(5)).await;
+
+        env.drain();
+        wait_parking_state(
+            &idle_pool,
+            ParkingState::SoftDraining,
+            Duration::from_secs(5),
+        )
+        .await;
+
+        // Simulate SIGUSR2's ordering while suppressing the watch wake: open
+        // parking first, then make Running visible without letting the main
+        // loop run its top-of-loop Running branch.
+        env.parking_gate.open_after_soft_drain();
+        env.mode_tx.send_if_modified(|mode| {
+            *mode = RunnerMode::Running;
+            false
+        });
+        assert_eq!(*env.mode_tx.borrow(), RunnerMode::Running);
+
+        gate.notify_one();
+        let c = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await;
+        assert!(c.is_some(), "job should complete after logical resume");
+        assert_eq!(c.unwrap().exit_code, 0);
+
+        assert_eq!(
+            idle_pool.lock().await.len(),
+            1,
+            "job should park even before the main loop acknowledges Running",
+        );
+        assert_eq!(
+            budget.allocated().2,
+            1,
+            "parked VM should retain its budget lease",
+        );
+
+        env.trigger_stopping().await;
+        match tokio::time::timeout(Duration::from_secs(5), run_handle).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => panic!("run() returned error: {e}"),
+            Ok(Err(e)) => panic!("task panicked: {e}"),
+            Err(_) => panic!("hard shutdown should exit within 5s"),
+        }
     }
 
     /// Regression (G2): on SIGTERM from Running, teardown's
@@ -5076,6 +5397,66 @@ mod tests {
             counter.park_call_count(),
             1,
             "expected exactly one park (the fresh-create's)"
+        );
+
+        shutdown(&env, run_handle).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unpark_failure_status_switches_from_idle_to_active_while_job_runs() {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+            Arc::clone(&gate),
+        ));
+        let counter = Arc::clone(&overrides);
+        overrides.push_unpark_result(Err(sandbox::SandboxError::IdleTransition {
+            transition: sandbox::SandboxIdleTransition::Unpark,
+            message: "simulated unpark failure".into(),
+        }));
+        let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 16384, 4, overrides);
+        let budget = Arc::clone(&config.budget);
+        let idle_pool = Arc::clone(&config.idle_pool);
+        let status = Arc::clone(&config.status);
+        let status_path = env._temp_dir.path().join("status.json");
+
+        seed_idle_pool_with_overrides(
+            &idle_pool,
+            &budget,
+            &counter,
+            "sess-unpark-status",
+            "vm0/default",
+            2,
+            4096,
+        )
+        .await;
+        publish_idle_status(&idle_pool, &status).await;
+        assert_eq!(
+            status_idle_sessions(&status_path).await,
+            vec!["sess-unpark-status".to_string()],
+            "pre-run status should list the idle VM",
+        );
+
+        let run_handle = tokio::spawn(run(config));
+        let run_id = RunId::new_v4();
+        push_job(
+            &env,
+            run_id,
+            "vm0/default",
+            Some(context_with_session(run_id, "sess-unpark-status")),
+        );
+
+        wait_idle_pool_len(&idle_pool, 0, Duration::from_secs(5)).await;
+        wait_status_idle_empty_with_active_run(&status_path, run_id, Duration::from_secs(5)).await;
+
+        gate.notify_one();
+        let completion = env
+            .handle
+            .wait_completion(run_id, Duration::from_secs(5))
+            .await
+            .expect("fresh-create job should still complete");
+        assert_eq!(
+            completion.reuse_result,
+            Some(SandboxReuseResult::UnparkFailed),
         );
 
         shutdown(&env, run_handle).await;

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
@@ -70,6 +73,82 @@ impl Default for IdlePoolConfig {
     }
 }
 
+/// Lifecycle-owned gate for whether completed jobs may enter the idle pool.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ParkingState {
+    Open = 0,
+    SoftDraining = 1,
+    Closed = 2,
+}
+
+impl ParkingState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Open,
+            1 => Self::SoftDraining,
+            2 => Self::Closed,
+            _ => Self::Closed,
+        }
+    }
+}
+
+/// Shared parking permission updated before publishing runner mode transitions.
+#[derive(Clone, Debug)]
+pub(crate) struct ParkingGate {
+    state: Arc<AtomicU8>,
+}
+
+impl ParkingGate {
+    pub(crate) fn new_open() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(ParkingState::Open as u8)),
+        }
+    }
+
+    pub(crate) fn state(&self) -> ParkingState {
+        ParkingState::from_u8(self.state.load(Ordering::SeqCst))
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.state() == ParkingState::Open
+    }
+
+    pub(crate) fn soft_drain(&self) -> bool {
+        match self.state.compare_exchange(
+            ParkingState::Open as u8,
+            ParkingState::SoftDraining as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(state) => ParkingState::from_u8(state) == ParkingState::SoftDraining,
+        }
+    }
+
+    pub(crate) fn open_after_soft_drain(&self) -> bool {
+        match self.state.compare_exchange(
+            ParkingState::SoftDraining as u8,
+            ParkingState::Open as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(state) => ParkingState::from_u8(state) == ParkingState::Open,
+        }
+    }
+
+    pub(crate) fn close(&self) {
+        self.state
+            .store(ParkingState::Closed as u8, Ordering::SeqCst);
+    }
+}
+
+impl Default for ParkingGate {
+    fn default() -> Self {
+        Self::new_open()
+    }
+}
+
 /// A sandbox parked in the idle pool, waiting for reuse.
 pub struct IdleEntry {
     pub sandbox: Box<dyn Sandbox>,
@@ -87,6 +166,17 @@ pub struct IdleEntry {
     /// Version fingerprints of storages downloaded in the previous turn.
     /// Used to skip re-downloading unchanged entries on reuse.
     pub storage_fingerprints: StorageFingerprints,
+}
+
+/// Idle pool status snapshot paired with a monotonic mutation revision.
+///
+/// Status writes happen after dropping the pool lock, so an older snapshot can
+/// otherwise complete after a newer drain/evict write and reintroduce stale
+/// `idle_vms` in status.json.
+#[derive(Clone, Debug)]
+pub struct IdlePoolSnapshot {
+    pub revision: u64,
+    pub idle_vms: Vec<IdleVm>,
 }
 
 /// Reusable sandbox state handed to the executor after a successful unpark.
@@ -174,25 +264,33 @@ impl IdleEntry {
 pub struct IdlePool {
     entries: HashMap<String, IdleEntry>,
     config: IdlePoolConfig,
-    /// Set by `drain()` to reject park attempts after shutdown.
-    drained: bool,
+    revision: u64,
+    /// Shared lifecycle gate. The signal/main-loop lifecycle controller updates
+    /// this before publishing externally visible mode transitions.
+    parking_gate: ParkingGate,
 }
 
 impl IdlePool {
+    #[cfg(test)]
     pub fn new(config: IdlePoolConfig) -> Self {
+        Self::new_with_parking_gate(config, ParkingGate::new_open())
+    }
+
+    pub(crate) fn new_with_parking_gate(config: IdlePoolConfig, parking_gate: ParkingGate) -> Self {
         Self {
             entries: HashMap::new(),
             config,
-            drained: false,
+            revision: 0,
+            parking_gate,
         }
     }
 
     /// Park a sandbox in the pool. Returns the previously parked entry
     /// for this session if one existed (caller must destroy it).
     ///
-    /// Returns `PoolFull(entry)` if the pool is drained or at capacity.
+    /// Returns `PoolFull(entry)` if parking is closed/soft-draining or at capacity.
     pub fn park(&mut self, session_id: String, entry: IdleEntry) -> ParkResult {
-        if self.drained {
+        if !self.parking_gate.is_open() {
             return ParkResult::PoolFull(entry);
         }
         if self.config.max_idle > 0 && self.entries.len() >= self.config.max_idle {
@@ -201,16 +299,22 @@ impl IdlePool {
                 return ParkResult::PoolFull(entry);
             }
         }
-        match self.entries.insert(session_id, entry) {
+        let result = match self.entries.insert(session_id, entry) {
             Some(evicted) => ParkResult::Evicted(evicted),
             None => ParkResult::Parked,
-        }
+        };
+        self.bump_revision();
+        result
     }
 
     /// Take a sandbox from the pool for reuse. Returns `None` if no
     /// sandbox is parked for this session.
     pub fn take(&mut self, session_id: &str) -> Option<IdleEntry> {
-        self.entries.remove(session_id)
+        let entry = self.entries.remove(session_id);
+        if entry.is_some() {
+            self.bump_revision();
+        }
+        entry
     }
 
     /// Remove and return all entries that have exceeded their idle timeout.
@@ -223,10 +327,14 @@ impl IdlePool {
             .map(|(k, _)| k.clone())
             .collect();
 
-        expired_keys
+        let expired: Vec<IdleEntry> = expired_keys
             .into_iter()
             .filter_map(|k| self.entries.remove(&k))
-            .collect()
+            .collect();
+        if !expired.is_empty() {
+            self.bump_revision();
+        }
+        expired
     }
 
     /// Evict the oldest idle entry (by park time). Used for resource
@@ -237,13 +345,18 @@ impl IdlePool {
             .iter()
             .min_by_key(|(_, e)| e.parked_at)
             .map(|(k, _)| k.clone())?;
-        self.entries.remove(&oldest_key)
+        let entry = self.entries.remove(&oldest_key);
+        if entry.is_some() {
+            self.bump_revision();
+        }
+        entry
     }
 
-    /// Return a sorted-by-session_id snapshot of the idle pool suitable
-    /// for status.json. Produced in a single iteration so `session_id` and
-    /// `sandbox_id` can never drift out of pairing.
-    pub fn held_snapshot(&self) -> Vec<IdleVm> {
+    /// Return a revisioned sorted-by-session_id snapshot suitable for status.json.
+    ///
+    /// Produced in a single iteration so `session_id` and `sandbox_id` can never
+    /// drift out of pairing.
+    pub fn status_snapshot(&self) -> IdlePoolSnapshot {
         let mut vms: Vec<IdleVm> = self
             .entries
             .iter()
@@ -253,13 +366,24 @@ impl IdlePool {
             })
             .collect();
         vms.sort_unstable_by(|a, b| a.session_id.cmp(&b.session_id));
-        vms
+        IdlePoolSnapshot {
+            revision: self.revision,
+            idle_vms: vms,
+        }
+    }
+
+    /// Return a sorted-by-session_id snapshot of the idle pool suitable
+    /// for status.json. Produced in a single iteration so `session_id` and
+    /// `sandbox_id` can never drift out of pairing.
+    #[cfg(test)]
+    pub fn held_snapshot(&self) -> Vec<IdleVm> {
+        self.status_snapshot().idle_vms
     }
 
     /// Return the list of session IDs currently held in the pool, sorted
     /// lexicographically for deterministic heartbeat output.
     ///
-    /// Prefer [`held_snapshot`](Self::held_snapshot) when pairing with
+    /// Prefer [`status_snapshot`](Self::status_snapshot) when pairing with
     /// sandbox IDs — it produces both views from a single iteration.
     pub fn held_sessions(&self) -> Vec<String> {
         let mut sessions: Vec<String> = self.entries.keys().cloned().collect();
@@ -272,19 +396,16 @@ impl IdlePool {
         self.entries.len()
     }
 
-    /// Whether the pool has been drained (rejects new park calls).
+    /// Current lifecycle parking state.
     #[cfg(test)]
-    pub fn is_drained(&self) -> bool {
-        self.drained
+    pub fn parking_state(&self) -> ParkingState {
+        self.parking_gate.state()
     }
 
-    /// Re-enable parking after a resumable soft drain returns to Running.
-    ///
-    /// This is only valid for SIGUSR1 -> SIGUSR2 soft-drain resume. Hard
-    /// shutdown paths must leave the pool drained so stale job tasks cannot
-    /// park new entries while teardown is in progress.
-    pub(crate) fn resume_after_soft_drain(&mut self) {
-        self.drained = false;
+    /// Shared lifecycle parking gate.
+    #[cfg(test)]
+    pub fn parking_gate(&self) -> ParkingGate {
+        self.parking_gate.clone()
     }
 
     /// The default idle timeout.
@@ -292,13 +413,19 @@ impl IdlePool {
         self.config.default_timeout
     }
 
-    /// Drain all entries from the pool (for shutdown).
-    ///
-    /// Also disables the pool so that concurrent job tasks that still hold
-    /// a stale `mode == Running` snapshot cannot park new entries after drain.
+    /// Drain all entries from the pool. Parking permission is controlled by
+    /// [`ParkingGate`] so soft-drain resume can reopen parking before
+    /// `RunnerMode::Running` becomes visible.
     pub fn drain(&mut self) -> Vec<IdleEntry> {
-        self.drained = true;
-        self.entries.drain().map(|(_, v)| v).collect()
+        let entries: Vec<IdleEntry> = self.entries.drain().map(|(_, v)| v).collect();
+        if !entries.is_empty() {
+            self.bump_revision();
+        }
+        entries
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 }
 
@@ -523,6 +650,33 @@ mod tests {
     }
 
     #[test]
+    fn status_snapshot_revision_tracks_idle_vm_mutations() {
+        let mut pool = IdlePool::new(pool_config(0));
+        assert_eq!(pool.status_snapshot().revision, 0);
+
+        let _ = pool.park("s1".into(), make_entry(2, 2048));
+        assert_eq!(pool.status_snapshot().revision, 1);
+
+        assert!(pool.take("s1").is_some());
+        assert_eq!(pool.status_snapshot().revision, 2);
+
+        let drained = pool.drain();
+        assert!(drained.is_empty());
+        assert_eq!(
+            pool.status_snapshot().revision,
+            2,
+            "empty drain must not create a fake idle_vms mutation",
+        );
+
+        let _ = pool.park("s2".into(), make_entry(2, 2048));
+        assert_eq!(pool.status_snapshot().revision, 3);
+
+        let drained = pool.drain();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(pool.status_snapshot().revision, 4);
+    }
+
+    #[test]
     fn drain() {
         let mut pool = IdlePool::new(pool_config(0));
         let _ = pool.park("s1".into(), make_entry(2, 2048));
@@ -531,21 +685,47 @@ mod tests {
         let drained = pool.drain();
         assert_eq!(drained.len(), 2);
         assert_eq!(pool.len(), 0);
-        // drain marks the pool as drained to prevent post-shutdown parking
-        assert!(pool.is_drained());
+        assert_eq!(pool.parking_state(), ParkingState::Open);
     }
 
     #[test]
-    fn park_after_drain_rejected() {
-        // drain() marks pool as drained — subsequent park() calls are rejected.
+    fn park_rejected_while_soft_draining() {
         let mut pool = IdlePool::new(pool_config(0));
+        let gate = pool.parking_gate();
         let _ = pool.park("s1".into(), make_entry(2, 2048));
-        pool.drain();
-        assert!(pool.is_drained());
+        gate.soft_drain();
+        assert_eq!(pool.parking_state(), ParkingState::SoftDraining);
 
         let result = pool.park("s2".into(), make_entry(4, 4096));
         assert!(matches!(result, ParkResult::PoolFull(_)));
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn park_rejected_when_closed() {
+        let mut pool = IdlePool::new(pool_config(0));
+        let gate = pool.parking_gate();
+        gate.close();
+
+        let result = pool.park("s1".into(), make_entry(2, 2048));
+        assert!(matches!(result, ParkResult::PoolFull(_)));
         assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn soft_drain_can_reopen_parking() {
+        let mut pool = IdlePool::new(pool_config(0));
+        let gate = pool.parking_gate();
+        gate.soft_drain();
+        assert!(matches!(
+            pool.park("s1".into(), make_entry(2, 2048)),
+            ParkResult::PoolFull(_)
+        ));
+
+        gate.open_after_soft_drain();
+        let result = pool.park("s1".into(), make_entry(2, 2048));
+        assert!(matches!(result, ParkResult::Parked));
+        assert_eq!(pool.len(), 1);
     }
 
     #[test]
@@ -566,7 +746,7 @@ mod tests {
         let mut pool = IdlePool::new(pool_config(0));
         let drained = pool.drain();
         assert!(drained.is_empty());
-        assert!(pool.is_drained());
+        assert_eq!(pool.parking_state(), ParkingState::Open);
     }
 
     #[test]

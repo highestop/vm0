@@ -6,9 +6,9 @@ export type Role =
   | "engineering"
   | "product"
   | "marketing"
+  | "sales"
   | "support"
   | "compliance"
-  | "ops"
   | "everyone";
 export type Capability = "multi-tool" | "scheduled" | "instant";
 
@@ -214,7 +214,7 @@ export const USE_CASES: UseCase[] = [
       expression: 1,
       intensity: "d",
     },
-    roles: ["engineering", "ops"],
+    roles: ["engineering"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [GITHUB, SLACK],
@@ -314,7 +314,7 @@ export const USE_CASES: UseCase[] = [
       expression: 3,
       intensity: "m",
     },
-    roles: ["marketing"],
+    roles: ["sales", "marketing"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [X_TWITTER, GMAIL, NOTION, SLACK],
@@ -403,7 +403,7 @@ export const USE_CASES: UseCase[] = [
       expression: 5,
       intensity: "m",
     },
-    roles: ["ops", "everyone"],
+    roles: ["support", "everyone"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [SLACK, NOTION, GOOGLE_CALENDAR, GMAIL],
@@ -465,7 +465,7 @@ export const USE_CASES: UseCase[] = [
       expression: 2,
       intensity: "m",
     },
-    roles: ["everyone", "ops"],
+    roles: ["everyone"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [SLACK, NOTION],
@@ -648,7 +648,7 @@ export const USE_CASES: UseCase[] = [
       expression: 1,
       intensity: "d",
     },
-    roles: ["support"],
+    roles: ["sales"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [GMAIL, GOOGLE_CALENDAR, SLACK, LINEAR, GITHUB],
@@ -1150,7 +1150,7 @@ export const USE_CASES: UseCase[] = [
       expression: 5,
       intensity: "h",
     },
-    roles: ["engineering", "ops"],
+    roles: ["engineering"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [SLACK, VM0],
@@ -1210,7 +1210,7 @@ export const USE_CASES: UseCase[] = [
       expression: 4,
       intensity: "d",
     },
-    roles: ["product", "ops"],
+    roles: ["product"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [LINEAR, GITHUB, PLAUSIBLE, GMAIL, NOTION],
@@ -1245,7 +1245,7 @@ export const USE_CASES: UseCase[] = [
       expression: 3,
       intensity: "m",
     },
-    roles: ["marketing"],
+    roles: ["sales"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [GMAIL, NOTION],
@@ -1273,7 +1273,7 @@ export const USE_CASES: UseCase[] = [
       expression: 2,
       intensity: "d",
     },
-    roles: ["engineering", "marketing"],
+    roles: ["product", "engineering"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [GITHUB, SLACK],
@@ -1334,7 +1334,7 @@ export const USE_CASES: UseCase[] = [
       expression: 5,
       intensity: "m",
     },
-    roles: ["product", "ops"],
+    roles: ["marketing"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [SLACK, GOOGLE_DRIVE, NOTION],
@@ -1498,7 +1498,7 @@ export const USE_CASES: UseCase[] = [
       expression: 4,
       intensity: "m",
     },
-    roles: ["everyone"],
+    roles: ["sales", "everyone"],
     capability: "scheduled",
     model: "Claude 4 Sonnet",
     connectors: [GMAIL, SLACK],
@@ -1781,7 +1781,7 @@ export const USE_CASES: UseCase[] = [
       expression: 5,
       intensity: "h",
     },
-    roles: ["ops"],
+    roles: ["sales"],
     capability: "multi-tool",
     model: "Claude 4 Sonnet",
     connectors: [APOLLO, INSTANTLY, SLACK],

@@ -3,7 +3,7 @@ import { createStore, type Command, type Computed } from "ccstate";
 import type { Handler } from "hono";
 import type { ContentfulStatusCode, StatusCode } from "hono/utils/http-status";
 
-import { initHono$ } from "./hono";
+import { initHono$, requestValidation$ } from "./hono";
 import { setRootSignal$ } from "./root";
 
 export type SignalRouteHandler<T> = Computed<T> | Command<T, [AbortSignal]>;
@@ -41,7 +41,15 @@ export function honoSignalHandler(
   return async (context) => {
     const store = createStore();
     store.set(setRootSignal$, signal);
-    store.set(initHono$, context);
+    store.set(initHono$, context, contract);
+
+    // Mirror the order ts-rest applies on the web side: path/query validation
+    // precedes auth and downstream services, so a malformed request returns
+    // 400 without touching either.
+    const validationError = store.get(requestValidation$);
+    if (validationError) {
+      return context.json(validationError.body, validationError.status);
+    }
 
     const data = await (isCommand(handler$)
       ? store.set(handler$, signal)

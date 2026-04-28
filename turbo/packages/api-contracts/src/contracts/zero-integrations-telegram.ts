@@ -89,6 +89,18 @@ const telegramRegisterBodySchema = z.object({
   reinstallBotId: z.string().min(1).optional(),
 });
 
+const telegramSetupStatusBodySchema = z.object({
+  botToken: z.string().min(1),
+  origin: z.string().optional(),
+});
+
+const telegramSetupStatusSchema = z.object({
+  id: z.string(),
+  username: z.string().nullable(),
+  domainConfigured: z.boolean(),
+  privacyDisabled: z.boolean(),
+});
+
 /**
  * Zero integrations Telegram contract
  * Covers all Telegram integration endpoints.
@@ -209,6 +221,19 @@ export const zeroIntegrationsTelegramContract = c.router({
     },
     summary: "Register a Telegram bot with VM0",
   },
+  setupStatus: {
+    method: "POST",
+    path: "/api/telegram/setup-status",
+    headers: authHeadersSchema,
+    body: telegramSetupStatusBodySchema,
+    responses: {
+      200: telegramSetupStatusSchema,
+      400: apiErrorSchema,
+      401: apiErrorSchema,
+      409: apiErrorSchema,
+    },
+    summary: "Check Telegram bot setup state before registration",
+  },
 });
 
 export type ZeroIntegrationsTelegramContract =
@@ -219,3 +244,4 @@ export type TelegramListResponse = z.infer<typeof telegramListResponseSchema>;
 export type TelegramLinkStatusResponse = z.infer<
   typeof telegramLinkStatusResponseSchema
 >;
+export type TelegramSetupStatus = z.infer<typeof telegramSetupStatusSchema>;

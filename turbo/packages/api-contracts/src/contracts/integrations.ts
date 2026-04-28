@@ -59,6 +59,100 @@ export type IntegrationsSlackMessageContract =
   typeof integrationsSlackMessageContract;
 
 /**
+ * Integration Telegram message contract
+ * POST /api/zero/integrations/telegram/message
+ *
+ * Sends a Telegram message via an org-owned bot token.
+ * Requires `telegram:write` capability (via ZERO_TOKEN).
+ */
+const sendTelegramMessageBodySchema = z.object({
+  botId: z.string().min(1, "Bot ID is required"),
+  chatId: z.string().min(1, "Chat ID is required"),
+  text: z.string().min(1, "Message text is required"),
+  replyToMessageId: z.number().int().positive().optional(),
+  messageThreadId: z.number().int().positive().optional(),
+});
+
+export type SendTelegramMessageBody = z.infer<
+  typeof sendTelegramMessageBodySchema
+>;
+
+const sendTelegramMessageResponseSchema = z.object({
+  ok: z.literal(true),
+  messageId: z.number().int(),
+  chatId: z.string(),
+});
+
+export type SendTelegramMessageResponse = z.infer<
+  typeof sendTelegramMessageResponseSchema
+>;
+
+export const integrationsTelegramMessageContract = c.router({
+  sendMessage: {
+    method: "POST",
+    path: "/api/zero/integrations/telegram/message",
+    headers: authHeadersSchema,
+    body: sendTelegramMessageBodySchema,
+    responses: {
+      200: sendTelegramMessageResponseSchema,
+      400: apiErrorSchema,
+      401: apiErrorSchema,
+      403: apiErrorSchema,
+      404: apiErrorSchema,
+      502: apiErrorSchema,
+    },
+    summary: "Send a Telegram message via org bot token",
+  },
+});
+
+export type IntegrationsTelegramMessageContract =
+  typeof integrationsTelegramMessageContract;
+
+/**
+ * Integration Telegram bot list contract
+ * GET /api/zero/integrations/telegram/bots
+ *
+ * Lists Telegram bots available in the authenticated user's org.
+ * Requires `telegram:read` capability (via ZERO_TOKEN).
+ */
+const telegramBotTokenStatusSchema = z.enum(["valid", "invalid", "unknown"]);
+
+const telegramBotListItemSchema = z.object({
+  id: z.string(),
+  username: z.string().nullable(),
+  agent: z.object({ id: z.string(), name: z.string() }).nullable(),
+  isOwner: z.boolean(),
+  isConnected: z.boolean(),
+  tokenStatus: telegramBotTokenStatusSchema,
+});
+
+const listTelegramBotsResponseSchema = z.object({
+  bots: z.array(telegramBotListItemSchema),
+});
+
+export type TelegramBotListItem = z.infer<typeof telegramBotListItemSchema>;
+export type ListTelegramBotsResponse = z.infer<
+  typeof listTelegramBotsResponseSchema
+>;
+
+export const integrationsTelegramBotListContract = c.router({
+  listBots: {
+    method: "GET",
+    path: "/api/zero/integrations/telegram/bots",
+    headers: authHeadersSchema,
+    responses: {
+      200: listTelegramBotsResponseSchema,
+      401: apiErrorSchema,
+      403: apiErrorSchema,
+    },
+    summary: "List Telegram bots available in the authenticated user's org",
+  },
+});
+
+export type IntegrationsTelegramBotListContract =
+  typeof integrationsTelegramBotListContract;
+
+/**
  * Integration Slack file upload — init contract
  * POST /api/zero/integrations/slack/upload-file/init
  *

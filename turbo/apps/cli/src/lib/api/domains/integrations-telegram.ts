@@ -3,8 +3,13 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { initClient } from "@ts-rest/core";
 import {
+  integrationsTelegramBotListContract,
+  integrationsTelegramMessageContract,
   integrationsTelegramUploadCompleteContract,
   integrationsTelegramUploadInitContract,
+  type ListTelegramBotsResponse,
+  type SendTelegramMessageBody,
+  type SendTelegramMessageResponse,
   type TelegramUploadCompleteBody,
   type TelegramUploadCompleteResponse,
   type TelegramUploadInitBody,
@@ -22,6 +27,34 @@ interface DownloadTelegramFileResult {
   path: string;
   mimetype: string;
   size: number;
+}
+
+export async function listTelegramBots(): Promise<ListTelegramBotsResponse> {
+  const config = await getClientConfig();
+  const client = initClient(integrationsTelegramBotListContract, config);
+
+  const result = await client.listBots({ headers: {} });
+
+  if (result.status === 200) {
+    return result.body;
+  }
+
+  handleError(result, "Failed to list Telegram bots");
+}
+
+export async function sendTelegramMessage(
+  body: SendTelegramMessageBody,
+): Promise<SendTelegramMessageResponse> {
+  const config = await getClientConfig();
+  const client = initClient(integrationsTelegramMessageContract, config);
+
+  const result = await client.sendMessage({ body, headers: {} });
+
+  if (result.status === 200) {
+    return result.body;
+  }
+
+  handleError(result, "Failed to send Telegram message");
 }
 
 export async function initTelegramFileUpload(

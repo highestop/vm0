@@ -222,12 +222,6 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
       "Show an artifacts button in the chat header that opens a drawer listing uploaded files grouped by run",
     enabled: true,
   },
-  [FeatureSwitchKey.ChatThreadReadIndicator]: {
-    maintainer: "ethan@vm0.ai",
-    description:
-      "Show the unread watermark dot and bold title for chat threads with unread messages in the sidebar",
-    enabled: false,
-  },
   [FeatureSwitchKey.ChatManualHistory]: {
     maintainer: "linghan@vm0.ai",
     description:

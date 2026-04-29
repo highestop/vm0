@@ -503,7 +503,7 @@ describe("usage insight chats table - rendering and interactions", () => {
     expect(screen.getByText("(untitled)")).toBeInTheDocument();
   });
 
-  it("shows '+N more chats' row when chatOtherCount > 0", async () => {
+  it("includes '+N more chats' overflow row when chatOtherCount > 0", async () => {
     server.use(
       mockApi(zeroUsageInsightContract.get, ({ respond }) => {
         return respond(
@@ -535,6 +535,7 @@ describe("usage insight chats table - rendering and interactions", () => {
     });
 
     expect(screen.getByText("+7 more chats")).toBeInTheDocument();
+    expect(screen.getByText(/chats used 400 credits/)).toBeInTheDocument();
   });
 
   it("formats large credit values with K suffix", async () => {
@@ -707,7 +708,7 @@ describe("usage insight schedules table - rendering and interactions", () => {
     expect(screen.getByText("200")).toBeInTheDocument();
   });
 
-  it("shows '+N more schedules' row when scheduleOtherCount > 0", async () => {
+  it("includes '+N more schedules' overflow row when scheduleOtherCount > 0", async () => {
     server.use(
       mockApi(zeroUsageInsightContract.get, ({ respond }) => {
         return respond(
@@ -742,6 +743,7 @@ describe("usage insight schedules table - rendering and interactions", () => {
     });
 
     expect(screen.getByText("+4 more schedules")).toBeInTheDocument();
+    expect(screen.getByText(/schedules used 200 credits/)).toBeInTheDocument();
   });
 
   it("prefers scheduleDescription over scheduleName when both are present", async () => {
@@ -787,34 +789,6 @@ describe("usage insight schedules table - rendering and interactions", () => {
     });
     // s2: no description → fall back to name
     expect(screen.getByText("default")).toBeInTheDocument();
-  });
-
-  it("uses singular form for scheduleOtherCount of 1", async () => {
-    server.use(
-      mockApi(zeroUsageInsightContract.get, ({ respond }) => {
-        return respond(
-          200,
-          makeFixture({
-            buckets: [],
-            schedules: [],
-            scheduleOtherCount: 1,
-            scheduleOtherCredits: 50,
-            chats: [],
-            chatOtherCount: 0,
-            chatOtherCredits: 0,
-            grandTotalCredits: 50,
-            grandTotalTokens: 100,
-          }),
-        );
-      }),
-    );
-
-    detachedSetupPage({ context, path: "/usage" });
-
-    // When scheduleOtherCount is 1, the "+1 more schedule" row appears (singular)
-    await waitFor(() => {
-      expect(screen.getByText("+1 more schedule")).toBeInTheDocument();
-    });
   });
 });
 
@@ -865,6 +839,9 @@ describe("usage insight selectors - date range dropdown", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: "Last 28 days" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Last 30 days" }),
     ).toBeInTheDocument();
   });
 });

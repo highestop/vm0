@@ -6,6 +6,12 @@ import vercelConfig from "./vercel.json";
 export default defineConfig({
   build: {
     copyPublicDir: false,
+    rollupOptions: {
+      output: {
+        // Vercel only packages files inside the .func directory for a function.
+        codeSplitting: false,
+      },
+    },
   },
   plugins: [
     build({

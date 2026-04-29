@@ -14,7 +14,11 @@ import {
   currentChatThreadId$,
   reloadChatThreads$,
 } from "../agent-chat.ts";
-import { detachedNavigateTo$ } from "../route.ts";
+import {
+  detachedNavigateTo$,
+  searchParams$,
+  updateSearchParams$,
+} from "../route.ts";
 import { talkDraft$ } from "../zero-page/chat-draft.ts";
 import { zeroOnboardingStatus$ } from "../zero-page/zero-onboarding.ts";
 import {
@@ -24,7 +28,12 @@ import {
 } from "./create-chat-thread.ts";
 import { prepareUserMessageFromDraft$ } from "./resolve-draft-attachments.ts";
 
+const SIDEBAR_PARAM = "sidebar";
+
+export type OptimisticChatPane = "main" | "sidebar";
+
 interface PendingChatThread {
+  pane: OptimisticChatPane;
   threadId: string;
   agentId: string;
   createdAt: string;
@@ -48,17 +57,72 @@ interface SendNewThreadMessagePending extends PendingChatThread {
   sendResult: Promise<SendNewThreadMessageResult>;
 }
 
-const internalOptimisticChatThread$ = state<PendingChatThread | null>(null);
+interface OptimisticChatThreads {
+  main: PendingChatThread | null;
+  sidebar: PendingChatThread | null;
+}
+
+const internalOptimisticChatThreads$ = state<OptimisticChatThreads>({
+  main: null,
+  sidebar: null,
+});
 
 export const optimisticChatThread$ = computed((get) => {
-  return get(internalOptimisticChatThread$);
+  return get(internalOptimisticChatThreads$).main;
+});
+
+export const sidebarOptimisticChatThread$ = computed((get) => {
+  return get(internalOptimisticChatThreads$).sidebar;
 });
 
 export const clearMatchingOptimisticChatThread$ = command(
   ({ set }, pending: PendingChatThread) => {
-    set(internalOptimisticChatThread$, (current) => {
-      return current === pending ? null : current;
+    set(internalOptimisticChatThreads$, (current) => {
+      if (current[pending.pane] !== pending) {
+        return current;
+      }
+      return { ...current, [pending.pane]: null };
     });
+  },
+);
+
+const routeMainOptimisticChatThread$ = command(
+  ({ get, set }, pending: PendingChatThread) => {
+    const next = new URLSearchParams(get(searchParams$));
+    if (next.get(SIDEBAR_PARAM) === pending.threadId) {
+      next.delete(SIDEBAR_PARAM);
+    }
+    set(detachedNavigateTo$, "/chats/:threadId", {
+      pathParams: { threadId: pending.threadId },
+      searchParams: next,
+    });
+  },
+);
+
+const routeSidebarOptimisticChatThread$ = command(
+  ({ get, set }, pending: PendingChatThread) => {
+    if (!get(currentChatThreadId$)) {
+      return;
+    }
+
+    const next = new URLSearchParams(get(searchParams$));
+    next.set(SIDEBAR_PARAM, pending.threadId);
+    set(updateSearchParams$, next);
+  },
+);
+
+const showExistingOptimisticChatThread$ = command(
+  ({ get, set }, pending: PendingChatThread) => {
+    if (pending.pane === "main") {
+      if (get(currentChatThreadId$) !== pending.threadId) {
+        set(routeMainOptimisticChatThread$, pending);
+      }
+      return;
+    }
+
+    if (get(searchParams$).get(SIDEBAR_PARAM) !== pending.threadId) {
+      set(routeSidebarOptimisticChatThread$, pending);
+    }
   },
 );
 
@@ -69,11 +133,15 @@ const routeOptimisticChatThread$ = command(
     signal.addEventListener("abort", () => {
       set(clearMatchingOptimisticChatThread$, pending);
     });
-    set(internalOptimisticChatThread$, pending);
-
-    set(detachedNavigateTo$, "/chats/:threadId", {
-      pathParams: { threadId: pending.threadId },
+    set(internalOptimisticChatThreads$, (current) => {
+      return { ...current, [pending.pane]: pending };
     });
+
+    if (pending.pane === "main") {
+      set(routeMainOptimisticChatThread$, pending);
+    } else {
+      set(routeSidebarOptimisticChatThread$, pending);
+    }
 
     await pending.settleResult.catch((error: unknown) => {
       set(clearMatchingOptimisticChatThread$, pending);
@@ -81,7 +149,10 @@ const routeOptimisticChatThread$ = command(
     });
     signal.throwIfAborted();
 
-    if (get(currentChatThreadId$) !== pending.threadId) {
+    if (
+      pending.pane === "sidebar" ||
+      get(currentChatThreadId$) !== pending.threadId
+    ) {
       set(clearMatchingOptimisticChatThread$, pending);
     }
   },
@@ -93,9 +164,9 @@ async function createChatThread(
   signal: AbortSignal,
   title: string | undefined,
   clientThreadId: string,
-): Promise<{ id: string; title: string | null }> {
+): Promise<void> {
   const client = createClient(chatThreadsContract);
-  const result = await accept(
+  await accept(
     client.create({
       body: {
         agentId,
@@ -106,13 +177,13 @@ async function createChatThread(
     }),
     [201],
   );
-  return { id: result.body.id, title: result.body.title };
 }
 
 const createNewChatThread$ = command(
   async (
     { get, set },
     agentComposeId: string | null,
+    pane: OptimisticChatPane,
     signal: AbortSignal,
   ): Promise<PendingChatThread | null> => {
     const resolvedComposeId =
@@ -153,8 +224,8 @@ const createNewChatThread$ = command(
     set(localThread.hideSkeleton$);
 
     const createClient = get(zeroClient$);
-    const settleResult = (async () => {
-      const thread = await createChatThread(
+    const settleResult = (async (): Promise<void> => {
+      await createChatThread(
         createClient,
         resolvedComposeId,
         signal,
@@ -162,16 +233,10 @@ const createNewChatThread$ = command(
         threadId,
       );
       signal.throwIfAborted();
-
-      if (thread.id !== threadId) {
-        set(detachedNavigateTo$, "/chats/:threadId", {
-          pathParams: { threadId: thread.id },
-          replace: true,
-        });
-      }
     })();
 
     return {
+      pane,
       threadId,
       agentId: resolvedComposeId,
       createdAt,
@@ -183,18 +248,26 @@ const createNewChatThread$ = command(
 );
 
 export const createNewChatThreadOptimistically$ = command(
-  async ({ get, set }, agentComposeId: string | null, signal: AbortSignal) => {
-    const optimisticThread = get(optimisticChatThread$);
+  async (
+    { get, set },
+    agentComposeId: string | null,
+    pane: OptimisticChatPane,
+    signal: AbortSignal,
+  ) => {
+    const targetPane =
+      pane === "sidebar" && get(currentChatThreadId$) ? "sidebar" : "main";
+    const optimisticThread = get(internalOptimisticChatThreads$)[targetPane];
     if (optimisticThread) {
-      if (get(currentChatThreadId$) !== optimisticThread.threadId) {
-        set(detachedNavigateTo$, "/chats/:threadId", {
-          pathParams: { threadId: optimisticThread.threadId },
-        });
-      }
+      set(showExistingOptimisticChatThread$, optimisticThread);
       return;
     }
 
-    const result = await set(createNewChatThread$, agentComposeId, signal);
+    const result = await set(
+      createNewChatThread$,
+      agentComposeId,
+      targetPane,
+      signal,
+    );
     if (!result) {
       return;
     }
@@ -205,37 +278,46 @@ export const createNewChatThreadOptimistically$ = command(
 
 export const pendingOptimisticChatThreads$ = computed(
   async (get): Promise<ChatThreadListItem[]> => {
-    const optimisticThread = get(optimisticChatThread$);
-    if (!optimisticThread) {
+    const optimisticThreads = Object.values(
+      get(internalOptimisticChatThreads$),
+    ).filter((thread): thread is PendingChatThread => {
+      return thread !== null;
+    });
+    if (optimisticThreads.length === 0) {
       return [];
     }
 
     const currentAgentId = await get(currentChatAgentId$);
-    if (!currentAgentId || optimisticThread.agentId !== currentAgentId) {
+    if (!currentAgentId) {
       return [];
     }
 
     const persistedThreads = await get(chatThreads$);
-    if (
-      persistedThreads.some((thread) => {
-        return thread.id === optimisticThread.threadId;
-      })
-    ) {
-      return [];
-    }
+    const persistedThreadIds = new Set(
+      persistedThreads.map((thread) => {
+        return thread.id;
+      }),
+    );
 
-    return [
-      {
-        id: optimisticThread.threadId,
-        title: null,
-        agent: { id: optimisticThread.agentId, avatarUrl: null },
-        createdAt: optimisticThread.createdAt,
-        updatedAt: optimisticThread.createdAt,
-        isRead: true,
-        isArchived: false,
-        running: optimisticThread.running,
-      },
-    ];
+    return optimisticThreads
+      .filter((thread) => {
+        return (
+          thread.agentId === currentAgentId &&
+          !persistedThreadIds.has(thread.threadId)
+        );
+      })
+      .map((thread) => {
+        return {
+          id: thread.threadId,
+          title: null,
+          agent: { id: thread.agentId, avatarUrl: null },
+          createdAt: thread.createdAt,
+          updatedAt: thread.createdAt,
+          isRead: true,
+          isArchived: false,
+          running: thread.running,
+        };
+      });
   },
 );
 
@@ -319,6 +401,7 @@ const sendNewThreadMessage$ = command(
     })();
 
     return {
+      pane: "main",
       threadId,
       agentId,
       createdAt,

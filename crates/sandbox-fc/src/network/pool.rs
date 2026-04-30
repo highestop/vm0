@@ -30,16 +30,19 @@
 //! Design:
 //! - Pool lazily pre-warms a small number of namespaces at init, then
 //!   replenishes in the background on each [`NetnsPool::acquire`]
-//! - [`NetnsPool::acquire`] returns a namespace from pool, or creates on-demand as fallback
-//! - [`NetnsPool::release`] returns the namespace to the pool
+//! - [`NetnsPool::acquire`] returns a non-cloneable [`NetnsLease`] from the
+//!   pool, or creates one on-demand as fallback
+//! - [`NetnsPool::release`] takes `&mut Option<NetnsLease>` so cancellation
+//!   before the final commit point leaves cleanup ownership with the caller
 //! - Pool index (0–63) is auto-allocated via flock on `/var/lock`
 //! - Orphans from abnormally-exited prior runners (SIGKILL, panic, OOM,
 //!   power loss, aborted in-flight creation tasks) are reconciled at
 //!   startup via flock-based liveness probe — see
 //!   [`reconcile_orphan_namespaces`]
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fs::File;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use nix::fcntl::{Flock, FlockArg};
 use sandbox::SandboxError;
@@ -81,27 +84,128 @@ const _: () = assert!(MAX_POOLS * MAX_NAMESPACES * 4 <= 65536);
 // Public types
 // ---------------------------------------------------------------------------
 
-/// A pooled network namespace resource.
+/// Monotonic in-process identity for [`NetnsPool`] instances.
+static NEXT_NETNS_POOL_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_pool_instance_id() -> u64 {
+    NEXT_NETNS_POOL_INSTANCE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Cloneable metadata for a network namespace.
+///
+/// Cloning this does not grant release authority. Checked-out ownership is held
+/// by [`NetnsLease`].
 #[derive(Debug, Clone)]
 #[must_use]
-pub struct PooledNetns {
+pub struct NetnsInfo {
     /// Namespace name (e.g. `vm0-ns-00-00`).
-    pub name: String,
+    name: String,
     /// Host-side veth device name (e.g. `vm0-ve-00-00`).
-    pub host_device: String,
+    host_device: String,
     /// Veth namespace-side IP (e.g. `10.200.0.2`). This is the source IP
     /// that the proxy sees after NAT, used as the VM registry key.
-    pub peer_ip: String,
+    peer_ip: String,
+}
+
+impl NetnsInfo {
+    fn new(name: String, host_device: String, peer_ip: String) -> Self {
+        Self {
+            name,
+            host_device,
+            peer_ip,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn host_device(&self) -> &str {
+        &self.host_device
+    }
+
+    pub fn peer_ip(&self) -> &str {
+        &self.peer_ip
+    }
+}
+
+/// Non-cloneable release authority for a checked-out namespace.
+///
+/// Dropping a live lease only emits a warning. Call [`NetnsPool::release`] so
+/// the namespace is either recycled into the pool or deleted during shutdown.
+#[derive(Debug)]
+#[must_use]
+pub struct NetnsLease {
+    info: NetnsInfo,
+    pool_instance_id: u64,
+    active: bool,
+}
+
+impl NetnsLease {
+    fn new(info: NetnsInfo, pool_instance_id: u64) -> Self {
+        Self {
+            info,
+            pool_instance_id,
+            active: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(name: &str) -> Self {
+        Self::new(
+            NetnsInfo::new(name.into(), "test-ve".into(), "10.200.0.2".into()),
+            0,
+        )
+    }
+
+    pub fn info(&self) -> &NetnsInfo {
+        &self.info
+    }
+
+    pub fn name(&self) -> &str {
+        self.info.name()
+    }
+
+    pub fn peer_ip(&self) -> &str {
+        self.info.peer_ip()
+    }
+
+    fn pool_instance_id(&self) -> u64 {
+        self.pool_instance_id
+    }
+
+    fn into_info(mut self) -> NetnsInfo {
+        self.active = false;
+        self.info.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_info_for_test(self) -> NetnsInfo {
+        self.into_info()
+    }
+}
+
+impl Drop for NetnsLease {
+    fn drop(&mut self) {
+        if self.active {
+            warn!(
+                name = %self.info.name,
+                pool_instance_id = self.pool_instance_id,
+                "netns lease dropped without explicit release"
+            );
+        }
+    }
 }
 
 /// Configuration for creating a [`NetnsPool`].
 ///
-/// When `proxy_port` is set, the pool maintains **two** queues
-/// (plain + proxy), each buffering `BUFFER_SIZE` namespaces.
+/// When `proxy_port` is set, the pool pre-warms and acquires from the proxy
+/// queue only. Without `proxy_port`, it pre-warms and acquires from the plain
+/// queue. This avoids keeping an unreachable plain queue alive in proxy mode.
 pub struct NetnsPoolConfig {
     /// Proxy port for HTTP/HTTPS redirect (only adds redirect rules when set).
     pub proxy_port: Option<u16>,
-    /// DNS proxy port for DNS query redirect (only adds redirect rules when set).
+    /// DNS proxy port for DNS query redirect. Only meaningful with `proxy_port`.
     pub dns_port: Option<u16>,
 }
 
@@ -669,12 +773,15 @@ fn acquire_pool_lock(locks: &LockPaths) -> Result<(u32, Flock<File>)> {
 /// [`release`](Self::release) are recycled back into the queue.
 pub struct NetnsPool {
     active: bool,
-    plain_queue: VecDeque<PooledNetns>,
-    proxy_queue: VecDeque<PooledNetns>,
+    plain_queue: VecDeque<NetnsInfo>,
+    proxy_queue: VecDeque<NetnsInfo>,
     /// In-flight background namespace creation tasks (plain).
-    pending_plain: tokio::task::JoinSet<Result<PooledNetns>>,
+    pending_plain: tokio::task::JoinSet<Result<NetnsInfo>>,
     /// In-flight background namespace creation tasks (proxy).
-    pending_proxy: tokio::task::JoinSet<Result<PooledNetns>>,
+    pending_proxy: tokio::task::JoinSet<Result<NetnsInfo>>,
+    /// Namespaces checked out from this pool instance.
+    in_flight: HashSet<String>,
+    instance_id: u64,
     next_ns_index: u32,
     pool_index: u32,
     proxy_port: Option<u16>,
@@ -699,6 +806,8 @@ impl NetnsPool {
             proxy_queue: VecDeque::new(),
             pending_plain: tokio::task::JoinSet::new(),
             pending_proxy: tokio::task::JoinSet::new(),
+            in_flight: HashSet::new(),
+            instance_id: next_pool_instance_id(),
             next_ns_index: 0,
             pool_index: 0,
             proxy_port: None,
@@ -753,6 +862,8 @@ impl NetnsPool {
             }),
             pending_plain: tokio::task::JoinSet::new(),
             pending_proxy: tokio::task::JoinSet::new(),
+            in_flight: HashSet::new(),
+            instance_id: next_pool_instance_id(),
             next_ns_index: 0,
             pool_index: index,
             proxy_port: config.proxy_port,
@@ -845,7 +956,11 @@ impl NetnsPool {
     /// When `proxy_port` is configured, acquires from the proxy queue
     /// (namespaces with iptables REDIRECT rules). Otherwise acquires from
     /// the plain queue.
-    pub async fn acquire(&mut self) -> Result<PooledNetns> {
+    pub async fn acquire(&mut self) -> Result<NetnsLease> {
+        if !self.active {
+            return Err(NetworkError::PoolNotActive);
+        }
+
         // Move completed background tasks into queues before checking.
         self.drain_completed();
 
@@ -860,7 +975,7 @@ impl NetnsPool {
     ///
     /// Tries three tiers: queue → pending → on-demand.
     /// Spawns a background replenishment task after success.
-    async fn acquire_plain(&mut self) -> Result<PooledNetns> {
+    async fn acquire_plain(&mut self) -> Result<NetnsLease> {
         // Tier 1: pre-warmed queue.
         if let Some(pooled) = self.plain_queue.pop_front() {
             info!(
@@ -868,16 +983,18 @@ impl NetnsPool {
                 remaining = self.plain_queue.len(),
                 "acquired namespace"
             );
+            let lease = self.checkout_or_requeue(pooled, false)?;
             self.maybe_replenish_plain();
-            return Ok(pooled);
+            return Ok(lease);
         }
         // Tier 2: await in-flight background task.
         while let Some(result) = self.pending_plain.join_next().await {
             match result {
                 Ok(Ok(ns)) => {
                     info!(name = %ns.name, "acquired namespace from pending");
+                    let lease = self.checkout_or_requeue(ns, false)?;
                     self.maybe_replenish_plain();
-                    return Ok(ns);
+                    return Ok(lease);
                 }
                 Ok(Err(e)) => error!(error = %e, "pending namespace creation failed"),
                 Err(e) => error!(error = %e, "pending namespace task panicked"),
@@ -885,16 +1002,20 @@ impl NetnsPool {
         }
         // Tier 3: on-demand.
         info!("pool exhausted, creating namespace on-demand");
-        let ns = self.create_on_demand(None, None).await?;
+        // Spawn into the pool-owned JoinSet before awaiting so cancellation
+        // leaves the creation task reachable for later acquire/cleanup.
+        self.spawn_plain_creation()?;
+        let ns = self.await_on_demand_plain().await?;
+        let lease = self.checkout_or_requeue(ns, false)?;
         self.maybe_replenish_plain();
-        Ok(ns)
+        Ok(lease)
     }
 
     /// Acquire from the proxy queue.
     ///
     /// Tries three tiers: queue → pending → on-demand.
     /// Spawns a background replenishment task after success.
-    async fn acquire_proxy(&mut self) -> Result<PooledNetns> {
+    async fn acquire_proxy(&mut self) -> Result<NetnsLease> {
         // Tier 1: pre-warmed queue.
         if let Some(pooled) = self.proxy_queue.pop_front() {
             info!(
@@ -902,16 +1023,18 @@ impl NetnsPool {
                 remaining = self.proxy_queue.len(),
                 "acquired namespace (proxy)"
             );
+            let lease = self.checkout_or_requeue(pooled, true)?;
             self.maybe_replenish_proxy();
-            return Ok(pooled);
+            return Ok(lease);
         }
         // Tier 2: await in-flight background task.
         while let Some(result) = self.pending_proxy.join_next().await {
             match result {
                 Ok(Ok(ns)) => {
                     info!(name = %ns.name, "acquired namespace (proxy) from pending");
+                    let lease = self.checkout_or_requeue(ns, true)?;
                     self.maybe_replenish_proxy();
-                    return Ok(ns);
+                    return Ok(lease);
                 }
                 Ok(Err(e)) => error!(error = %e, "pending proxy namespace creation failed"),
                 Err(e) => error!(error = %e, "pending proxy namespace task panicked"),
@@ -919,19 +1042,16 @@ impl NetnsPool {
         }
         // Tier 3: on-demand.
         info!("proxy pool exhausted, creating namespace on-demand");
-        let ns = self
-            .create_on_demand(self.proxy_port, self.dns_port)
-            .await?;
+        // Spawn into the pool-owned JoinSet before awaiting so cancellation
+        // leaves the creation task reachable for later acquire/cleanup.
+        self.spawn_proxy_creation()?;
+        let ns = self.await_on_demand_proxy().await?;
+        let lease = self.checkout_or_requeue(ns, true)?;
         self.maybe_replenish_proxy();
-        Ok(ns)
+        Ok(lease)
     }
 
-    /// Create a new namespace on-demand, allocating the next index.
-    async fn create_on_demand(
-        &mut self,
-        proxy_port: Option<u16>,
-        dns_port: Option<u16>,
-    ) -> Result<PooledNetns> {
+    fn reserve_ns_index(&mut self) -> Result<u32> {
         let ns_index = self.next_ns_index;
         if ns_index >= MAX_NAMESPACES {
             return Err(NetworkError::NamespaceLimitReached {
@@ -939,14 +1059,101 @@ impl NetnsPool {
             });
         }
         self.next_ns_index += 1;
-        create_single_namespace(
-            self.pool_index,
+        Ok(ns_index)
+    }
+
+    fn spawn_plain_creation(&mut self) -> Result<()> {
+        let ns_index = self.reserve_ns_index()?;
+        let pool_index = self.pool_index;
+        let default_iface = self.default_iface.clone();
+        self.pending_plain.spawn(create_single_namespace(
+            pool_index,
             ns_index,
-            self.default_iface.clone(),
-            proxy_port,
+            default_iface,
+            None,
+            None,
+        ));
+        Ok(())
+    }
+
+    fn spawn_proxy_creation(&mut self) -> Result<()> {
+        let Some(proxy_port) = self.proxy_port else {
+            return Err(NetworkError::Prerequisite(
+                "proxy namespace requested without proxy port".into(),
+            ));
+        };
+        let ns_index = self.reserve_ns_index()?;
+        let pool_index = self.pool_index;
+        let default_iface = self.default_iface.clone();
+        let dns_port = self.dns_port;
+        self.pending_proxy.spawn(create_single_namespace(
+            pool_index,
+            ns_index,
+            default_iface,
+            Some(proxy_port),
             dns_port,
-        )
-        .await
+        ));
+        Ok(())
+    }
+
+    async fn await_on_demand_plain(&mut self) -> Result<NetnsInfo> {
+        match self.pending_plain.join_next().await {
+            Some(Ok(Ok(ns))) => Ok(ns),
+            Some(Ok(Err(e))) => Err(e),
+            Some(Err(e)) => Err(Self::join_error_to_network_error(
+                e,
+                "on-demand namespace creation task",
+            )),
+            None => Err(NetworkError::Prerequisite(
+                "on-demand namespace creation task disappeared".into(),
+            )),
+        }
+    }
+
+    async fn await_on_demand_proxy(&mut self) -> Result<NetnsInfo> {
+        match self.pending_proxy.join_next().await {
+            Some(Ok(Ok(ns))) => Ok(ns),
+            Some(Ok(Err(e))) => Err(e),
+            Some(Err(e)) => Err(Self::join_error_to_network_error(
+                e,
+                "on-demand proxy namespace creation task",
+            )),
+            None => Err(NetworkError::Prerequisite(
+                "on-demand proxy namespace creation task disappeared".into(),
+            )),
+        }
+    }
+
+    fn join_error_to_network_error(e: tokio::task::JoinError, context: &str) -> NetworkError {
+        if e.is_panic() {
+            std::panic::resume_unwind(e.into_panic());
+        }
+        NetworkError::Prerequisite(format!("{context} cancelled: {e}"))
+    }
+
+    fn checkout_or_requeue(&mut self, info: NetnsInfo, has_proxy: bool) -> Result<NetnsLease> {
+        let name = info.name.clone();
+        match self.checkout(info) {
+            Ok(lease) => Ok(lease),
+            Err(info) => {
+                warn!(
+                    name = %name,
+                    has_proxy,
+                    "namespace is already checked out; returning metadata to queue"
+                );
+                self.target_queue_mut(has_proxy).push_front(info);
+                Err(NetworkError::InvalidLease(format!(
+                    "namespace {name} is already checked out"
+                )))
+            }
+        }
+    }
+
+    fn checkout(&mut self, info: NetnsInfo) -> std::result::Result<NetnsLease, NetnsInfo> {
+        if !self.in_flight.insert(info.name.clone()) {
+            return Err(info);
+        }
+        Ok(NetnsLease::new(info, self.instance_id))
     }
 
     /// Move completed background tasks into their respective queues.
@@ -981,17 +1188,7 @@ impl NetnsPool {
         {
             return;
         }
-        let ns_index = self.next_ns_index;
-        self.next_ns_index += 1;
-        let pool_index = self.pool_index;
-        let default_iface = self.default_iface.clone();
-        self.pending_plain.spawn(create_single_namespace(
-            pool_index,
-            ns_index,
-            default_iface,
-            None,
-            None,
-        ));
+        let _ = self.spawn_plain_creation();
     }
 
     /// Spawn a background proxy namespace creation task if needed.
@@ -999,54 +1196,103 @@ impl NetnsPool {
     /// Skips if: no proxy port configured, buffer is full, a task is
     /// already in-flight, or namespace index limit reached.
     fn maybe_replenish_proxy(&mut self) {
-        let Some(proxy_port) = self.proxy_port else {
+        if self.proxy_port.is_none() {
             return;
-        };
+        }
         if self.proxy_queue.len() + self.pending_proxy.len() >= BUFFER_SIZE
             || !self.pending_proxy.is_empty()
             || self.next_ns_index >= MAX_NAMESPACES
         {
             return;
         }
-        let ns_index = self.next_ns_index;
-        self.next_ns_index += 1;
-        let pool_index = self.pool_index;
-        let default_iface = self.default_iface.clone();
-        let dns_port = self.dns_port;
-        self.pending_proxy.spawn(create_single_namespace(
-            pool_index,
-            ns_index,
-            default_iface,
-            Some(proxy_port),
-            dns_port,
-        ));
+        let _ = self.spawn_proxy_creation();
     }
 
     /// Return a namespace to the pool, or delete it if the pool is inactive.
     ///
     /// When `proxy_port` is configured, the namespace is returned to
     /// the proxy queue so its REDIRECT rules are reused.
-    pub async fn release(&mut self, ns: PooledNetns) -> Result<()> {
+    ///
+    /// The caller keeps the lease in `Some` while this future awaits. Release
+    /// only takes and disarms the lease at the final no-await commit point, so
+    /// cancelling this future before success leaves cleanup ownership with the
+    /// caller.
+    pub async fn release(&mut self, lease: &mut Option<NetnsLease>) -> Result<()> {
+        let Some(active_lease) = lease.as_ref() else {
+            return Err(NetworkError::InvalidLease("missing netns lease".into()));
+        };
+        if active_lease.pool_instance_id() != self.instance_id {
+            warn!(
+                name = %active_lease.name(),
+                lease_pool_instance_id = active_lease.pool_instance_id(),
+                pool_instance_id = self.instance_id,
+                "refusing to release netns lease from a different pool instance"
+            );
+            return Err(NetworkError::InvalidLease(format!(
+                "namespace {} belongs to pool instance {}, not {}",
+                active_lease.name(),
+                active_lease.pool_instance_id(),
+                self.instance_id
+            )));
+        }
+        if !self.in_flight.contains(active_lease.name()) {
+            warn!(
+                name = %active_lease.name(),
+                pool_instance_id = self.instance_id,
+                "refusing to release netns lease that is not in flight"
+            );
+            return Err(NetworkError::InvalidLease(format!(
+                "namespace {} is not checked out",
+                active_lease.name()
+            )));
+        }
+
         if !self.active {
-            delete_namespace_resources(&ns.name, &ns.host_device).await;
+            delete_namespace_resources(active_lease.name(), active_lease.info().host_device())
+                .await;
+            let Some(lease) = lease.take() else {
+                return Err(NetworkError::InvalidLease(
+                    "validated netns lease disappeared".into(),
+                ));
+            };
+            self.in_flight.remove(lease.name());
+            let _ = lease.into_info();
             return Ok(());
         }
 
         let has_proxy = self.proxy_port.is_some();
+        if self
+            .target_queue(has_proxy)
+            .iter()
+            .any(|r| r.name == active_lease.name())
+        {
+            warn!(
+                name = %active_lease.name(),
+                "refusing to release netns lease already queued in pool"
+            );
+            return Err(NetworkError::InvalidLease(format!(
+                "namespace {} is already queued",
+                active_lease.name()
+            )));
+        }
+
+        // Flush stale conntrack entries so the next VM using this namespace
+        // does not inherit connection tracking state from the previous VM.
+        flush_conntrack(active_lease.peer_ip()).await;
+
+        let Some(lease) = lease.take() else {
+            return Err(NetworkError::InvalidLease(
+                "validated netns lease disappeared".into(),
+            ));
+        };
+        self.in_flight.remove(lease.name());
+        let ns = lease.into_info();
+
         let target_queue = if has_proxy {
             &mut self.proxy_queue
         } else {
             &mut self.plain_queue
         };
-
-        if target_queue.iter().any(|r| r.name == ns.name) {
-            info!(name = %ns.name, "namespace already in pool, ignoring");
-            return Ok(());
-        }
-
-        // Flush stale conntrack entries so the next VM using this namespace
-        // does not inherit connection tracking state from the previous VM.
-        flush_conntrack(&ns.peer_ip).await;
 
         info!(
             name = %ns.name,
@@ -1058,23 +1304,47 @@ impl NetnsPool {
         Ok(())
     }
 
-    /// Delete all namespaces currently in the pool queue and cancel
-    /// in-flight background creation tasks.
+    fn target_queue(&self, has_proxy: bool) -> &VecDeque<NetnsInfo> {
+        if has_proxy {
+            &self.proxy_queue
+        } else {
+            &self.plain_queue
+        }
+    }
+
+    fn target_queue_mut(&mut self, has_proxy: bool) -> &mut VecDeque<NetnsInfo> {
+        if has_proxy {
+            &mut self.proxy_queue
+        } else {
+            &mut self.plain_queue
+        }
+    }
+
+    /// Delete all namespaces currently in the pool queue and wait for
+    /// in-flight background creation tasks so their resources can be deleted.
     ///
     /// Namespaces that have been acquired but not yet released are **not**
     /// cleaned up here — they will be caught by orphan cleanup on the next
     /// [`NetnsPool::create`] call with the same index.
     pub async fn cleanup(&mut self) -> Result<()> {
-        if !self.active {
+        if !self.active
+            && self.plain_queue.is_empty()
+            && self.proxy_queue.is_empty()
+            && self.pending_plain.is_empty()
+            && self.pending_proxy.is_empty()
+        {
             return Ok(());
         }
         self.active = false;
+        if !self.in_flight.is_empty() {
+            warn!(
+                in_flight = self.in_flight.len(),
+                "namespace pool cleanup with outstanding leases"
+            );
+        }
 
-        // Cancel in-flight background creation tasks.
-        self.pending_plain.abort_all();
-        self.pending_proxy.abort_all();
-
-        // Drain any tasks that completed before abort into queues for cleanup.
+        // Let in-flight creation finish instead of aborting it. Aborting can
+        // leave partially-created kernel resources with no NetnsInfo to retry.
         while let Some(result) = self.pending_plain.join_next().await {
             if let Ok(Ok(ns)) = result {
                 self.plain_queue.push_back(ns);
@@ -1089,36 +1359,42 @@ impl NetnsPool {
         let count = self.plain_queue.len() + self.proxy_queue.len();
         info!(count, "cleaning up namespace pool");
 
-        let to_delete: Vec<PooledNetns> = self
-            .plain_queue
-            .drain(..)
-            .chain(self.proxy_queue.drain(..))
-            .collect();
-
-        // Delete namespaces in parallel
-        let mut set = tokio::task::JoinSet::new();
-        for ns in to_delete {
-            set.spawn(async move {
-                delete_namespace_resources(&ns.name, &ns.host_device).await;
-            });
-        }
-        while let Some(result) = set.join_next().await {
-            if let Err(e) = result {
-                error!(error = %e, "namespace deletion task panicked");
-            }
-        }
+        Self::delete_queued_namespaces(&mut self.plain_queue).await;
+        Self::delete_queued_namespaces(&mut self.proxy_queue).await;
 
         info!("namespace pool cleanup complete");
         Ok(())
+    }
+
+    async fn delete_queued_namespaces(queue: &mut VecDeque<NetnsInfo>) {
+        Self::delete_queued_namespaces_with(queue, |ns| async move {
+            delete_namespace_resources(&ns.name, &ns.host_device).await;
+        })
+        .await;
+    }
+
+    async fn delete_queued_namespaces_with<F, Fut>(queue: &mut VecDeque<NetnsInfo>, mut delete: F)
+    where
+        F: FnMut(NetnsInfo) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        while let Some(ns) = queue.front().cloned() {
+            delete(ns).await;
+            queue.pop_front();
+        }
     }
 }
 
 impl Drop for NetnsPool {
     fn drop(&mut self) {
-        if self.active {
+        let queued = self.plain_queue.len() + self.proxy_queue.len();
+        let pending = self.pending_plain.len() + self.pending_proxy.len();
+        if self.active || queued != 0 || pending != 0 || !self.in_flight.is_empty() {
             warn!(
-                queued = self.plain_queue.len() + self.proxy_queue.len(),
-                pending = self.pending_plain.len() + self.pending_proxy.len(),
+                active = self.active,
+                queued,
+                pending,
+                in_flight = self.in_flight.len(),
                 "NetnsPool dropped without calling cleanup()"
             );
         }
@@ -1139,7 +1415,7 @@ async fn create_single_namespace(
     default_iface: String,
     proxy_port: Option<u16>,
     dns_port: Option<u16>,
-) -> Result<PooledNetns> {
+) -> Result<NetnsInfo> {
     if ns_index >= MAX_NAMESPACES {
         return Err(NetworkError::NamespaceLimitReached {
             max: MAX_NAMESPACES,
@@ -1192,11 +1468,7 @@ async fn create_single_namespace(
                 }
             }
             info!(name = %ns_name, "namespace created");
-            Ok(PooledNetns {
-                name: ns_name,
-                host_device,
-                peer_ip,
-            })
+            Ok(NetnsInfo::new(ns_name, host_device, peer_ip))
         }
         Err(e) => {
             error!(name = %ns_name, error = %e, "failed to create namespace, cleaning up");
@@ -1517,6 +1789,271 @@ mod tests {
     #[test]
     fn parse_ns_name_bare_prefix() {
         assert_eq!(parse_ns_name("vm0-ns-"), None);
+    }
+
+    fn test_info(name: &str) -> NetnsInfo {
+        NetnsInfo::new(name.into(), "test-ve".into(), "10.200.0.2".into())
+    }
+
+    #[tokio::test]
+    async fn release_disarms_lease_and_returns_info_to_queue() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let info = test_info("test-ns");
+        let mut lease = Some(pool.checkout(info).unwrap());
+
+        pool.release(&mut lease).await.unwrap();
+
+        assert!(lease.is_none());
+        assert!(pool.in_flight.is_empty());
+        assert_eq!(pool.plain_queue.len(), 1);
+        assert_eq!(pool.plain_queue.front().unwrap().name(), "test-ns");
+
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_after_cleanup_deletes_outstanding_lease_without_requeueing() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let info = test_info("test-ns");
+        let mut lease = Some(pool.checkout(info).unwrap());
+
+        pool.cleanup().await.unwrap();
+
+        assert!(!pool.active);
+        assert!(lease.is_some());
+        assert!(pool.in_flight.contains("test-ns"));
+
+        pool.release(&mut lease).await.unwrap();
+
+        assert!(lease.is_none());
+        assert!(pool.in_flight.is_empty());
+        assert!(pool.plain_queue.is_empty());
+        assert!(pool.proxy_queue.is_empty());
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_retry_drains_pending_creation_after_cancel() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let entered_task = std::sync::Arc::clone(&entered);
+        let release_task = std::sync::Arc::clone(&release);
+        pool.pending_plain.spawn(async move {
+            entered_task.notify_one();
+            release_task.notified().await;
+            Ok(test_info("test-ns"))
+        });
+
+        {
+            let cleanup = pool.cleanup();
+            tokio::pin!(cleanup);
+            tokio::select! {
+                result = &mut cleanup => panic!("cleanup completed before pending task was released: {result:?}"),
+                _ = entered.notified() => {}
+            }
+        }
+
+        assert!(!pool.active);
+        assert_eq!(pool.pending_plain.len(), 1);
+
+        release.notify_one();
+        pool.cleanup().await.unwrap();
+
+        assert!(!pool.active);
+        assert!(pool.pending_plain.is_empty());
+        assert!(pool.plain_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn acquire_cancellation_keeps_pending_creation_for_cleanup() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let entered_task = std::sync::Arc::clone(&entered);
+        let release_task = std::sync::Arc::clone(&release);
+        pool.pending_plain.spawn(async move {
+            entered_task.notify_one();
+            release_task.notified().await;
+            Ok(test_info("test-ns"))
+        });
+
+        {
+            let acquire = pool.acquire();
+            tokio::pin!(acquire);
+            tokio::select! {
+                result = &mut acquire => panic!("acquire completed before pending task was released: {result:?}"),
+                _ = entered.notified() => {}
+            }
+        }
+
+        assert!(pool.in_flight.is_empty());
+        assert_eq!(pool.pending_plain.len(), 1);
+
+        release.notify_one();
+        pool.cleanup().await.unwrap();
+
+        assert!(!pool.active);
+        assert!(pool.pending_plain.is_empty());
+        assert!(pool.plain_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_queued_namespaces_keeps_front_entry_when_cancelled() {
+        let mut queue = VecDeque::from([test_info("test-ns")]);
+        let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+
+        let delete = {
+            let entered = std::sync::Arc::clone(&entered);
+            let release = std::sync::Arc::clone(&release);
+            move |ns: NetnsInfo| {
+                assert_eq!(ns.name(), "test-ns");
+                let entered = std::sync::Arc::clone(&entered);
+                let release = std::sync::Arc::clone(&release);
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+            }
+        };
+        {
+            let deletion = NetnsPool::delete_queued_namespaces_with(&mut queue, delete);
+            tokio::pin!(deletion);
+            tokio::select! {
+                _ = &mut deletion => panic!("delete completed before test released it"),
+                _ = entered.notified() => {}
+            }
+        }
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.front().unwrap().name(), "test-ns");
+
+        release.notify_one();
+        NetnsPool::delete_queued_namespaces_with(&mut queue, |_| async {}).await;
+        assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_retries_when_pool_is_inactive_but_not_drained() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.plain_queue.push_back(test_info("test-ns"));
+
+        pool.cleanup().await.unwrap();
+
+        assert!(!pool.active);
+        assert!(pool.plain_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn acquire_rejects_inactive_pool() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.plain_queue.push_back(test_info("test-ns"));
+
+        let err = pool.acquire().await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::PoolNotActive));
+        assert_eq!(pool.plain_queue.len(), 1);
+        assert!(pool.in_flight.is_empty());
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acquire_requeues_namespace_when_checkout_detects_in_flight_duplicate() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        pool.in_flight.insert("test-ns".into());
+        pool.plain_queue.push_back(test_info("test-ns"));
+
+        let err = pool.acquire().await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::InvalidLease(_)));
+        assert_eq!(pool.plain_queue.len(), 1);
+        assert_eq!(pool.plain_queue.front().unwrap().name(), "test-ns");
+        assert!(pool.pending_plain.is_empty());
+        assert_eq!(pool.next_ns_index, 0);
+
+        pool.in_flight.clear();
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn proxy_acquire_requeues_namespace_when_checkout_detects_in_flight_duplicate() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        pool.proxy_port = Some(8080);
+        pool.in_flight.insert("test-ns".into());
+        pool.proxy_queue.push_back(test_info("test-ns"));
+
+        let err = pool.acquire().await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::InvalidLease(_)));
+        assert!(pool.plain_queue.is_empty());
+        assert_eq!(pool.proxy_queue.len(), 1);
+        assert_eq!(pool.proxy_queue.front().unwrap().name(), "test-ns");
+        assert!(pool.pending_proxy.is_empty());
+        assert_eq!(pool.next_ns_index, 0);
+
+        pool.in_flight.clear();
+        pool.proxy_queue.clear();
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_keeps_lease_when_namespace_already_queued() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let info = test_info("test-ns");
+        let mut lease = Some(pool.checkout(info.clone()).unwrap());
+        pool.plain_queue.push_back(info);
+
+        let err = pool.release(&mut lease).await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::InvalidLease(_)));
+        assert!(lease.is_some());
+        assert_eq!(pool.plain_queue.len(), 1);
+        assert_eq!(pool.plain_queue.front().unwrap().name(), "test-ns");
+
+        let _ = lease.take().unwrap().into_info_for_test();
+        pool.in_flight.clear();
+        pool.plain_queue.clear();
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_keeps_lease_on_wrong_pool_instance() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let info = test_info("test-ns");
+        let mut lease = Some(NetnsLease::new(info, pool.instance_id + 1));
+
+        let err = pool.release(&mut lease).await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::InvalidLease(_)));
+        assert!(lease.is_some());
+        let _ = lease.take().unwrap().into_info_for_test();
+
+        pool.cleanup().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn release_keeps_lease_when_not_in_flight() {
+        let mut pool = NetnsPool::inactive_for_test();
+        pool.active = true;
+        let info = test_info("test-ns");
+        let mut lease = Some(NetnsLease::new(info, pool.instance_id));
+
+        let err = pool.release(&mut lease).await.unwrap_err();
+
+        assert!(matches!(err, NetworkError::InvalidLease(_)));
+        assert!(lease.is_some());
+        let _ = lease.take().unwrap().into_info_for_test();
+
+        pool.cleanup().await.unwrap();
     }
 
     #[test]

@@ -7,12 +7,7 @@ import {
   type State,
 } from "ccstate";
 import { animationFrame, delay } from "signal-timers";
-import {
-  createDeferredPromise,
-  onRef,
-  resetSignal,
-  setLoop,
-} from "../utils.ts";
+import { onRef, resetSignal, setLoop } from "../utils.ts";
 import { setAblyLoop$ } from "../realtime.ts";
 import { createScrollSignals } from "../auto-scroll.ts";
 import {
@@ -1164,20 +1159,6 @@ function createRunTracking({
         return;
       }
 
-      // Mark thread as read on open (focus-gated)
-      if (document.visibilityState !== "visible") {
-        const visibleDeferred = createDeferredPromise<void>(signal);
-        const handler = () => {
-          if (document.visibilityState === "visible") {
-            visibleDeferred.resolve();
-          }
-        };
-        document.addEventListener("visibilitychange", handler, {
-          signal,
-        });
-        await visibleDeferred.promise;
-        signal.throwIfAborted();
-      }
       await set(markThreadReadIfNeeded$, signal);
 
       const onMessageCreated$ = command(async ({ set }, sig: AbortSignal) => {

@@ -55,4 +55,5 @@ export enum FeatureSwitchKey {
   ZapierConnector = "zapierConnector",
   GumroadConnector = "gumroadConnector",
   CodexBeta = "codexBeta",
+  IdbMessage = "idbMessage",
 }

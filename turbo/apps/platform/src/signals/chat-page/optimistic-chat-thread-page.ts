@@ -1,4 +1,4 @@
-import { command, computed, state } from "ccstate";
+import { command, computed } from "ccstate";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import {
   chatMessagesContract,
@@ -14,31 +14,28 @@ import {
   currentChatThreadId$,
   reloadChatThreads$,
 } from "../agent-chat.ts";
-import {
-  detachedNavigateTo$,
-  searchParams$,
-  updateSearchParams$,
-} from "../route.ts";
+import { detachedNavigateTo$, searchParams$ } from "../route.ts";
+import { loadRightThread$ } from "./chat-thread-panes.ts";
 import { talkDraft$ } from "../zero-page/chat-draft.ts";
 import { zeroOnboardingStatus$ } from "../zero-page/zero-onboarding.ts";
 import { createChatThreadSignals, ensureDraft$ } from "./create-chat-thread.ts";
 import { createLocalChatThreadDataSource } from "./local-chat-thread-data-source.ts";
 import { createPendingChatThread } from "./pending-chat-thread.ts";
 import { prepareUserMessageFromDraft$ } from "./resolve-draft-attachments.ts";
+import {
+  allPendingChatThreads$,
+  clearMatchingOptimisticChatThread$,
+  optimisticChatThread$,
+  optimisticChatThreadByPane$,
+  registerOptimisticChatThread$,
+  type OptimisticChatPane,
+  type PendingChatThread,
+} from "./optimistic-chat-thread-state.ts";
+
+export type { OptimisticChatPane };
+export { optimisticChatThread$ };
 
 const SIDEBAR_PARAM = "sidebar";
-
-export type OptimisticChatPane = "main" | "sidebar";
-
-interface PendingChatThread {
-  pane: OptimisticChatPane;
-  threadId: string;
-  agentId: string;
-  createdAt: string;
-  running: boolean;
-  pendingThread: ReturnType<typeof createChatThreadSignals>;
-  settleResult: Promise<void>;
-}
 
 interface SendNewThreadMessageRequest {
   agentId: string;
@@ -55,35 +52,6 @@ interface SendNewThreadMessagePending extends PendingChatThread {
   sendResult: Promise<SendNewThreadMessageResult>;
 }
 
-interface OptimisticChatThreads {
-  main: PendingChatThread | null;
-  sidebar: PendingChatThread | null;
-}
-
-const internalOptimisticChatThreads$ = state<OptimisticChatThreads>({
-  main: null,
-  sidebar: null,
-});
-
-export const optimisticChatThread$ = computed((get) => {
-  return get(internalOptimisticChatThreads$).main;
-});
-
-export const sidebarOptimisticChatThread$ = computed((get) => {
-  return get(internalOptimisticChatThreads$).sidebar;
-});
-
-export const clearMatchingOptimisticChatThread$ = command(
-  ({ set }, pending: PendingChatThread) => {
-    set(internalOptimisticChatThreads$, (current) => {
-      if (current[pending.pane] !== pending) {
-        return current;
-      }
-      return { ...current, [pending.pane]: null };
-    });
-  },
-);
-
 const routeMainOptimisticChatThread$ = command(
   ({ get, set }, pending: PendingChatThread) => {
     const next = new URLSearchParams(get(searchParams$));
@@ -98,19 +66,30 @@ const routeMainOptimisticChatThread$ = command(
 );
 
 const routeSidebarOptimisticChatThread$ = command(
-  ({ get, set }, pending: PendingChatThread) => {
+  async (
+    { get, set },
+    pending: PendingChatThread,
+    signal: AbortSignal,
+  ): Promise<void> => {
     if (!get(currentChatThreadId$)) {
       return;
     }
 
-    const next = new URLSearchParams(get(searchParams$));
-    next.set(SIDEBAR_PARAM, pending.threadId);
-    set(updateSearchParams$, next);
+    // Funnel through loadRightThread$ so the optimistic flow goes through
+    // the same setup as URL-driven loads (settleResult swap, draft seeding,
+    // Ably subscription). loadRightThread$ reads sidebarOptimisticChatThread$
+    // synchronously and publishes pending.pendingThread before its first
+    // await, so the sidebar paints without delay.
+    await set(loadRightThread$, pending.threadId, signal);
   },
 );
 
 const showExistingOptimisticChatThread$ = command(
-  ({ get, set }, pending: PendingChatThread) => {
+  async (
+    { get, set },
+    pending: PendingChatThread,
+    signal: AbortSignal,
+  ): Promise<void> => {
     if (pending.pane === "main") {
       if (get(currentChatThreadId$) !== pending.threadId) {
         set(routeMainOptimisticChatThread$, pending);
@@ -119,7 +98,7 @@ const showExistingOptimisticChatThread$ = command(
     }
 
     if (get(searchParams$).get(SIDEBAR_PARAM) !== pending.threadId) {
-      set(routeSidebarOptimisticChatThread$, pending);
+      await set(routeSidebarOptimisticChatThread$, pending, signal);
     }
   },
 );
@@ -131,14 +110,12 @@ const routeOptimisticChatThread$ = command(
     signal.addEventListener("abort", () => {
       set(clearMatchingOptimisticChatThread$, pending);
     });
-    set(internalOptimisticChatThreads$, (current) => {
-      return { ...current, [pending.pane]: pending };
-    });
+    set(registerOptimisticChatThread$, pending);
 
     if (pending.pane === "main") {
       set(routeMainOptimisticChatThread$, pending);
     } else {
-      set(routeSidebarOptimisticChatThread$, pending);
+      await set(routeSidebarOptimisticChatThread$, pending, signal);
     }
 
     await pending.settleResult.catch((error: unknown) => {
@@ -240,9 +217,9 @@ export const createNewChatThreadOptimistically$ = command(
   ) => {
     const targetPane =
       pane === "sidebar" && get(currentChatThreadId$) ? "sidebar" : "main";
-    const optimisticThread = get(internalOptimisticChatThreads$)[targetPane];
+    const optimisticThread = get(optimisticChatThreadByPane$)(targetPane);
     if (optimisticThread) {
-      set(showExistingOptimisticChatThread$, optimisticThread);
+      await set(showExistingOptimisticChatThread$, optimisticThread, signal);
       return;
     }
 
@@ -262,11 +239,7 @@ export const createNewChatThreadOptimistically$ = command(
 
 export const pendingOptimisticChatThreads$ = computed(
   async (get): Promise<ChatThreadListItem[]> => {
-    const optimisticThreads = Object.values(
-      get(internalOptimisticChatThreads$),
-    ).filter((thread): thread is PendingChatThread => {
-      return thread !== null;
-    });
+    const optimisticThreads = get(allPendingChatThreads$);
     if (optimisticThreads.length === 0) {
       return [];
     }

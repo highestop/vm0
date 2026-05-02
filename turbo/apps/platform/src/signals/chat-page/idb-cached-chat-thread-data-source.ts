@@ -1,4 +1,4 @@
-import { command, computed, type Computed } from "ccstate";
+import { command, computed } from "ccstate";
 import { clerk$ } from "../auth.ts";
 import { createIdbMessageStores } from "../external/idb-message-store.ts";
 import { logger } from "../log.ts";
@@ -40,7 +40,7 @@ function createListMessagesBefore(
       }
 
       const stores = getStores(userId, orgId);
-      const readStore = stores.readStore$;
+      const readStore = stores.readStore;
       const cached = await readStore.readBefore(tid, beforeId, 50, signal);
 
       if (cached.length > 0) {
@@ -59,7 +59,7 @@ function createListMessagesBefore(
         signal,
       );
 
-      const writeStore = stores.writeStore$;
+      const writeStore = stores.writeStore;
       await writeStore.upsertMessages(tid, result.messages, signal);
       L.debug("listBefore:cacheFilled", {
         threadId: tid,
@@ -95,7 +95,7 @@ function createListMessagesAfter(
 
       if (userId && orgId && result.messages.length > 0) {
         const stores = getStores(userId, orgId);
-        const writeStore = stores.writeStore$;
+        const writeStore = stores.writeStore;
         await writeStore.upsertMessages(tid, result.messages, signal);
         L.debug("listAfter:cacheFilled", {
           threadId: tid,
@@ -116,35 +116,13 @@ function createListMessagesAfter(
   );
 }
 
-function createSubscribeRealtime(
-  remote: ChatThreadDataSource,
-  initialPage$: Computed<Promise<InitialPage>>,
-  initialPageFromCache: { current: boolean },
-  listMessagesAfter$: ChatThreadDataSource["listMessagesAfter$"],
-) {
+function createSubscribeRealtime(remote: ChatThreadDataSource) {
   return command(
-    async (
-      { get, set },
+    (
+      { set },
       { threadId: tid, handlers }: SubscribeRealtimeArgs,
       signal: AbortSignal,
     ) => {
-      if (initialPageFromCache.current) {
-        const page = await get(initialPage$);
-        signal.throwIfAborted();
-        const latestMessageId = page.messages[page.messages.length - 1]?.id;
-        if (latestMessageId) {
-          L.debug("subscribeRealtime:catchUp", {
-            threadId: tid,
-            sinceId: latestMessageId,
-          });
-          await set(
-            listMessagesAfter$,
-            { threadId: tid, sinceId: latestMessageId },
-            signal,
-          );
-        }
-      }
-
       return set(
         remote.subscribeRealtime$,
         { threadId: tid, handlers },
@@ -159,7 +137,6 @@ export function createIdbCachedDataSource(
 ): ChatThreadDataSource {
   const remote = createRemoteChatThreadDataSource(threadId);
 
-  const cacheFlags = { current: false };
   let stores: Stores | null = null;
 
   function getStores(userId: string, orgId: string) {
@@ -176,24 +153,21 @@ export function createIdbCachedDataSource(
 
     if (!userId || !orgId) {
       L.debug("initialPage:noAuth", { threadId });
-      cacheFlags.current = false;
       return get(remote.initialPage$);
     }
 
     const stores = getStores(userId, orgId);
-    const readStore = stores.readStore$;
+    const readStore = stores.readStore;
     const cached = await readStore.readLatest(threadId, 50);
 
     if (cached.length > 0) {
       L.debug("initialPage:cacheHit", { threadId, count: cached.length });
-      cacheFlags.current = true;
       return { messages: cached, hasHistoryBefore: true };
     }
 
     L.debug("initialPage:cacheMiss", { threadId });
-    cacheFlags.current = false;
     const page = await get(remote.initialPage$);
-    const writeStore = stores.writeStore$;
+    const writeStore = stores.writeStore;
     await writeStore.upsertMessages(threadId, page.messages);
     L.debug("initialPage:cacheFilled", {
       threadId,
@@ -214,12 +188,6 @@ export function createIdbCachedDataSource(
     listMessagesBefore$: createListMessagesBefore(remote, getStores),
     cancelRuns$: remote.cancelRuns$,
     markRead$: remote.markRead$,
-    subscribeRealtime$: createSubscribeRealtime(
-      remote,
-      initialPage$,
-      cacheFlags,
-      listMessagesAfter$,
-    ),
-    isCancelRequested$: remote.isCancelRequested$,
+    subscribeRealtime$: createSubscribeRealtime(remote),
   };
 }

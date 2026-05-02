@@ -17,7 +17,7 @@ import {
   markRouteSetupBegin$,
 } from "../../lib/posthog.ts";
 
-export const setupChatPage$ = command(
+const internalSetupChatPage$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     set(markRouteSetupBegin$);
     const threadId = get(currentChatThreadId$);
@@ -25,13 +25,8 @@ export const setupChatPage$ = command(
       throw new Error("threadId is required to load chat page");
     }
 
-    if (await set(onboardGuard$, signal)) {
-      return;
-    }
-
     set(updatePage$, createElement(ZeroChatThreadPage), "sidebar");
-    await set(hideAppSkeleton$, signal);
-    signal.throwIfAborted();
+
     set(captureNavigationTiming$);
 
     const sidebarThreadId = get(searchParams$).get(SIDEBAR_PARAM);
@@ -46,9 +41,16 @@ export const setupChatPage$ = command(
     signal.throwIfAborted();
 
     if (sidebarThreadId && !shouldLoadRight) {
-      // URL referenced sidebar thread that matched the primary thread —
-      // strip it to keep state coherent.
       set(unloadRightThread$);
     }
   },
 );
+
+export const setupChatPage$ = command(async ({ set }, signal: AbortSignal) => {
+  await Promise.all([
+    set(onboardGuard$, signal),
+    set(internalSetupChatPage$, signal),
+    set(hideAppSkeleton$, signal),
+  ]);
+  signal.throwIfAborted();
+});

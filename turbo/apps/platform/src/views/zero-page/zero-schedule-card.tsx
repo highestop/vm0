@@ -31,7 +31,12 @@ import {
   TabsList,
   TabsTrigger,
 } from "@vm0/ui";
-import { detach, Reason } from "../../signals/utils.ts";
+import {
+  bestEffort,
+  detach,
+  onDomEventFn,
+  Reason,
+} from "../../signals/utils.ts";
 import { pageSignal$ } from "../../signals/page-signal.ts";
 import {
   ScheduleFormDialog,
@@ -330,6 +335,10 @@ export function ZeroScheduleCard({
           return new Set([...prev, id]);
         });
         detach(
+          // TODO: for yuma@vm0.ai
+          // It looks like we are maintaining some temporary states within the View,
+          // which should be refactored into a CCState pattern.
+          // oxlint-disable-next-line promise/prefer-await-to-then
           onToggleEnabled({ name: entry.name, enabled }).finally(() => {
             setTogglingIds((prev) => {
               const next = new Set(prev);
@@ -352,63 +361,58 @@ export function ZeroScheduleCard({
   const setRunningIds = useSet(setRunningIds$);
 
   const handleRunNow = onRunNow
-    ? (entry: ScheduleEntry) => {
+    ? onDomEventFn(async (entry: ScheduleEntry) => {
         const id = entry.id;
         setRunningIds((prev) => {
           return new Set([...prev, id]);
         });
-        detach(
-          onRunNow(entry).finally(() => {
-            setRunningIds((prev) => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
-          }),
-          Reason.DomCallback,
-        );
-      }
+        await bestEffort(onRunNow(entry));
+        setRunningIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      })
     : undefined;
 
-  const confirmDelete = () => {
+  const confirmDelete = onDomEventFn(async () => {
     const entry = pendingDelete;
     if (!entry?.name || !onDelete) {
       return;
     }
+    const name = entry.name;
     setDeleting(true);
-    detach(
-      onDelete(entry.name)
-        .then(() => {
-          setPendingDelete(null);
-        })
-        .finally(() => {
-          setDeleting(false);
-        }),
-      Reason.DomCallback,
+    await bestEffort(
+      (async () => {
+        await onDelete(name);
+        setPendingDelete(null);
+      })(),
     );
-  };
+    setDeleting(false);
+  });
 
   const handleCreateSave = (values: ScheduleFormValues) => {
     if (onSave) {
       detach(
-        onSave({
-          prompt: values.prompt.trim(),
-          description: values.description.trim() || undefined,
-          freq: values.freq,
-          date: values.date,
-          hour: values.hour,
-          minute: values.minute,
-          timezone: values.timezone,
-          intervalSeconds: values.loopMinutes * 60,
-          dayOfWeek:
-            values.freq === "every_week" ? values.dayOfWeek : undefined,
-          dayOfMonth:
-            values.freq === "every_month" ? values.dayOfMonth : undefined,
-          modelProviderId: values.modelProviderId,
-          selectedModel: values.selectedModel,
-        }).then(() => {
-          return setAddScheduleOpen(false, signal);
-        }),
+        (async () => {
+          await onSave({
+            prompt: values.prompt.trim(),
+            description: values.description.trim() || undefined,
+            freq: values.freq,
+            date: values.date,
+            hour: values.hour,
+            minute: values.minute,
+            timezone: values.timezone,
+            intervalSeconds: values.loopMinutes * 60,
+            dayOfWeek:
+              values.freq === "every_week" ? values.dayOfWeek : undefined,
+            dayOfMonth:
+              values.freq === "every_month" ? values.dayOfMonth : undefined,
+            modelProviderId: values.modelProviderId,
+            selectedModel: values.selectedModel,
+          });
+          await setAddScheduleOpen(false, signal);
+        })(),
         Reason.DomCallback,
       );
       return;
@@ -439,25 +443,26 @@ export function ZeroScheduleCard({
   const handleEditSave = (values: ScheduleFormValues) => {
     if (onSave) {
       detach(
-        onSave({
-          prompt: values.prompt.trim(),
-          description: values.description.trim() || undefined,
-          freq: values.freq,
-          date: values.date,
-          hour: values.hour,
-          minute: values.minute,
-          timezone: values.timezone,
-          intervalSeconds: values.loopMinutes * 60,
-          dayOfWeek:
-            values.freq === "every_week" ? values.dayOfWeek : undefined,
-          dayOfMonth:
-            values.freq === "every_month" ? values.dayOfMonth : undefined,
-          editName: editingEntry?.name,
-          modelProviderId: values.modelProviderId,
-          selectedModel: values.selectedModel,
-        }).then(() => {
-          return setEditingScheduleId(null, signal);
-        }),
+        (async () => {
+          await onSave({
+            prompt: values.prompt.trim(),
+            description: values.description.trim() || undefined,
+            freq: values.freq,
+            date: values.date,
+            hour: values.hour,
+            minute: values.minute,
+            timezone: values.timezone,
+            intervalSeconds: values.loopMinutes * 60,
+            dayOfWeek:
+              values.freq === "every_week" ? values.dayOfWeek : undefined,
+            dayOfMonth:
+              values.freq === "every_month" ? values.dayOfMonth : undefined,
+            editName: editingEntry?.name,
+            modelProviderId: values.modelProviderId,
+            selectedModel: values.selectedModel,
+          });
+          await setEditingScheduleId(null, signal);
+        })(),
         Reason.DomCallback,
       );
       return;
@@ -539,13 +544,7 @@ export function ZeroScheduleCard({
             onEdit={openEditSchedule}
             onToggle={handleToggle}
             onDelete={handleDelete}
-            onRunNow={
-              handleRunNow
-                ? (entry) => {
-                    detach(handleRunNow(entry), Reason.DomCallback);
-                  }
-                : undefined
-            }
+            onRunNow={handleRunNow}
             onOpenDetails={onOpenDetails}
           />
         )}

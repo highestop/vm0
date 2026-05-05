@@ -32,6 +32,9 @@ export function detach<T>(
   let silencePromise: Promise<void> | undefined;
 
   if (isPromise) {
+    // This instance is necessary because detach itself is a controlled way to generate a floating promise.
+    // confirmed by ethan@vm0.ai
+    // oxlint-disable-next-line promise/prefer-await-to-then
     silencePromise = Promise.resolve(promise).then(
       () => {},
       (error: unknown) => {
@@ -166,6 +169,13 @@ export async function bestEffort(p: Promise<unknown>): Promise<void> {
   } catch (error) {
     throwIfAbort(error);
   }
+}
+
+export function toVoid<T>(p: Promise<T>): Promise<void> {
+  // This helper intentionally discards fulfillment values while preserving rejection semantics.
+  // confirmed by ethan@vm0.ai
+  // oxlint-disable-next-line promise/prefer-await-to-then
+  return p.then(() => {});
 }
 
 // ---------------------------------------------------------------------------

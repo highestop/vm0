@@ -36,6 +36,7 @@ fn cow_destroy_retry_policy() -> DestroyRetryPolicy {
 }
 
 async fn destroy_snapshot_cow_after_error(context: &'static str, cow_device: PooledNbdCowDevice) {
+    let cow_file = cow_device.cow_file().to_path_buf();
     if let Err(e) = cow_device
         .destroy_with_retries(cow_destroy_retry_policy())
         .await
@@ -45,6 +46,8 @@ async fn destroy_snapshot_cow_after_error(context: &'static str, cow_device: Poo
             context,
             "failed to destroy COW device after snapshot setup error"
         );
+    } else {
+        cleanup_snapshot_attempt_dir_for_cow(&cow_file).await;
     }
 }
 
@@ -145,9 +148,14 @@ async fn cleanup_existing_snapshot_sock_dir(sock_dir: &Path) {
     }
 }
 
-async fn cleanup_snapshot_sock_dir(sock_dir: &Path, warning: &'static str) {
-    if let Err(e) = tokio::fs::remove_dir_all(sock_dir).await {
-        tracing::warn!(error = %e, "{warning}");
+async fn cleanup_snapshot_sock_dir(sock_dir: &Path, warning: &'static str) -> bool {
+    match tokio::fs::remove_dir_all(sock_dir).await {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "{warning}");
+            false
+        }
     }
 }
 
@@ -159,11 +167,73 @@ fn create_sparse_cow_file(path: &Path, size: u64) -> Result<(), SnapshotError> {
     Ok(())
 }
 
+fn snapshot_attempt_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+fn snapshot_attempt_dir(work_dir: &Path, token: &str) -> PathBuf {
+    work_dir.join("attempts").join(token)
+}
+
+fn snapshot_attempt_cow_file(work_dir: &Path, token: &str) -> PathBuf {
+    snapshot_attempt_dir(work_dir, token).join("cow.img")
+}
+
+struct SnapshotAttemptDirGuard {
+    dir: Option<PathBuf>,
+}
+
+impl SnapshotAttemptDirGuard {
+    fn new(dir: PathBuf) -> Self {
+        Self { dir: Some(dir) }
+    }
+
+    fn disarm(&mut self) {
+        self.dir.take();
+    }
+}
+
+impl Drop for SnapshotAttemptDirGuard {
+    fn drop(&mut self) {
+        let Some(dir) = self.dir.take() else {
+            return;
+        };
+        if let Err(e) = std::fs::remove_dir_all(&dir)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "failed to cleanup unowned snapshot attempt dir"
+            );
+        }
+    }
+}
+
+async fn cleanup_snapshot_attempt_dir_for_cow(cow_file: &Path) -> bool {
+    let Some(dir) = cow_file.parent() else {
+        return true;
+    };
+    match tokio::fs::remove_dir(dir).await {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "failed to cleanup snapshot attempt dir"
+            );
+            false
+        }
+    }
+}
+
 async fn cleanup_after_netns_pool_failure(
     cow_device: PooledNbdCowDevice,
     device_pool: &DevicePoolHandle,
     sock_dir: &Path,
 ) {
+    let cow_file = cow_device.cow_file().to_path_buf();
     if let Err(cleanup_err) = cow_device
         .destroy_with_retries(cow_destroy_retry_policy())
         .await
@@ -172,6 +242,8 @@ async fn cleanup_after_netns_pool_failure(
             error = %cleanup_err,
             "failed to destroy COW device after netns pool failure"
         );
+    } else {
+        cleanup_snapshot_attempt_dir_for_cow(&cow_file).await;
     }
     device_pool.cleanup().await;
     cleanup_snapshot_sock_dir(
@@ -253,6 +325,60 @@ async fn kill_and_reap_firecracker(child: &mut tokio::process::Child) {
     let _ = child.wait().await;
 }
 
+async fn kill_and_reap_firecracker_bounded(
+    child: &mut tokio::process::Child,
+    timeout: Duration,
+) -> bool {
+    kill_process_group(child);
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "failed to wait for snapshot firecracker child during cleanup");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_ms = timeout.as_millis() as u64,
+                "timed out waiting for snapshot firecracker child during cleanup"
+            );
+            false
+        }
+    }
+}
+
+async fn drain_or_abort_forwarder(
+    handle: &mut Option<JoinHandle<()>>,
+    pipe: &'static str,
+    timeout: Duration,
+) -> bool {
+    let Some(mut handle) = handle.take() else {
+        return true;
+    };
+
+    tokio::select! {
+        result = &mut handle => {
+            match result {
+                Ok(()) => true,
+                Err(e) if e.is_cancelled() => true,
+                Err(e) => {
+                    tracing::warn!(pipe, error = %e, "snapshot pipe forwarder failed during cleanup");
+                    false
+                }
+            }
+        }
+        () = tokio::time::sleep(timeout) => {
+            handle.abort();
+            if let Err(e) = handle.await
+                && !e.is_cancelled()
+            {
+                tracing::warn!(pipe, error = %e, "snapshot pipe forwarder failed after abort");
+                return false;
+            }
+            true
+        }
+    }
+}
+
 async fn finalize_snapshot_cow_output(
     cow_device: PooledNbdCowDevice,
     output: &SnapshotOutputPaths,
@@ -271,6 +397,7 @@ async fn finalize_snapshot_cow_output(
     // bitmap-less snapshot.
     tokio::fs::rename(&kept_cow.bitmap_file, &output.cow_bitmap()).await?;
     tokio::fs::rename(&kept_cow.cow_file, &output.cow()).await?;
+    cleanup_snapshot_attempt_dir_for_cow(&kept_cow.cow_file).await;
     // Persist the output directory so all four final dir entries
     // (snapshot.bin and memory.bin written by Firecracker via the API,
     // cow.img and cow.img.bitmap just renamed in) are durable. Without
@@ -287,11 +414,14 @@ async fn finalize_snapshot_cow_output(
 }
 
 async fn destroy_snapshot_cow_after_workflow_error(cow_device: PooledNbdCowDevice) {
+    let cow_file = cow_device.cow_file().to_path_buf();
     if let Err(e) = cow_device
         .destroy_with_retries(cow_destroy_retry_policy())
         .await
     {
         tracing::warn!(error = %e, "failed to destroy COW device after snapshot error");
+    } else {
+        cleanup_snapshot_attempt_dir_for_cow(&cow_file).await;
     }
 }
 
@@ -300,22 +430,31 @@ async fn destroy_snapshot_cow_after_workflow_error(cow_device: PooledNbdCowDevic
 /// This owner centralizes the explicit success/failure cleanup path for
 /// snapshot creation. It intentionally does not participate in the factory
 /// leak-cleaner path used by sandbox creation: a snapshot attempt owns a
-/// one-shot netns pool, a single COW device, and one Firecracker child only
-/// until `finish_workflow`, `cleanup_netns_pool`, and `cleanup_sock_dir` run.
+/// one-shot netns pool, a per-snapshot NBD device pool, a single COW device,
+/// and one Firecracker child only until `finish_workflow` and the outer pool /
+/// socket cleanup steps run.
 ///
-/// Drop is diagnostic-only in this PR. Cancellation-safe handoff to detached
-/// cleanup is tracked separately and should not be hidden here.
+/// Drop never performs async cleanup inline. If cancellation drops the attempt
+/// while it still owns runtime resources, Drop moves them into a detached
+/// snapshot cleanup finalizer when a Tokio runtime is available.
 struct SnapshotAttempt {
     paths: SandboxPaths,
-    sock_paths: SockPaths,
+    // Socket paths are cleaned only by the explicit path while the caller still
+    // holds the snapshot build lock. A detached Drop finalizer must not remove
+    // this stable snapshot-id directory after cancellation, because another
+    // runner may already be rebuilding the same snapshot.
+    sock_paths: Option<SockPaths>,
     output: SnapshotOutputPaths,
-    netns_pool: NetnsPool,
+    netns_pool: Option<NetnsPool>,
+    device_pool: Option<DevicePoolHandle>,
     cow_device: Option<PooledNbdCowDevice>,
     network: Option<NetnsLease>,
     child: Option<tokio::process::Child>,
     stdout_handle: Option<JoinHandle<()>>,
     stderr_handle: Option<JoinHandle<()>>,
     stderr_buf: StderrBuf,
+    #[cfg(test)]
+    cleanup_complete_tx: Option<tokio::sync::oneshot::Sender<SnapshotCleanupReport>>,
 }
 
 impl SnapshotAttempt {
@@ -324,19 +463,23 @@ impl SnapshotAttempt {
         sock_paths: SockPaths,
         output: SnapshotOutputPaths,
         netns_pool: NetnsPool,
+        device_pool: DevicePoolHandle,
         cow_device: PooledNbdCowDevice,
     ) -> Self {
         Self {
             paths,
-            sock_paths,
+            sock_paths: Some(sock_paths),
             output,
-            netns_pool,
+            netns_pool: Some(netns_pool),
+            device_pool: Some(device_pool),
             cow_device: Some(cow_device),
             network: None,
             child: None,
             stdout_handle: None,
             stderr_handle: None,
             stderr_buf: Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_BUF_LINES))),
+            #[cfg(test)]
+            cleanup_complete_tx: None,
         }
     }
 
@@ -348,24 +491,61 @@ impl SnapshotAttempt {
     ) -> Self {
         Self {
             paths,
-            sock_paths,
+            sock_paths: Some(sock_paths),
             output,
-            netns_pool: NetnsPool::inactive_for_test(),
+            netns_pool: Some(NetnsPool::inactive_for_test()),
+            device_pool: None,
             cow_device: None,
             network: None,
             child: None,
             stdout_handle: None,
             stderr_handle: None,
             stderr_buf: Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_BUF_LINES))),
+            #[cfg(test)]
+            cleanup_complete_tx: None,
         }
+    }
+
+    #[cfg(test)]
+    fn track_network_for_test(&mut self, name: &str) {
+        if let Some(netns_pool) = self.netns_pool.as_mut() {
+            let network = netns_pool.lease_for_test(name);
+            netns_pool.track_lease_for_test(&network);
+            self.network = Some(network);
+        }
+    }
+
+    #[cfg(test)]
+    fn track_child_for_test(&mut self, child: tokio::process::Child) {
+        self.child = Some(child);
+    }
+
+    #[cfg(test)]
+    fn track_stdout_handle_for_test(&mut self, handle: JoinHandle<()>) {
+        self.stdout_handle = Some(handle);
+    }
+
+    #[cfg(test)]
+    fn track_stderr_handle_for_test(&mut self, handle: JoinHandle<()>) {
+        self.stderr_handle = Some(handle);
+    }
+
+    #[cfg(test)]
+    fn notify_cleanup_complete_for_test(
+        &mut self,
+        tx: tokio::sync::oneshot::Sender<SnapshotCleanupReport>,
+    ) {
+        self.cleanup_complete_tx = Some(tx);
     }
 
     fn paths(&self) -> &SandboxPaths {
         &self.paths
     }
 
-    fn sock_paths(&self) -> &SockPaths {
-        &self.sock_paths
+    fn sock_paths(&self) -> Result<&SockPaths, SnapshotError> {
+        self.sock_paths
+            .as_ref()
+            .ok_or_else(|| SnapshotError::Setup("snapshot attempt missing socket paths".into()))
     }
 
     fn output(&self) -> &SnapshotOutputPaths {
@@ -382,7 +562,7 @@ impl SnapshotAttempt {
         // The empty bind target file is consumed by `mount --bind` inside
         // `unshare --mount` at spawn time; file content is irrelevant
         // because the bind overlay is what FC reads.
-        if let Err(e) = tokio::fs::create_dir_all(self.sock_paths.dir()).await {
+        if let Err(e) = tokio::fs::create_dir_all(self.sock_paths()?.dir()).await {
             self.destroy_cow_after_setup_error("mkdir sock dir").await;
             return Err(SnapshotError::Setup(format!("mkdir sock dir: {e}")));
         }
@@ -398,7 +578,17 @@ impl SnapshotAttempt {
     }
 
     async fn acquire_network(&mut self) -> Result<(), SnapshotError> {
-        let network = match self.netns_pool.acquire().await {
+        let acquire_result = match self.netns_pool.as_mut() {
+            Some(netns_pool) => netns_pool.acquire().await,
+            None => {
+                self.destroy_cow_after_setup_error("missing netns pool before acquire")
+                    .await;
+                return Err(SnapshotError::Setup(
+                    "snapshot attempt missing netns pool before acquire".into(),
+                ));
+            }
+        };
+        let network = match acquire_result {
             Ok(network) => network,
             Err(e) => {
                 self.destroy_cow_after_setup_error("acquire netns").await;
@@ -415,7 +605,7 @@ impl SnapshotAttempt {
         &mut self,
         config: &SnapshotCreateConfig,
     ) -> Result<(), SnapshotError> {
-        let api_sock = self.sock_paths.api_sock();
+        let api_sock = self.sock_paths()?.api_sock();
         let drive_bind = self.paths.cow_device_bind();
         let cow_device_path = self
             .cow_device
@@ -535,14 +725,27 @@ impl SnapshotAttempt {
         result
     }
 
-    async fn cleanup_netns_pool(&mut self) {
-        if let Err(e) = self.netns_pool.cleanup().await {
-            tracing::warn!(error = %e, "failed to cleanup netns pool");
+    async fn cleanup_device_pool(&mut self) {
+        if let Some(device_pool) = self.device_pool.as_ref() {
+            device_pool.cleanup().await;
         }
+        self.device_pool.take();
     }
 
-    async fn cleanup_sock_dir(&self) {
-        cleanup_snapshot_sock_dir(self.sock_paths.dir(), "failed to cleanup sock dir").await;
+    async fn cleanup_netns_pool(&mut self) {
+        if let Some(netns_pool) = self.netns_pool.as_mut()
+            && let Err(e) = netns_pool.cleanup().await
+        {
+            tracing::warn!(error = %e, "failed to cleanup netns pool");
+        }
+        self.netns_pool.take();
+    }
+
+    async fn cleanup_sock_dir(&mut self) {
+        if let Some(sock_paths) = self.sock_paths.as_ref() {
+            cleanup_snapshot_sock_dir(sock_paths.dir(), "failed to cleanup sock dir").await;
+        }
+        self.sock_paths.take();
     }
 
     async fn destroy_cow_after_setup_error(&mut self, context: &'static str) {
@@ -553,7 +756,11 @@ impl SnapshotAttempt {
 
     async fn release_network(&mut self, warning: &'static str) {
         if self.network.is_some() {
-            release_snapshot_netns(&mut self.netns_pool, &mut self.network, warning).await;
+            let Some(netns_pool) = self.netns_pool.as_mut() else {
+                tracing::warn!("snapshot attempt missing netns pool while releasing netns");
+                return;
+            };
+            release_snapshot_netns(netns_pool, &mut self.network, warning).await;
         }
     }
 
@@ -575,23 +782,253 @@ impl SnapshotAttempt {
         self.stderr_handle.take();
     }
 
-    fn has_owned_cleanup_resources(&self) -> bool {
-        self.cow_device.is_some() || self.network.is_some() || self.child.is_some()
+    fn has_cleanup_work(&self) -> bool {
+        self.device_pool.is_some()
+            || self.netns_pool.is_some()
+            || self.cow_device.is_some()
+            || self.network.is_some()
+            || self.child.is_some()
+            || self.stdout_handle.is_some()
+            || self.stderr_handle.is_some()
+    }
+
+    fn take_cleanup_finalizer(&mut self) -> Option<SnapshotCleanupFinalizer> {
+        if !self.has_cleanup_work() {
+            return None;
+        }
+
+        Some(SnapshotCleanupFinalizer {
+            netns_pool: self.netns_pool.take(),
+            device_pool: self.device_pool.take(),
+            cow_device: self.cow_device.take(),
+            network: self.network.take(),
+            child: self.child.take(),
+            stdout_handle: self.stdout_handle.take(),
+            stderr_handle: self.stderr_handle.take(),
+            #[cfg(test)]
+            cleanup_complete_tx: self.cleanup_complete_tx.take(),
+        })
+    }
+}
+
+struct SnapshotCleanupReport {
+    child_reaped: bool,
+    stdout_forwarder_finished: bool,
+    stderr_forwarder_finished: bool,
+    network_released: bool,
+    cow_destroyed: bool,
+    device_pool_cleaned: bool,
+    netns_pool_cleaned: bool,
+}
+
+struct SnapshotCleanupFinalizer {
+    netns_pool: Option<NetnsPool>,
+    device_pool: Option<DevicePoolHandle>,
+    cow_device: Option<PooledNbdCowDevice>,
+    network: Option<NetnsLease>,
+    child: Option<tokio::process::Child>,
+    stdout_handle: Option<JoinHandle<()>>,
+    stderr_handle: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    cleanup_complete_tx: Option<tokio::sync::oneshot::Sender<SnapshotCleanupReport>>,
+}
+
+impl SnapshotCleanupFinalizer {
+    async fn run(mut self) {
+        let child_reaped = if let Some(child) = self.child.as_mut() {
+            kill_and_reap_firecracker_bounded(child, SNAPSHOT_FINALIZER_CHILD_WAIT_TIMEOUT).await
+        } else {
+            true
+        };
+        self.child.take();
+
+        let stdout_forwarder_finished = drain_or_abort_forwarder(
+            &mut self.stdout_handle,
+            "stdout",
+            SNAPSHOT_FINALIZER_PIPE_DRAIN_TIMEOUT,
+        )
+        .await;
+        let stderr_forwarder_finished = drain_or_abort_forwarder(
+            &mut self.stderr_handle,
+            "stderr",
+            SNAPSHOT_FINALIZER_PIPE_DRAIN_TIMEOUT,
+        )
+        .await;
+
+        let network_released = self.release_network().await;
+        let cow_destroyed = self.destroy_cow().await;
+        let device_pool_cleaned = self.cleanup_device_pool().await;
+        let netns_pool_cleaned = self.cleanup_netns_pool().await;
+
+        let report = SnapshotCleanupReport {
+            child_reaped,
+            stdout_forwarder_finished,
+            stderr_forwarder_finished,
+            network_released,
+            cow_destroyed,
+            device_pool_cleaned,
+            netns_pool_cleaned,
+        };
+
+        tracing::info!(
+            child_reaped = report.child_reaped,
+            stdout_forwarder_finished = report.stdout_forwarder_finished,
+            stderr_forwarder_finished = report.stderr_forwarder_finished,
+            network_released = report.network_released,
+            cow_destroyed = report.cow_destroyed,
+            device_pool_cleaned = report.device_pool_cleaned,
+            netns_pool_cleaned = report.netns_pool_cleaned,
+            "snapshot cancellation cleanup complete"
+        );
+
+        #[cfg(test)]
+        if let Some(tx) = self.cleanup_complete_tx.take() {
+            let _ = tx.send(report);
+        }
+    }
+
+    async fn release_network(&mut self) -> bool {
+        if self.network.is_none() {
+            return true;
+        }
+        let Some(netns_pool) = self.netns_pool.as_mut() else {
+            tracing::warn!(
+                "snapshot cancellation cleanup missing netns pool while releasing netns"
+            );
+            return false;
+        };
+        release_snapshot_netns(
+            netns_pool,
+            &mut self.network,
+            "failed to release netns during snapshot cancellation cleanup",
+        )
+        .await;
+        self.network.is_none()
+    }
+
+    async fn destroy_cow(&mut self) -> bool {
+        let Some(cow_device) = self.cow_device.take() else {
+            return true;
+        };
+        let cow_file = cow_device.cow_file().to_path_buf();
+        match cow_device
+            .destroy_with_retries(cow_destroy_retry_policy())
+            .await
+        {
+            Ok(()) => {
+                cleanup_snapshot_attempt_dir_for_cow(&cow_file).await;
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to destroy COW device during snapshot cancellation cleanup"
+                );
+                false
+            }
+        }
+    }
+
+    async fn cleanup_device_pool(&mut self) -> bool {
+        let Some(device_pool) = self.device_pool.as_ref() else {
+            return true;
+        };
+        device_pool.cleanup().await;
+        self.device_pool.take();
+        true
+    }
+
+    async fn cleanup_netns_pool(&mut self) -> bool {
+        let Some(netns_pool) = self.netns_pool.as_mut() else {
+            return true;
+        };
+        if let Err(e) = netns_pool.cleanup().await {
+            tracing::warn!(error = %e, "failed to cleanup netns pool during snapshot cancellation cleanup");
+            return false;
+        }
+        self.netns_pool.take();
+        true
+    }
+
+    fn has_cleanup_work(&self) -> bool {
+        self.device_pool.is_some()
+            || self.netns_pool.is_some()
+            || self.cow_device.is_some()
+            || self.network.is_some()
+            || self.child.is_some()
+            || self.stdout_handle.is_some()
+            || self.stderr_handle.is_some()
+    }
+}
+
+impl Drop for SnapshotCleanupFinalizer {
+    fn drop(&mut self) {
+        if !self.has_cleanup_work() {
+            return;
+        }
+
+        tracing::warn!(
+            has_device_pool = self.device_pool.is_some(),
+            has_netns_pool = self.netns_pool.is_some(),
+            has_cow_device = self.cow_device.is_some(),
+            has_network = self.network.is_some(),
+            has_child = self.child.is_some(),
+            has_stdout_forwarder = self.stdout_handle.is_some(),
+            has_stderr_forwarder = self.stderr_handle.is_some(),
+            "snapshot cancellation finalizer dropped before cleanup completed"
+        );
     }
 }
 
 impl Drop for SnapshotAttempt {
     fn drop(&mut self) {
-        if !self.has_owned_cleanup_resources() {
+        let Some(finalizer) = self.take_cleanup_finalizer() else {
             return;
+        };
+        let has_device_pool = finalizer.device_pool.is_some();
+        let has_netns_pool = finalizer.netns_pool.is_some();
+        let has_cow_device = finalizer.cow_device.is_some();
+        let has_network = finalizer.network.is_some();
+        let has_child = finalizer.child.is_some();
+        let has_stdout_forwarder = finalizer.stdout_handle.is_some();
+        let has_stderr_forwarder = finalizer.stderr_handle.is_some();
+
+        if let Some(child) = finalizer.child.as_ref() {
+            // The outer snapshot build lock can be released as soon as the
+            // cancelled future is dropped. Signal the process group before the
+            // async handoff so a later build of the same snapshot does not race
+            // a still-running Firecracker process. Reaping remains async.
+            kill_process_group(child);
         }
 
-        tracing::warn!(
-            has_cow_device = self.cow_device.is_some(),
-            has_network = self.network.is_some(),
-            has_child = self.child.is_some(),
-            "snapshot attempt dropped without explicit async cleanup; Drop handoff is intentionally deferred"
-        );
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                tracing::info!(
+                    has_device_pool,
+                    has_netns_pool,
+                    has_cow_device,
+                    has_network,
+                    has_child,
+                    has_stdout_forwarder,
+                    has_stderr_forwarder,
+                    "snapshot attempt dropped; scheduling cancellation cleanup"
+                );
+                runtime.spawn(async move {
+                    finalizer.run().await;
+                });
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                has_device_pool,
+                has_netns_pool,
+                has_cow_device,
+                has_network,
+                has_child,
+                has_stdout_forwarder,
+                has_stderr_forwarder,
+                "snapshot attempt dropped outside Tokio runtime; async cancellation cleanup not scheduled"
+            ),
+        }
     }
 }
 
@@ -652,13 +1089,22 @@ pub async fn create_snapshot(
     .map_err(|e| SnapshotError::Setup(e.to_string()))?;
 
     // 2. Create NBD COW device backed by the rootfs image.
-    let cow_file = paths.workspace().join("cow.img");
     let base_size = tokio::fs::metadata(&config.rootfs_path)
         .await
         .map_err(|e| SnapshotError::Setup(format!("base image metadata: {e}")))?
         .len();
 
-    // Create sparse COW file.
+    // The stable `work/cow-device-bind` path is baked into the snapshot for
+    // restore, but the temporary COW backing file is not. Keep the COW under an
+    // attempt-scoped directory so a cancelled attempt's detached finalizer cannot
+    // unlink a later rebuild's COW after the outer snapshot lock has been released.
+    let attempt_token = snapshot_attempt_token();
+    let attempt_dir = snapshot_attempt_dir(paths.workspace(), &attempt_token);
+    tokio::fs::create_dir_all(&attempt_dir)
+        .await
+        .map_err(|e| SnapshotError::Setup(format!("create snapshot attempt dir: {e}")))?;
+    let mut attempt_dir_guard = SnapshotAttemptDirGuard::new(attempt_dir);
+    let cow_file = snapshot_attempt_cow_file(paths.workspace(), &attempt_token);
     create_sparse_cow_file(&cow_file, base_size)?;
 
     let device_pool =
@@ -680,10 +1126,18 @@ pub async fn create_snapshot(
         }
     };
 
-    let mut attempt = SnapshotAttempt::new(paths, sock_paths, output, netns_pool, cow_device);
+    let mut attempt = SnapshotAttempt::new(
+        paths,
+        sock_paths,
+        output,
+        netns_pool,
+        device_pool,
+        cow_device,
+    );
+    attempt_dir_guard.disarm();
     let result = run_snapshot_workflow(&config, &mut attempt).await;
 
-    device_pool.cleanup().await;
+    attempt.cleanup_device_pool().await;
     attempt.cleanup_netns_pool().await;
     attempt.cleanup_sock_dir().await;
 
@@ -717,6 +1171,13 @@ const STDERR_BUF_LINES: usize = 32;
 /// hasn't caught up in 100ms after the pipe's write end closed, the buffer
 /// we have is what the operator sees.
 const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Cancellation finalizer child reap budget after SIGKILL. This is a fallback
+/// path: keep it bounded so a cancelled snapshot cannot pin cleanup forever.
+const SNAPSHOT_FINALIZER_CHILD_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Short grace period for stdout/stderr log forwarders after child cleanup.
+const SNAPSHOT_FINALIZER_PIPE_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Shared bounded ring buffer of recent stderr lines from the spawn chain.
 type StderrBuf = Arc<Mutex<VecDeque<String>>>;
@@ -789,7 +1250,7 @@ async fn run_snapshot_workflow(
     let result = run_with_firecracker(
         config,
         attempt.paths(),
-        attempt.sock_paths(),
+        attempt.sock_paths()?,
         attempt.output(),
     )
     .await;
@@ -937,7 +1398,12 @@ impl SnapshotProvider for FirecrackerSnapshotProvider {
 
     async fn is_complete(&self, output_dir: &Path) -> Result<bool, sandbox::SnapshotError> {
         let output = SnapshotOutputPaths::new(output_dir.to_path_buf());
-        for path in [output.snapshot(), output.memory(), output.cow()] {
+        for path in [
+            output.snapshot(),
+            output.memory(),
+            output.cow(),
+            output.cow_bitmap(),
+        ] {
             let exists = tokio::fs::try_exists(&path).await?;
             if !exists {
                 return Ok(false);
@@ -1010,6 +1476,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_provider_requires_cow_bitmap_for_complete_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = SnapshotOutputPaths::new(dir.path().to_path_buf());
+        tokio::fs::create_dir_all(output.dir())
+            .await
+            .expect("create output dir");
+
+        for artifact in [output.snapshot(), output.memory(), output.cow()] {
+            tokio::fs::write(&artifact, b"snapshot artifact")
+                .await
+                .unwrap_or_else(|e| panic!("write {}: {e}", artifact.display()));
+        }
+
+        let provider = FirecrackerSnapshotProvider;
+        assert!(
+            !provider.is_complete(output.dir()).await.unwrap(),
+            "snapshot without dirty bitmap sidecar must be incomplete"
+        );
+
+        tokio::fs::write(output.cow_bitmap(), b"bitmap")
+            .await
+            .expect("write cow bitmap");
+        assert!(provider.is_complete(output.dir()).await.unwrap());
+    }
+
+    #[test]
+    fn snapshot_attempt_cow_file_is_attempt_scoped() {
+        let work = std::path::Path::new("/tmp/snapshot-work");
+
+        assert_eq!(
+            snapshot_attempt_cow_file(work, "abc123ef"),
+            work.join("attempts").join("abc123ef").join("cow.img")
+        );
+        assert_ne!(
+            snapshot_attempt_cow_file(work, "abc123ef"),
+            work.join("cow.img")
+        );
+    }
+
+    #[test]
+    fn snapshot_attempt_dir_guard_removes_unowned_attempt_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let attempt_dir = dir.path().join("work").join("attempts").join("abc123ef");
+        std::fs::create_dir_all(&attempt_dir).expect("create attempt dir");
+        std::fs::write(attempt_dir.join("cow.img"), b"partial cow").expect("write cow");
+
+        {
+            let _guard = SnapshotAttemptDirGuard::new(attempt_dir.clone());
+        }
+
+        assert!(
+            !attempt_dir.exists(),
+            "unowned attempt dir should be removed on cancellation"
+        );
+    }
+
+    #[test]
+    fn snapshot_attempt_dir_guard_disarm_preserves_owned_attempt_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let attempt_dir = dir.path().join("work").join("attempts").join("abc123ef");
+        std::fs::create_dir_all(&attempt_dir).expect("create attempt dir");
+
+        {
+            let mut guard = SnapshotAttemptDirGuard::new(attempt_dir.clone());
+            guard.disarm();
+        }
+
+        assert!(
+            attempt_dir.exists(),
+            "disarmed attempt dir guard should leave the owned dir intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_snapshot_attempt_dir_removes_empty_token_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        let cow = snapshot_attempt_cow_file(&work, "abc123ef");
+        let attempt_dir = cow.parent().expect("attempt dir").to_path_buf();
+        tokio::fs::create_dir_all(&attempt_dir)
+            .await
+            .expect("create attempt dir");
+        tokio::fs::write(&cow, b"cow").await.expect("write cow");
+        tokio::fs::remove_file(&cow).await.expect("remove cow");
+
+        assert!(cleanup_snapshot_attempt_dir_for_cow(&cow).await);
+        assert!(
+            !tokio::fs::try_exists(&attempt_dir).await.unwrap(),
+            "empty attempt token dir should be removed after cow cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_snapshot_attempt_dir_treats_missing_dir_as_clean() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cow = snapshot_attempt_cow_file(&dir.path().join("work"), "missing");
+
+        assert!(cleanup_snapshot_attempt_dir_for_cow(&cow).await);
+    }
+
+    #[tokio::test]
+    async fn cleanup_snapshot_attempt_dir_reports_nonempty_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        let cow = snapshot_attempt_cow_file(&work, "abc123ef");
+        let attempt_dir = cow.parent().expect("attempt dir").to_path_buf();
+        tokio::fs::create_dir_all(&attempt_dir)
+            .await
+            .expect("create attempt dir");
+        tokio::fs::write(attempt_dir.join("extra"), b"keep")
+            .await
+            .expect("write extra");
+
+        assert!(!cleanup_snapshot_attempt_dir_for_cow(&cow).await);
+        assert!(
+            tokio::fs::try_exists(&attempt_dir).await.unwrap(),
+            "nonempty attempt dir should not be force removed"
+        );
+    }
+
+    #[tokio::test]
     async fn cleanup_existing_snapshot_sock_dir_removes_existing_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sock_dir = dir.path().join("sock");
@@ -1040,7 +1627,7 @@ mod tests {
         let sock_dir = dir.path().join("sock");
         let sock_paths = SockPaths::new(sock_dir.clone());
         let stale_socket = sock_dir.join("api.sock");
-        let attempt = SnapshotAttempt::new_without_cow_for_test(paths, sock_paths, output);
+        let mut attempt = SnapshotAttempt::new_without_cow_for_test(paths, sock_paths, output);
 
         tokio::fs::create_dir_all(&sock_dir)
             .await
@@ -1050,10 +1637,116 @@ mod tests {
             .expect("write stale socket placeholder");
 
         attempt.cleanup_sock_dir().await;
+        attempt.cleanup_netns_pool().await;
 
         assert!(
             !tokio::fs::try_exists(&sock_dir).await.unwrap(),
             "snapshot attempt should own runtime socket cleanup"
+        );
+    }
+
+    fn snapshot_attempt_for_test(dir: &tempfile::TempDir) -> (SnapshotAttempt, std::path::PathBuf) {
+        let output = SnapshotOutputPaths::new(dir.path().join("output"));
+        let paths = SandboxPaths::new(output.work_dir());
+        let sock_dir = dir.path().join("sock");
+        let sock_paths = SockPaths::new(sock_dir.clone());
+        (
+            SnapshotAttempt::new_without_cow_for_test(paths, sock_paths, output),
+            sock_dir,
+        )
+    }
+
+    async fn wait_for_snapshot_cleanup(
+        rx: tokio::sync::oneshot::Receiver<SnapshotCleanupReport>,
+    ) -> SnapshotCleanupReport {
+        tokio::time::timeout(Duration::from_secs(5), rx)
+            .await
+            .expect("snapshot cleanup finalizer should complete")
+            .expect("snapshot cleanup finalizer should report completion")
+    }
+
+    fn long_running_child_for_test() -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("while true; do sleep 60; done")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn long-running child")
+    }
+
+    #[tokio::test]
+    async fn snapshot_attempt_drop_handoff_releases_netns_without_unlocked_sock_cleanup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut attempt, sock_dir) = snapshot_attempt_for_test(&dir);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        attempt.track_network_for_test("test-snapshot-netns");
+        attempt.notify_cleanup_complete_for_test(tx);
+        tokio::fs::create_dir_all(&sock_dir)
+            .await
+            .expect("create sock dir");
+
+        drop(attempt);
+        let report = wait_for_snapshot_cleanup(rx).await;
+
+        assert!(report.network_released);
+        assert!(report.netns_pool_cleaned);
+        assert!(
+            tokio::fs::try_exists(&sock_dir).await.unwrap(),
+            "detached cleanup must not remove the stable snapshot socket directory without the outer snapshot lock"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_attempt_drop_handoff_kills_child_before_netns_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut attempt, sock_dir) = snapshot_attempt_for_test(&dir);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let child = long_running_child_for_test();
+
+        attempt.track_network_for_test("test-snapshot-netns-child");
+        attempt.track_child_for_test(child);
+        attempt.notify_cleanup_complete_for_test(tx);
+        tokio::fs::create_dir_all(&sock_dir)
+            .await
+            .expect("create sock dir");
+
+        drop(attempt);
+        let report = wait_for_snapshot_cleanup(rx).await;
+
+        assert!(report.child_reaped);
+        assert!(report.network_released);
+        assert!(
+            tokio::fs::try_exists(&sock_dir).await.unwrap(),
+            "detached cleanup must not remove the stable snapshot socket directory without the outer snapshot lock"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_attempt_drop_handoff_aborts_unfinished_forwarders() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut attempt, sock_dir) = snapshot_attempt_for_test(&dir);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        attempt.track_stdout_handle_for_test(tokio::spawn(std::future::pending::<()>()));
+        attempt.track_stderr_handle_for_test(tokio::spawn(std::future::pending::<()>()));
+        attempt.notify_cleanup_complete_for_test(tx);
+        tokio::fs::create_dir_all(&sock_dir)
+            .await
+            .expect("create sock dir");
+
+        drop(attempt);
+        let report = wait_for_snapshot_cleanup(rx).await;
+
+        assert!(report.stdout_forwarder_finished);
+        assert!(report.stderr_forwarder_finished);
+        assert!(
+            tokio::fs::try_exists(&sock_dir).await.unwrap(),
+            "detached cleanup must not remove the stable snapshot socket directory without the outer snapshot lock"
         );
     }
 

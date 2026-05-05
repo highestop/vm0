@@ -10,6 +10,7 @@ import {
   pathParams$,
 } from "./route.ts";
 import { registerServiceWorker$ } from "../lib/push-notifications.ts";
+import { onDomEventFn } from "./utils.ts";
 import "./pwa-install.ts";
 import { ROUTES, type RoutePath } from "./route-paths.ts";
 
@@ -302,20 +303,22 @@ const handleBillingRedirect$ = command(() => {
 });
 
 const setupNotificationListener$ = command(({ set }, signal: AbortSignal) => {
-  const handler = (event: MessageEvent) => {
-    if (event.data?.type === "NOTIFICATION_CLICK" && event.data.url) {
-      const match = /^\/chats\/(.+)$/.exec(event.data.url as string);
-      if (match) {
-        set(detachedNavigateTo$, "/chats/:threadId", {
-          pathParams: { threadId: match[1] },
-        });
+  navigator.serviceWorker?.addEventListener(
+    "message",
+    onDomEventFn((event: MessageEvent): void => {
+      if (event.data?.type === "NOTIFICATION_CLICK" && event.data.url) {
+        const match = /^\/chats\/(.+)$/.exec(event.data.url as string);
+        if (match) {
+          set(detachedNavigateTo$, "/chats/:threadId", {
+            pathParams: { threadId: match[1] },
+          });
+        }
       }
-    }
-  };
-  navigator.serviceWorker?.addEventListener("message", handler);
-  signal.addEventListener("abort", () => {
-    navigator.serviceWorker?.removeEventListener("message", handler);
-  });
+    }),
+    {
+      signal,
+    },
+  );
 });
 
 export const bootstrap$ = command(

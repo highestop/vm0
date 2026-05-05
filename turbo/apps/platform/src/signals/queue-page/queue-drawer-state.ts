@@ -1,11 +1,8 @@
 import { command, computed, state } from "ccstate";
 import { searchParams$, replaceSearchParams$ } from "../route.ts";
 import { startQueuePolling$ } from "./queue-signals.ts";
-import { resetSignal } from "../utils.ts";
-import { logger } from "../log.ts";
+import { detach, Reason, resetSignal } from "../utils.ts";
 import { maybePageSignal$ } from "../page-signal.ts";
-
-const L = logger("QueueDrawer");
 
 const internalQueueDrawerOpen$ = state(false);
 const resetQueuePollingSignal$ = resetSignal();
@@ -26,15 +23,14 @@ export const setQueueDrawerOpen$ = command(({ get, set }, open: boolean) => {
       next.set("queue", "1");
       set(replaceSearchParams$, next);
     }
+
     const signal = pageSignal
       ? set(resetQueuePollingSignal$, pageSignal)
       : set(resetQueuePollingSignal$);
-    set(startQueuePolling$, signal).catch((error: unknown) => {
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
-      L.error("Queue polling failed", error);
-    });
+
+    // confirmed by ethan@vm0.ai
+    // eslint-disable-next-line ccstate/no-detach-in-signals -- polling is a long-running background task, fire-and-forget by design
+    detach(set(startQueuePolling$, signal), Reason.Entrance);
   } else {
     if (next.has("queue")) {
       next.delete("queue");

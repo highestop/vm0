@@ -197,11 +197,11 @@ function SidebarNavContent() {
     return toggleOff();
   };
   const rawOnSelect = useSet(handleZeroNavSelect$);
+  const onAccountAction = useSet(handleZeroAccountAction$);
   const onSelect = (id: SidebarNavId) => {
     rawOnSelect(id);
     setExpanded(false);
   };
-  const onAccountAction = useSet(handleZeroAccountAction$);
   const isScrolled = useGet(isScrolled$);
   const setIsScrolledFn = useSet(setIsScrolled$);
   const manageCollapsed = useGet(manageSectionCollapsed$);

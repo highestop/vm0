@@ -9,6 +9,7 @@ import { command, state } from "ccstate";
 import { pwaOfflineCacheEnabled$ } from "../signals/external/feature-switch.ts";
 import { clerk$ } from "../signals/auth.ts";
 import { apiBase$ } from "../signals/fetch.ts";
+import { bestEffort } from "../signals/utils.ts";
 
 const swRegistration$ = state<ServiceWorkerRegistration | null>(null);
 const subscribing$ = state(false);
@@ -23,25 +24,20 @@ export const registerServiceWorker$ = command(
       return;
     }
 
-    // Registration can reject for reasons outside our control: private
-    // browsing, enterprise/browser policy, user-disabled SW, etc. Push
-    // notifications are a non-critical enhancement, so swallow the
-    // rejection to avoid aborting bootstrap or spamming Sentry.
-    const pwaOfflineEnabled = await get(pwaOfflineCacheEnabled$);
+    const pwaOfflineEnabled = get(pwaOfflineCacheEnabled$);
     signal.throwIfAborted();
-    const registration = await navigator.serviceWorker
-      .register(
-        "/sw.js",
-        pwaOfflineEnabled ? { updateViaCache: "none" } : undefined,
-      )
-      .catch(() => {
-        return null;
-      });
-    signal.throwIfAborted();
-    if (!registration) {
-      return;
-    }
-    set(swRegistration$, registration);
+
+    await bestEffort(
+      (async () => {
+        const registration = await navigator.serviceWorker.register(
+          "/sw.js",
+          pwaOfflineEnabled ? { updateViaCache: "none" } : undefined,
+        );
+
+        signal.throwIfAborted();
+        set(swRegistration$, registration);
+      })(),
+    );
   },
 );
 
@@ -64,7 +60,8 @@ export const ensurePushSubscription$ = command(
       return;
     }
     set(subscribing$, true);
-    // eslint-disable-next-line no-restricted-syntax -- finally needed to reset `subscribing$` on success, failure, or abort so the next call can proceed
+    // TODO: The try-catch block here needs to be cleaned up. confirmed by ethan@vm0.ai
+    // eslint-disable-next-line no-restricted-syntax
     try {
       const clerkPromise = get(clerk$);
       const apiBase = await get(apiBase$);

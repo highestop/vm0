@@ -65,11 +65,7 @@ import docPdfIcon from "./assets/doc-pdf.svg";
 import docTxtIcon from "./assets/doc-txt.svg";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
-import {
-  ttsPlayingRunId$,
-  playTts$,
-  stopTts$,
-} from "../../signals/voice-io/voice-io-tts.ts";
+import { playTts$, stopTts$ } from "../../signals/voice-io/voice-io-tts.ts";
 import {
   autoReadEnabled$,
   toggleAutoRead$,
@@ -1712,7 +1708,7 @@ function ChatThreadComposer({
   const setInputRef = useSet(thread.setInputRef$);
   const scheduleDraftSync = useSet(thread.scheduleDraftSync$);
   const pageSignal = useGet(pageSignal$);
-  const { signal: rootSignal } = useGet(rootSignal$);
+  const rootSignal = useGet(rootSignal$);
 
   // Per-thread composer state lives in ccstate signals on the factory so the
   // initial value seeds from threadData once it resolves (a React useState
@@ -1866,7 +1862,9 @@ function ThinkingIndicator({ thread }: { thread: ChatThreadSignals }) {
       Waiting in{" "}
       <button
         type="button"
-        onClick={openQueueDrawer}
+        onClick={() => {
+          openQueueDrawer();
+        }}
         className="cursor-pointer underline underline-offset-2"
       >
         queue...
@@ -2714,13 +2712,12 @@ function PagedGroupActions({
   const audioOutputEnabled = features?.[FeatureSwitchKey.AudioOutput] ?? false;
   const messageStartButtonEnabled =
     features?.[FeatureSwitchKey.ChatMessageStartButton] ?? false;
-  const playingRunId = useGet(ttsPlayingRunId$);
   const firstRunId = group.messages.find((m) => {
     return m.runId;
   })?.runId;
   const hasContent = content.length > 0;
-  const isPlayingThis = !!firstRunId && playingRunId === firstRunId;
-  const playTts = useSet(playTts$);
+  const [ttsLoadable, playTts] = useLoadableSet(playTts$);
+  const isPlayingThis = ttsLoadable.state === "loading";
   const stopTts = useSet(stopTts$);
 
   if (group.role === "user") {
@@ -2746,9 +2743,9 @@ function PagedGroupActions({
       return;
     }
     if (isPlayingThis) {
-      detach(stopTts(), Reason.DomCallback);
+      stopTts();
     } else {
-      detach(playTts(firstRunId, content, pageSignal), Reason.DomCallback);
+      detach(playTts(content, pageSignal), Reason.DomCallback);
     }
   };
 

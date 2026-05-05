@@ -104,12 +104,6 @@ const routeSidebarOptimisticChatThread$ = command(
     if (!get(currentChatThreadId$)) {
       return;
     }
-
-    // Funnel through loadRightThread$ so the optimistic flow goes through
-    // the same setup as URL-driven loads (settleResult swap, draft seeding,
-    // Ably subscription). loadRightThread$ reads sidebarOptimisticChatThread$
-    // synchronously and publishes pending.pendingThread before its first
-    // await, so the sidebar paints without delay.
     await set(loadRightThread$, pending.threadId, signal);
   },
 );

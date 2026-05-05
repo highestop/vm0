@@ -208,29 +208,6 @@ export default [
       ],
     },
   },
-  // utils.ts is the centralised infrastructure file for try/catch patterns:
-  // JSON.parse guard, best-effort wrappers, polling with transient-error backoff,
-  // and race-under-signal finally cleanup. All try statements here are intentional.
-  {
-    files: ["src/signals/utils.ts"],
-    rules: {
-      "no-restricted-syntax": "off",
-    },
-  },
-  // voice-chat-session.ts wraps three browser APIs that are specified
-  // to throw: JSON.parse on untrusted Realtime DC event data, navigator.wakeLock.request
-  // (OS deny or hidden document), and navigator.mediaDevices.getUserMedia (permission
-  // denied or no hardware). Each try block has recovery logic that cannot use accept()
-  // or useLoadableSet.
-  {
-    files: [
-      "src/signals/voice-chat/voice-chat-session.ts",
-      "src/signals/voice-chat-candidate/voice-chat-candidate-session.ts",
-    ],
-    rules: {
-      "no-restricted-syntax": "off",
-    },
-  },
   {
     ignores: [
       "dist/**",

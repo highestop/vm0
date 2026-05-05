@@ -179,7 +179,7 @@ function NewChatButton() {
   const currentChatAgentId = useResolved(currentChatAgentId$);
   const createNewChat = useSet(createNewChatThreadOptimistically$);
   const creating = useGet(optimisticChatThread$) !== null;
-  const { signal: rootSignal } = useGet(rootSignal$);
+  const rootSignal = useGet(rootSignal$);
 
   const handleNewChat = (pane: OptimisticChatPane) => {
     detach(
@@ -468,7 +468,7 @@ export function AgentChatPage() {
   );
 
   const sendNewThread = useSet(sendNewThreadOptimistically$);
-  const { signal: rootSignal } = useGet(rootSignal$);
+  const rootSignal = useGet(rootSignal$);
   const pageSignal = useGet(pageSignal$);
 
   const orgProviders = useLastResolved(orgModelProviders$);

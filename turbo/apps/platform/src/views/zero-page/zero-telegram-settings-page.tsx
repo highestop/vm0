@@ -1235,6 +1235,13 @@ function AddTelegramBotDialog({
   const [registerLoadable, registerBot] = useLoadableSet(registerTelegramBot$);
   const adding = registerLoadable.state === "loading";
 
+  const wrappedNavigate = (
+    pathname: typeof ROUTES.telegramConnect,
+    options: { searchParams: URLSearchParams },
+  ) => {
+    navigate(pathname, options);
+  };
+
   return (
     <AddTelegramBotDialogInner
       key={session}
@@ -1248,7 +1255,7 @@ function AddTelegramBotDialog({
       setBotToken={setBotToken}
       setAgentId={setAgentId}
       setOpen={setOpen}
-      navigate={navigate}
+      navigate={wrappedNavigate}
       registerBot={registerBot}
       pageSignal={pageSignal}
       adding={adding}

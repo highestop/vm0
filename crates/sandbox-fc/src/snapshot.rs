@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +26,8 @@ const API_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Timeout for waiting for the guest to connect via vsock after start.
 const VSOCK_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub const SNAPSHOT_COMPLETE_MARKER_CONTENT: &[u8] = b"snapshot-complete-v1\n";
 
 use crate::factory::{DESTROY_RETRIES, DESTROY_RETRY_DELAY};
 
@@ -132,6 +135,11 @@ async fn prepare_snapshot_output(output: &SnapshotOutputPaths) -> Result<PathBuf
     //
     // Only remove snapshot-specific artifacts, not the entire output directory.
     let work = output.work_dir();
+    match tokio::fs::remove_file(output.complete_marker()).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
     let _ = tokio::fs::remove_dir_all(&work).await;
     for stale in [
         output.snapshot(),
@@ -230,6 +238,57 @@ async fn cleanup_snapshot_attempt_dir_for_cow(cow_file: &Path) -> bool {
             );
             false
         }
+    }
+}
+
+async fn sync_snapshot_output_dir(output: &SnapshotOutputPaths) -> Result<(), SnapshotError> {
+    let dir = tokio::fs::File::open(output.dir()).await?;
+    dir.sync_all().await?;
+    Ok(())
+}
+
+fn publish_snapshot_complete_marker(output: &SnapshotOutputPaths) -> Result<(), SnapshotError> {
+    fn write_and_sync(output: &SnapshotOutputPaths) -> std::io::Result<()> {
+        for artifact in [
+            output.snapshot(),
+            output.memory(),
+            output.cow(),
+            output.cow_bitmap(),
+        ] {
+            std::fs::metadata(artifact)?;
+        }
+
+        let marker = output.complete_marker();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)?;
+        file.write_all(SNAPSHOT_COMPLETE_MARKER_CONTENT)?;
+        file.sync_all()?;
+        drop(file);
+
+        std::fs::File::open(output.dir())?.sync_all()?;
+        Ok(())
+    }
+
+    if let Err(e) = write_and_sync(output) {
+        // If marker publication fails after creating the file, remove it so
+        // future readers do not treat an uncommitted publish as complete.
+        let _ = std::fs::remove_file(output.complete_marker());
+        let _ = std::fs::File::open(output.dir()).and_then(|dir| dir.sync_all());
+        return Err(SnapshotError::Io(e));
+    }
+
+    Ok(())
+}
+
+async fn snapshot_complete_marker_present(
+    output: &SnapshotOutputPaths,
+) -> Result<bool, sandbox::SnapshotError> {
+    match tokio::fs::read(output.complete_marker()).await {
+        Ok(content) => Ok(content == SNAPSHOT_COMPLETE_MARKER_CONTENT),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -403,7 +462,7 @@ async fn finalize_snapshot_cow_output(
     tokio::fs::rename(&kept_cow.bitmap_file, &output.cow_bitmap()).await?;
     tokio::fs::rename(&kept_cow.cow_file, &output.cow()).await?;
     cleanup_snapshot_attempt_dir_for_cow(&kept_cow.cow_file).await;
-    // Persist the output directory so all four final dir entries
+    // Persist the output directory so all four artifact dir entries
     // (snapshot.bin and memory.bin written by Firecracker via the API,
     // cow.img and cow.img.bitmap just renamed in) are durable. Without
     // this fsync, rename(2) and Firecracker's creates return once the
@@ -413,8 +472,13 @@ async fn finalize_snapshot_cow_output(
     // missing or rolled back — worst case, cow.img present but
     // cow.img.bitmap absent, which silently corrupts restore reads
     // (same failure class as #9794, one layer up).
-    let dir = tokio::fs::File::open(output.dir()).await?;
-    dir.sync_all().await?;
+    sync_snapshot_output_dir(output).await?;
+
+    // Commit point: the marker is written only after all artifacts are present
+    // and the output directory has been synced. Marker publication uses a
+    // synchronous no-await section so async cancellation cannot stop between
+    // marker visibility and the marker directory fsync.
+    publish_snapshot_complete_marker(output)?;
     Ok(())
 }
 
@@ -1397,6 +1461,9 @@ impl SnapshotProvider for FirecrackerSnapshotProvider {
 
     async fn is_complete(&self, output_dir: &Path) -> Result<bool, sandbox::SnapshotError> {
         let output = SnapshotOutputPaths::new(output_dir.to_path_buf());
+        if !snapshot_complete_marker_present(&output).await? {
+            return Ok(false);
+        }
         for path in [
             output.snapshot(),
             output.memory(),
@@ -1437,6 +1504,7 @@ mod tests {
             output.memory(),
             output.cow(),
             output.cow_bitmap(),
+            output.complete_marker(),
         ] {
             tokio::fs::write(&artifact, b"stale")
                 .await
@@ -1461,6 +1529,7 @@ mod tests {
             output.memory(),
             output.cow(),
             output.cow_bitmap(),
+            output.complete_marker(),
         ] {
             assert!(
                 !tokio::fs::try_exists(&artifact).await.unwrap(),
@@ -1493,11 +1562,92 @@ mod tests {
             !provider.is_complete(output.dir()).await.unwrap(),
             "snapshot without dirty bitmap sidecar must be incomplete"
         );
+        assert!(
+            publish_snapshot_complete_marker(&output).is_err(),
+            "complete marker publication must fail before all artifacts exist"
+        );
+        assert!(
+            !tokio::fs::try_exists(output.complete_marker())
+                .await
+                .unwrap(),
+            "failed marker publication must not leave a marker behind"
+        );
 
         tokio::fs::write(output.cow_bitmap(), b"bitmap")
             .await
             .expect("write cow bitmap");
+        publish_snapshot_complete_marker(&output).expect("publish complete marker");
         assert!(provider.is_complete(output.dir()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn snapshot_provider_requires_complete_marker_for_complete_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = SnapshotOutputPaths::new(dir.path().to_path_buf());
+        tokio::fs::create_dir_all(output.dir())
+            .await
+            .expect("create output dir");
+
+        for artifact in [
+            output.snapshot(),
+            output.memory(),
+            output.cow(),
+            output.cow_bitmap(),
+        ] {
+            tokio::fs::write(&artifact, b"snapshot artifact")
+                .await
+                .unwrap_or_else(|e| panic!("write {}: {e}", artifact.display()));
+        }
+
+        let provider = FirecrackerSnapshotProvider;
+        assert!(
+            !provider.is_complete(output.dir()).await.unwrap(),
+            "snapshot artifacts without complete marker must be incomplete"
+        );
+
+        tokio::fs::write(output.complete_marker(), b"wrong marker")
+            .await
+            .expect("write malformed marker");
+        assert!(
+            !provider.is_complete(output.dir()).await.unwrap(),
+            "malformed complete marker must not commit the snapshot"
+        );
+
+        tokio::fs::remove_file(output.complete_marker())
+            .await
+            .expect("remove malformed marker");
+        publish_snapshot_complete_marker(&output).expect("publish complete marker");
+        assert!(provider.is_complete(output.dir()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn snapshot_provider_rejects_valid_marker_with_missing_artifact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let output = SnapshotOutputPaths::new(dir.path().to_path_buf());
+        tokio::fs::create_dir_all(output.dir())
+            .await
+            .expect("create output dir");
+
+        for artifact in [
+            output.snapshot(),
+            output.memory(),
+            output.cow(),
+            output.cow_bitmap(),
+        ] {
+            tokio::fs::write(&artifact, b"snapshot artifact")
+                .await
+                .unwrap_or_else(|e| panic!("write {}: {e}", artifact.display()));
+        }
+        publish_snapshot_complete_marker(&output).expect("publish complete marker");
+        tokio::fs::remove_file(output.cow_bitmap())
+            .await
+            .expect("remove cow bitmap");
+
+        let provider = FirecrackerSnapshotProvider;
+        assert!(
+            !provider.is_complete(output.dir()).await.unwrap(),
+            "valid marker must not hide a missing snapshot artifact"
+        );
     }
 
     #[test]

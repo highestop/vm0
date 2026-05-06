@@ -10,12 +10,12 @@ import { loadFeatureSwitchOverrides } from "../user/feature-switches-service";
  * banner suppression. Returning false MUST hide the entire surface so the
  * new provider type does not leak into UI or API responses.
  */
-export async function isChatgptOauthEligible(
+export async function isCodexOauthEligible(
   orgId: string,
   userId: string,
 ): Promise<boolean> {
   const overrides = await loadFeatureSwitchOverrides(orgId, userId);
-  return isFeatureEnabled(FeatureSwitchKey.ChatgptOauthProvider, {
+  return isFeatureEnabled(FeatureSwitchKey.CodexOauthProvider, {
     orgId,
     userId,
     overrides,

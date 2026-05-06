@@ -4,7 +4,7 @@ import { deriveAppUrl } from "../playwright.config";
 
 /**
  * Test 4 (UI portion) for issue #11941: stale-provider banner + re-connect
- * CTA in OrgProvidersTab when a chatgpt-oauth-token provider has
+ * CTA in OrgProvidersTab when a codex-oauth-token provider has
  * needsReconnect=true.
  *
  * REQUIRES Wave 3 (#11932). The probe at the top of the test skips when
@@ -17,7 +17,7 @@ import { deriveAppUrl } from "../playwright.config";
  *   - Link href: must contain "/api/zero/chatgpt/oauth/connect"
  * Coordinate via PR-comment cross-link before merging #11932.
  */
-test("chatgpt-oauth stale provider renders banner with re-connect CTA", async ({
+test("codex-oauth stale provider renders banner with re-connect CTA", async ({
   page,
   request,
 }) => {
@@ -56,7 +56,7 @@ test("chatgpt-oauth stale provider renders banner with re-connect CTA", async ({
     return;
   }
 
-  // Seed a stale chatgpt-oauth-token provider via the test endpoint.
+  // Seed a stale codex-oauth-token provider via the test endpoint.
   const seedHeaders: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -65,7 +65,7 @@ test("chatgpt-oauth stale provider renders banner with re-connect CTA", async ({
   }
   const encodedEmail = email.replace(/\+/g, "%2B").replace(/@/g, "%40");
   const seedResp = await request.post(
-    `${apiUrl}/api/cli/auth/test-chatgpt-oauth?email=${encodedEmail}`,
+    `${apiUrl}/api/cli/auth/test-codex-oauth?email=${encodedEmail}`,
     {
       headers: seedHeaders,
       data: {

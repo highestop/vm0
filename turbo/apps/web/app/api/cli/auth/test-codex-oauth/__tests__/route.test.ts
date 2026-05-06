@@ -29,8 +29,8 @@ vi.mock("@clerk/nextjs/server", () => {
 
 const context = testContext();
 
-const TEST_USER_ID = "user_chatgpt_oauth_test";
-const TEST_ORG_ID = "org_chatgpt_oauth_test";
+const TEST_USER_ID = "user_codex_oauth_test";
+const TEST_ORG_ID = "org_codex_oauth_test";
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 const VALID_BODY = {
@@ -42,7 +42,7 @@ const VALID_BODY = {
 
 function makeRequest(body: unknown): Request {
   return createTestRequest(
-    "http://localhost:3000/api/cli/auth/test-chatgpt-oauth",
+    "http://localhost:3000/api/cli/auth/test-codex-oauth",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,7 +51,7 @@ function makeRequest(body: unknown): Request {
   );
 }
 
-describe("/api/cli/auth/test-chatgpt-oauth", () => {
+describe("/api/cli/auth/test-codex-oauth", () => {
   beforeEach(async () => {
     context.setupMocks();
     vi.stubEnv("VERCEL_ENV", "");
@@ -63,7 +63,7 @@ describe("/api/cli/auth/test-chatgpt-oauth", () => {
 
     await insertOrgCacheEntry({
       orgId: TEST_ORG_ID,
-      slug: "chatgpt-oauth-org",
+      slug: "codex-oauth-org",
     });
     await ensureOrgRow(TEST_ORG_ID);
     await insertOrgMembersCacheEntry({
@@ -87,7 +87,7 @@ describe("/api/cli/auth/test-chatgpt-oauth", () => {
     expect(response.status).toBe(400);
   });
 
-  it("seeds chatgpt-oauth-token provider with secrets and tokenExpiresAt", async () => {
+  it("seeds codex-oauth-token provider with secrets and tokenExpiresAt", async () => {
     const response = await POST(makeRequest(VALID_BODY));
     expect(response.status).toBe(200);
     const data = await response.json();
@@ -98,7 +98,7 @@ describe("/api/cli/auth/test-chatgpt-oauth", () => {
     const state = await findTestModelProviderTokenState(
       TEST_ORG_ID,
       ORG_SENTINEL_USER_ID,
-      "chatgpt-oauth-token",
+      "codex-oauth-token",
     );
     expect(state).not.toBeNull();
     expect(state!.tokenExpiresAt).toBeInstanceOf(Date);
@@ -129,7 +129,7 @@ describe("/api/cli/auth/test-chatgpt-oauth", () => {
     const state = await findTestModelProviderTokenState(
       TEST_ORG_ID,
       ORG_SENTINEL_USER_ID,
-      "chatgpt-oauth-token",
+      "codex-oauth-token",
     );
     expect(state).not.toBeNull();
     expect(state!.tokenExpiresAt).toBeInstanceOf(Date);
@@ -149,7 +149,7 @@ describe("/api/cli/auth/test-chatgpt-oauth", () => {
     const state = await findTestModelProviderTokenState(
       TEST_ORG_ID,
       ORG_SENTINEL_USER_ID,
-      "chatgpt-oauth-token",
+      "codex-oauth-token",
     );
     expect(state).not.toBeNull();
     expect(state!.needsReconnect).toBe(true);

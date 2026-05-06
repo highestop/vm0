@@ -74,8 +74,8 @@ export function OrgAddProviderDialog({
   const configuredProviders = useLastResolved(orgConfiguredProviders$);
   const features = useLastResolved(featureSwitch$);
   const codexBetaEnabled = features?.[FeatureSwitchKey.CodexBeta] ?? false;
-  const chatgptOauthEnabled =
-    features?.[FeatureSwitchKey.ChatgptOauthProvider] ?? false;
+  const codexOauthEnabled =
+    features?.[FeatureSwitchKey.CodexOauthProvider] ?? false;
   const openAdd = useSet(orgOpenAddDialog$);
   const configuredSet = new Set(
     configuredProviders?.map((p) => {
@@ -84,7 +84,7 @@ export function OrgAddProviderDialog({
   );
 
   const handleAdd = (type: ModelProviderType) => {
-    if (type === "chatgpt-oauth-token") {
+    if (type === "codex-oauth-token") {
       // Server-side eligibility re-check happens in /api/zero/chatgpt/oauth/connect
       // (delivered in #11909). The client gate above is a UX optimization to keep
       // the card out of view; the route returns 404 when ineligible.
@@ -101,7 +101,7 @@ export function OrgAddProviderDialog({
     if (type === "openai-api-key" && !codexBetaEnabled) {
       return false;
     }
-    if (type === "chatgpt-oauth-token" && !chatgptOauthEnabled) {
+    if (type === "codex-oauth-token" && !codexOauthEnabled) {
       return false;
     }
     return true;

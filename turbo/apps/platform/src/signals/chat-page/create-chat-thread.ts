@@ -17,6 +17,7 @@ import {
 import {
   collectSuccessfulAttachmentInfos,
   prepareUserMessageFromDraft$,
+  shouldExcludeVisualAttachmentsForModel,
 } from "./resolve-draft-attachments.ts";
 import { reloadChatThreads$, type ChatThread } from "../agent-chat.ts";
 import {
@@ -26,6 +27,10 @@ import {
   type ModelSelectionRequest,
   type PagedChatMessage,
 } from "@vm0/api-contracts/contracts/chat-threads";
+import {
+  getDefaultModel,
+  type ModelProviderResponse,
+} from "@vm0/api-contracts/contracts/model-providers";
 import type { ModelProviderSelection } from "../../views/zero-page/components/model-provider-picker.tsx";
 import { accept } from "../../lib/accept.ts";
 import { zeroClient$ } from "../api-client.ts";
@@ -1099,11 +1104,38 @@ function createSendMessage(deps: SendMessageDeps) {
         L.debug("sendMessage$ no agentId, abort", { threadId });
         return;
       }
+      let effectiveSelectedModel = modelSelection?.selectedModel;
+      if (!effectiveSelectedModel) {
+        const agent = await get(agentById(agentId));
+        signal.throwIfAborted();
+        if (agent?.modelProviderId && agent.selectedModel) {
+          effectiveSelectedModel = agent.selectedModel;
+        }
+      }
+      if (!effectiveSelectedModel) {
+        const { modelProviders } = await get(orgModelProviders$);
+        signal.throwIfAborted();
+        const defaultProvider = (
+          modelProviders as ModelProviderResponse[]
+        ).find((provider) => {
+          return provider.isDefault;
+        });
+        const defaultModel = defaultProvider
+          ? getDefaultModel(defaultProvider.type)
+          : undefined;
+        effectiveSelectedModel =
+          defaultProvider?.selectedModel ?? defaultModel ?? undefined;
+      }
 
       const result = await set(
         prepareUserMessageFromDraft$,
         draft,
         prompt,
+        {
+          excludeVisualAttachments: shouldExcludeVisualAttachmentsForModel(
+            effectiveSelectedModel,
+          ),
+        },
         signal,
       );
       if (!result) {

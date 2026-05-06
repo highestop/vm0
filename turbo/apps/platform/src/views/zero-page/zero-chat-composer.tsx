@@ -49,6 +49,7 @@ import {
 import { sendMode$ } from "../../signals/send-mode.ts";
 import { toggleSidebarOff$ } from "../../signals/zero-page/zero-nav.ts";
 import type { DraftSignals } from "../../signals/chat-page/create-chat-thread.ts";
+import { isVisualAttachment } from "../../signals/chat-page/resolve-draft-attachments.ts";
 import type { Command, Computed } from "ccstate";
 import {
   zeroChatAttachments$ as singletonAttachments$,
@@ -67,10 +68,13 @@ import {
   CONNECTOR_TYPES,
   type ConnectorType,
 } from "@vm0/connectors/connectors";
-import type {
-  ModelProviderResponse,
-  ModelProviderType,
+import {
+  getDefaultModel,
+  getModelImageInputSupport,
+  type ModelProviderResponse,
+  type ModelProviderType,
 } from "@vm0/api-contracts/contracts/model-providers";
+import { getModelDisplayName } from "@vm0/core/model-display-name";
 import {
   ModelProviderPicker,
   type ModelProviderSelection,
@@ -196,6 +200,8 @@ interface ZeroChatComposerProps {
   };
 }
 
+type ComposerModelPicker = NonNullable<ZeroChatComposerProps["modelPicker"]>;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -215,6 +221,81 @@ function resolveConnectorLabel(
   connectorMap: Map<ConnectorType, { label: string }>,
 ): string {
   return connectorMap.get(type as ConnectorType)?.label ?? type;
+}
+
+interface ResolvedComposerModel {
+  modelProviderId: string;
+  selectedModel: string;
+}
+
+function resolveProviderSelection(
+  provider: ModelProviderResponse | undefined,
+): ResolvedComposerModel | null {
+  if (!provider) {
+    return null;
+  }
+  const selectedModel =
+    provider.selectedModel ?? getDefaultModel(provider.type);
+  if (!selectedModel) {
+    return null;
+  }
+  return {
+    modelProviderId: provider.id,
+    selectedModel,
+  };
+}
+
+function resolveComposerModelForSelection(
+  modelPicker: ComposerModelPicker | undefined,
+  selection: ModelProviderSelection | null,
+): ResolvedComposerModel | null {
+  if (!modelPicker) {
+    return null;
+  }
+  if (selection) {
+    return selection;
+  }
+  if (modelPicker.agentDefault) {
+    return modelPicker.agentDefault;
+  }
+  const defaultProvider = modelPicker.providers.find((provider) => {
+    return provider.isDefault;
+  });
+  return resolveProviderSelection(defaultProvider);
+}
+
+function getVisualAttachmentUnsupportedState(
+  modelPicker: ComposerModelPicker | undefined,
+  selection: ModelProviderSelection | null = modelPicker?.value ?? null,
+): {
+  currentModelName: string;
+} | null {
+  const currentModel = resolveComposerModelForSelection(modelPicker, selection);
+  if (
+    getModelImageInputSupport(currentModel?.selectedModel) !== "unsupported" ||
+    !currentModel
+  ) {
+    return null;
+  }
+  return {
+    currentModelName: getModelDisplayName(currentModel.selectedModel),
+  };
+}
+
+function isVisualAttachmentFile(file: File): boolean {
+  return isVisualAttachment({
+    contentType: file.type,
+    filename: file.name,
+  });
+}
+
+function showVisualAttachmentUnsupportedToast(state: {
+  currentModelName: string;
+}): void {
+  toast.error(
+    `${state.currentModelName} cannot recognize images or videos. Switch to a vision-capable model to attach them.`,
+    { id: "visual-attachment-unsupported" },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -739,7 +820,7 @@ export function ZeroChatComposer({
     setComposerFileInputProp$,
   );
   const {
-    canSend,
+    canSend: draftCanSend,
     attachments,
     uploadAttachment,
     restoreAttachments,
@@ -752,6 +833,15 @@ export function ZeroChatComposer({
 
   const ensurePushSubscription = useSet(ensurePushSubscription$);
   const rootSignal = useGet(rootSignal$);
+  const visualAttachmentUnsupported =
+    getVisualAttachmentUnsupportedState(modelPicker);
+  const visibleAttachments = visualAttachmentUnsupported
+    ? attachments.filter((attachment) => {
+        return !isVisualAttachment(attachment);
+      })
+    : attachments;
+  const canSend =
+    draftCanSend && (input.trim() !== "" || visibleAttachments.length > 0);
 
   // File upload handlers (paste / drag-drop)
   const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -761,6 +851,17 @@ export function ZeroChatComposer({
         chatPayload.attachments,
       );
       if (persistedAttachments.length > 0) {
+        const allowedAttachments = visualAttachmentUnsupported
+          ? persistedAttachments.filter((attachment) => {
+              return !isVisualAttachment({
+                contentType: attachment.contentType,
+                filename: attachment.filename,
+              });
+            })
+          : persistedAttachments;
+        if (allowedAttachments.length < persistedAttachments.length) {
+          showVisualAttachmentUnsupportedToast(visualAttachmentUnsupported!);
+        }
         e.preventDefault();
         const nextInput = insertPastedText(
           e.currentTarget,
@@ -770,7 +871,9 @@ export function ZeroChatComposer({
         if (nextInput !== input) {
           onInputChange(nextInput);
         }
-        restoreAttachments(persistedAttachments);
+        if (allowedAttachments.length > 0) {
+          restoreAttachments(allowedAttachments);
+        }
         onDraftChange?.();
         return;
       }
@@ -800,6 +903,12 @@ export function ZeroChatComposer({
       if (!file) {
         continue;
       }
+      if (visualAttachmentUnsupported && isVisualAttachmentFile(file)) {
+        e.preventDefault();
+        applyPlainText();
+        showVisualAttachmentUnsupportedToast(visualAttachmentUnsupported);
+        continue;
+      }
       if (file.size > MAX_FILE_SIZE) {
         toast.error(`${file.name} exceeds the 1 GB limit`);
         continue;
@@ -818,14 +927,22 @@ export function ZeroChatComposer({
     if (!files) {
       return;
     }
+    let uploaded = false;
     for (const file of files) {
+      if (visualAttachmentUnsupported && isVisualAttachmentFile(file)) {
+        showVisualAttachmentUnsupportedToast(visualAttachmentUnsupported);
+        continue;
+      }
       if (file.size > MAX_FILE_SIZE) {
         toast.error(`${file.name} exceeds the 1 GB limit`);
         continue;
       }
       detach(uploadAttachment(file, rootSignal), Reason.DomCallback);
+      uploaded = true;
     }
-    onDraftChange?.();
+    if (uploaded) {
+      onDraftChange?.();
+    }
   };
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -968,15 +1085,41 @@ export function ZeroChatComposer({
     if (!files) {
       return;
     }
+    let uploaded = false;
     for (const file of files) {
+      if (visualAttachmentUnsupported && isVisualAttachmentFile(file)) {
+        showVisualAttachmentUnsupportedToast(visualAttachmentUnsupported);
+        continue;
+      }
       if (file.size > MAX_FILE_SIZE) {
         toast.error(`${file.name} exceeds the 1 GB limit`);
         continue;
       }
       detach(uploadAttachment(file, rootSignal), Reason.DomCallback);
+      uploaded = true;
     }
-    onDraftChange?.();
+    if (uploaded) {
+      onDraftChange?.();
+    }
     e.target.value = "";
+  };
+
+  const handleModelPickerChange = (
+    selection: ModelProviderSelection | null,
+  ) => {
+    const nextUnsupported = getVisualAttachmentUnsupportedState(
+      modelPicker,
+      selection,
+    );
+    if (
+      nextUnsupported &&
+      attachments.some((attachment) => {
+        return isVisualAttachment(attachment);
+      })
+    ) {
+      showVisualAttachmentUnsupportedToast(nextUnsupported);
+    }
+    modelPicker?.onChange(selection);
   };
 
   return (
@@ -1001,9 +1144,9 @@ export function ZeroChatComposer({
       >
         <CardContent className="p-0">
           <div className="flex flex-col">
-            {attachments.length > 0 && (
+            {visibleAttachments.length > 0 && (
               <AttachmentChips
-                attachments={attachments}
+                attachments={visibleAttachments}
                 onRemove={(attachment) => {
                   removeAttachment(attachment);
                   onDraftChange?.();
@@ -1075,7 +1218,7 @@ export function ZeroChatComposer({
                       <ModelProviderPicker
                         providers={modelPicker.providers}
                         value={modelPicker.value}
-                        onChange={modelPicker.onChange}
+                        onChange={handleModelPickerChange}
                         placeholder="Default"
                         triggerClassName={cn(
                           "h-9 w-9 max-w-none gap-0 border-transparent bg-transparent px-0 text-sm text-muted-foreground transition-colors sm:w-auto sm:max-w-[14rem] sm:gap-1 sm:px-2",

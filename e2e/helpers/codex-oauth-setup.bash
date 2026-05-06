@@ -154,6 +154,67 @@ disable_codex_oauth_provider() {
     curl "${curl_args[@]}" "${VM0_API_URL}/api/zero/feature-switches" >/dev/null 2>&1 || true
 }
 
+# Common POST helper for /api/cli/auth/test-codex-oauth. Takes a JSON body
+# string on stdin or as $1; returns curl exit + sets http_code via a
+# nameref-style global. Centralizes email encoding + Vercel bypass header.
+_post_test_codex_oauth() {
+    local body="$1"
+    local encoded_email
+    encoded_email=$(_codex_encode_email) || return 1
+
+    local curl_args=(-s -w "\n%{http_code}" -X POST -H "Content-Type: application/json")
+    if [ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]; then
+        curl_args+=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+    fi
+    curl_args+=(-d "$body")
+
+    curl "${curl_args[@]}" "${VM0_API_URL}/api/cli/auth/test-codex-oauth?email=${encoded_email}"
+}
+
+# Seed a codex-oauth-token model provider via the auth_json paste path.
+#
+# Usage:
+#   seed_codex_oauth_via_authjson <raw_auth_json>
+#
+# raw_auth_json: the codex CLI's auth.json contents (JSON string). The
+# server-side parser derives tokenExpiresAt, needsReconnect=false from
+# the parsed claims; the legacy seed_codex_oauth helper is the way to
+# inject explicit metadata (pre-expired tokens, stale state, etc.).
+#
+# Returns nonzero if HTTP != 200. Used by the *-paste tests.
+seed_codex_oauth_via_authjson() {
+    local raw_json="$1"
+
+    local body
+    body=$(jq -n --arg aj "$raw_json" '{authJson: $aj}')
+
+    local resp http_code resp_body
+    resp=$(_post_test_codex_oauth "$body")
+    http_code=$(echo "$resp" | tail -n1)
+    resp_body=$(echo "$resp" | head -n-1)
+
+    if [ "$http_code" != "200" ]; then
+        echo "test-codex-oauth seed via authJson failed: HTTP $http_code" >&2
+        echo "Response: $resp_body" >&2
+        return 1
+    fi
+}
+
+# Probe whether the paste flow (#11978's parser) is wired in the running
+# server. Mostly redundant after #11978 merged into main — kept as a
+# robust runtime probe so the tests gracefully skip if the test endpoint
+# regresses.
+#
+# Returns 0 if a clearly-invalid authJson POST yields a 400 response.
+codex_oauth_paste_supported() {
+    local body='{"authJson":"{ not json"}'
+    local resp http_code
+    resp=$(_post_test_codex_oauth "$body" 2>/dev/null)
+    http_code=$(echo "$resp" | tail -n1)
+
+    [ "$http_code" = "400" ]
+}
+
 # Probe whether Wave 3 (#11932) features are present. Used to gate Test 4
 # (stale recovery) tests so this PR can ship before #11932 merges.
 #

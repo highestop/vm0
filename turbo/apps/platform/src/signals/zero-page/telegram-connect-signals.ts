@@ -92,13 +92,23 @@ export const connectTelegramAccount$ = command(
     const client = get(zeroClient$)(zeroIntegrationsTelegramContract);
     const linkCredential = params.connectSignature
       ? { connectSignature: params.connectSignature }
-      : {
-          telegramAuth: await requestTelegramAuth(
-            params.telegramBotId,
-            await get(apiBaseForNavigation$),
+      : await (async () => {
+          const linkStatus = await get(telegramConnectLinkStatus$);
+          signal.throwIfAborted();
+          const telegramLoginBotId =
+            linkStatus?.linked === false
+              ? linkStatus.installation?.loginBotId
+              : undefined;
+          const apiBase = await get(apiBaseForNavigation$);
+          signal.throwIfAborted();
+          const telegramAuth = await requestTelegramAuth(
+            telegramLoginBotId ?? params.telegramBotId,
+            apiBase,
             signal,
-          ),
-        };
+          );
+          signal.throwIfAborted();
+          return { telegramAuth };
+        })();
 
     const result = await accept(
       client.link({

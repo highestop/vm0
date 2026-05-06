@@ -2767,6 +2767,7 @@ dependencies = [
  "async-trait",
  "base64",
  "clap",
+ "futures-util",
  "hex",
  "libc",
  "nbd-cow",

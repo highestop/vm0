@@ -52,6 +52,7 @@ vendor_check.verify()
 # HTTP status boundaries used in response-phase classification.
 _HTTP_STATUS_UNAUTHORIZED = 401
 _HTTP_STATUS_ERROR_MIN = 400  # inclusive: start of 4xx/5xx error range
+_MODEL_PROVIDER_USAGE_REPORTED = "_model_provider_usage_reported"
 
 # ============================================================================
 # Addon Configuration
@@ -284,6 +285,14 @@ def _release_tracked_usage_flow(flow: http.HTTPFlow) -> None:
         usage.decrement_flows()
 
 
+def _report_model_provider_usage_once(flow: http.HTTPFlow, run_id: str) -> None:
+    """Avoid duplicate usage webhook enqueue if response/error both fire."""
+    if flow.metadata.get(_MODEL_PROVIDER_USAGE_REPORTED, False):
+        return
+    if usage.report_model_provider_usage(flow, run_id):
+        flow.metadata[_MODEL_PROVIDER_USAGE_REPORTED] = True
+
+
 # ============================================================================
 # HTTP Response Handlers
 # ============================================================================
@@ -389,6 +398,7 @@ def response(flow: http.HTTPFlow) -> None:
 
         log_network_entry(network_log_path, log_entry)
 
+    response_streaming.finalize_model_sse_usage(flow)
     response_streaming.finalize_model_json_usage(flow, proxy_log_path)
 
     # Report proxy-extracted usage for model provider responses.
@@ -416,7 +426,7 @@ def response(flow: http.HTTPFlow) -> None:
                 )
             if json_usage:
                 flow.metadata["model_provider_usage"] = json_usage
-    usage.report_model_provider_usage(flow, run_id)
+    _report_model_provider_usage_once(flow, run_id)
 
     # Billable connector usage observation (issue #9504, stage 0).
     response_streaming.finalize_x_json_state(flow)
@@ -506,7 +516,8 @@ def error(flow: http.HTTPFlow) -> None:
     # Report proxy-extracted usage for model provider responses.
     # The SSE parser may have partially populated model_provider_usage before the
     # connection error occurred.  Partial data is better than none.
-    usage.report_model_provider_usage(flow, run_id)
+    response_streaming.finalize_model_sse_usage(flow)
+    _report_model_provider_usage_once(flow, run_id)
 
     # Billable connector usage for X NDJSON streams that crash mid-flight
     # (issue #9534): the incremental parser populated x_ndjson_state during

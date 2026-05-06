@@ -19,6 +19,7 @@ import auth
 import body_utils
 import mitm_addon
 import registry as registry_cache
+import response_streaming
 import usage
 from usage import (
     create_anthropic_messages_sse_usage_extractor,
@@ -1681,6 +1682,46 @@ class TestAnthropicSseUsageExtractor:
         parse(b"event: message_start\ndata: {invalid json}\n\n")
         assert usage == {}  # no crash, no data
 
+    def test_finish_flushes_message_start_without_blank_line(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(
+            b"event: message_start\n"
+            b'data: {"message":{"model":"claude-sonnet-4-6",'
+            b'"usage":{"input_tokens":55}}}'
+        )
+        parse.finish()
+        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["tokens.input"] == 55
+
+    def test_accepts_sse_fields_without_optional_space(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(
+            b"event:message_start\n"
+            b'data:{"message":{"model":"claude-sonnet-4-6",'
+            b'"usage":{"input_tokens":57}}}\n\n'
+        )
+        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["tokens.input"] == 57
+
+    def test_accepts_event_name_after_data_line(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(
+            b'data: {"message":{"model":"claude-sonnet-4-6",'
+            b'"usage":{"input_tokens":56}}}\n'
+            b"event: message_start\n\n"
+        )
+        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["tokens.input"] == 56
+
+    def test_accepts_data_level_type_without_event_line(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(
+            b'data: {"type":"message_start","message":{"model":"claude-sonnet-4-6",'
+            b'"usage":{"input_tokens":58}}}\n\n'
+        )
+        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["tokens.input"] == 58
+
     def test_empty_chunks(self):
         parse, usage = create_anthropic_messages_sse_usage_extractor()
         parse(b"")
@@ -1700,6 +1741,17 @@ class TestAnthropicSseUsageExtractor:
         parse(chunk)
         assert usage["model"] == "claude-sonnet-4-6"
         assert usage["tokens.input"] == 77
+
+    def test_standalone_cr_line_endings(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(
+            b"event: message_start\r"
+            b'data: {"message":{"model":"claude-sonnet-4-6",'
+            b'"usage":{"input_tokens":88}}}\r'
+            b"\r"
+        )
+        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["tokens.input"] == 88
 
     def test_skips_content_block_data_without_buffering(self):
         """Large content_block_delta data should not accumulate in line_buf."""
@@ -1771,6 +1823,24 @@ class TestAnthropicSseUsageExtractor:
         )
         assert usage["tokens.input"] == 5
         assert usage["tokens.output"] == 99
+
+    def test_extracts_usage_from_large_message_start_data_line(self):
+        parse, usage = create_anthropic_messages_sse_usage_extractor()
+        parse(b"event: message_start\n")
+        parse(
+            b'data: {"type":"message_start","message":{"id":"msg_big",'
+            b'"model":"claude-sonnet-4-6","content":[{"type":"text","text":"' + b"x" * 100_000
+        )
+        parse(
+            b'"}],"usage":{"input_tokens":123,"cache_read_input_tokens":45,"output_tokens":6}}}\n\n'
+        )
+        assert usage == {
+            "message_id": "msg_big",
+            "model": "claude-sonnet-4-6",
+            "tokens.input": 123,
+            "tokens.cache_read": 45,
+            "tokens.output": 6,
+        }
 
     def test_empty_usage_dict_not_reported(self):
         """Empty model_provider_usage (SSE ran but no usage found) should not trigger report."""
@@ -1931,6 +2001,37 @@ class TestOpenAIResponsesSseUsageExtractor:
         assert usage["model"] == "gpt-5.4-mini"
         assert usage["tokens.input"] == 3
 
+    def test_finish_flushes_response_completed_without_blank_line(self):
+        parse, usage = create_openai_responses_sse_usage_extractor()
+        parse(
+            b"event: response.completed\n"
+            b'data: {"response":{"model":"gpt-5.4",'
+            b'"usage":{"output_tokens":4}}}'
+        )
+        parse.finish()
+        assert usage["model"] == "gpt-5.4"
+        assert usage["tokens.output"] == 4
+
+    def test_accepts_sse_fields_without_optional_space(self):
+        parse, usage = create_openai_responses_sse_usage_extractor()
+        parse(
+            b"event:response.completed\n"
+            b'data:{"response":{"model":"gpt-5.4",'
+            b'"usage":{"output_tokens":5}}}\n\n'
+        )
+        assert usage["model"] == "gpt-5.4"
+        assert usage["tokens.output"] == 5
+
+    def test_accepts_event_name_after_data_line(self):
+        parse, usage = create_openai_responses_sse_usage_extractor()
+        parse(
+            b'data: {"response":{"model":"gpt-5.4",'
+            b'"usage":{"output_tokens":4}}}\n'
+            b"event: response.completed\n\n"
+        )
+        assert usage["model"] == "gpt-5.4"
+        assert usage["tokens.output"] == 4
+
     def test_handles_chunked_event_and_data_prefix(self):
         parse, usage = create_openai_responses_sse_usage_extractor()
         parse(b"event: response.completed")
@@ -1956,6 +2057,16 @@ class TestOpenAIResponsesSseUsageExtractor:
         )
         assert usage["model"] == "gpt-5.4"
         assert usage["tokens.input"] == 10
+        assert usage["tokens.output"] == 4
+
+    def test_multidata_response_completed_event(self):
+        parse, usage = create_openai_responses_sse_usage_extractor()
+        parse(
+            b"event: response.completed\n"
+            b'data: {"response":\n'
+            b'data: {"model":"gpt-5.4","usage":{"output_tokens":4}}}\n\n'
+        )
+        assert usage["model"] == "gpt-5.4"
         assert usage["tokens.output"] == 4
 
     def test_skips_large_irrelevant_events_without_buffering(self):
@@ -2211,6 +2322,30 @@ class TestResponseHeadersSseParser:
         assert flow.metadata["model_provider_usage"]["model"] == "gpt-5.5"
         assert flow.metadata["model_provider_usage"]["tokens.output"] == 5
 
+    def test_finalizes_sse_parser_for_trailing_event_without_blank_line(self, real_flow):
+        flow = real_flow(with_response=False, host="api.openai.com")
+        flow.response = tutils.tresp(
+            status_code=200,
+            headers=http.Headers(**{"content-type": "text/event-stream"}),
+        )
+        flow.metadata["firewall_name"] = "model-provider:openai-api-key"
+        flow.metadata["firewall_billable"] = True
+
+        mitm_addon.responseheaders(flow)
+
+        callback = flow.response.stream
+        callback(
+            b"event: response.completed\n"
+            b'data: {"response":{"model":"gpt-5.5",'
+            b'"usage":{"output_tokens":7}}}\n'
+        )
+        assert flow.metadata["model_provider_usage"] == {}
+
+        response_streaming.finalize_model_sse_usage(flow)
+
+        assert flow.metadata["model_provider_usage"]["model"] == "gpt-5.5"
+        assert flow.metadata["model_provider_usage"]["tokens.output"] == 7
+
     def test_sets_up_openai_sse_parser_for_openai_model_provider(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.openai.com")
         flow.response = tutils.tresp(
@@ -2459,6 +2594,121 @@ class TestResponseUsageReporting:
         mock_opener.open.assert_not_called()
         assert "model_provider_usage" not in flow.metadata
 
+    def test_full_pipeline_model_sse_finalizes_trailing_event(
+        self, tmp_path, real_flow, mitm_ctx, fresh_usage_executor
+    ):
+        """response() must flush a trailing SSE usage event before reporting."""
+        flow = real_flow(with_response=False, host="api.openai.com")
+        flow.metadata["vm_run_id"] = "run-abc-123"
+        flow.metadata["vm_network_log_path"] = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_proxy_log_path"] = str(tmp_path / "proxy.jsonl")
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.metadata["original_url"] = "https://api.openai.com/v1/responses"
+        flow.metadata["firewall_name"] = "model-provider:openai-api-key"
+        flow.metadata["firewall_billable"] = True
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.response = tutils.tresp(
+            status_code=200,
+            headers=http.Headers(**{"content-type": "text/event-stream"}),
+        )
+
+        mitm_addon.responseheaders(flow)
+        flow.response.stream(
+            b"event: response.completed\n"
+            b'data: {"response":{"model":"gpt-5.5",'
+            b'"usage":{"input_tokens":50,"output_tokens":20,'
+            b'"input_tokens_details":{"cached_tokens":10}}}}'
+        )
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            mitm_ctx(),
+            patch.object(usage.webhook, "_opener") as mock_opener,
+        ):
+            mock_opener.open.return_value = MagicMock()
+            mitm_addon.response(flow)
+            usage.webhook.usage_executor.shutdown(wait=True)
+
+        events = _usage_event_events_from_calls(mock_opener.open.call_args_list)
+        by_category = {event["category"]: event["quantity"] for event in events}
+        assert by_category == {
+            "tokens.input": 40,
+            "tokens.output": 20,
+            "tokens.cache_read": 10,
+        }
+
+    def test_response_then_error_does_not_enqueue_model_usage_twice(
+        self, tmp_path, real_flow, mitm_ctx, fresh_usage_executor
+    ):
+        """If mitmproxy fires both hooks for one flow, model usage reports once."""
+        flow = real_flow(with_response=False, host="api.openai.com")
+        flow.metadata["vm_run_id"] = "run-abc-123"
+        flow.metadata["vm_network_log_path"] = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_proxy_log_path"] = str(tmp_path / "proxy.jsonl")
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.metadata["original_url"] = "https://api.openai.com/v1/responses"
+        flow.metadata["firewall_name"] = "model-provider:openai-api-key"
+        flow.metadata["firewall_billable"] = True
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["model_provider_usage"] = {
+            "model": "gpt-5.5",
+            "tokens.output": 20,
+        }
+        flow.response = tutils.tresp(
+            status_code=200,
+            headers=http.Headers(**{"content-type": "application/json"}),
+        )
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            mitm_ctx(),
+            patch.object(usage.webhook, "_opener") as mock_opener,
+        ):
+            mock_opener.open.return_value = MagicMock()
+            mitm_addon.response(flow)
+            flow.error = Error("connection reset after response")
+            mitm_addon.error(flow)
+            usage.webhook.usage_executor.shutdown(wait=True)
+
+        events = _usage_event_events_from_calls(mock_opener.open.call_args_list)
+        assert [event["category"] for event in events] == ["tokens.output"]
+
+    def test_empty_model_usage_does_not_block_later_error_usage(
+        self, tmp_path, real_flow, mitm_ctx, fresh_usage_executor
+    ):
+        """A no-event response pass must not mark the flow reported."""
+        flow = real_flow(with_response=False, host="api.openai.com")
+        flow.metadata["vm_run_id"] = "run-abc-123"
+        flow.metadata["vm_network_log_path"] = str(tmp_path / "network.jsonl")
+        flow.metadata["vm_proxy_log_path"] = str(tmp_path / "proxy.jsonl")
+        flow.metadata["firewall_action"] = "ALLOW"
+        flow.metadata["original_url"] = "https://api.openai.com/v1/responses"
+        flow.metadata["firewall_name"] = "model-provider:openai-api-key"
+        flow.metadata["firewall_billable"] = True
+        flow.metadata["vm_sandbox_token"] = "tok-xyz"
+        flow.metadata["model_provider_usage"] = {"model": "gpt-5.5"}
+        flow.response = tutils.tresp(
+            status_code=200,
+            headers=http.Headers(**{"content-type": "application/json"}),
+        )
+        mitm_addon._request_start_times[flow.id] = time.time()
+
+        with (
+            mitm_ctx(),
+            patch.object(usage.webhook, "_opener") as mock_opener,
+        ):
+            mock_opener.open.return_value = MagicMock()
+            mitm_addon.response(flow)
+            mock_opener.open.assert_not_called()
+
+            flow.metadata["model_provider_usage"]["tokens.output"] = 20
+            flow.error = Error("connection reset after response")
+            mitm_addon.error(flow)
+            usage.webhook.usage_executor.shutdown(wait=True)
+
+        events = _usage_event_events_from_calls(mock_opener.open.call_args_list)
+        assert [event["category"] for event in events] == ["tokens.output"]
+
     def test_full_pipeline_large_model_json_uses_bounded_buffer(
         self, tmp_path, real_flow, mitm_ctx, headers, fresh_usage_executor
     ):
@@ -2669,6 +2919,30 @@ class TestResponseUsageReporting:
         assert "stream_buffer" not in flow.metadata
         assert "stream_buffer_state" not in flow.metadata
         assert "x_json_response_finish" not in flow.metadata
+
+    def test_response_without_run_id_releases_sse_streaming_state(self, real_flow):
+        """Early-returning SSE flows should not retain parser closures."""
+        flow = real_flow(with_response=False, host="api.openai.com")
+        flow.metadata["firewall_name"] = "model-provider:openai-api-key"
+        flow.metadata["firewall_billable"] = True
+        flow.response = tutils.tresp(
+            status_code=200,
+            headers=http.Headers(**{"content-type": "text/event-stream"}),
+        )
+
+        mitm_addon.responseheaders(flow)
+        flow.response.stream(
+            b"event: response.completed\n"
+            b'data: {"response":{"model":"gpt-5.5","usage":{"output_tokens":7}}}\n'
+        )
+        assert "model_sse_usage_finish" in flow.metadata
+
+        mitm_addon.response(flow)
+
+        assert flow.response.stream is False
+        assert "stream_buffer" not in flow.metadata
+        assert "stream_buffer_state" not in flow.metadata
+        assert "model_sse_usage_finish" not in flow.metadata
 
     def test_response_does_not_clear_external_stream_callback(self, tmp_path, real_flow, mitm_ctx):
         """Cleanup should only reset the stream callback installed by this addon."""
@@ -5165,6 +5439,25 @@ class TestUsagePendingCounter:
             }
         finally:
             usage.counters._decrement_reports()
+
+    def test_submit_failure_rolls_back_pending_report(self, tmp_path):
+        pending_path = tmp_path / "usage-pending"
+        usage.set_pending_path(str(pending_path))
+
+        with (
+            patch.object(usage.webhook.usage_executor, "submit", side_effect=OSError("no threads")),
+            pytest.raises(OSError, match="no threads"),
+        ):
+            usage.webhook._enqueue_webhook(
+                "https://api.vm0.ai/api/webhooks/agent/usage-event",
+                "tok",
+                {"runId": "run-1", "events": [{"category": "tokens.input", "quantity": 1}]},
+                "",
+                "usage_event",
+            )
+
+        assert usage.counters._pending_reports == 0
+        _assert_pending(pending_path, flows=0, reports=0)
 
     def test_set_pending_path_accepts_explicit_usage_state_id(self, tmp_path):
         pending_path = tmp_path / "usage-pending"

@@ -64,11 +64,11 @@ describe("GET /api/zero/integrations/telegram/bots", () => {
   });
 
   it("lists the official bot and custom Telegram bots in the active org", async () => {
-    const ownedBotId = uniqueNumericId();
+    const ownerBotId = uniqueNumericId();
     const orgBotId = uniqueNumericId();
     const otherOrgBotId = uniqueNumericId();
     const botId = await createTestTelegramInstallation({
-      telegramBotId: ownedBotId,
+      telegramBotId: ownerBotId,
       ownerUserId: user.userId,
       vm0UserId: user.userId,
       orgId: user.orgId,
@@ -88,7 +88,7 @@ describe("GET /api/zero/integrations/telegram/bots", () => {
         return HttpResponse.json({
           ok: true,
           result: {
-            id: Number(ownedBotId),
+            id: Number(ownerBotId),
             is_bot: true,
             first_name: "Bot",
             username: "alerts_bot",
@@ -107,7 +107,7 @@ describe("GET /api/zero/integrations/telegram/bots", () => {
         officialBotExpectation,
         expect.objectContaining({
           id: botId,
-          username: `bot_${ownedBotId}`,
+          username: `bot_${ownerBotId}`,
           isOwner: true,
           isConnected: true,
           tokenStatus: "valid",

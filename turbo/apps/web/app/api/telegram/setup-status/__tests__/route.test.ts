@@ -14,6 +14,10 @@ const context = testContext();
 
 const TEST_BOT_TOKEN = "123456:ABC-test-token";
 
+function testBotToken(botId: string): string {
+  return `${botId}:ABC-test-token`;
+}
+
 function setupStatusRequest(body: Record<string, unknown>) {
   return new Request("http://localhost:3000/api/telegram/setup-status", {
     method: "POST",
@@ -95,16 +99,18 @@ describe("POST /api/telegram/setup-status", () => {
   it("returns BotFather domain and privacy setup status", async () => {
     await context.setupUser();
     const botId = uniqueNumericId();
+    const botToken = testBotToken(botId);
     const getMeHandler = telegramGetMe({
       botId,
       username: "setup_bot",
       privacyDisabled: true,
+      token: botToken,
     });
     server.use(getMeHandler.handler, telegramOauthHead("2048"));
 
     const response = await POST(
       setupStatusRequest({
-        botToken: TEST_BOT_TOKEN,
+        botToken,
         origin: "https://app.example.com/settings/telegram",
       }),
     );
@@ -123,6 +129,7 @@ describe("POST /api/telegram/setup-status", () => {
   it("returns 409 when the bot is already installed", async () => {
     const user = await context.setupUser();
     const botId = uniqueNumericId();
+    const botToken = testBotToken(botId);
     await createTestTelegramInstallation({
       telegramBotId: botId,
       orgId: user.orgId,
@@ -130,12 +137,11 @@ describe("POST /api/telegram/setup-status", () => {
     const getMeHandler = telegramGetMe({
       botId,
       username: "setup_bot",
+      token: botToken,
     });
     server.use(getMeHandler.handler);
 
-    const response = await POST(
-      setupStatusRequest({ botToken: TEST_BOT_TOKEN }),
-    );
+    const response = await POST(setupStatusRequest({ botToken }));
     const body = await response.json();
 
     expect(response.status).toBe(409);

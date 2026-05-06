@@ -246,6 +246,8 @@ export function createIdbCachedDataSource(
     reloadThread$: remote.reloadThread$,
     initialPage$,
     patchDraft$: remote.patchDraft$,
+    appendPendingMessage$: remote.appendPendingMessage$,
+    recallPendingMessage$: remote.recallPendingMessage$,
     listMessagesAfter$,
     listMessagesBefore$: createListMessagesBefore(remote, getStores),
     cancelRuns$: remote.cancelRuns$,

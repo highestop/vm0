@@ -136,6 +136,7 @@ import {
 import {
   navigateToAdjacentThread$,
   scrollCurrentThread$,
+  setChatKeyboardScrollRoot$,
 } from "../../signals/chat-page/chat-keyboard.ts";
 import { sidebarChatThreads$ } from "../../signals/chat-page/optimistic-chat-thread-page.ts";
 import {
@@ -1591,10 +1592,14 @@ export function ZeroChatThreadPage() {
   const leftThread = useGet(currentLeftThread$);
   const rightThread = useGet(currentRightThread$);
   const lightboxUrl = useGet(attachmentLightboxUrl$);
+  const setKeyboardScrollRoot = useSet(setChatKeyboardScrollRoot$);
 
   return (
     <>
-      <div className="flex flex-1 min-h-0 bg-transparent">
+      <div
+        ref={setKeyboardScrollRoot}
+        className="flex flex-1 min-h-0 bg-transparent"
+      >
         {leftThread && (
           <ChatThread key={leftThread.threadId} thread={leftThread} />
         )}
@@ -1734,7 +1739,8 @@ function ChatThreadContent({ thread }: { thread: ChatThreadSignals }) {
         <div
           ref={setScrollContainer}
           data-scroll-container
-          className="absolute inset-0 overflow-y-auto [scrollbar-gutter:stable]"
+          tabIndex={-1}
+          className="absolute inset-0 overflow-y-auto focus:outline-none [scrollbar-gutter:stable]"
         >
           <main className="px-4 sm:px-6 py-4 items-center @container">
             <div

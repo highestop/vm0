@@ -16,33 +16,111 @@ import {
   submitCodexAuthJson$,
   updateCodexPasteContent$,
 } from "../../../../signals/zero-page/settings/org-model-providers.ts";
+import {
+  codexPasteContentPersonal$,
+  codexPasteDialogStatePersonal$,
+  setCodexPasteDialogStatePersonal$,
+  submitCodexAuthJsonPersonal$,
+  updateCodexPasteContentPersonal$,
+} from "../../../../signals/zero-page/settings/personal-model-providers.ts";
 import { ApiError } from "../../../../lib/accept.ts";
 import { detach, isValidJson, Reason } from "../../../../signals/utils.ts";
 import { pageSignal$ } from "../../../../signals/page-signal.ts";
+
+type CodexPasteDialogState = {
+  open: boolean;
+  mode: "connect" | "reconnect";
+};
+
+/**
+ * Loadable state read by the dialog. Derived from `useLoadableSet`'s actual
+ * return tuple so the discriminator union here cannot drift from
+ * `ccstate-react/experimental` — if the upstream library renames/adds a
+ * state, this type updates with it. `unknown` for the data type because the
+ * dialog only inspects `state` and `error` (both org and personal commands
+ * resolve to a non-void payload, and we don't want the bundle interface to
+ * bake one scope's payload into the other's signature).
+ */
+type SubmitLoadable = ReturnType<
+  typeof useLoadableSet<unknown, [AbortSignal]>
+>[0];
+
+/**
+ * The set of signals the paste dialog reads/writes for one scope. Both the
+ * org and personal variants conform to this shape, so the inner presentational
+ * `CodexAuthPasteDialogView` can be agnostic of which scope it is rendering
+ * — only the wrapper (`Org…` / `Personal…`) subscribes to the right bundle.
+ */
+interface CodexPasteScopeBundle {
+  dialog: CodexPasteDialogState;
+  paste: string;
+  setDialog: (next: CodexPasteDialogState) => void;
+  updatePaste: (next: string) => void;
+  submitLoadable: SubmitLoadable;
+  submit: (signal: AbortSignal) => Promise<unknown>;
+}
+
+/**
+ * Org-tier wrapper. Subscribes only to the org signal bundle so the personal
+ * bundle is not evaluated on this render path. Used from `org-providers-tab`.
+ */
+export function CodexAuthPasteDialog() {
+  const bundle = useOrgCodexPasteBundle();
+  return <CodexAuthPasteDialogView bundle={bundle} />;
+}
+
+/**
+ * Personal-tier wrapper. Subscribes only to the personal signal bundle so
+ * the org bundle is not evaluated on this render path. Used from
+ * `personal-providers-tab`.
+ */
+export function PersonalCodexAuthPasteDialog() {
+  const bundle = usePersonalCodexPasteBundle();
+  return <CodexAuthPasteDialogView bundle={bundle} />;
+}
+
+function useOrgCodexPasteBundle(): CodexPasteScopeBundle {
+  const dialog = useGet(codexPasteDialogState$);
+  const paste = useGet(codexPasteContent$);
+  const setDialog = useSet(setCodexPasteDialogState$);
+  const updatePaste = useSet(updateCodexPasteContent$);
+  const [submitLoadable, submit] = useLoadableSet(submitCodexAuthJson$);
+  return { dialog, paste, setDialog, updatePaste, submitLoadable, submit };
+}
+
+function usePersonalCodexPasteBundle(): CodexPasteScopeBundle {
+  const dialog = useGet(codexPasteDialogStatePersonal$);
+  const paste = useGet(codexPasteContentPersonal$);
+  const setDialog = useSet(setCodexPasteDialogStatePersonal$);
+  const updatePaste = useSet(updateCodexPasteContentPersonal$);
+  const [submitLoadable, submit] = useLoadableSet(submitCodexAuthJsonPersonal$);
+  return { dialog, paste, setDialog, updatePaste, submitLoadable, submit };
+}
 
 /**
  * Paste-based connection dialog for the codex-oauth-token provider.
  *
  * Replaces the broken cross-origin `window.location.assign` redirect that
- * shipped in #11909 (the platform SPA on app.vm0.ai resolved the relative
- * /api/zero/chatgpt/oauth/connect path against itself instead of www.vm0.ai).
- * Same component handles first-time connect and re-paste recovery from a
- * stale session — only the title differs by mode.
+ * shipped in #11909. Same component handles first-time connect and re-paste
+ * recovery from a stale session — only the title differs by mode. The
+ * scope-specific signal bundle is supplied by the wrapper component so this
+ * presentational layer is agnostic of org vs personal tier (#12024).
  *
  * Submit POSTs `{ type: 'codex-oauth-token', authMethod: 'auth_json',
- * secrets: { CODEX_AUTH_JSON: <raw> } }` to /api/zero/model-providers; the
- * server-side parser lands in #11978. Typed error codes
- * (`CODEX_AUTH_JSON_SHAPE_INVALID`, `CODEX_FREE_PLAN_REJECTED`) surface
- * inline rather than via toast — the user is staring at the textarea, an
- * inline message keeps cause-and-effect close.
+ * secrets: { CODEX_AUTH_JSON: <raw> } }` to the scope-appropriate endpoint.
+ * Typed error codes (`CODEX_AUTH_JSON_SHAPE_INVALID`,
+ * `CODEX_FREE_PLAN_REJECTED`) surface inline rather than via toast — the
+ * user is staring at the textarea, an inline message keeps cause-and-effect
+ * close.
  */
-export function CodexAuthPasteDialog() {
-  const dialog = useGet(codexPasteDialogState$);
-  const paste = useGet(codexPasteContent$);
-  const setDialog = useSet(setCodexPasteDialogState$);
-  const updatePaste = useSet(updateCodexPasteContent$);
+function CodexAuthPasteDialogView({
+  bundle,
+}: {
+  bundle: CodexPasteScopeBundle;
+}) {
+  const { dialog, paste, setDialog, updatePaste, submitLoadable, submit } =
+    bundle;
   const pageSignal = useGet(pageSignal$);
-  const [submitLoadable, submit] = useLoadableSet(submitCodexAuthJson$);
 
   const submitting = submitLoadable.state === "loading";
   const serverError =

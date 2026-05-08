@@ -195,6 +195,30 @@ describe("POST /api/webhooks/agent/complete", () => {
       const data = await response.json();
       expect(data.error.message).toContain("lastEventSequence");
     });
+
+    it("should reject lastEventSequence outside the database integer range", async () => {
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+            lastEventSequence: 2_147_483_648,
+          }),
+        },
+      );
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+      const data = await response.json();
+      expect(data.error.message).toContain("lastEventSequence");
+    });
   });
 
   describe("Authorization", () => {
@@ -299,17 +323,8 @@ describe("POST /api/webhooks/agent/complete", () => {
       expect(data.status).toBe("completed");
     });
 
-    it("should wait for the lastEventSequence prefix before successful completion", async () => {
+    it("should persist lastEventSequence without waiting for Axiom visibility", async () => {
       await createCheckpoint();
-      context.mocks.axiom.queryAxiom
-        .mockResolvedValueOnce([
-          { _time: "2026-01-01T00:00:00.000Z", sequenceNumber: 0 },
-          { _time: "2026-01-01T00:00:00.000Z", sequenceNumber: 2 },
-        ])
-        .mockResolvedValueOnce([
-          { _time: "2026-01-01T00:00:00.000Z", sequenceNumber: 1 },
-          { _time: "2026-01-01T00:00:00.000Z", sequenceNumber: 2 },
-        ]);
 
       const request = createTestRequest(
         "http://localhost:3000/api/webhooks/agent/complete",
@@ -332,14 +347,11 @@ describe("POST /api/webhooks/agent/complete", () => {
       expect(response.status).toBe(200);
       const run = await findTestRunRecord(testRunId);
       expect(run!.status).toBe("completed");
-      expect(context.mocks.axiom.queryAxiom).toHaveBeenCalledTimes(2);
-      expect(context.mocks.axiom.queryAxiom).toHaveBeenCalledWith(
-        expect.stringContaining(`runId == "${testRunId}"`),
-        { maxRetries: 0 },
-      );
+      expect(run!.lastEventSequence).toBe(2);
+      expect(context.mocks.axiom.queryAxiom).not.toHaveBeenCalled();
     });
 
-    it("should fail open when Axiom visibility query fails", async () => {
+    it("should complete when Axiom query would fail", async () => {
       await createCheckpoint();
       context.mocks.axiom.queryAxiom.mockRejectedValueOnce(
         new Error("axiom unavailable"),
@@ -366,9 +378,11 @@ describe("POST /api/webhooks/agent/complete", () => {
       expect(response.status).toBe(200);
       const run = await findTestRunRecord(testRunId);
       expect(run!.status).toBe("completed");
+      expect(run!.lastEventSequence).toBe(0);
+      expect(context.mocks.axiom.queryAxiom).not.toHaveBeenCalled();
     });
 
-    it("should skip the Axiom visibility barrier when watermark is absent", async () => {
+    it("should not query Axiom when watermark is absent", async () => {
       await createCheckpoint();
 
       const request = createTestRequest(
@@ -562,6 +576,8 @@ describe("POST /api/webhooks/agent/complete", () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
+      const run = await findTestRunRecord(runId);
+      expect(run!.lastEventSequence).toBe(0);
       expect(context.mocks.axiom.queryAxiom).not.toHaveBeenCalled();
     });
   });
@@ -589,6 +605,31 @@ describe("POST /api/webhooks/agent/complete", () => {
       expect(response.status).toBe(404);
       const data = await response.json();
       expect(data.error.message).toContain("Checkpoint");
+    });
+
+    it("should persist lastEventSequence when checkpoint is missing", async () => {
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+            lastEventSequence: 4,
+          }),
+        },
+      );
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(404);
+      const run = await findTestRunRecord(testRunId);
+      expect(run!.status).toBe("failed");
+      expect(run!.lastEventSequence).toBe(4);
     });
   });
 
@@ -619,6 +660,78 @@ describe("POST /api/webhooks/agent/complete", () => {
       const data = await response.json();
       expect(data.success).toBe(true);
       expect(data.status).toBe("completed");
+    });
+
+    it("should persist a late lastEventSequence for already completed run", async () => {
+      await completeTestRun(user.userId, testRunId);
+
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+            lastEventSequence: 7,
+          }),
+        },
+      );
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const run = await findTestRunRecord(testRunId);
+      expect(run!.lastEventSequence).toBe(7);
+      expect(context.mocks.axiom.queryAxiom).not.toHaveBeenCalled();
+    });
+
+    it("should not lower an existing lastEventSequence on duplicate complete", async () => {
+      await completeTestRun(user.userId, testRunId);
+
+      const higherRequest = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+            lastEventSequence: 7,
+          }),
+        },
+      );
+
+      const firstResponse = await POST(higherRequest);
+      expect(firstResponse.status).toBe(200);
+
+      const lowerRequest = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+            lastEventSequence: 3,
+          }),
+        },
+      );
+
+      const response = await POST(lowerRequest);
+
+      expect(response.status).toBe(200);
+      const run = await findTestRunRecord(testRunId);
+      expect(run!.lastEventSequence).toBe(7);
     });
 
     it("should return success without processing for already failed run", async () => {
@@ -665,6 +778,91 @@ describe("POST /api/webhooks/agent/complete", () => {
       const data = await response.json();
       expect(data.success).toBe(true);
       expect(data.status).toBe("failed");
+    });
+
+    it("should persist a late lastEventSequence for already failed run", async () => {
+      const failRequest = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 1,
+            error: "Initial failure",
+          }),
+        },
+      );
+
+      const failResponse = await POST(failRequest);
+      expect(failResponse.status).toBe(200);
+
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 1,
+            error: "Another error",
+            lastEventSequence: 7,
+          }),
+        },
+      );
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.status).toBe("failed");
+      const run = await findTestRunRecord(testRunId);
+      expect(run!.lastEventSequence).toBe(7);
+      expect(context.mocks.axiom.queryAxiom).not.toHaveBeenCalled();
+    });
+
+    it("should return failed when completion loses the transition race to cancellation", async () => {
+      await createCheckpoint();
+      const cancelled = await transitionRunStatus(
+        testRunId,
+        {
+          status: "cancelled",
+          completedAt: new Date(),
+        },
+        ["pending", "running"],
+      );
+      expect(cancelled).toBe(true);
+
+      const request = createTestRequest(
+        "http://localhost:3000/api/webhooks/agent/complete",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${testToken}`,
+          },
+          body: JSON.stringify({
+            runId: testRunId,
+            exitCode: 0,
+          }),
+        },
+      );
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.success).toBe(true);
+      expect(data.status).toBe("failed");
+      const run = await findTestRunRecord(testRunId);
+      expect(run!.status).toBe("cancelled");
     });
   });
 

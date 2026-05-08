@@ -8,7 +8,7 @@ import { initServices } from "../../../../../src/lib/init-services";
 import { agentRuns } from "@vm0/db/schema/agent-run";
 import { checkpoints } from "@vm0/db/schema/checkpoint";
 import { agentSessions } from "@vm0/db/schema/agent-session";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   transitionRunStatus,
   dispatchTerminalSideEffects,
@@ -22,7 +22,6 @@ import {
   dispatchQueuedZeroRun,
 } from "../../../../../src/lib/zero/zero-run-queue-service";
 import { processOrgUsageEvents } from "../../../../../src/lib/zero/credit/usage-event-service";
-import { waitForAgentEventPrefixVisible } from "../../../../../src/lib/infra/run/agent-event-visibility";
 import { publishRunChangedForUserSafely } from "../../../../../src/lib/infra/run/run-realtime";
 import { after } from "next/server";
 
@@ -77,6 +76,35 @@ function buildRunResult(
   return result;
 }
 
+async function persistLastEventSequence(
+  runId: string,
+  userId: string,
+  lastEventSequence: number,
+): Promise<void> {
+  await globalThis.services.db
+    .update(agentRuns)
+    .set({
+      lastEventSequence: sql<number>`greatest(coalesce(${agentRuns.lastEventSequence}, -1), ${lastEventSequence})`,
+    })
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.userId, userId)));
+}
+
+async function readCompletionResponseStatus(
+  runId: string,
+  userId: string,
+): Promise<"completed" | "failed"> {
+  const [currentRun] = await globalThis.services.db
+    .select({ status: agentRuns.status })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.userId, userId)))
+    .limit(1);
+
+  if (currentRun?.status === "completed") {
+    return "completed";
+  }
+  return "failed";
+}
+
 const router = tsr.router(webhookCompleteContract, {
   complete: async ({ body, headers }) => {
     initServices();
@@ -117,6 +145,14 @@ const router = tsr.router(webhookCompleteContract, {
       };
     }
 
+    if (body.lastEventSequence !== undefined) {
+      await persistLastEventSequence(
+        body.runId,
+        userId,
+        body.lastEventSequence,
+      );
+    }
+
     // Idempotency check: if run is already completed/failed, return early
     if (run.status === "completed" || run.status === "failed") {
       log.debug(
@@ -155,9 +191,9 @@ const router = tsr.router(webhookCompleteContract, {
           ["pending", "running", "timeout"],
         );
 
-        // Dispatch callbacks so the user gets notified about the failure
-        // (previously this path returned without dispatching)
         if (transitioned) {
+          // Dispatch callbacks so the user gets notified about the failure
+          // (previously this path returned without dispatching)
           await publishRunChangedForUserSafely(run.userId, body.runId, {
             status: "failed",
           });
@@ -167,15 +203,22 @@ const router = tsr.router(webhookCompleteContract, {
             run.orgId,
             "Checkpoint for run not found",
           );
+          return {
+            status: 404 as const,
+            body: {
+              error: {
+                message: "Checkpoint for run not found",
+                code: "NOT_FOUND",
+              },
+            },
+          };
         }
 
         return {
-          status: 404 as const,
+          status: 200 as const,
           body: {
-            error: {
-              message: "Checkpoint for run not found",
-              code: "NOT_FOUND",
-            },
+            success: true,
+            status: await readCompletionResponseStatus(body.runId, userId),
           },
         };
       }
@@ -188,25 +231,6 @@ const router = tsr.router(webhookCompleteContract, {
         .limit(1);
 
       const result = buildRunResult(checkpoint, session?.id);
-
-      if (body.lastEventSequence !== undefined) {
-        const visibility = await waitForAgentEventPrefixVisible(
-          body.runId,
-          body.lastEventSequence,
-        );
-
-        if (!visibility.visible) {
-          log.warn("Completing run before all agent events are Axiom-visible", {
-            runId: body.runId,
-            targetSequence: visibility.targetSequence,
-            visibleThrough: visibility.visibleThrough,
-            attempts: visibility.attempts,
-            elapsedMs: visibility.elapsedMs,
-            reason: visibility.reason,
-            error: visibility.error,
-          });
-        }
-      }
 
       // Atomically transition to "completed". Also accept "timeout" so a
       // sandbox that eventually reports success after a heartbeat-timeout
@@ -229,7 +253,10 @@ const router = tsr.router(webhookCompleteContract, {
         );
         return {
           status: 200 as const,
-          body: { success: true, status: "completed" as const },
+          body: {
+            success: true,
+            status: await readCompletionResponseStatus(body.runId, userId),
+          },
         };
       }
 
@@ -270,7 +297,10 @@ const router = tsr.router(webhookCompleteContract, {
         );
         return {
           status: 200 as const,
-          body: { success: true, status: "failed" as const },
+          body: {
+            success: true,
+            status: await readCompletionResponseStatus(body.runId, userId),
+          },
         };
       }
 

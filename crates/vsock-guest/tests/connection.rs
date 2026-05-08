@@ -11,12 +11,14 @@ use std::time::Duration;
 
 use vsock_guest::{handle_connection, run};
 use vsock_proto::{
-    self, MSG_EXEC, MSG_EXEC_RESULT, MSG_PROCESS_EXIT, MSG_SHUTDOWN, MSG_SHUTDOWN_ACK,
+    self, MSG_ERROR, MSG_EXEC, MSG_EXEC_RESULT, MSG_PROCESS_EXIT, MSG_SHUTDOWN, MSG_SHUTDOWN_ACK,
     MSG_SPAWN_WATCH, MSG_SPAWN_WATCH_RESULT, MSG_STDOUT_CHUNK,
 };
 
 const EXIT_CODE_TIMEOUT: i32 = 124;
 const DRAIN_DEADLINE_SECS: u64 = 5;
+const LARGE_ENV_COMMAND: &str =
+    "printf '%s:%s:%s:%s:%s\\n' \"$SMALL\" \"${#BIG_A}\" \"${#BIG_B}\" \"${#BIG_C}\" \"${#BIG_D}\"";
 
 struct TempPathGuard(String);
 
@@ -54,6 +56,32 @@ fn unique_socket_path(label: &str) -> TempPathGuard {
 
 fn unique_pid_path(label: &str) -> TempPathGuard {
     unique_tmp_path(label, ".pid")
+}
+
+fn large_env_values() -> [String; 4] {
+    [
+        "A".repeat(40 * 1024),
+        "B".repeat(40 * 1024),
+        "C".repeat(40 * 1024),
+        "D".repeat(40 * 1024),
+    ]
+}
+
+fn large_env_entries(values: &[String; 4]) -> [(&'static str, &str); 5] {
+    [
+        ("SMALL", "ok"),
+        ("BIG_A", values[0].as_str()),
+        ("BIG_B", values[1].as_str()),
+        ("BIG_C", values[2].as_str()),
+        ("BIG_D", values[3].as_str()),
+    ]
+}
+
+fn assert_large_env_stdout(stdout: &[u8]) {
+    assert_eq!(
+        String::from_utf8_lossy(stdout),
+        "ok:40960:40960:40960:40960\n"
+    );
 }
 
 struct OrphanProcessGuard {
@@ -103,7 +131,18 @@ fn send_exec_and_read_result(
     command: &str,
     timeout_ms: u32,
 ) -> (i32, Vec<u8>, Vec<u8>) {
-    let payload = vsock_proto::encode_exec(timeout_ms, command, &[], false);
+    send_exec_and_read_result_with_env(writer, reader, seq, command, timeout_ms, &[])
+}
+
+fn send_exec_and_read_result_with_env(
+    writer: &mut impl std::io::Write,
+    reader: &mut impl std::io::Read,
+    seq: u32,
+    command: &str,
+    timeout_ms: u32,
+    env: &[(&str, &str)],
+) -> (i32, Vec<u8>, Vec<u8>) {
+    let payload = vsock_proto::encode_exec(timeout_ms, command, env, false);
     let msg = vsock_proto::encode(MSG_EXEC, seq, &payload).unwrap();
     writer.write_all(&msg).unwrap();
 
@@ -233,6 +272,79 @@ fn exec_returns_correct_result() {
         send_exec_and_read_result(&mut host_writer, &mut host_reader, 1, "echo hello", 5000);
     assert_eq!(code, 0);
     assert_eq!(String::from_utf8_lossy(&stdout).trim(), "hello");
+
+    drop(host_writer);
+    drop(host_reader);
+    let _ = handle.join();
+}
+
+#[test]
+fn exec_large_env_payload_succeeds() {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let values = large_env_values();
+    let env = large_env_entries(&values);
+
+    let (guest_stream, host_stream) = StdUnixStream::pair().unwrap();
+    let mut host_writer = host_stream.try_clone().unwrap();
+    let mut host_reader = host_stream;
+
+    let handle = thread::spawn(move || {
+        let _ = handle_connection(guest_stream);
+    });
+    read_and_discard_message(&mut host_reader); // MSG_READY
+    host_reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let (code, stdout, stderr) = send_exec_and_read_result_with_env(
+        &mut host_writer,
+        &mut host_reader,
+        1,
+        LARGE_ENV_COMMAND,
+        5000,
+        &env,
+    );
+
+    assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&stderr));
+    assert_large_env_stdout(&stdout);
+
+    drop(host_writer);
+    drop(host_reader);
+    let _ = handle.join();
+}
+
+#[test]
+fn exec_invalid_env_payload_returns_error_without_leaking_value() {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let (guest_stream, host_stream) = StdUnixStream::pair().unwrap();
+    let mut host_writer = host_stream.try_clone().unwrap();
+    let mut host_reader = host_stream;
+
+    let handle = thread::spawn(move || {
+        let _ = handle_connection(guest_stream);
+    });
+    read_and_discard_message(&mut host_reader); // MSG_READY
+    host_reader
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let secret = "do-not-print-this-secret";
+    let (code, stdout, stderr) = send_exec_and_read_result_with_env(
+        &mut host_writer,
+        &mut host_reader,
+        1,
+        "echo should-not-run",
+        5000,
+        &[("BAD;KEY", secret)],
+    );
+    let stderr = String::from_utf8_lossy(&stderr);
+
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("invalid environment variable name"));
+    assert!(!stderr.contains(secret));
 
     drop(host_writer);
     drop(host_reader);
@@ -430,8 +542,19 @@ fn send_spawn_watch(
     log_path: Option<&str>,
     timeout_ms: u32,
 ) {
+    send_spawn_watch_with_env(stream, seq, command, &[], log_path, timeout_ms);
+}
+
+fn send_spawn_watch_with_env(
+    stream: &mut impl std::io::Write,
+    seq: u32,
+    command: &str,
+    env: &[(&str, &str)],
+    log_path: Option<&str>,
+    timeout_ms: u32,
+) {
     let payload =
-        vsock_proto::encode_spawn_watch(timeout_ms, command, &[], false, true, log_path).unwrap();
+        vsock_proto::encode_spawn_watch(timeout_ms, command, env, false, true, log_path).unwrap();
     let msg = vsock_proto::encode(MSG_SPAWN_WATCH, seq, &payload).unwrap();
     stream.write_all(&msg).unwrap();
 }
@@ -511,6 +634,66 @@ fn streaming_monitor_normal_exit() {
     assert!(pid > 0);
     assert_eq!(exit_code, 0);
     assert_eq!(String::from_utf8_lossy(&stdout_data).trim(), "hello");
+
+    drop(host_stream);
+    let _ = handle.join();
+}
+
+#[test]
+fn streaming_spawn_watch_large_env_payload_succeeds() {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let values = large_env_values();
+    let env = large_env_entries(&values);
+
+    let (guest_stream, mut host_stream) = StdUnixStream::pair().unwrap();
+    let handle = thread::spawn(move || {
+        let _ = handle_connection(guest_stream);
+    });
+    read_and_discard_message(&mut host_stream); // MSG_READY
+    host_stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    send_spawn_watch_with_env(&mut host_stream, 1, LARGE_ENV_COMMAND, &env, None, 5000);
+    let (_pid, stdout_data, exit_code, stderr) = read_streaming_result(&mut host_stream, 1);
+
+    assert_eq!(exit_code, 0, "stderr: {}", String::from_utf8_lossy(&stderr));
+    assert_large_env_stdout(&stdout_data);
+
+    drop(host_stream);
+    let _ = handle.join();
+}
+
+#[test]
+fn streaming_spawn_watch_invalid_env_payload_returns_error_without_leaking_value() {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let (guest_stream, mut host_stream) = StdUnixStream::pair().unwrap();
+    let handle = thread::spawn(move || {
+        let _ = handle_connection(guest_stream);
+    });
+    read_and_discard_message(&mut host_stream); // MSG_READY
+    host_stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let secret = "do-not-print-this-secret";
+    send_spawn_watch_with_env(
+        &mut host_stream,
+        1,
+        "echo should-not-run",
+        &[("BAD;KEY", secret)],
+        None,
+        5000,
+    );
+
+    let msg = read_message(&mut host_stream);
+    assert_eq!(msg.msg_type, MSG_ERROR);
+    assert_eq!(msg.seq, 1);
+    let error = vsock_proto::decode_error(&msg.payload).unwrap();
+    assert!(error.contains("invalid environment variable name"));
+    assert!(!error.contains(secret));
 
     drop(host_stream);
     let _ = handle.join();
@@ -771,8 +954,18 @@ fn send_spawn_watch_buffered(
     command: &str,
     timeout_ms: u32,
 ) {
+    send_spawn_watch_buffered_with_env(stream, seq, command, &[], timeout_ms);
+}
+
+fn send_spawn_watch_buffered_with_env(
+    stream: &mut impl std::io::Write,
+    seq: u32,
+    command: &str,
+    env: &[(&str, &str)],
+    timeout_ms: u32,
+) {
     let payload =
-        vsock_proto::encode_spawn_watch(timeout_ms, command, &[], false, false, None).unwrap();
+        vsock_proto::encode_spawn_watch(timeout_ms, command, env, false, false, None).unwrap();
     let msg = vsock_proto::encode(MSG_SPAWN_WATCH, seq, &payload).unwrap();
     stream.write_all(&msg).unwrap();
 }
@@ -1048,6 +1241,32 @@ fn spawn_watch_buffered_timeout_zero_silent_child_is_cancelled_on_host_disconnec
     drop(host_stream);
     let _ = handle.join();
     wait_for_pid_exit(pid, "buffered spawn_watch host disconnect");
+}
+
+#[test]
+fn buffered_spawn_watch_large_env_payload_succeeds() {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let values = large_env_values();
+    let env = large_env_entries(&values);
+
+    let (guest_stream, mut host_stream) = StdUnixStream::pair().unwrap();
+    let handle = thread::spawn(move || {
+        let _ = handle_connection(guest_stream);
+    });
+    read_and_discard_message(&mut host_stream); // MSG_READY
+    host_stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    send_spawn_watch_buffered_with_env(&mut host_stream, 1, LARGE_ENV_COMMAND, &env, 5000);
+    let (_pid, code, stdout, stderr) = read_buffered_spawn_watch_result(&mut host_stream, 1);
+
+    assert_eq!(code, 0, "stderr: {}", String::from_utf8_lossy(&stderr));
+    assert_large_env_stdout(&stdout);
+
+    drop(host_stream);
+    let _ = handle.join();
 }
 
 /// Regression for #11077: when the host drops the vsock connection

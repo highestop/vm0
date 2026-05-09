@@ -10,7 +10,6 @@ import {
 import { authContext$, organizationAuthContext$ } from "../auth/auth-context";
 import { authRoute } from "../auth/auth-route";
 import { pathParamsOf, queryOf } from "../context/request";
-import { shadowCompareRoute } from "../context/shadow-compare";
 import { notFound } from "../../lib/error";
 import {
   zeroConnectorByType,
@@ -112,10 +111,7 @@ export const zeroConnectorsRoutes: readonly RouteEntry[] = [
   },
   {
     route: zeroConnectorScopeDiffContract.getScopeDiff,
-    handler: shadowCompareRoute({
-      route: zeroConnectorScopeDiffContract.getScopeDiff,
-      handler: authRoute(connectorReadAuth, getScopeDiffInner$),
-    }),
+    handler: authRoute(connectorReadAuth, getScopeDiffInner$),
   },
   {
     route: zeroConnectorsByTypeContract.get,

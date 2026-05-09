@@ -104,10 +104,7 @@ export const zeroConnectorsRoutes: readonly RouteEntry[] = [
   },
   {
     route: zeroConnectorsSearchContract.search,
-    handler: shadowCompareRoute({
-      route: zeroConnectorsSearchContract.search,
-      handler: authRoute({}, searchConnectorsInner$),
-    }),
+    handler: authRoute({}, searchConnectorsInner$),
   },
   {
     route: zeroConnectorsMainContract.list,

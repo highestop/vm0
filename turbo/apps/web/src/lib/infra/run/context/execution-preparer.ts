@@ -259,6 +259,7 @@ function buildPreparedContext(
     featureFlags: getAllFeatureStates({
       userId: context.userId,
       orgId: context.orgId,
+      overrides: context.featureSwitchOverrides,
     }),
 
     // Metadata

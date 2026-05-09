@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -172,6 +173,9 @@ enum ConnectionState {
 struct Shared {
     /// Serialises writes to the stream.
     writer: tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>,
+    /// Raw fd of the underlying socket, used to poison a connection after an
+    /// interrupted frame write. Ownership remains with the split stream halves.
+    fd: RawFd,
     /// Monotonically increasing sequence number (starts at 2, skips 0).
     /// Handshake uses seq=1 before Shared is created, so post-handshake
     /// sequences start at 2 to avoid collisions.
@@ -310,6 +314,30 @@ impl Drop for PendingBoundedOutputGuard {
     }
 }
 
+struct FrameWriteGuard {
+    shared: Option<Arc<Shared>>,
+}
+
+impl FrameWriteGuard {
+    fn new(shared: Arc<Shared>) -> Self {
+        Self {
+            shared: Some(shared),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.shared = None;
+    }
+}
+
+impl Drop for FrameWriteGuard {
+    fn drop(&mut self) {
+        if let Some(shared) = self.shared.take() {
+            shared.poison_connection();
+        }
+    }
+}
+
 impl Shared {
     /// Get next sequence number, skipping 0 (reserved for unsolicited messages).
     fn next_seq(&self) -> u32 {
@@ -370,6 +398,11 @@ impl Shared {
             drop(maps);
             self.exit_notify.notify_waiters();
         }
+    }
+
+    fn poison_connection(&self) {
+        let _ = nix::sys::socket::shutdown(self.fd, nix::sys::socket::Shutdown::Both);
+        self.close();
     }
 
     fn remove_pending(&self, seq: u32) {
@@ -686,7 +719,7 @@ async fn request_raw_on_shared(
 
     // The guard removes the pending entry on write failure, timeout, or
     // cancellation before reader_loop dispatches a response.
-    shared.writer.lock().await.write_all(&data).await?;
+    write_frame_on_shared(shared, &data).await?;
 
     // `rx` returns `Ok(msg)` when the reader dispatches a response and
     // `Err(RecvError)` when `close()` drops the `Connected` variant. The
@@ -703,6 +736,26 @@ async fn request_raw_on_shared(
             Err(io::Error::new(io::ErrorKind::TimedOut, "request timeout"))
         }
     }
+}
+
+async fn write_frame_on_shared(shared: &Arc<Shared>, data: &[u8]) -> io::Result<()> {
+    let mut writer = shared.writer.lock().await;
+    {
+        let guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(&*guard, ConnectionState::Closed { .. }) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "connection closed",
+            ));
+        }
+    }
+
+    // Declare after `writer` so cancellation drops the guard before the writer
+    // lock, preventing another request from writing before the poison close.
+    let mut write_guard = FrameWriteGuard::new(Arc::clone(shared));
+    writer.write_all(data).await?;
+    write_guard.disarm();
+    Ok(())
 }
 
 async fn exec_on_shared(
@@ -835,6 +888,7 @@ impl VsockHost {
 
         let shared = Arc::new(Shared {
             writer: tokio::sync::Mutex::new(write_half),
+            fd,
             seq: AtomicU32::new(2),
             state: std::sync::Mutex::new(ConnectionState::Connected {
                 pending: HashMap::new(),
@@ -1030,7 +1084,7 @@ impl VsockHost {
                 .then(|| PendingBoundedOutputGuard::new(Arc::clone(&self.shared), seq))
         });
 
-        self.shared.writer.lock().await.write_all(&data).await?;
+        write_frame_on_shared(&self.shared, &data).await?;
 
         let timeout = Duration::from_millis(request.timeout_ms as u64 + 5000);
         let resp = tokio::select! {
@@ -1376,10 +1430,42 @@ impl VsockHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::os::fd::AsRawFd;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Wake, Waker};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: std::sync::Arc<Self>) {}
+    }
+
+    fn noop_waker() -> Waker {
+        Waker::from(std::sync::Arc::new(NoopWake))
+    }
 
     fn make_pair() -> (UnixStream, UnixStream) {
         UnixStream::pair().unwrap()
+    }
+
+    fn set_send_buffer(stream: &UnixStream, size: nix::libc::c_int) -> io::Result<()> {
+        // SAFETY: setsockopt receives a valid socket fd and a pointer to a
+        // properly sized integer option value for the duration of the call.
+        let ret = unsafe {
+            nix::libc::setsockopt(
+                stream.as_raw_fd(),
+                nix::libc::SOL_SOCKET,
+                nix::libc::SO_SNDBUF,
+                (&size as *const nix::libc::c_int).cast(),
+                std::mem::size_of_val(&size) as nix::libc::socklen_t,
+            )
+        };
+        if ret < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// Perform mock guest handshake: send ready, receive ping, send pong.
@@ -2013,6 +2099,187 @@ mod tests {
         );
 
         release_guest.notify_one();
+    }
+
+    #[tokio::test]
+    async fn test_cancel_while_waiting_for_writer_lock_does_not_close_connection() {
+        let (host_stream, mut guest) = make_pair();
+
+        let guest_task = tokio::spawn(async move {
+            let mut decoder = Decoder::new();
+            mock_handshake(&mut guest, &mut decoder).await;
+
+            let mut buf = [0u8; 4096];
+            let n = guest.read(&mut buf).await.unwrap();
+            let msgs = decoder.decode(&buf[..n]).unwrap();
+            assert_eq!(msgs.len(), 1);
+            assert_eq!(msgs[0].msg_type, MSG_EXEC);
+            let decoded = vsock_proto::decode_exec(&msgs[0].payload).unwrap();
+            assert_eq!(decoded.command, "after-cancel");
+
+            let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
+            let resp = vsock_proto::encode(MSG_EXEC_RESULT, msgs[0].seq, &payload).unwrap();
+            guest.write_all(&resp).await.unwrap();
+        });
+
+        let host = std::sync::Arc::new(host_from_stream(host_stream).await.unwrap());
+        let writer_guard = host.shared.writer.lock().await;
+
+        let request_host = std::sync::Arc::clone(&host);
+        let mut request =
+            Box::pin(async move { request_host.exec("blocked-on-lock", 5000, &[], false).await });
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(
+            Future::poll(Pin::as_mut(&mut request), &mut cx),
+            Poll::Pending
+        ));
+        assert_eq!(registration_counts(&host), (1, 0, 0, 0));
+        drop(request);
+        assert_eq!(registration_counts(&host), (0, 0, 0, 0));
+
+        drop(writer_guard);
+
+        let result = host.exec("after-cancel", 5000, &[], false).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, b"ok");
+        guest_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cancel_during_frame_write_closes_connection() {
+        let (host_stream, mut guest) = make_pair();
+        set_send_buffer(&host_stream, 4096).unwrap();
+
+        let frame_started = std::sync::Arc::new(Notify::new());
+        let release_guest = std::sync::Arc::new(Notify::new());
+
+        let guest_task = {
+            let frame_started = std::sync::Arc::clone(&frame_started);
+            let release_guest = std::sync::Arc::clone(&release_guest);
+            tokio::spawn(async move {
+                let mut decoder = Decoder::new();
+                mock_handshake(&mut guest, &mut decoder).await;
+
+                let mut buf = [0u8; 1024];
+                let mut n = 0usize;
+                while n < vsock_proto::HEADER_SIZE {
+                    let read = guest.read(&mut buf[n..]).await.unwrap();
+                    assert_ne!(read, 0, "connection closed before frame header arrived");
+                    n += read;
+                }
+                let frame_body_len =
+                    u32::from_be_bytes(buf[..vsock_proto::HEADER_SIZE].try_into().unwrap())
+                        as usize;
+                assert!(
+                    frame_body_len + vsock_proto::HEADER_SIZE > n,
+                    "guest should observe only a partial frame before it stops reading",
+                );
+                frame_started.notify_one();
+
+                release_guest.notified().await;
+            })
+        };
+
+        let host = std::sync::Arc::new(host_from_stream(host_stream).await.unwrap());
+        let task_host = std::sync::Arc::clone(&host);
+        let task = tokio::spawn(async move {
+            let content = vec![b'x'; 8 * 1024 * 1024];
+            task_host
+                .write_file("/tmp/large-frame.bin", &content, false)
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), frame_started.notified())
+            .await
+            .expect("guest should receive the beginning of the large frame");
+
+        task.abort();
+        let _ = task.await;
+
+        host.wait_until_closed(Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(registration_counts(&host), (0, 0, 0, 0));
+
+        let err = host
+            .exec("after-cancelled-write", 5000, &[], false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
+
+        release_guest.notify_one();
+        guest_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cancel_during_bounded_exec_frame_write_cleans_up_registrations() {
+        let (host_stream, mut guest) = make_pair();
+        set_send_buffer(&host_stream, 4096).unwrap();
+
+        let frame_started = std::sync::Arc::new(Notify::new());
+        let release_guest = std::sync::Arc::new(Notify::new());
+
+        let guest_task = {
+            let frame_started = std::sync::Arc::clone(&frame_started);
+            let release_guest = std::sync::Arc::clone(&release_guest);
+            tokio::spawn(async move {
+                let mut decoder = Decoder::new();
+                mock_handshake(&mut guest, &mut decoder).await;
+
+                let mut buf = [0u8; 1024];
+                let mut n = 0usize;
+                while n < vsock_proto::HEADER_SIZE {
+                    let read = guest.read(&mut buf[n..]).await.unwrap();
+                    assert_ne!(read, 0, "connection closed before frame header arrived");
+                    n += read;
+                }
+                let frame_body_len =
+                    u32::from_be_bytes(buf[..vsock_proto::HEADER_SIZE].try_into().unwrap())
+                        as usize;
+                assert!(
+                    frame_body_len + vsock_proto::HEADER_SIZE > n,
+                    "guest should observe only a partial frame before it stops reading",
+                );
+                frame_started.notify_one();
+
+                release_guest.notified().await;
+            })
+        };
+
+        let host = std::sync::Arc::new(host_from_stream(host_stream).await.unwrap());
+        let task_host = std::sync::Arc::clone(&host);
+        let task = tokio::spawn(async move {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let stdin = vec![b'x'; 8 * 1024 * 1024];
+            let request = BoundedExecRequest {
+                command: "large-stdin",
+                timeout_ms: 5000,
+                env: &[],
+                sudo: false,
+                stdin: Some(&stdin),
+                stdout_limit_bytes: 1024,
+                stderr_limit_bytes: 1024,
+                stream: Some(bounded_stream_request(tx)),
+            };
+            task_host.bounded_exec(&request).await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), frame_started.notified())
+            .await
+            .expect("guest should receive the beginning of the bounded exec frame");
+
+        assert_eq!(registration_counts(&host), (1, 0, 0, 1));
+        task.abort();
+        let _ = task.await;
+
+        host.wait_until_closed(Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(registration_counts(&host), (0, 0, 0, 0));
+
+        release_guest.notify_one();
+        guest_task.await.unwrap();
     }
 
     #[tokio::test]

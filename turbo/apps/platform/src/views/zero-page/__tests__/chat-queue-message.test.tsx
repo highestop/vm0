@@ -7,7 +7,11 @@ import {
   type PendingMessage,
 } from "@vm0/api-contracts/contracts/chat-threads";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
-import { detachedSetupPage, fill } from "../../../__tests__/page-helper.ts";
+import {
+  detachedSetupPage,
+  fill,
+  click,
+} from "../../../__tests__/page-helper.ts";
 import { createDeferredPromise } from "../../../signals/utils.ts";
 import { changeChatPendingMessage } from "../../../mocks/mock-helpers.ts";
 import { server } from "../../../mocks/server.ts";
@@ -424,6 +428,57 @@ describe("chat pending message queue", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Recall queued message")).not.toBeDisabled();
+    });
+  });
+
+  it("clicking Stop with a queued message recalls the message to draft and cancels the run", async () => {
+    const user = userEvent.setup({ delay: null });
+    let recallCalled = false;
+    const ctrl = mockChatLifecycle({
+      onPendingMessageRecall: () => {
+        recallCalled = true;
+      },
+    });
+
+    detachedSetupPage({
+      context,
+      path: CHAT_PATH,
+      featureSwitches: { [FeatureSwitchKey.QueueMessage]: true },
+    });
+
+    // Start a run and queue a message
+    let textarea = await startActiveRun(user);
+    await fill(textarea, "queued content");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+        "queued content",
+      );
+    });
+
+    // Input is empty again → Stop button visible
+    await waitFor(() => {
+      expect(screen.getByLabelText("Stop")).toBeInTheDocument();
+    });
+
+    // Click Stop — should recall the queue to draft and cancel the run
+    click(screen.getByLabelText("Stop"));
+
+    // Recall fires optimistically: queued card gone, draft repopulated
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+    textarea = screen.getByPlaceholderText(
+      /Type your next message/,
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("queued content");
+    expect(recallCalled).toBeTruthy();
+
+    // Cancel also fires: run ends and Send button is restored
+    ctrl.cancelRun();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Send")).toBeInTheDocument();
     });
   });
 });

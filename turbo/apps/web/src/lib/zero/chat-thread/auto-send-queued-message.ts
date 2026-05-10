@@ -1,12 +1,15 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { agentRuns } from "@vm0/db/schema/agent-run";
 import { chatMessages } from "@vm0/db/schema/chat-message";
 import { chatThreads } from "@vm0/db/schema/chat-thread";
 import { initServices } from "../../init-services";
 import {
+  GOAL_DONE_SENTINEL,
   buildWebAttachFilesPrompt,
+  buildWebChatGoalPrompt,
   buildWebChatIncompleteContext,
   buildWebChatPrompt,
+  type WebChatGoalContext,
   type WebChatIncompleteRound,
 } from "../integration-prompt";
 import { createZeroRun, fetchZeroAgentForRun } from "../zero-run-service";
@@ -24,6 +27,10 @@ import { resolveAttachFileUrls } from "./chat-thread-service";
 
 const log = logger("auto-send-queued");
 
+function containsGoalDoneSentinel(content: string | null): boolean {
+  return content !== null && content.includes(GOAL_DONE_SENTINEL);
+}
+
 type QueuedUserMessage = {
   id: string;
   content: string | null;
@@ -32,6 +39,8 @@ type QueuedUserMessage = {
   modelProviderType: string | null;
   modelProviderCredentialScope: string | null;
   selectedModel: string | null;
+  goalRemainingTurns: number | null;
+  goalOriginMessageId: string | null;
 };
 
 async function nextQueuedUserMessage(
@@ -46,6 +55,8 @@ async function nextQueuedUserMessage(
       modelProviderType: chatThreads.modelProviderType,
       modelProviderCredentialScope: chatThreads.modelProviderCredentialScope,
       selectedModel: chatThreads.selectedModel,
+      goalRemainingTurns: chatMessages.goalRemainingTurns,
+      goalOriginMessageId: chatMessages.goalOriginMessageId,
     })
     .from(chatMessages)
     .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.chatThreadId))
@@ -70,12 +81,125 @@ async function nextQueuedUserMessage(
   return message ?? null;
 }
 
-function buildAppendSystemPrompt(incompleteContext: string): string {
-  return [buildWebChatPrompt(), incompleteContext]
+function buildAppendSystemPrompt(
+  incompleteContext: string,
+  goalContext: WebChatGoalContext | null,
+): string {
+  return [
+    buildWebChatPrompt(),
+    goalContext ? buildWebChatGoalPrompt(goalContext) : "",
+    incompleteContext,
+  ]
     .filter((part) => {
       return typeof part === "string" && part.length > 0;
     })
     .join("\n\n");
+}
+
+/**
+ * Goal-mode continuation. Inspects the just-completed run to decide whether
+ * to enqueue another turn against the same `/go` chain. The continuation
+ * row is a verbatim copy of the triggering user row (same content body,
+ * same attachments, same goal_origin_message_id) with the budget decremented;
+ * inserting it with `run_id = NULL` lets the existing FIFO picker (above)
+ * claim it on the next iteration.
+ *
+ * Stop conditions, in order:
+ *   1. The callback's terminal status is not `completed` — any error/cancel
+ *      ends the chain. No retry. The callback parameter is the source of
+ *      truth: by the time this runs the run row may already have been
+ *      updated, but the callback we're handling carries the authoritative
+ *      terminal verdict for this delivery.
+ *   2. The triggering message is not goal-driven (no goal_remaining_turns).
+ *   3. A row with `interrupts_run_id = <runId>` exists — the user explicitly
+ *      stopped the run.
+ *   4. Any assistant message of the run contains `[GOAL_DONE]` — the agent
+ *      voluntarily declared completion.
+ *   5. `goal_remaining_turns <= 1` for the just-completed turn — budget spent.
+ */
+async function maybeInsertGoalContinuation(
+  runId: string,
+  terminalStatus: "completed" | "failed",
+): Promise<void> {
+  if (terminalStatus !== "completed") {
+    return;
+  }
+
+  const [trigger] = await globalThis.services.db
+    .select({
+      threadId: chatMessages.chatThreadId,
+      content: chatMessages.content,
+      attachFiles: chatMessages.attachFiles,
+      goalRemainingTurns: chatMessages.goalRemainingTurns,
+      goalOriginMessageId: chatMessages.goalOriginMessageId,
+    })
+    .from(chatMessages)
+    .where(and(eq(chatMessages.runId, runId), eq(chatMessages.role, "user")))
+    .limit(1);
+
+  if (!trigger) {
+    return;
+  }
+  if (
+    trigger.goalRemainingTurns === null ||
+    trigger.goalOriginMessageId === null
+  ) {
+    return;
+  }
+  if (trigger.goalRemainingTurns <= 1) {
+    return;
+  }
+
+  const [interrupt] = await globalThis.services.db
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(eq(chatMessages.interruptsRunId, runId))
+    .limit(1);
+  if (interrupt) {
+    return;
+  }
+
+  // Sentinel scope: only the *last* assistant message of the run, matched in
+  // application code (not SQL `LIKE`) so future tightening (e.g. last line
+  // only, end-of-message anchor) lives in one place. Casual mentions of the
+  // literal in earlier turns of the same run no longer false-positive.
+  const [lastAssistant] = await globalThis.services.db
+    .select({ content: chatMessages.content })
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.runId, runId),
+        eq(chatMessages.role, "assistant"),
+        isNotNull(chatMessages.content),
+      ),
+    )
+    .orderBy(desc(chatMessages.sequenceNumber), desc(chatMessages.createdAt))
+    .limit(1);
+  if (lastAssistant && containsGoalDoneSentinel(lastAssistant.content)) {
+    log.info("Goal chain stopped by sentinel", {
+      runId,
+      goalOriginMessageId: trigger.goalOriginMessageId,
+    });
+    return;
+  }
+
+  // Idempotency: `goalContinuationOfRunId` is unique-indexed. If this callback
+  // fires twice for the same run (at-least-once delivery / retry), the second
+  // insert hits the unique constraint and `onConflictDoNothing` makes it a
+  // no-op — no duplicate continuation rows.
+  await globalThis.services.db
+    .insert(chatMessages)
+    .values({
+      chatThreadId: trigger.threadId,
+      role: "user",
+      content: trigger.content,
+      runId: null,
+      attachFiles: trigger.attachFiles,
+      goalRemainingTurns: trigger.goalRemainingTurns - 1,
+      goalOriginMessageId: trigger.goalOriginMessageId,
+      goalContinuationOfRunId: runId,
+    })
+    .onConflictDoNothing({ target: chatMessages.goalContinuationOfRunId });
 }
 
 function groupIncompleteRoundsByRunId(
@@ -116,15 +240,23 @@ export async function autoSendQueuedMessageOnRunComplete(input: {
   runId: string;
   agentId: string;
   apiStartTime: number;
+  terminalStatus: "completed" | "failed";
 }): Promise<void> {
   initServices();
-  const { runId, agentId, apiStartTime } = input;
+  const { runId, agentId, apiStartTime, terminalStatus } = input;
 
   const chatThread = await getChatThreadIdForRun(runId);
   if (!chatThread) {
     return;
   }
   const { chatThreadId: threadId, userId } = chatThread;
+
+  // If the just-completed run was driven by a `/go` and the chain is still
+  // alive (run succeeded, no interrupt, no sentinel, budget remaining),
+  // enqueue the next continuation row before consulting the FIFO picker.
+  // The continuation is a fresh queued user message and will be picked up
+  // immediately after — same code path as a real user-typed message.
+  await maybeInsertGoalContinuation(runId, terminalStatus);
 
   const queuedMessage = await nextQueuedUserMessage(threadId);
   if (!queuedMessage) {
@@ -177,6 +309,11 @@ export async function autoSendQueuedMessageOnRunComplete(input: {
     payload: { threadId, agentId },
   };
 
+  const goalContext: WebChatGoalContext | null =
+    queuedMessage.goalRemainingTurns !== null
+      ? { remainingTurns: queuedMessage.goalRemainingTurns }
+      : null;
+
   const run = await createZeroRun({
     userId,
     prompt: fullPrompt,
@@ -184,7 +321,7 @@ export async function autoSendQueuedMessageOnRunComplete(input: {
     sessionId,
     triggerSource: "web",
     apiStartTime,
-    appendSystemPrompt: buildAppendSystemPrompt(incompleteContext),
+    appendSystemPrompt: buildAppendSystemPrompt(incompleteContext, goalContext),
     callbacks: [chatCallback],
     chatThreadId: threadId,
     modelProvider: queuedMessage.modelProviderType ?? undefined,
@@ -204,6 +341,11 @@ export async function autoSendQueuedMessageOnRunComplete(input: {
       runId: run.runId,
       attachFiles: queuedMessage.attachFiles,
       revokesMessageId: queuedMessage.id,
+      // Carry the goal columns onto the claim row so the next run-completion
+      // callback can detect the chain via this row (since the claim row is
+      // the one whose `runId` matches the just-completed run).
+      goalRemainingTurns: queuedMessage.goalRemainingTurns,
+      goalOriginMessageId: queuedMessage.goalOriginMessageId,
     })
     .onConflictDoNothing({ target: chatMessages.revokesMessageId })
     .returning({ id: chatMessages.id });

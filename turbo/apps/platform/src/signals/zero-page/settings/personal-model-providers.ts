@@ -26,6 +26,11 @@ import {
   orgModelPolicies$,
   updateOrgModelPolicies$,
 } from "../../external/org-model-policies.ts";
+import {
+  hasTokenInputValue,
+  sanitizeTokenInput,
+  sanitizeTokenInputRecord,
+} from "./token-input.ts";
 
 // ---------------------------------------------------------------------------
 // Codex auth.json paste dialog (personal scope, mirrors org-side dialog from
@@ -269,7 +274,7 @@ function validatePersonalProviderForm(params: {
       if (config.derived) {
         continue;
       }
-      if (config.required && !formValues.secrets[key]?.trim()) {
+      if (config.required && !hasTokenInputValue(formValues.secrets[key])) {
         errors[key] = `${config.label} is required`;
       }
     }
@@ -277,7 +282,7 @@ function validatePersonalProviderForm(params: {
   }
 
   if ((mode === "add" || requireSecret) && getSecretNameForType(providerType)) {
-    if (!formValues.secret.trim()) {
+    if (!hasTokenInputValue(formValues.secret)) {
       errors["secret"] =
         providerType === "claude-code-oauth-token"
           ? "OAuth token is required"
@@ -297,9 +302,11 @@ function buildPersonalProviderRequest(
 
   if (hasAuthMethods(providerType)) {
     request.authMethod = formValues.authMethod;
-    request.secrets = formValues.secrets;
-  } else if (formValues.secret.trim()) {
-    request.secret = formValues.secret;
+    request.secrets = sanitizeTokenInputRecord(formValues.secrets, {
+      preserveWhitespaceKeys: new Set(["CODEX_AUTH_JSON"]),
+    });
+  } else if (hasTokenInputValue(formValues.secret)) {
+    request.secret = sanitizeTokenInput(formValues.secret);
   }
 
   if (

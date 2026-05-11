@@ -9,6 +9,7 @@ import { initServices } from "../../../../../src/lib/init-services";
 import { getUserId } from "../../../../../src/lib/auth/get-auth-context";
 import {
   getChatThread,
+  getFirstRunModelPinForThread,
   getChatThreadMessages,
   getActiveRunsForThread,
   updateChatThreadDraft,
@@ -18,6 +19,7 @@ import {
   getLatestRunProviderTypeForThread,
   publishThreadListChanged,
 } from "../../../../../src/lib/zero/chat-thread/chat-message-service";
+import { isModelFirstModelProviderEnabled } from "../../../../../src/lib/zero/model-policy/model-first-route-service";
 import { isNotFound } from "@vm0/api-services/errors";
 
 const chatThreadIdParamSchema = z.string().uuid();
@@ -32,6 +34,61 @@ function chatThreadNotFoundResponse() {
     body: {
       error: { message: "Chat thread not found", code: "NOT_FOUND" },
     },
+  };
+}
+
+type ChatThreadRecord = Awaited<ReturnType<typeof getChatThread>>;
+type ModelFirstRunPin = Awaited<
+  ReturnType<typeof getFirstRunModelPinForThread>
+>;
+
+async function getModelFirstRunPinForThreadDetail(
+  thread: ChatThreadRecord,
+  threadId: string,
+  userId: string,
+): Promise<ModelFirstRunPin> {
+  if (!thread.orgId || thread.selectedModel !== null) {
+    return null;
+  }
+  const enabled = await isModelFirstModelProviderEnabled(thread.orgId, userId);
+  if (!enabled) {
+    return null;
+  }
+  return getFirstRunModelPinForThread(threadId);
+}
+
+function parseThreadProviderType(value: string | null) {
+  if (value === null) {
+    return null;
+  }
+  return modelProviderTypeSchema.safeParse(value).data ?? null;
+}
+
+function parseThreadCredentialScope(value: string | null) {
+  if (value === null) {
+    return null;
+  }
+  return modelProviderCredentialScopeSchema.safeParse(value).data ?? null;
+}
+
+function resolveThreadModelFields(
+  thread: ChatThreadRecord,
+  modelFirstRunPin: ModelFirstRunPin,
+) {
+  const modelProviderCredentialScope =
+    modelFirstRunPin?.modelProviderCredentialScope ??
+    thread.modelProviderCredentialScope;
+  const modelProviderType =
+    modelFirstRunPin?.modelProviderType ?? thread.modelProviderType;
+
+  return {
+    modelProviderId:
+      modelFirstRunPin?.modelProviderId ?? thread.modelProviderId,
+    modelProviderType: parseThreadProviderType(modelProviderType),
+    modelProviderCredentialScope: parseThreadCredentialScope(
+      modelProviderCredentialScope,
+    ),
+    selectedModel: modelFirstRunPin?.selectedModel ?? thread.selectedModel,
   };
 }
 
@@ -59,10 +116,12 @@ const router = tsr.router(chatThreadByIdContract, {
         { chatMessages, latestSessionId },
         activeRuns,
         latestRunProviderTypeRaw,
+        modelFirstRunPin,
       ] = await Promise.all([
         getChatThreadMessages(params.id, userId),
         getActiveRunsForThread(params.id),
         getLatestRunProviderTypeForThread(params.id),
+        getModelFirstRunPinForThreadDetail(thread, params.id, userId),
       ]);
       const activeRunIds = activeRuns.map((r) => {
         return r.id;
@@ -74,17 +133,10 @@ const router = tsr.router(chatThreadByIdContract, {
           ? null
           : (modelProviderTypeSchema.safeParse(latestRunProviderTypeRaw).data ??
             null);
-      const threadModelProviderType =
-        thread.modelProviderType === null
-          ? null
-          : (modelProviderTypeSchema.safeParse(thread.modelProviderType).data ??
-            null);
-      const threadModelProviderCredentialScope =
-        thread.modelProviderCredentialScope === null
-          ? null
-          : (modelProviderCredentialScopeSchema.safeParse(
-              thread.modelProviderCredentialScope,
-            ).data ?? null);
+      const threadModelFields = resolveThreadModelFields(
+        thread,
+        modelFirstRunPin,
+      );
 
       return {
         status: 200 as const,
@@ -102,10 +154,7 @@ const router = tsr.router(chatThreadByIdContract, {
           updatedAt: thread.updatedAt.toISOString(),
           draftContent: thread.draftContent,
           draftAttachments: thread.draftAttachments,
-          modelProviderId: thread.modelProviderId,
-          modelProviderType: threadModelProviderType,
-          modelProviderCredentialScope: threadModelProviderCredentialScope,
-          selectedModel: thread.selectedModel,
+          ...threadModelFields,
           renamedAt: thread.renamedAt ? thread.renamedAt.toISOString() : null,
         },
       };

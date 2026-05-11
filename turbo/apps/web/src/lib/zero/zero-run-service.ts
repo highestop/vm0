@@ -7,6 +7,7 @@ import {
   getSkillStorageName,
 } from "@vm0/core/storage-names";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
+import { isFeatureEnabled } from "@vm0/core/feature-switch";
 import { orgTierSchema } from "@vm0/api-contracts/contracts/orgs";
 import { resolveFirewallPolicies } from "@vm0/connectors/firewalls";
 import {
@@ -206,6 +207,13 @@ export interface CreateZeroRunParams {
    * email, github) have no session claims to project.
    */
   userProfile?: { email: string; name: string | null };
+  /**
+   * Model-first only: honor this request's selectedModelOverride as an
+   * explicit user choice. Other stored agent/schedule overrides are ignored
+   * under model-first so routing falls back to the user's model preference, then the
+   * workspace default policy.
+   */
+  explicitModelFirstModelSelection?: boolean;
 }
 
 /**
@@ -285,14 +293,31 @@ function buildSystemSkillVolumes(
 function resolveEffectiveModel(
   params: Pick<
     CreateZeroRunParams,
-    "modelProviderId" | "modelProviderCredentialScope" | "selectedModelOverride"
+    | "modelProviderId"
+    | "modelProviderCredentialScope"
+    | "selectedModelOverride"
+    | "explicitModelFirstModelSelection"
   >,
   row?: ZeroAgentForRun | null,
+  options?: { modelFirstEnabled?: boolean },
 ): {
   modelProviderId?: string;
   modelProviderCredentialScope?: string;
   selectedModelOverride?: string;
 } {
+  if (options?.modelFirstEnabled) {
+    return params.explicitModelFirstModelSelection
+      ? {
+          modelProviderId: params.modelProviderId ?? undefined,
+          modelProviderCredentialScope: params.modelProviderCredentialScope,
+          selectedModelOverride: params.selectedModelOverride ?? undefined,
+        }
+      : {
+          modelProviderCredentialScope: undefined,
+          selectedModelOverride: undefined,
+        };
+  }
+
   return {
     modelProviderId:
       params.modelProviderId ?? row?.modelProviderId ?? undefined,
@@ -648,7 +673,17 @@ async function createZeroRunRecord(
     userInfo,
     params.appendSystemPrompt,
   );
-  const effectiveModel = resolveEffectiveModel(params, row);
+  const modelFirstEnabled = isFeatureEnabled(
+    FeatureSwitchKey.ModelFirstModelProvider,
+    {
+      orgId: resolved.orgId,
+      userId: params.userId,
+      overrides: featureOverrides,
+    },
+  );
+  const effectiveModel = resolveEffectiveModel(params, row, {
+    modelFirstEnabled,
+  });
 
   // ── Round 3: Pre-flight checks (need compose content) ───────────────
   authorizeCompose(params.userId, resolved.orgId, {

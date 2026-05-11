@@ -347,6 +347,7 @@ function buildZeroRunMetadata(
 interface InsertRunWithAdvisoryLockParams {
   resolved: Awaited<ReturnType<typeof resolveStartRunCompose>>;
   runParams: CreateRunParams;
+  runFramework: SupportedFramework;
   orgTier: ReturnType<typeof orgTierSchema.parse>;
   composeId: string;
   params: CreateZeroRunParams;
@@ -371,6 +372,7 @@ async function insertRunWithAdvisoryLock(
   const {
     resolved,
     runParams,
+    runFramework,
     orgTier,
     composeId,
     params,
@@ -407,7 +409,7 @@ async function insertRunWithAdvisoryLock(
           additionalVolumes: runParams.additionalVolumes,
           resumedFromCheckpointId: runParams.resumedFromCheckpointId,
           sessionId: runParams.sessionId,
-          artifacts: [buildAutoMemoryArtifact()],
+          artifacts: [buildAutoMemoryArtifact(runFramework)],
         });
       });
       emit(CHAT_REQUEST_OPS.create_run_insert_run_record, insertT.ms);
@@ -424,6 +426,7 @@ async function insertRunWithAdvisoryLock(
     if (isConcurrentRunLimit(error)) {
       let persistDurationMs: number | undefined;
       const queueResult = await enqueueRun(runParams, {
+        runtimeFramework: runFramework,
         zeroRunMetadata,
         onZeroRunMetadataPersisted: (durationMs) => {
           persistDurationMs = durationMs;
@@ -799,6 +802,7 @@ async function createZeroRunRecord(
   const lockResult = await insertRunWithAdvisoryLock({
     resolved,
     runParams,
+    runFramework,
     orgTier,
     composeId: resolved.composeId,
     params,

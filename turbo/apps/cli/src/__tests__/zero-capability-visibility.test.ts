@@ -27,6 +27,7 @@ function buildCommands(): Command[] {
     new Command("whoami"),
     new Command("built-in"),
     new Command("web"),
+    new Command("remote-agent"),
   ];
 }
 
@@ -148,6 +149,7 @@ describe("registerZeroCommands", () => {
       "telegram",
       "variable",
       "built-in",
+      "remote-agent",
     ]);
   });
 
@@ -297,6 +299,32 @@ describe("registerZeroCommands", () => {
     expect(visibleCommandNames(prog)).toContain("whoami");
   });
 
+  it("should show remote-agent when remote-agent:read capability is present", () => {
+    const token = buildZeroToken({
+      scope: "zero",
+      capabilities: ["remote-agent:read"],
+    });
+    vi.stubEnv("ZERO_TOKEN", token);
+
+    const prog = buildProgram();
+
+    expect(visibleCommandNames(prog)).toContain("remote-agent");
+    expect(visibleCommandNames(prog)).toContain("whoami");
+  });
+
+  it("should show remote-agent when remote-agent:write capability is present", () => {
+    const token = buildZeroToken({
+      scope: "zero",
+      capabilities: ["remote-agent:write"],
+    });
+    vi.stubEnv("ZERO_TOKEN", token);
+
+    const prog = buildProgram();
+
+    expect(visibleCommandNames(prog)).toContain("remote-agent");
+    expect(visibleCommandNames(prog)).toContain("whoami");
+  });
+
   it("should hide logs when agent-run:read capability is missing", () => {
     const token = buildZeroToken({
       scope: "zero",
@@ -319,6 +347,18 @@ describe("registerZeroCommands", () => {
     const prog = buildProgram();
 
     expect(hiddenCommandNames(prog)).toContain("run");
+  });
+
+  it("should hide remote-agent when remote-agent capabilities are missing", () => {
+    const token = buildZeroToken({
+      scope: "zero",
+      capabilities: ["agent-run:read", "agent-run:write"],
+    });
+    vi.stubEnv("ZERO_TOKEN", token);
+
+    const prog = buildProgram();
+
+    expect(hiddenCommandNames(prog)).toContain("remote-agent");
   });
 
   it("should hide agent when agent:read capability is missing", () => {

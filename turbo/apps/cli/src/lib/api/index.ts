@@ -188,6 +188,19 @@ export {
   getComputerUseHost,
 } from "./domains/zero-computer-use";
 
+// Domain modules - Zero Remote Agent
+export {
+  claimNextRemoteAgentHostJob,
+  completeRemoteAgentHostJob,
+  createRemoteAgentRun,
+  createRemoteAgentHostRealtimeSubscription,
+  deleteRemoteAgentHost,
+  getRemoteAgentRun,
+  listRemoteAgentHosts,
+  startRemoteAgentHost,
+  sendRemoteAgentHeartbeat,
+} from "./domains/zero-remote-agent";
+
 // Domain modules - Web
 export {
   downloadWebFile,

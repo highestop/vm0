@@ -2535,6 +2535,41 @@
       "when": 1778472488613,
       "tag": "0361_black_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 362,
+      "version": "7",
+      "when": 1778483690749,
+      "tag": "0362_lowly_valeria_richards",
+      "breakpoints": true
+    },
+    {
+      "idx": 363,
+      "version": "7",
+      "when": 1778484855147,
+      "tag": "0363_perfect_red_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 364,
+      "version": "7",
+      "when": 1778487383650,
+      "tag": "0364_productive_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 365,
+      "version": "7",
+      "when": 1778495784188,
+      "tag": "0365_remote_agent_job_backend_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 366,
+      "version": "7",
+      "when": 1778495917272,
+      "tag": "0366_remote_agent_job_host_nullable",
+      "breakpoints": true
     }
   ]
 }

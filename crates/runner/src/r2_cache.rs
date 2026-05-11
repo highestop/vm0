@@ -11,7 +11,9 @@
 //!
 //! 1. `runner build` computes a `template_hash` for the shared R2 object and
 //!    a separate `rootfs_hash` for local images.
-//! 2. `--warm-rootfs-cache` ensures only the template R2 object exists.
+//! 2. `--warm-rootfs-cache` ensures the template R2 object exists. Existing
+//!    objects are checked with HEAD only; normal builds still validate the
+//!    archive before using it.
 //! 3. Normal builds materialize the template object into a per-attempt local
 //!    file (or build/upload it on miss), move the verified template into
 //!    `rootfs.ext4.staging`, customize the staging image locally, verify it,
@@ -489,6 +491,12 @@ impl R2ImageCache {
     ) -> Result<(), R2Error> {
         let key = key_for_template_hash(hash);
         self.upload_key(&key, &[rootfs.to_path_buf()], force).await
+    }
+
+    /// Returns `Ok(true)` if the shared template object exists.
+    pub async fn template_exists(&self, hash: &str) -> Result<bool, R2Error> {
+        let key = key_for_template_hash(hash);
+        self.exists_key(&key).await
     }
 
     async fn upload_key(&self, key: &str, files: &[PathBuf], force: bool) -> Result<(), R2Error> {

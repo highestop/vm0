@@ -878,16 +878,44 @@ async fn ensure_rootfs_under_lock(
 }
 
 async fn ensure_template_cached_under_lock(input: &TemplateInput<'_>) -> RunnerResult<()> {
-    input.cache.as_cache().ok_or_else(|| {
+    let mut scripts = RootfsScripts::new();
+    ensure_template_cached_under_lock_with_scripts(input, &mut scripts).await
+}
+
+async fn ensure_template_cached_under_lock_with_scripts(
+    input: &TemplateInput<'_>,
+    scripts: &mut RootfsScripts,
+) -> RunnerResult<()> {
+    let cache = input.cache.as_cache().ok_or_else(|| {
         RunnerError::Internal("--warm-rootfs-cache requires R2 template cache".into())
     })?;
-    let mut scripts = RootfsScripts::new();
-    let work_dir_path = scripts.path().await?;
-    // Keep warm-up staging on the runner image volume, not the system temp
-    // filesystem. Even a cache hit downloads a full template for validation,
-    // and /tmp may be much smaller than the runner data disk.
+
     let warm_parent = template_warm_parent_dir(input.paths, input.template_hash);
     cleanup_template_warm_parent(&warm_parent).await?;
+    remove_empty_dir_if_exists(&warm_parent).await?;
+
+    match cache.template_exists(input.template_hash).await {
+        Ok(true) => {
+            tracing::info!("[OK] template already in R2: {}", input.template_hash);
+            return Ok(());
+        }
+        Ok(false) => {
+            tracing::info!(
+                "R2 template cache miss for {} — building locally",
+                input.template_hash
+            );
+        }
+        Err(e) => {
+            return Err(RunnerError::Internal(format!(
+                "R2 template HEAD failed while warming cache: {e}"
+            )));
+        }
+    }
+
+    let work_dir_path = scripts.path().await?;
+    // Keep warm-up staging on the runner image volume, not the system temp
+    // filesystem. A cache miss builds a full template image before uploading,
+    // and /tmp may be much smaller than the runner data disk.
     let warm_dir = template_attempt_dir(&warm_parent, TEMPLATE_WARM_ATTEMPT_DIR_PREFIX);
 
     let result = materialize_template_from_r2_or_build(
@@ -2901,6 +2929,146 @@ exit 1
         assert!(
             !work_dir.join("build-template-called").exists(),
             "required download failure must fail before local rebuild"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_cache_existing_remote_uses_head_without_download_or_build() {
+        use aws_sdk_s3::Client;
+        use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::HomePaths::with_root(dir.path().to_path_buf());
+        let head = mock!(Client::head_object)
+            .match_requests(|req| {
+                req.bucket() == Some("test-bucket")
+                    && req.key() == Some("runner-templates/test-template-hash.tar.zst")
+            })
+            .then_output(|| HeadObjectOutput::builder().build());
+        let cache = mock_r2_cache(&[&head]);
+        let input = template_input(&home, TemplateCache::Required(&cache));
+
+        ensure_template_cached_under_lock(&input).await.unwrap();
+
+        assert_eq!(head.num_calls(), 1);
+        assert!(
+            !template_warm_parent_dir(&home, "test-template-hash").exists(),
+            "warm cache hit should not create local template staging"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_cache_head_hit_cleans_stale_local_attempts() {
+        use aws_sdk_s3::Client;
+        use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::HomePaths::with_root(dir.path().to_path_buf());
+        let warm_parent = template_warm_parent_dir(&home, "test-template-hash");
+        let stale_attempt = template_attempt_dir(&warm_parent, TEMPLATE_WARM_ATTEMPT_DIR_PREFIX);
+        tokio::fs::create_dir_all(&stale_attempt).await.unwrap();
+        tokio::fs::write(stale_attempt.join(TEMPLATE_FILE), b"stale")
+            .await
+            .unwrap();
+        let head = mock!(Client::head_object)
+            .match_requests(|req| {
+                req.bucket() == Some("test-bucket")
+                    && req.key() == Some("runner-templates/test-template-hash.tar.zst")
+            })
+            .then_output(|| HeadObjectOutput::builder().build());
+        let cache = mock_r2_cache(&[&head]);
+        let input = template_input(&home, TemplateCache::Required(&cache));
+
+        ensure_template_cached_under_lock(&input).await.unwrap();
+
+        assert_eq!(head.num_calls(), 1);
+        assert!(
+            !warm_parent.exists(),
+            "warm HEAD hit must still clean stale local warm attempt residue"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_cache_head_request_failure_is_fatal() {
+        use aws_sdk_s3::Client;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::HomePaths::with_root(dir.path().to_path_buf());
+        let head = mock!(Client::head_object)
+            .sequence()
+            .http_status(
+                500,
+                Some("<Error><Code>InternalError</Code></Error>".into()),
+            )
+            .build();
+        let cache = mock_r2_cache(&[&head]);
+        let input = template_input(&home, TemplateCache::Required(&cache));
+
+        let err = ensure_template_cached_under_lock(&input).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("R2 template HEAD failed while warming cache"),
+            "got {err}"
+        );
+        assert!(
+            !template_warm_parent_dir(&home, "test-template-hash").exists(),
+            "warm cache should fail before local template staging when HEAD fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_cache_miss_builds_and_uploads_after_head_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::HomePaths::with_root(dir.path().to_path_buf());
+        let head = template_head_miss_rule();
+        let get = template_get_miss_rule();
+        let (create, upload_part, complete) = multipart_success_rules();
+        let cache = mock_r2_cache(&[&head, &get, &create, &upload_part, &complete]);
+        let input = template_input(&home, TemplateCache::Required(&cache));
+        let (mut scripts, _work_dir) = fake_rootfs_scripts().await;
+
+        ensure_template_cached_under_lock_with_scripts(&input, &mut scripts)
+            .await
+            .unwrap();
+
+        assert!(
+            head.num_calls() >= 2,
+            "warm miss should HEAD for warm preflight and upload dedup"
+        );
+        assert_eq!(get.num_calls(), 1);
+        assert_eq!(create.num_calls(), 1);
+        assert_eq!(upload_part.num_calls(), 1);
+        assert_eq!(complete.num_calls(), 1);
+        assert!(
+            !template_warm_parent_dir(&home, "test-template-hash").exists(),
+            "successful warm miss should clean local template staging"
+        );
+    }
+
+    #[tokio::test]
+    async fn warm_cache_head_miss_uses_template_uploaded_by_another_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::HomePaths::with_root(dir.path().to_path_buf());
+        let head = template_head_miss_rule();
+        let get = template_get_rule(template_archive_bytes(b"concurrent-template").await);
+        let cache = mock_r2_cache(&[&head, &get]);
+        let input = template_input(&home, TemplateCache::Required(&cache));
+        let (mut scripts, work_dir) = fake_rootfs_scripts().await;
+
+        ensure_template_cached_under_lock_with_scripts(&input, &mut scripts)
+            .await
+            .unwrap();
+
+        assert_eq!(head.num_calls(), 1);
+        assert_eq!(get.num_calls(), 1);
+        assert!(
+            !work_dir.join("build-template-called").exists(),
+            "warm should not build locally when another runner uploaded after HEAD miss"
+        );
+        assert!(
+            !template_warm_parent_dir(&home, "test-template-hash").exists(),
+            "successful concurrent-upload warm should clean local template staging"
         );
     }
 

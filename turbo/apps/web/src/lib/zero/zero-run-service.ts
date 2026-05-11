@@ -104,14 +104,6 @@ export interface ZeroAgentForRun {
   customSkills: string[];
   modelProviderId: string | null;
   selectedModel: string | null;
-  /**
-   * Per-Epic #11868: when true, runs that resolve through this agent prefer
-   * the caller's personal-tier model providers before falling back to the
-   * org default (gated additionally by the `personalModelProvider` feature
-   * switch). Off by default; honored only when the schedule (if any) does
-   * not override it.
-   */
-  preferPersonalProvider: boolean;
 }
 
 type OrgAdmissionMetadata = Pick<OrgMetadata, "orgId" | "tier"> & {
@@ -139,7 +131,6 @@ export async function fetchZeroAgentForRun(
       customSkills: zeroAgents.customSkills,
       modelProviderId: zeroAgents.modelProviderId,
       selectedModel: zeroAgents.selectedModel,
-      preferPersonalProvider: zeroAgents.preferPersonalProvider,
     })
     .from(zeroAgents)
     .where(eq(zeroAgents.id, agentId))
@@ -173,15 +164,6 @@ export interface CreateZeroRunParams {
   modelProviderCredentialScope?: string;
   /** Per-agent or per-schedule selected model override. */
   selectedModelOverride?: string;
-  /**
-   * Personal-tier preference (Epic #11868). When defined, overrides the
-   * agent's stored `preferPersonalProvider` — schedule-driven runs pass
-   * the schedule's flag here so schedule overrides agent (mirrors the
-   * existing modelProviderId/selectedModel override semantics). Honored
-   * only when the `personalModelProvider` feature switch is on for the
-   * caller; otherwise treated as false.
-   */
-  preferPersonalProvider?: boolean;
   callbacks?: Array<{ url: string; secret: string; payload: unknown }>;
   scheduleId?: string;
   triggerAgentId?: string;
@@ -303,17 +285,13 @@ function buildSystemSkillVolumes(
 function resolveEffectiveModel(
   params: Pick<
     CreateZeroRunParams,
-    | "modelProviderId"
-    | "modelProviderCredentialScope"
-    | "selectedModelOverride"
-    | "preferPersonalProvider"
+    "modelProviderId" | "modelProviderCredentialScope" | "selectedModelOverride"
   >,
   row?: ZeroAgentForRun | null,
 ): {
   modelProviderId?: string;
   modelProviderCredentialScope?: string;
   selectedModelOverride?: string;
-  preferPersonalProvider: boolean;
 } {
   return {
     modelProviderId:
@@ -321,8 +299,6 @@ function resolveEffectiveModel(
     modelProviderCredentialScope: params.modelProviderCredentialScope,
     selectedModelOverride:
       params.selectedModelOverride ?? row?.selectedModel ?? undefined,
-    preferPersonalProvider:
-      params.preferPersonalProvider ?? row?.preferPersonalProvider ?? false,
   };
 }
 
@@ -693,7 +669,6 @@ async function createZeroRunRecord(
     modelProviderCredentialScope: effectiveModel.modelProviderCredentialScope,
     selectedModelOverride: effectiveModel.selectedModelOverride,
     composeFramework,
-    preferPersonalProvider: effectiveModel.preferPersonalProvider,
   });
   const runFramework = resolveRuntimeFramework({
     providerFramework: admissionContext.providerFramework,
@@ -722,7 +697,6 @@ async function createZeroRunRecord(
       params.userId,
       params.modelProvider,
       resolved.composeContent,
-      effectiveModel.preferPersonalProvider,
       effectiveModel.selectedModelOverride,
       effectiveModel.modelProviderId,
       effectiveModel.modelProviderCredentialScope,

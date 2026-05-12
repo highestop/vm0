@@ -36,6 +36,7 @@ import { zeroComputerUseRoutes } from "./routes/zero-computer-use";
 import { zeroConnectorsRoutes } from "./routes/zero-connectors";
 import { zeroCustomConnectorsRoutes } from "./routes/zero-custom-connectors";
 import { zeroDefaultAgentRoutes } from "./routes/zero-default-agent";
+import { zeroDeveloperSupportRoutes } from "./routes/zero-developer-support";
 import { zeroFeatureSwitchesRoutes } from "./routes/zero-feature-switches";
 import { zeroInsightsRoutes } from "./routes/zero-insights";
 import { zeroLogsRoutes } from "./routes/zero-logs";
@@ -144,6 +145,7 @@ export const ROUTES: readonly RouteEntry[] = [
   ...zeroConnectorsRoutes,
   ...zeroCustomConnectorsRoutes,
   ...zeroDefaultAgentRoutes,
+  ...zeroDeveloperSupportRoutes,
   ...zeroFeatureSwitchesRoutes,
   ...zeroInsightsRoutes,
   ...zeroLogsRoutes,

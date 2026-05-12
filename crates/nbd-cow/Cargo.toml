@@ -7,6 +7,8 @@ edition.workspace = true
 bitvec = { workspace = true }
 libc = { workspace = true }
 nix = { workspace = true, features = ["fs"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
@@ -14,7 +16,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 nix = { workspace = true, features = ["user"] }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

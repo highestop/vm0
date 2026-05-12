@@ -117,6 +117,7 @@ describe("createZeroRun() — service-only parameters", () => {
       "web",
       "schedule",
       "telegram",
+      "agentphone",
       "slack",
       "email",
       "github",

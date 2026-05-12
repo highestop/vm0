@@ -1247,3 +1247,8 @@ export {
   type TelegramLinkStatusResponse,
   type TelegramSetupStatus,
 } from "./zero-integrations-telegram";
+export {
+  zeroIntegrationsAgentPhoneContract,
+  type ZeroIntegrationsAgentPhoneContract,
+  type AgentPhoneConnectResponse,
+} from "./zero-integrations-agentphone";

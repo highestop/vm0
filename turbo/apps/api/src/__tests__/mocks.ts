@@ -100,6 +100,7 @@ export interface ApiTestMocks {
   readonly telegram: {
     readonly getMe: AsyncMock;
     readonly getFile: AsyncMock;
+    readonly deleteWebhook: AsyncMock;
   };
   readonly otel: {
     readonly registerOTel: SyncMock;
@@ -199,6 +200,7 @@ const apiTestMocks: ApiTestMocks = vi.hoisted((): ApiTestMocks => {
   const telegram = {
     getMe: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     getFile: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+    deleteWebhook: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
 
   const axiomLogging = {
@@ -426,6 +428,7 @@ vi.mock("../signals/external/telegram-client", async () => {
     ...actual,
     getMe: apiTestMocks.telegram.getMe,
     getFile: apiTestMocks.telegram.getFile,
+    deleteWebhook: apiTestMocks.telegram.deleteWebhook,
   };
 });
 
@@ -537,6 +540,8 @@ export function resetApiTestMocks(): void {
   mockStripeClient(apiTestMocks.stripe as unknown as StripeSDK);
   apiTestMocks.telegram.getMe.mockReset();
   apiTestMocks.telegram.getFile.mockReset();
+  apiTestMocks.telegram.deleteWebhook.mockReset();
+  apiTestMocks.telegram.deleteWebhook.mockResolvedValue(undefined);
   apiTestMocks.otel.registerOTel.mockReset();
   apiTestMocks.sentry.captureException.mockReset();
   apiTestMocks.sentry.httpIntegration.mockClear();

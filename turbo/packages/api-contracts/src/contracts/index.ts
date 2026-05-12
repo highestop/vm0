@@ -235,6 +235,13 @@ export {
   type TestOAuthProviderUserinfoResponse,
 } from "./test-oauth-provider-userinfo";
 export {
+  testSlackStateContract,
+  testSlackStateErrorSchema,
+  testSlackStateResponseSchema,
+  type TestSlackStateContract,
+  type TestSlackStateResponse,
+} from "./test-slack-state";
+export {
   testTelegramStateContract,
   testTelegramStateErrorSchema,
   testTelegramStateResponseSchema,

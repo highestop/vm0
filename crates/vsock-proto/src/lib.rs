@@ -28,7 +28,7 @@
 //! | 0x0A | H→G       | shutdown          | (empty) |
 //! | 0x0B | G→H       | shutdown_ack      | (empty) |
 //! | 0x0C | G→H       | stdout_chunk      | `[4B pid][data]` |
-//! | 0x0D | H→G       | command_start     | `[4B timeout_ms][1B flags][4B cmd_len][command][4B env_count]... [stdout_policy][stderr_policy][2B label_len][label]` |
+//! | 0x0D | H→G       | command_start     | `[4B timeout_ms][1B flags][4B cmd_len][command][4B env_count]... [2B label_len][label][stdout_policy][stderr_policy]` |
 //! | 0x0E | G→H       | command_output    | `[1B stream][4B output_seq][1B flags][4B chunk_len][chunk]` |
 //! | 0x0F | G→H       | command_result    | `[1B termination]...[4B duration_ms][stdout][stderr][2B diagnostic_len][diagnostic]` |
 //! | 0x10 | H→G       | command_cancel    | (empty) |
@@ -36,6 +36,8 @@
 //!
 //! Command operation messages are request-scoped; host/guest dispatch layers
 //! must use a non-zero sequence number for start/output/result/cancel.
+//! `command_output.output_seq` is per command operation and starts at 0,
+//! incrementing by 1 for each output frame across stdout and stderr.
 
 /// Header size (4-byte length prefix).
 pub const HEADER_SIZE: usize = 4;
@@ -165,9 +167,9 @@ pub struct DecodedCommandStart<'a> {
     pub command: &'a str,
     pub env: Vec<(&'a str, &'a str)>,
     pub sudo: bool,
+    pub label: &'a str,
     pub stdout: CommandOutputPolicy,
     pub stderr: CommandOutputPolicy,
-    pub label: &'a str,
 }
 
 /// Decoded command output payload.
@@ -592,15 +594,15 @@ fn append_command_output_policy(p: &mut Vec<u8>, policy: CommandOutputPolicy) {
 /// Encode command_start payload.
 ///
 /// Wire format:
-/// `[4B timeout_ms][1B flags][4B cmd_len][command][4B env_count]... [stdout_policy][stderr_policy][2B label_len][label]`.
+/// `[4B timeout_ms][1B flags][4B cmd_len][command][4B env_count]... [2B label_len][label][stdout_policy][stderr_policy]`.
 pub fn encode_command_start(
     timeout_ms: u32,
     command: &str,
     env: &[(&str, &str)],
     sudo: bool,
+    label: &str,
     stdout: CommandOutputPolicy,
     stderr: CommandOutputPolicy,
-    label: &str,
 ) -> Result<Vec<u8>, ProtocolError> {
     let cmd = command.as_bytes();
     let label_bytes = label.as_bytes();
@@ -626,10 +628,10 @@ pub fn encode_command_start(
         payload_len = checked_payload_len_add(payload_len, key_bytes.len())?;
         payload_len = checked_payload_len_add(payload_len, val_bytes.len())?;
     }
-    payload_len = checked_payload_len_add(payload_len, stdout_policy_len)?;
-    payload_len = checked_payload_len_add(payload_len, stderr_policy_len)?;
     payload_len = checked_payload_len_add(payload_len, 2)?;
     payload_len = checked_payload_len_add(payload_len, label_bytes.len())?;
+    payload_len = checked_payload_len_add(payload_len, stdout_policy_len)?;
+    payload_len = checked_payload_len_add(payload_len, stderr_policy_len)?;
     ensure_payload_fits_message(payload_len)?;
 
     let mut p = Vec::with_capacity(payload_len);
@@ -646,15 +648,18 @@ pub fn encode_command_start(
         p.extend_from_slice(&(val_bytes.len() as u32).to_be_bytes());
         p.extend_from_slice(val_bytes);
     }
-    append_command_output_policy(&mut p, stdout);
-    append_command_output_policy(&mut p, stderr);
     p.extend_from_slice(&label_len.to_be_bytes());
     p.extend_from_slice(label_bytes);
+    append_command_output_policy(&mut p, stdout);
+    append_command_output_policy(&mut p, stderr);
     debug_assert_eq!(p.len(), payload_len);
     Ok(p)
 }
 
 /// Encode command_output payload: `[1B stream][4B output_seq][1B flags][4B chunk_len][chunk]`.
+///
+/// `output_seq` starts at 0 for each command operation and increments by 1
+/// for every output frame across stdout and stderr.
 pub fn encode_command_output(
     stream: CommandOutputStream,
     output_seq: u32,
@@ -1195,8 +1200,6 @@ pub fn decode_command_start(payload: &[u8]) -> Result<DecodedCommandStart<'_>, P
         )?;
         env.push((key, val));
     }
-    let stdout = decode_command_output_policy(payload, &mut offset)?;
-    let stderr = decode_command_output_policy(payload, &mut offset)?;
     let label_len = read_u16(payload, &mut offset, "command start label_len truncated")? as usize;
     let label = read_str(
         payload,
@@ -1205,15 +1208,17 @@ pub fn decode_command_start(payload: &[u8]) -> Result<DecodedCommandStart<'_>, P
         "command start label truncated",
         "invalid UTF-8 in label",
     )?;
+    let stdout = decode_command_output_policy(payload, &mut offset)?;
+    let stderr = decode_command_output_policy(payload, &mut offset)?;
     expect_consumed(payload, offset, "command start trailing bytes")?;
     Ok(DecodedCommandStart {
         timeout_ms,
         command,
         env,
         sudo: (flags & COMMAND_FLAG_SUDO) != 0,
+        label,
         stdout,
         stderr,
-        label,
     })
 }
 
@@ -1788,9 +1793,9 @@ mod tests {
             "echo ready",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
 
@@ -1802,10 +1807,42 @@ mod tests {
                 command: "echo ready",
                 env: Vec::new(),
                 sudo: false,
+                label: "",
                 stdout: CommandOutputPolicy::Discard,
                 stderr: CommandOutputPolicy::Discard,
-                label: "",
             }
+        );
+    }
+
+    #[test]
+    fn command_start_wire_layout_places_label_before_output_policies() {
+        let payload = encode_command_start(
+            5000,
+            "cmd",
+            &[],
+            false,
+            "abc",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Capture { limit_bytes: 7 },
+        )
+        .unwrap();
+
+        let label_len_offset = 4 + 1 + 4 + "cmd".len() + 4;
+        assert_eq!(
+            &payload[label_len_offset..],
+            &[
+                0,
+                3,
+                b'a',
+                b'b',
+                b'c',
+                COMMAND_OUTPUT_POLICY_DISCARD,
+                COMMAND_OUTPUT_POLICY_CAPTURE,
+                0,
+                0,
+                0,
+                7,
+            ]
         );
     }
 
@@ -1816,9 +1853,9 @@ mod tests {
             "printenv",
             &[("PATH", "/usr/bin"), ("HOME", "/home/user")],
             true,
+            "setup",
             CommandOutputPolicy::Capture { limit_bytes: 0 },
             CommandOutputPolicy::Capture { limit_bytes: 4096 },
-            "setup",
         )
         .unwrap();
 
@@ -1848,12 +1885,12 @@ mod tests {
             "tail -f /tmp/log",
             &[],
             false,
+            "stream",
             CommandOutputPolicy::Stream {
                 limit_bytes: 0,
                 chunk_limit_bytes: 8192,
             },
             CommandOutputPolicy::Discard,
-            "stream",
         )
         .unwrap();
 
@@ -1875,6 +1912,7 @@ mod tests {
             "run",
             &[],
             false,
+            "combined",
             CommandOutputPolicy::CaptureAndStream {
                 capture_limit_bytes: 1024,
                 stream_limit_bytes: 2048,
@@ -1885,7 +1923,6 @@ mod tests {
                 stream_limit_bytes: 0,
                 chunk_limit_bytes: 1,
             },
-            "combined",
         )
         .unwrap();
 
@@ -2036,9 +2073,9 @@ mod tests {
             "cmd",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         payload[4] = 0x80;
@@ -2057,9 +2094,9 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         payload[9] = 0xFF;
@@ -2073,9 +2110,9 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         let key_offset = 4 + 1 + 4 + "cmd".len() + 4 + 4;
@@ -2090,9 +2127,9 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         let val_offset = key_offset + "K".len() + 4;
@@ -2107,12 +2144,12 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
-        let label_offset = payload.len() - 2;
+        let label_offset = 4 + 1 + 4 + "cmd".len() + 4 + 4 + "K".len() + 4 + "V".len() + 2;
         payload[label_offset] = 0xFF;
         assert!(matches!(
             decode_command_start(&payload),
@@ -2127,9 +2164,9 @@ mod tests {
             "cmd",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         payload.push(0);
@@ -2148,9 +2185,9 @@ mod tests {
             "",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         let env_count_offset = 4 + 1 + 4;
@@ -2170,9 +2207,9 @@ mod tests {
             "cmd",
             &env,
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap_err();
         assert!(matches!(
@@ -2185,9 +2222,9 @@ mod tests {
             "",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         let env_count_offset = 4 + 1 + 4;
@@ -2228,9 +2265,9 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         payload.truncate(10);
@@ -2246,9 +2283,9 @@ mod tests {
             "cmd",
             &[("K", "V")],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
         let env_count_offset = 4 + 1 + 4 + "cmd".len();
@@ -2265,12 +2302,32 @@ mod tests {
             "cmd",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
-        payload.truncate(payload.len() - 1);
+        let label_len_offset = 4 + 1 + 4 + "cmd".len() + 4;
+        payload.truncate(label_len_offset + 1);
+        assert!(matches!(
+            decode_command_start(&payload),
+            Err(ProtocolError::InvalidPayload(
+                "command start label_len truncated"
+            ))
+        ));
+
+        let mut payload = encode_command_start(
+            1,
+            "cmd",
+            &[],
+            false,
+            "ok",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
+        )
+        .unwrap();
+        let label_start = 4 + 1 + 4 + "cmd".len() + 4 + 2;
+        payload.truncate(label_start + 1);
         assert!(matches!(
             decode_command_start(&payload),
             Err(ProtocolError::InvalidPayload(
@@ -2286,12 +2343,12 @@ mod tests {
             "cmd",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap();
-        let stdout_policy_offset = 4 + 1 + 4 + "cmd".len() + 4;
+        let stdout_policy_offset = 4 + 1 + 4 + "cmd".len() + 4 + 2;
         payload[stdout_policy_offset] = 0x99;
 
         let err = decode_command_start(&payload).unwrap_err();
@@ -2308,12 +2365,12 @@ mod tests {
             "cmd",
             &[],
             false,
+            "",
             CommandOutputPolicy::Stream {
                 limit_bytes: 1,
                 chunk_limit_bytes: 0,
             },
             CommandOutputPolicy::Discard,
-            "",
         )
         .unwrap_err();
         assert!(matches!(
@@ -2326,15 +2383,15 @@ mod tests {
             "cmd",
             &[],
             false,
+            "",
             CommandOutputPolicy::Stream {
                 limit_bytes: 1,
                 chunk_limit_bytes: 1,
             },
             CommandOutputPolicy::Discard,
-            "",
         )
         .unwrap();
-        let chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 1 + 4;
+        let chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 2 + 1 + 4;
         payload[chunk_limit_offset..chunk_limit_offset + 4].copy_from_slice(&0u32.to_be_bytes());
 
         let err = decode_command_start(&payload).unwrap_err();
@@ -2351,15 +2408,15 @@ mod tests {
             "cmd",
             &[],
             false,
+            "",
             CommandOutputPolicy::Stream {
                 limit_bytes: 1,
                 chunk_limit_bytes: 1,
             },
             CommandOutputPolicy::Discard,
-            "",
         )
         .unwrap();
-        let stream_chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 1 + 4;
+        let stream_chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 2 + 1 + 4;
         stream_payload.truncate(stream_chunk_limit_offset + 3);
         assert!(matches!(
             decode_command_start(&stream_payload),
@@ -2373,16 +2430,16 @@ mod tests {
             "cmd",
             &[],
             false,
+            "",
             CommandOutputPolicy::CaptureAndStream {
                 capture_limit_bytes: 1,
                 stream_limit_bytes: 1,
                 chunk_limit_bytes: 1,
             },
             CommandOutputPolicy::Discard,
-            "",
         )
         .unwrap();
-        let capture_and_stream_chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 1 + 4 + 4;
+        let capture_and_stream_chunk_limit_offset = 4 + 1 + 4 + "cmd".len() + 4 + 2 + 1 + 4 + 4;
         capture_and_stream_payload.truncate(capture_and_stream_chunk_limit_offset + 3);
         assert!(matches!(
             decode_command_start(&capture_and_stream_payload),
@@ -2615,9 +2672,9 @@ mod tests {
             &command,
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             "",
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap_err();
         assert!(matches!(err, ProtocolError::MessageTooLarge(_)));
@@ -2649,9 +2706,9 @@ mod tests {
             "cmd",
             &[],
             false,
-            CommandOutputPolicy::Discard,
-            CommandOutputPolicy::Discard,
             &label,
+            CommandOutputPolicy::Discard,
+            CommandOutputPolicy::Discard,
         )
         .unwrap_err();
         assert!(matches!(

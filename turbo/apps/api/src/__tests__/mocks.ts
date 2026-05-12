@@ -285,6 +285,14 @@ vi.mock("@aws-sdk/client-s3", () => {
     }
   }
 
+  class HeadObjectCommand {
+    readonly input: unknown;
+
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  }
+
   class ListObjectsV2Command {
     readonly input: unknown;
 
@@ -322,6 +330,7 @@ vi.mock("@aws-sdk/client-s3", () => {
   return {
     DeleteObjectsCommand,
     GetObjectCommand,
+    HeadObjectCommand,
     ListObjectsV2Command,
     PutObjectCommand,
     S3Client,

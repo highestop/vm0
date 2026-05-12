@@ -109,6 +109,7 @@ export interface ApiTestMocks {
     readonly getMe: AsyncMock;
     readonly getFile: AsyncMock;
     readonly deleteWebhook: AsyncMock;
+    readonly getUserProfilePhotos: AsyncMock;
   };
   readonly otel: {
     readonly registerOTel: SyncMock;
@@ -219,6 +220,7 @@ const apiTestMocks: ApiTestMocks = vi.hoisted((): ApiTestMocks => {
     getMe: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     getFile: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     deleteWebhook: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+    getUserProfilePhotos: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
 
   const axiomLogging = {
@@ -452,6 +454,7 @@ vi.mock("../signals/external/telegram-client", async () => {
     getMe: apiTestMocks.telegram.getMe,
     getFile: apiTestMocks.telegram.getFile,
     deleteWebhook: apiTestMocks.telegram.deleteWebhook,
+    getUserProfilePhotos: apiTestMocks.telegram.getUserProfilePhotos,
   };
 });
 
@@ -567,6 +570,7 @@ export function resetApiTestMocks(): void {
   apiTestMocks.telegram.getFile.mockReset();
   apiTestMocks.telegram.deleteWebhook.mockReset();
   apiTestMocks.telegram.deleteWebhook.mockResolvedValue(undefined);
+  apiTestMocks.telegram.getUserProfilePhotos.mockReset();
   apiTestMocks.otel.registerOTel.mockReset();
   apiTestMocks.sentry.captureException.mockReset();
   apiTestMocks.sentry.httpIntegration.mockClear();

@@ -18,7 +18,10 @@ import { emailUnsubscribeRoutes } from "./routes/email-unsubscribe";
 import { apiHealth$ } from "./routes/health";
 import { healthAuthProbeRoutes } from "./routes/health-auth-probe";
 import { githubOauthRoutes } from "./routes/github-oauth";
+import { internalEventConsumerAxiomRoutes } from "./routes/internal-event-consumers-axiom";
+import { internalEventConsumerChatAssistantRoutes } from "./routes/internal-event-consumers-chat-assistant";
 import { internalEventConsumerTelegramTypingRoutes } from "./routes/internal-event-consumers-telegram-typing";
+import { internalEventConsumerVoiceChatRoutes } from "./routes/internal-event-consumers-voice-chat";
 import { logsSearchRoutes } from "./routes/logs-search";
 import { modelStatsRoutes } from "./routes/model-stats";
 import { runnersRoutes } from "./routes/runners";
@@ -128,7 +131,10 @@ export const ROUTES: readonly RouteEntry[] = [
   ...authMeRoutes,
   ...healthAuthProbeRoutes,
   ...githubOauthRoutes,
+  ...internalEventConsumerAxiomRoutes,
+  ...internalEventConsumerChatAssistantRoutes,
   ...internalEventConsumerTelegramTypingRoutes,
+  ...internalEventConsumerVoiceChatRoutes,
   ...logsSearchRoutes,
   ...usageRoutes,
   ...userExportRoutes,

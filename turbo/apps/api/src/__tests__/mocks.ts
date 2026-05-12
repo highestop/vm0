@@ -25,6 +25,7 @@ export interface ApiTestMocks {
   readonly clerk: {
     readonly authenticateRequest: AsyncMock;
     readonly organizations: {
+      readonly createOrganizationDomain: AsyncMock;
       readonly createOrganizationInvitation: AsyncMock;
       readonly getOrganization: AsyncMock;
       readonly getOrganizationDomainList: AsyncMock;
@@ -127,6 +128,8 @@ const apiTestMocks: ApiTestMocks = vi.hoisted((): ApiTestMocks => {
   const clerk = {
     authenticateRequest: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     organizations: {
+      createOrganizationDomain:
+        vi.fn<(...args: unknown[]) => Promise<unknown>>(),
       createOrganizationInvitation:
         vi.fn<(...args: unknown[]) => Promise<unknown>>(),
       getOrganization: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
@@ -512,6 +515,7 @@ export function resetApiTestMocks(): void {
   apiTestMocks.axiomLogging.error.mockReset();
   apiTestMocks.axiomLogging.flush.mockReset();
   apiTestMocks.clerk.authenticateRequest.mockReset();
+  apiTestMocks.clerk.organizations.createOrganizationDomain.mockReset();
   apiTestMocks.clerk.organizations.createOrganizationInvitation.mockReset();
   apiTestMocks.clerk.organizations.getOrganization.mockReset();
   apiTestMocks.clerk.organizations.getOrganizationDomainList.mockReset();

@@ -50,6 +50,12 @@ This workspace contains Rust crates for the vm0 sandbox runtime — VM orchestra
 └──────────────────────────────────────────┘
 ```
 
+## Logging
+
+Runner Rust logs are recorded to local files, stderr, and CI at `info` and
+above by default. Axiom ingests `warn` and above. Use `debug` or `trace` only
+for local diagnostics that are acceptable to miss in production logs.
+
 ## TLS in Guest Binaries
 
 Guest crates (`guest-agent`, `guest-download`) **must** use system certificate roots, not bundled webpki roots. The host runs a mitmproxy transparent proxy that intercepts HTTPS traffic with its own CA certificate, which is installed into the guest's system certificate store at boot. Using bundled roots would bypass the proxy CA and cause TLS verification failures.

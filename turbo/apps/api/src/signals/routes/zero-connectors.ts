@@ -1,8 +1,11 @@
+import { randomInt } from "node:crypto";
+
 import { command, computed } from "ccstate";
 import type { AppRoute } from "@ts-rest/core";
 import {
   zeroComputerConnectorContract,
   zeroConnectorAuthorizeContract,
+  zeroConnectorSessionsContract,
   zeroConnectorSessionByIdContract,
   zeroConnectorScopeDiffContract,
   zeroConnectorsByTypeContract,
@@ -33,7 +36,7 @@ import {
 import { authRoute } from "../auth/auth-route";
 import { request$ } from "../context/hono";
 import { pathParamsOf, queryOf } from "../context/request";
-import { conflict, notFound } from "../../lib/error";
+import { badRequestMessage, conflict, notFound } from "../../lib/error";
 import { env, optionalEnv } from "../../lib/env";
 import { nowDate } from "../../lib/time";
 import { writeDb$ } from "../external/db";
@@ -46,6 +49,7 @@ import {
 } from "../services/zero-connector-data.service";
 import { userFeatureSwitchOverrides } from "../services/feature-switches.service";
 import { connectRemoteAgentConnector$ } from "../services/zero-remote-agent.service";
+import { createComputerConnector$ } from "../services/zero-computer-connector.service";
 import type { RouteEntry } from "../route";
 
 const STATE_COOKIE_NAME = "connector_oauth_state";
@@ -53,6 +57,10 @@ const SESSION_COOKIE_NAME = "connector_oauth_session";
 const PKCE_COOKIE_NAME = "connector_oauth_pkce";
 const COOKIE_MAX_AGE = 15 * 60;
 const REDIRECT_STATUS = 307;
+const CONNECTOR_SESSION_TTL_SECONDS = 15 * 60;
+const CONNECTOR_SESSION_POLL_INTERVAL_SECONDS = 5;
+const CONNECTOR_SESSION_CODE_LENGTH = 8;
+const CONNECTOR_SESSION_CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 type ConnectorAuthorizeRoute = AppRoute & {
   readonly pathParams: z.ZodType<{ readonly type: string }>;
@@ -98,6 +106,22 @@ function generateState(): string {
   return Array.from(array, (byte) => {
     return byte.toString(16).padStart(2, "0");
   }).join("");
+}
+
+function generateConnectorSessionCode(
+  length: number = CONNECTOR_SESSION_CODE_LENGTH,
+): string {
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    if (i > 0 && i % 4 === 0) {
+      code += "-";
+    }
+    code +=
+      CONNECTOR_SESSION_CODE_CHARS[
+        randomInt(CONNECTOR_SESSION_CODE_CHARS.length)
+      ];
+  }
+  return code;
 }
 
 function isRefreshOnlyConnectorType(type: ConnectorType): boolean {
@@ -327,6 +351,32 @@ const getComputerConnectorInner$ = computed(async (get) => {
   return { status: 200 as const, body: connector };
 });
 
+const createComputerConnectorInner$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    const auth = get(organizationAuthContext$);
+    const result = await set(
+      createComputerConnector$,
+      { orgId: auth.orgId, userId: auth.userId },
+      signal,
+    );
+    signal.throwIfAborted();
+
+    switch (result.kind) {
+      case "created": {
+        return { status: 200 as const, body: result.connector };
+      }
+      case "bad_request": {
+        return badRequestMessage("Invalid request");
+      }
+      case "conflict": {
+        return conflict("Resource conflict");
+      }
+    }
+    const exhaustive: never = result;
+    return exhaustive;
+  },
+);
+
 const getScopeDiffInner$ = computed(async (get) => {
   const auth = get(organizationAuthContext$);
   const params = get(pathParamsOf(zeroConnectorScopeDiffContract.getScopeDiff));
@@ -510,6 +560,47 @@ const authorizeConnectorInner$ = createAuthorizeConnectorInner(
   zeroConnectorAuthorizeContract.authorize,
 );
 
+const createConnectorSessionInner$ = command(
+  async ({ get, set }, signal: AbortSignal) => {
+    const auth = get(authContext$);
+    const params = get(pathParamsOf(zeroConnectorSessionsContract.create));
+    const code = generateConnectorSessionCode();
+    const expiresAt = new Date(
+      nowDate().getTime() + CONNECTOR_SESSION_TTL_SECONDS * 1000,
+    );
+    const writeDb = set(writeDb$);
+
+    const [session] = await writeDb
+      .insert(connectorSessions)
+      .values({
+        code,
+        type: params.type,
+        userId: auth.userId,
+        status: "pending",
+        expiresAt,
+      })
+      .returning({ id: connectorSessions.id });
+    signal.throwIfAborted();
+
+    if (!session) {
+      throw new Error("Failed to create connector session");
+    }
+
+    return {
+      status: 200 as const,
+      body: {
+        id: session.id,
+        code,
+        type: params.type,
+        status: "pending" as const,
+        verificationUrl: `/api/connectors/${params.type}/authorize?session=${session.id}`,
+        expiresIn: CONNECTOR_SESSION_TTL_SECONDS,
+        interval: CONNECTOR_SESSION_POLL_INTERVAL_SECONDS,
+      },
+    };
+  },
+);
+
 const getConnectorSessionByIdInner$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     const auth = get(authContext$);
@@ -561,6 +652,10 @@ const getConnectorSessionByIdInner$ = command(
 
 export const zeroConnectorsRoutes: readonly RouteEntry[] = [
   {
+    route: zeroComputerConnectorContract.create,
+    handler: authRoute(connectorWriteAuth, createComputerConnectorInner$),
+  },
+  {
     route: zeroComputerConnectorContract.get,
     handler: authRoute(connectorReadAuth, getComputerConnectorInner$),
   },
@@ -587,6 +682,10 @@ export const zeroConnectorsRoutes: readonly RouteEntry[] = [
   {
     route: zeroConnectorSessionByIdContract.get,
     handler: authRoute({}, getConnectorSessionByIdInner$),
+  },
+  {
+    route: zeroConnectorSessionsContract.create,
+    handler: authRoute({}, createConnectorSessionInner$),
   },
   {
     route: zeroConnectorsByTypeContract.get,

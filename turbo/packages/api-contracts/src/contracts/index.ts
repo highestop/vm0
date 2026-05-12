@@ -1009,6 +1009,22 @@ export {
   type ZeroSlackConnectContract,
 } from "./zero-slack-connect";
 export {
+  zeroSlackBrowserConnectContract,
+  zeroSlackBrowserConnectQuerySchema,
+  type ZeroSlackBrowserConnectContract,
+  type ZeroSlackBrowserConnectQuery,
+} from "./zero-slack-browser-connect";
+export {
+  zeroSlackOauthContract,
+  zeroSlackOauthInstallQuerySchema,
+  zeroSlackOauthConnectQuerySchema,
+  zeroSlackOauthCallbackQuerySchema,
+  type ZeroSlackOauthContract,
+  type ZeroSlackOauthInstallQuery,
+  type ZeroSlackOauthConnectQuery,
+  type ZeroSlackOauthCallbackQuery,
+} from "./zero-slack-oauth";
+export {
   zeroSlackChannelsContract,
   slackChannelSchema,
   type ZeroSlackChannelsContract,

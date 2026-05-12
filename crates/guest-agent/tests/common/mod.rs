@@ -32,6 +32,17 @@ pub const SIGKILL_EXIT: i32 = 137;
 /// Normal clean exit. Reap should never fire on this path.
 pub const CLEAN_EXIT: i32 = 0;
 
+/// Documented maximum number of stderr lines returned in
+/// `guest_agent::cli::CliExecutionResult`.
+pub const CLI_STDERR_RESULT_MAX_LINES: usize = 200;
+
+/// Documented maximum byte length for one returned stderr line after CRLF normalization.
+pub const CLI_STDERR_RESULT_MAX_LINE_BYTES: usize = 16 * 1024;
+
+/// Documented replacement for a stderr line that exceeds the diagnostic limit.
+pub const CLI_STDERR_OMITTED_LONG_LINE: &str =
+    "[stderr line omitted: exceeded diagnostic size limit]";
+
 /// Build the mock binary (idempotent when up to date) and resolve its
 /// filesystem path.
 ///
@@ -100,6 +111,9 @@ pub fn build_and_locate_mock() -> Result<PathBuf, String> {
 /// - `@hang-after-result` → SIGTERM path
 /// - `@hang-after-result-deaf` → SIGKILL escalation path
 /// - `@exit-after-result` → happy path (no signal ever fires)
+/// - `@fail-no-newline:<message>` → stderr EOF without trailing newline
+/// - `@fail-invalid-utf8` → stderr bytes that are not valid UTF-8
+/// - `@fail-invalid-utf8-long` → invalid UTF-8 whose lossy form exceeds the limit
 /// - `@stuck-tool-deaf` → forced-termination SIGKILL escalation path
 /// - `@stuck-tool-closed-stdout-deaf` → stdout EOF before forced termination
 ///

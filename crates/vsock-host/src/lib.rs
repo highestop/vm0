@@ -43,6 +43,10 @@ const READ_BUF_SIZE: usize = 64 * 1024;
 const DEFAULT_COMMAND_CAPTURE_LIMIT_BYTES: u32 = 1024 * 1024;
 const DEFAULT_COMMAND_STREAM_CAPACITY: usize = 32;
 const MAX_COMMAND_STREAM_CAPACITY: usize = 1024;
+const COMMAND_LABEL_LOG_PREFIX_MAX_BYTES: usize = 100;
+const COMMAND_CLOSE_ACTIVE_LOG_LIMIT: usize = 16;
+const COMMAND_FRAME_WRITE_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
+const COMMAND_STAGE_SLOW_THRESHOLD: Duration = Duration::from_secs(5);
 const COMMAND_FRAME_WRITE_NOT_STARTED: u8 = 0;
 const COMMAND_FRAME_WRITE_STARTED: u8 = 1;
 const COMMAND_FRAME_WRITE_COMPLETED: u8 = 2;
@@ -140,6 +144,7 @@ pub struct CommandStreamRequest<'a> {
 }
 
 struct CommandOperation {
+    diagnostic: CommandOperationDiagnostic,
     result_tx: oneshot::Sender<io::Result<CommandOperationResult>>,
     stream_tx: Option<mpsc::Sender<CommandOutputEvent>>,
     stdout_capture: CommandCaptureState,
@@ -148,6 +153,31 @@ struct CommandOperation {
     stderr_stream: Option<CommandStreamState>,
     expected_output_seq: u32,
     stream_overflowed: bool,
+}
+
+#[derive(Clone)]
+struct CommandOperationDiagnostic {
+    seq: u32,
+    label_log: String,
+    registered_at: Instant,
+    first_output_at: Option<Instant>,
+}
+
+struct CommandOperationSnapshot {
+    seq: u32,
+    label_log: String,
+    elapsed_ms: u128,
+}
+
+struct CommandOperationCloseSnapshot {
+    active_count: usize,
+    operations: Vec<CommandOperationSnapshot>,
+}
+
+struct CommandFrameDiagnostic {
+    seq: u32,
+    label_log: String,
+    frame: &'static str,
 }
 
 enum Operation {
@@ -321,6 +351,94 @@ impl Drop for CommandFrameWriteGuard {
     }
 }
 
+impl CommandOperationDiagnostic {
+    fn new(seq: u32, label: &str) -> Self {
+        Self {
+            seq,
+            label_log: command_label_log(label),
+            registered_at: Instant::now(),
+            first_output_at: None,
+        }
+    }
+
+    fn frame(&self, frame: &'static str) -> CommandFrameDiagnostic {
+        CommandFrameDiagnostic {
+            seq: self.seq,
+            label_log: self.label_log.clone(),
+            frame,
+        }
+    }
+
+    fn elapsed_ms(&self) -> u128 {
+        self.registered_at.elapsed().as_millis()
+    }
+
+    fn snapshot(&self) -> CommandOperationSnapshot {
+        CommandOperationSnapshot {
+            seq: self.seq,
+            label_log: self.label_log.clone(),
+            elapsed_ms: self.elapsed_ms(),
+        }
+    }
+
+    fn mark_first_output(&mut self) -> Option<CommandOperationSnapshot> {
+        if self.first_output_at.is_some() {
+            return None;
+        }
+
+        self.first_output_at = Some(Instant::now());
+        let elapsed_ms = self.elapsed_ms();
+        if elapsed_ms >= COMMAND_STAGE_SLOW_THRESHOLD.as_millis() {
+            return Some(CommandOperationSnapshot {
+                seq: self.seq,
+                label_log: self.label_log.clone(),
+                elapsed_ms,
+            });
+        }
+
+        None
+    }
+
+    fn log_terminal(
+        &self,
+        result: &vsock_proto::DecodedCommandResult<'_>,
+        stream_overflowed: bool,
+    ) {
+        let elapsed_ms = self.elapsed_ms();
+        let slow = elapsed_ms >= COMMAND_STAGE_SLOW_THRESHOLD.as_millis();
+        let notable = command_termination_is_notable(result.termination)
+            || command_result_has_truncation(result)
+            || stream_overflowed
+            || !result.diagnostic.is_empty();
+        if !slow && !notable {
+            return;
+        }
+
+        tracing::warn!(
+            seq = self.seq,
+            label = %self.label_log,
+            elapsed_ms,
+            guest_duration_ms = result.duration_ms,
+            termination = ?result.termination,
+            stream_overflowed,
+            stdout_truncated = command_captured_output_truncated(result.stdout),
+            stderr_truncated = command_captured_output_truncated(result.stderr),
+            diagnostic_present = !result.diagnostic.is_empty(),
+            "command operation terminal result"
+        );
+    }
+
+    fn log_error_response(&self, error: &io::Error) {
+        tracing::warn!(
+            seq = self.seq,
+            label = %self.label_log,
+            elapsed_ms = self.elapsed_ms(),
+            error = %error,
+            "command operation error response"
+        );
+    }
+}
+
 /// Handle for a host-side command operation.
 ///
 /// Dropping the handle removes the host-side registration only. It never sends
@@ -329,6 +447,7 @@ impl Drop for CommandFrameWriteGuard {
 pub struct CommandOperationHandle {
     shared: Arc<Shared>,
     seq: Option<u32>,
+    diagnostic: CommandOperationDiagnostic,
     result_rx: Option<oneshot::Receiver<io::Result<CommandOperationResult>>>,
     stream_rx: Option<mpsc::Receiver<CommandOutputEvent>>,
 }
@@ -363,10 +482,31 @@ impl CommandOperationHandle {
             io::Error::new(io::ErrorKind::ConnectionReset, "command operation closed")
         })?;
         let payload = vsock_proto::encode_command_cancel();
-        write_command_frame(&self.shared, MSG_COMMAND_CANCEL, seq, &payload).await?;
+        write_command_frame(
+            &self.shared,
+            MSG_COMMAND_CANCEL,
+            seq,
+            &payload,
+            Some(self.diagnostic.frame("cancel")),
+        )
+        .await?;
+        tracing::info!(
+            seq = seq,
+            label = %self.diagnostic.label_log,
+            elapsed_ms = self.diagnostic.elapsed_ms(),
+            "command operation cancel sent"
+        );
 
+        let cancel_label_log = self.diagnostic.label_log.clone();
+        let registered_at = self.diagnostic.registered_at;
         let result = self.wait_with_timeout(timeout, true).await?;
         if result.termination == CommandTermination::Cancelled {
+            tracing::info!(
+                seq = seq,
+                label = %cancel_label_log,
+                elapsed_ms = registered_at.elapsed().as_millis(),
+                "command operation cancel completed"
+            );
             return Ok(result);
         }
 
@@ -425,6 +565,13 @@ impl CommandOperationHandle {
                 self.shared.remove_operation(seq);
                 self.seq = None;
                 self.result_rx = None;
+                tracing::warn!(
+                    seq = seq,
+                    label = %self.diagnostic.label_log,
+                    elapsed_ms = self.diagnostic.elapsed_ms(),
+                    poison_connection = poison_on_timeout,
+                    "command operation wait timeout"
+                );
                 if poison_on_timeout {
                     self.shared.poison_connection();
                 }
@@ -524,6 +671,10 @@ impl Shared {
     /// "cached `exits` survive a double-close" is enforced by the match
     /// binding rather than by convention.
     fn close(&self) {
+        self.close_with_reason("connection closed");
+    }
+
+    fn close_with_reason(&self, reason: &'static str) {
         let maps_to_drop = {
             let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
             match std::mem::replace(
@@ -539,8 +690,15 @@ impl Shared {
                     operations,
                     exits,
                 } => {
+                    let command_snapshot = command_operation_close_snapshot(&operations);
                     *guard = ConnectionState::Closed { exits };
-                    Some((pending, pending_stdout, stdout_senders, operations))
+                    Some((
+                        pending,
+                        pending_stdout,
+                        stdout_senders,
+                        operations,
+                        command_snapshot,
+                    ))
                 }
                 closed @ ConnectionState::Closed { .. } => {
                     // Reassign the whole variant; cached `exits` preserved
@@ -550,14 +708,18 @@ impl Shared {
                 }
             }
         };
-        if let Some(maps) = maps_to_drop {
+        if let Some((pending, pending_stdout, stdout_senders, operations, command_snapshot)) =
+            maps_to_drop
+        {
+            let maps = (pending, pending_stdout, stdout_senders, operations);
             drop(maps);
             self.exit_notify.notify_waiters();
+            log_command_operations_closed(reason, &command_snapshot);
         }
     }
 
     fn poison_connection(&self) {
-        self.close();
+        self.close_with_reason("connection poisoned");
         let _ = nix::sys::socket::shutdown(self.fd, nix::sys::socket::Shutdown::Both);
     }
 
@@ -585,6 +747,82 @@ impl Shared {
 
 fn command_protocol_error(error: impl ToString) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+}
+
+fn command_termination_is_notable(termination: CommandTermination) -> bool {
+    !matches!(termination, CommandTermination::Exited { exit_code: 0 })
+}
+
+fn command_label_log(label: &str) -> String {
+    if label.len() <= COMMAND_LABEL_LOG_PREFIX_MAX_BYTES {
+        return label.to_string();
+    }
+
+    let mut end = COMMAND_LABEL_LOG_PREFIX_MAX_BYTES;
+    while !label.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &label[..end])
+}
+
+fn command_captured_output_truncated(output: CommandCapturedOutput<'_>) -> bool {
+    matches!(
+        output,
+        CommandCapturedOutput::Captured {
+            truncated: true,
+            ..
+        }
+    )
+}
+
+fn command_result_has_truncation(result: &vsock_proto::DecodedCommandResult<'_>) -> bool {
+    command_captured_output_truncated(result.stdout)
+        || command_captured_output_truncated(result.stderr)
+}
+
+fn command_operation_close_snapshot(
+    operations: &HashMap<u32, Operation>,
+) -> CommandOperationCloseSnapshot {
+    let active_count = operations.len();
+    let operations = operations
+        .values()
+        .take(COMMAND_CLOSE_ACTIVE_LOG_LIMIT)
+        .map(|operation| match operation {
+            Operation::Command(operation) => operation.diagnostic.snapshot(),
+        })
+        .collect();
+    CommandOperationCloseSnapshot {
+        active_count,
+        operations,
+    }
+}
+
+fn log_command_operations_closed(reason: &'static str, snapshot: &CommandOperationCloseSnapshot) {
+    if snapshot.active_count == 0 {
+        return;
+    }
+
+    let active_operations = snapshot
+        .operations
+        .iter()
+        .map(|operation| {
+            format!(
+                "seq={} label={} elapsed_ms={}",
+                operation.seq, operation.label_log, operation.elapsed_ms
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let active_omitted = snapshot
+        .active_count
+        .saturating_sub(snapshot.operations.len());
+    tracing::warn!(
+        reason = reason,
+        active_count = snapshot.active_count,
+        active_omitted,
+        active_operations = %active_operations,
+        "closing connection with active command operations"
+    );
 }
 
 fn command_output_policy_streams(policy: CommandOutputPolicy) -> bool {
@@ -755,24 +993,38 @@ fn owned_command_result(
 }
 
 fn dispatch_command_output(shared: &Arc<Shared>, msg: &RawMessage) -> io::Result<()> {
-    let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    if let ConnectionState::Connected { operations, .. } = &mut *guard
-        && let Some(Operation::Command(operation)) = operations.get_mut(&msg.seq)
+    let mut first_output_slow = None;
     {
-        let decoded =
-            vsock_proto::decode_command_output(&msg.payload).map_err(command_protocol_error)?;
-        validate_command_output(operation, &decoded)?;
-        if let Some(tx) = operation.stream_tx.take() {
-            match tx.try_reserve_owned() {
-                Ok(permit) => {
-                    operation.stream_tx = Some(permit.send(owned_command_output_event(decoded)));
+        let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let ConnectionState::Connected { operations, .. } = &mut *guard
+            && let Some(Operation::Command(operation)) = operations.get_mut(&msg.seq)
+        {
+            let decoded =
+                vsock_proto::decode_command_output(&msg.payload).map_err(command_protocol_error)?;
+            validate_command_output(operation, &decoded)?;
+            first_output_slow = operation.diagnostic.mark_first_output();
+            if let Some(tx) = operation.stream_tx.take() {
+                match tx.try_reserve_owned() {
+                    Ok(permit) => {
+                        operation.stream_tx =
+                            Some(permit.send(owned_command_output_event(decoded)));
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        operation.stream_overflowed = true;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {}
                 }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    operation.stream_overflowed = true;
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {}
             }
         }
+    }
+
+    if let Some(snapshot) = first_output_slow {
+        tracing::warn!(
+            seq = snapshot.seq,
+            label = %snapshot.label_log,
+            elapsed_ms = snapshot.elapsed_ms,
+            "slow command operation first output"
+        );
     }
 
     Ok(())
@@ -795,6 +1047,9 @@ fn dispatch_command_result(shared: &Arc<Shared>, msg: &RawMessage) -> io::Result
 
     if let Some(Operation::Command(operation)) = operation {
         validate_command_result(&operation, &decoded)?;
+        operation
+            .diagnostic
+            .log_terminal(&decoded, operation.stream_overflowed);
         let CommandOperation {
             result_tx,
             stream_overflowed,
@@ -820,6 +1075,7 @@ fn dispatch_command_error(shared: &Arc<Shared>, msg: &RawMessage) -> io::Result<
         let err = vsock_proto::decode_error(&msg.payload)
             .map(|message| io::Error::other(message.to_string()))
             .map_err(command_protocol_error)?;
+        operation.diagnostic.log_error_response(&err);
         let _ = operation.result_tx.send(Err(err));
         return Ok(true);
     }
@@ -1066,16 +1322,66 @@ async fn write_command_frame(
     msg_type: u8,
     seq: u32,
     payload: &[u8],
+    diagnostic: Option<CommandFrameDiagnostic>,
 ) -> io::Result<()> {
     let data = vsock_proto::encode(msg_type, seq, payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
     let state = Arc::new(AtomicU8::new(COMMAND_FRAME_WRITE_NOT_STARTED));
     let guard = CommandFrameWriteGuard::new(Arc::clone(shared), Arc::clone(&state));
 
+    let wait_started_at = Instant::now();
     let mut writer = shared.writer.lock().await;
+    let wait_elapsed_ms = wait_started_at.elapsed().as_millis();
     state.store(COMMAND_FRAME_WRITE_STARTED, Ordering::Release);
-    writer.write_all(&data).await?;
-    state.store(COMMAND_FRAME_WRITE_COMPLETED, Ordering::Release);
+    let write_started_at = Instant::now();
+    let result = writer.write_all(&data).await;
+    let write_elapsed_ms = write_started_at.elapsed().as_millis();
+    if result.is_ok() {
+        state.store(COMMAND_FRAME_WRITE_COMPLETED, Ordering::Release);
+    } else {
+        shared.poison_connection();
+    }
+    drop(writer);
+
+    if wait_elapsed_ms >= COMMAND_FRAME_WRITE_SLOW_THRESHOLD.as_millis()
+        && let Some(diagnostic) = &diagnostic
+    {
+        tracing::warn!(
+            seq = diagnostic.seq,
+            label = %diagnostic.label_log,
+            frame = diagnostic.frame,
+            wait_elapsed_ms,
+            "slow command frame writer lock wait"
+        );
+    }
+
+    if write_elapsed_ms >= COMMAND_FRAME_WRITE_SLOW_THRESHOLD.as_millis()
+        && result.is_ok()
+        && let Some(diagnostic) = &diagnostic
+    {
+        tracing::warn!(
+            seq = diagnostic.seq,
+            label = %diagnostic.label_log,
+            frame = diagnostic.frame,
+            write_elapsed_ms,
+            "slow command frame write"
+        );
+    }
+
+    if let Err(e) = result {
+        if let Some(diagnostic) = &diagnostic {
+            tracing::warn!(
+                seq = diagnostic.seq,
+                label = %diagnostic.label_log,
+                frame = diagnostic.frame,
+                write_elapsed_ms,
+                error = %e,
+                "command frame write failed"
+            );
+        }
+        return Err(e);
+    }
+
     drop(guard);
 
     Ok(())
@@ -1382,7 +1688,9 @@ impl VsockHost {
         };
         let (result_tx, result_rx) = oneshot::channel();
         let seq = self.shared.next_seq();
+        let diagnostic = CommandOperationDiagnostic::new(seq, request.label);
         let operation = CommandOperation {
+            diagnostic: diagnostic.clone(),
             result_tx,
             stream_tx,
             stdout_capture: command_capture_state(request.stdout),
@@ -1410,12 +1718,20 @@ impl VsockHost {
 
         let mut registration_guard =
             CommandOperationRegistrationGuard::new(Arc::clone(&self.shared), seq);
-        write_command_frame(&self.shared, MSG_COMMAND_START, seq, &payload).await?;
+        write_command_frame(
+            &self.shared,
+            MSG_COMMAND_START,
+            seq,
+            &payload,
+            Some(diagnostic.frame("start")),
+        )
+        .await?;
         registration_guard.disarm();
 
         Ok(CommandOperationHandle {
             shared: Arc::clone(&self.shared),
             seq: Some(seq),
+            diagnostic,
             result_rx: Some(result_rx),
             stream_rx,
         })
@@ -1864,9 +2180,131 @@ mod tests {
         }
     }
 
+    fn command_operation_for_snapshot(seq: u32, label: &str) -> Operation {
+        let (result_tx, _result_rx) = oneshot::channel();
+        Operation::Command(CommandOperation {
+            diagnostic: CommandOperationDiagnostic::new(seq, label),
+            result_tx,
+            stream_tx: None,
+            stdout_capture: CommandCaptureState::Discard,
+            stderr_capture: CommandCaptureState::Discard,
+            stdout_stream: None,
+            stderr_stream: None,
+            expected_output_seq: 0,
+            stream_overflowed: false,
+        })
+    }
+
     fn is_connected(host: &VsockHost) -> bool {
         let guard = host.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         matches!(&*guard, ConnectionState::Connected { .. })
+    }
+
+    #[test]
+    fn command_termination_notable_tracks_nonzero_exit() {
+        assert!(!command_termination_is_notable(
+            CommandTermination::Exited { exit_code: 0 }
+        ));
+        assert!(command_termination_is_notable(CommandTermination::Exited {
+            exit_code: 1
+        }));
+        assert!(command_termination_is_notable(CommandTermination::TimedOut));
+    }
+
+    #[test]
+    fn command_label_log_truncates_at_utf8_boundary() {
+        let exact = "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES);
+        assert_eq!(command_label_log(&exact), exact);
+
+        let over_ascii = format!("{}b", "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES));
+        assert_eq!(
+            command_label_log(&over_ascii),
+            format!("{}...", "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES))
+        );
+
+        let boundary = format!(
+            "{}\u{00e9}tail",
+            "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES - 2)
+        );
+        assert_eq!(
+            command_label_log(&boundary),
+            format!(
+                "{}\u{00e9}...",
+                "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES - 2)
+            )
+        );
+
+        let crossing = format!(
+            "{}\u{00e9}tail",
+            "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES - 1)
+        );
+        assert_eq!(
+            command_label_log(&crossing),
+            format!("{}...", "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES - 1))
+        );
+    }
+
+    #[test]
+    fn command_diagnostic_keeps_only_truncated_label_log() {
+        let label = format!(
+            "{}secret-tail",
+            "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES)
+        );
+        let mut diagnostic = CommandOperationDiagnostic::new(7, &label);
+        diagnostic.registered_at =
+            Instant::now() - COMMAND_STAGE_SLOW_THRESHOLD - Duration::from_millis(1);
+
+        assert_eq!(
+            diagnostic.label_log,
+            format!("{}...", "a".repeat(COMMAND_LABEL_LOG_PREFIX_MAX_BYTES))
+        );
+        assert!(!diagnostic.label_log.contains("secret-tail"));
+        assert_eq!(diagnostic.frame("start").label_log, diagnostic.label_log);
+        assert_eq!(diagnostic.snapshot().label_log, diagnostic.label_log);
+        assert_eq!(
+            diagnostic.mark_first_output().unwrap().label_log,
+            diagnostic.label_log
+        );
+    }
+
+    #[test]
+    fn command_diagnostic_marks_only_first_slow_output() {
+        let mut diagnostic = CommandOperationDiagnostic {
+            seq: 9,
+            label_log: "slow-first-output".to_string(),
+            registered_at: Instant::now() - COMMAND_STAGE_SLOW_THRESHOLD - Duration::from_millis(1),
+            first_output_at: None,
+        };
+
+        let snapshot = diagnostic.mark_first_output().unwrap();
+        assert_eq!(snapshot.seq, 9);
+        assert_eq!(snapshot.label_log, "slow-first-output");
+        assert!(snapshot.elapsed_ms >= COMMAND_STAGE_SLOW_THRESHOLD.as_millis());
+        assert!(diagnostic.mark_first_output().is_none());
+    }
+
+    #[test]
+    fn command_operation_close_snapshot_limits_logged_operations() {
+        let active_count = COMMAND_CLOSE_ACTIVE_LOG_LIMIT + 3;
+        let mut operations = HashMap::new();
+        for seq in 0..active_count {
+            operations.insert(
+                seq as u32,
+                command_operation_for_snapshot(seq as u32, &format!("operation-{seq}")),
+            );
+        }
+
+        let snapshot = command_operation_close_snapshot(&operations);
+        assert_eq!(snapshot.active_count, active_count);
+        assert_eq!(snapshot.operations.len(), COMMAND_CLOSE_ACTIVE_LOG_LIMIT);
+        assert_eq!(
+            snapshot.active_count - snapshot.operations.len(),
+            active_count - COMMAND_CLOSE_ACTIVE_LOG_LIMIT
+        );
+        for operation in snapshot.operations {
+            assert!(operations.contains_key(&operation.seq));
+            assert!(operation.label_log.starts_with("operation-"));
+        }
     }
 
     async fn read_guest_message(stream: &mut UnixStream, decoder: &mut Decoder) -> RawMessage {
@@ -1879,6 +2317,21 @@ mod tests {
                 return msgs.remove(0);
             }
         }
+    }
+
+    async fn read_guest_messages(
+        stream: &mut UnixStream,
+        decoder: &mut Decoder,
+        count: usize,
+    ) -> Vec<RawMessage> {
+        let mut messages = Vec::new();
+        let mut buf = [0u8; 4096];
+        while messages.len() < count {
+            let n = stream.read(&mut buf).await.unwrap();
+            assert_ne!(n, 0, "connection closed before messages");
+            messages.extend(decoder.decode(&buf[..n]).unwrap());
+        }
+        messages
     }
 
     async fn setup_host_and_guest() -> (VsockHost, UnixStream, Decoder) {
@@ -2102,6 +2555,107 @@ mod tests {
             }
         );
         assert_eq!(operation_count(&host), 0);
+    }
+
+    #[tokio::test]
+    async fn command_capture_repeated_short_operations_soak() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let host = Arc::new(host);
+
+        for i in 0..8 {
+            let label = format!("repeat-{i}");
+            let handle = host
+                .start_command_operation(CommandOperationRequest {
+                    timeout_ms: 5000,
+                    command: "printf ok",
+                    env: &[],
+                    sudo: false,
+                    label: &label,
+                    stdout: CommandOutputPolicy::Capture { limit_bytes: 16 },
+                    stderr: CommandOutputPolicy::Capture { limit_bytes: 16 },
+                    stream_queue_capacity: None,
+                })
+                .await
+                .unwrap();
+
+            let msg = read_guest_message(&mut guest, &mut decoder).await;
+            assert_eq!(msg.msg_type, MSG_COMMAND_START);
+            let stdout = format!("ok-{i}");
+            send_command_result(
+                &mut guest,
+                msg.seq,
+                CommandTermination::Exited { exit_code: 0 },
+                stdout.as_bytes(),
+                b"",
+            )
+            .await;
+
+            let result = handle.wait(Duration::from_secs(5)).await.unwrap();
+            assert_eq!(
+                result.stdout,
+                CommandOwnedCapturedOutput::Captured {
+                    bytes: stdout.into_bytes(),
+                    truncated: false,
+                }
+            );
+            assert_eq!(operation_count(&host), 0);
+            assert!(is_connected(&host));
+        }
+
+        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+    }
+
+    #[tokio::test]
+    async fn command_capture_large_stdout_stderr_within_limits_soak() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let stdout = vec![b'o'; 64 * 1024];
+        let stderr = vec![b'e'; 64 * 1024];
+        let handle = host
+            .start_command_operation(CommandOperationRequest {
+                timeout_ms: 5000,
+                command: "large-capture",
+                env: &[],
+                sudo: false,
+                label: "large-capture",
+                stdout: CommandOutputPolicy::Capture {
+                    limit_bytes: stdout.len() as u32,
+                },
+                stderr: CommandOutputPolicy::Capture {
+                    limit_bytes: stderr.len() as u32,
+                },
+                stream_queue_capacity: None,
+            })
+            .await
+            .unwrap();
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            &stdout,
+            &stderr,
+        )
+        .await;
+
+        let result = handle.wait(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(
+            result.stdout,
+            CommandOwnedCapturedOutput::Captured {
+                bytes: stdout,
+                truncated: false,
+            }
+        );
+        assert_eq!(
+            result.stderr,
+            CommandOwnedCapturedOutput::Captured {
+                bytes: stderr,
+                truncated: false,
+            }
+        );
+        assert_eq!(operation_count(&host), 0);
+        assert!(is_connected(&host));
     }
 
     #[tokio::test]
@@ -2541,13 +3095,7 @@ mod tests {
         let first = start_capture_operation(&host, "cmd-a").await;
         let second = start_capture_operation(&host, "cmd-b").await;
 
-        let mut messages = Vec::new();
-        let mut buf = [0u8; 4096];
-        while messages.len() < 2 {
-            let n = guest.read(&mut buf).await.unwrap();
-            assert_ne!(n, 0, "connection closed before command start messages");
-            messages.extend(decoder.decode(&buf[..n]).unwrap());
-        }
+        let mut messages = read_guest_messages(&mut guest, &mut decoder, 2).await;
         let msg_a = messages.remove(0);
         let msg_b = messages.remove(0);
         assert_eq!(msg_a.msg_type, MSG_COMMAND_START);
@@ -2718,6 +3266,63 @@ mod tests {
 
         let result = handle.wait(Duration::from_secs(5)).await.unwrap();
         assert!(result.stream_overflowed);
+    }
+
+    #[tokio::test]
+    async fn command_stream_many_chunks_soak_does_not_block_terminal_result() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let mut handle = host
+            .command_stream(CommandStreamRequest {
+                timeout_ms: 5000,
+                command: "stream-many",
+                env: &[],
+                sudo: false,
+                label: "stream-many",
+                stdout: CommandOutputPolicy::Stream {
+                    limit_bytes: 1024,
+                    chunk_limit_bytes: 16,
+                },
+                stderr: CommandOutputPolicy::Discard,
+                stream_queue_capacity: Some(2),
+            })
+            .await
+            .unwrap();
+        let mut rx = handle.take_stream_receiver().unwrap();
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        for output_seq in 0..32 {
+            send_command_output(
+                &mut guest,
+                msg.seq,
+                output_seq,
+                CommandOutputStream::Stdout,
+                b"x",
+                false,
+            )
+            .await;
+        }
+        send_discarded_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+        )
+        .await;
+
+        let result = handle.wait(Duration::from_secs(5)).await.unwrap();
+        assert!(result.stream_overflowed);
+        assert_eq!(operation_count(&host), 0);
+        let mut buffered_chunks = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(_) => buffered_chunks += 1,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    panic!("stream receiver should be closed after terminal result");
+                }
+            }
+        }
+        assert!(buffered_chunks <= 2);
     }
 
     #[tokio::test]

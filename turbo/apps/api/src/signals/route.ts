@@ -10,6 +10,8 @@ import { agentRunTelemetryRoutes } from "./routes/agent-run-telemetry";
 import { agentSessionsRoutes } from "./routes/agent-sessions-id";
 import { authMeRoutes } from "./routes/auth-me";
 import { audioTranscriptionsV1Routes } from "./routes/audio-transcriptions-v1";
+import { cliAuthRoutes } from "./routes/cli-auth";
+import { cliAuthTestRoutes } from "./routes/cli-auth-test";
 import type { SignalRouteHandler } from "./context/route";
 import { chatThreadsV1Routes } from "./routes/chat-threads-v1";
 import { connectorsTypeAuthorizeRoutes } from "./routes/connectors-type-authorize";
@@ -132,6 +134,8 @@ export const ROUTES: readonly RouteEntry[] = [
     handler: apiHealth$,
   },
   ...authMeRoutes,
+  ...cliAuthRoutes,
+  ...cliAuthTestRoutes,
   ...healthAuthProbeRoutes,
   ...githubOauthRoutes,
   ...internalEventConsumerAxiomRoutes,

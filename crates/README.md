@@ -66,21 +66,21 @@ Both HTTP clients in the workspace use `rustls-platform-verifier` to read from t
 cargo build
 cargo build --release
 
-# Cross-compile for aarch64 (production target)
+# Cross-compile for aarch64 with the faster CI/dev profile
 # Step 1: build guest binaries
 cargo build --target aarch64-unknown-linux-musl \
   -p guest-agent -p guest-download -p guest-init -p guest-mock-claude -p guest-mock-codex -p guest-reseed -p guest-write-file \
-  --release
+  --profile ci
 
 # Step 2: build runner with embedded guests
-GUEST_AGENT_PATH=target/aarch64-unknown-linux-musl/release/guest-agent \
-GUEST_DOWNLOAD_PATH=target/aarch64-unknown-linux-musl/release/guest-download \
-GUEST_INIT_PATH=target/aarch64-unknown-linux-musl/release/guest-init \
-GUEST_MOCK_CLAUDE_PATH=target/aarch64-unknown-linux-musl/release/guest-mock-claude \
-GUEST_MOCK_CODEX_PATH=target/aarch64-unknown-linux-musl/release/guest-mock-codex \
-GUEST_RESEED_PATH=target/aarch64-unknown-linux-musl/release/guest-reseed \
-GUEST_WRITE_FILE_PATH=target/aarch64-unknown-linux-musl/release/guest-write-file \
-cargo build --target aarch64-unknown-linux-musl -p runner --release
+GUEST_AGENT_PATH=target/aarch64-unknown-linux-musl/ci/guest-agent \
+GUEST_DOWNLOAD_PATH=target/aarch64-unknown-linux-musl/ci/guest-download \
+GUEST_INIT_PATH=target/aarch64-unknown-linux-musl/ci/guest-init \
+GUEST_MOCK_CLAUDE_PATH=target/aarch64-unknown-linux-musl/ci/guest-mock-claude \
+GUEST_MOCK_CODEX_PATH=target/aarch64-unknown-linux-musl/ci/guest-mock-codex \
+GUEST_RESEED_PATH=target/aarch64-unknown-linux-musl/ci/guest-reseed \
+GUEST_WRITE_FILE_PATH=target/aarch64-unknown-linux-musl/ci/guest-write-file \
+cargo build --target aarch64-unknown-linux-musl -p runner --profile ci
 ```
 
 ## Testing

@@ -20,6 +20,7 @@ import { githubOauthRoutes } from "./routes/github-oauth";
 import { internalEventConsumerTelegramTypingRoutes } from "./routes/internal-event-consumers-telegram-typing";
 import { logsSearchRoutes } from "./routes/logs-search";
 import { modelStatsRoutes } from "./routes/model-stats";
+import { runnersRoutes } from "./routes/runners";
 import { usageRoutes } from "./routes/usage";
 import { userExportRoutes } from "./routes/user-export";
 import { zeroAgentInstructionsRoutes } from "./routes/zero-agent-instructions";
@@ -221,6 +222,7 @@ export const ROUTES: readonly RouteEntry[] = [
   ...chatThreadsV1Routes,
   ...audioTranscriptionsV1Routes,
   ...modelStatsRoutes,
+  ...runnersRoutes,
   ...testOAuthProviderAuthorizeRoutes,
   ...testOAuthProviderEchoRoutes,
   ...testOAuthProviderTokenRoutes,

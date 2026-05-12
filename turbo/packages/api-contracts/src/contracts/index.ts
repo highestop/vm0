@@ -932,6 +932,12 @@ export {
   type SendChatMessageResponse,
 } from "./integrations";
 export {
+  deleteGithubInstallationResponseSchema,
+  integrationsGithubContract,
+  type DeleteGithubInstallationResponse,
+  type IntegrationsGithubContract,
+} from "./integrations-github";
+export {
   zeroBillingStatusContract,
   zeroBillingCheckoutContract,
   zeroBillingPortalContract,

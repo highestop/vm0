@@ -24,14 +24,28 @@ function buildProxyHeaders(request: Request): Headers {
       headers.set(key, value);
     }
   }
+  const requestUrl = new URL(request.url);
+  headers.set("x-forwarded-host", requestUrl.host);
+  headers.set("x-forwarded-proto", requestUrl.protocol.replace(":", ""));
   return headers;
 }
 
 function buildProxyResponse(response: Response): Response {
   const headers = new Headers();
   for (const [key, value] of response.headers) {
-    if (!isHopByHopHeader(key)) {
+    if (key.toLowerCase() !== "set-cookie" && !isHopByHopHeader(key)) {
       headers.set(key, value);
+    }
+  }
+  const cookies = response.headers.getSetCookie();
+  if (cookies.length > 0) {
+    for (const cookie of cookies) {
+      headers.append("set-cookie", cookie);
+    }
+  } else {
+    const cookie = response.headers.get("set-cookie");
+    if (cookie) {
+      headers.set("set-cookie", cookie);
     }
   }
   return new Response(response.body, {

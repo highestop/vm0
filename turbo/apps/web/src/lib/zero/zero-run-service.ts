@@ -332,6 +332,35 @@ function resolveEffectiveModel(
   };
 }
 
+function resolveRunModelForRecord(
+  effectiveModel: ReturnType<typeof resolveEffectiveModel>,
+  admissionContext: {
+    modelProviderId?: string | null;
+    modelProviderCredentialScope?: string;
+    selectedModel?: string;
+  },
+  options: { modelFirstEnabled: boolean },
+): ReturnType<typeof resolveEffectiveModel> {
+  if (!options.modelFirstEnabled) {
+    return effectiveModel;
+  }
+
+  return {
+    modelProviderId:
+      effectiveModel.modelProviderId ??
+      admissionContext.modelProviderId ??
+      undefined,
+    modelProviderCredentialScope:
+      effectiveModel.modelProviderCredentialScope ??
+      admissionContext.modelProviderCredentialScope ??
+      undefined,
+    selectedModelOverride:
+      effectiveModel.selectedModelOverride ??
+      admissionContext.selectedModel ??
+      undefined,
+  };
+}
+
 function buildZeroRunMetadata(
   params: CreateZeroRunParams,
   runParams: CreateRunParams,
@@ -722,6 +751,11 @@ async function createZeroRunRecord(
     providerType: admissionContext.providerType,
     agentCompose: resolved.composeContent,
   });
+  const resolvedRunModel = resolveRunModelForRecord(
+    effectiveModel,
+    admissionContext,
+    { modelFirstEnabled },
+  );
 
   if (!params.sessionId) {
     await validateComposeRequirements(
@@ -744,9 +778,9 @@ async function createZeroRunRecord(
       params.userId,
       params.modelProvider,
       resolved.composeContent,
-      effectiveModel.selectedModelOverride,
-      effectiveModel.modelProviderId,
-      effectiveModel.modelProviderCredentialScope,
+      resolvedRunModel.selectedModelOverride,
+      resolvedRunModel.modelProviderId,
+      resolvedRunModel.modelProviderCredentialScope,
     );
   });
   const round3Capture = timed(async () => {
@@ -790,7 +824,7 @@ async function createZeroRunRecord(
     sessionId: params.sessionId,
     appendSystemPrompt,
     modelProvider: params.modelProvider,
-    ...effectiveModel,
+    ...resolvedRunModel,
     callbacks: params.callbacks,
     disallowedTools: [...DISALLOWED_TOOLS],
     vars: { ZERO_AGENT_ID: params.agentId },
@@ -901,7 +935,14 @@ async function dispatchZeroRun(
       apiStartTime: record.apiStartTime,
     });
 
-    // 8. Dispatch with pre-built context (callbacks already registered above)
+    // 8. Persist resolved model metadata before dispatch so failed runs still
+    // carry the model signature used for admission and context building. The
+    // queued path does the same before dispatching from the queue worker.
+    if (contextResult?.resolvedModelProvider || contextResult?.selectedModel) {
+      await updateZeroRunModelInfo(record.run.id, contextResult);
+    }
+
+    // 9. Dispatch with pre-built context (callbacks already registered above)
     const dispatchResult = await buildAndDispatchRun({
       runId: record.run.id,
       context: contextResult.context,
@@ -918,13 +959,6 @@ async function dispatchZeroRun(
         diagnosticSpans: contextResult.timings.diagnosticSpans,
       },
     });
-
-    // 9. Update zero-layer metadata with model fields resolved during dispatch.
-    // The base row (triggerSource, scheduleId, triggerAgentId) was already
-    // inserted in createZeroRunRecord; here we only backfill model info.
-    if (contextResult?.resolvedModelProvider || contextResult?.selectedModel) {
-      await updateZeroRunModelInfo(record.run.id, contextResult);
-    }
 
     return dispatchResult;
   } catch (error) {

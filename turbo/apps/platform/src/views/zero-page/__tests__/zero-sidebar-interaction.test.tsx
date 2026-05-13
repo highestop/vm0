@@ -369,8 +369,19 @@ describe("zero sidebar - delete thread button shows confirmation (SIDEBAR-D-018)
       expect(screen.getByText("First chat")).toBeInTheDocument();
     });
 
-    const deleteButtons = screen.getAllByLabelText("Delete chat");
-    click(deleteButtons[0]);
+    // ChatThreadPin enabled by default — open the kebab menu, then click Delete.
+    const menuTriggers = screen.getAllByLabelText("Open chat menu");
+    click(menuTriggers[0]);
+    const deleteItem = await waitFor(() => {
+      const item = screen.getAllByRole("menuitem").find((el) => {
+        return /Delete chat/i.test(el.textContent ?? "");
+      });
+      if (!item) {
+        throw new Error("Delete chat menu item not visible yet");
+      }
+      return item;
+    });
+    click(deleteItem);
 
     await waitFor(() => {
       const dialog = screen.getByRole("dialog");
@@ -422,8 +433,19 @@ describe("zero sidebar - confirm delete removes thread (SIDEBAR-D-019)", () => {
       expect(screen.getByText("First chat")).toBeInTheDocument();
     });
 
-    const deleteButtons = screen.getAllByLabelText("Delete chat");
-    click(deleteButtons[0]);
+    // ChatThreadPin enabled by default — open the kebab menu, then click Delete.
+    const menuTriggers = screen.getAllByLabelText("Open chat menu");
+    click(menuTriggers[0]);
+    const deleteItem = await waitFor(() => {
+      const item = screen.getAllByRole("menuitem").find((el) => {
+        return /Delete chat/i.test(el.textContent ?? "");
+      });
+      if (!item) {
+        throw new Error("Delete chat menu item not visible yet");
+      }
+      return item;
+    });
+    click(deleteItem);
 
     const dialog = await waitFor(() => {
       return screen.getByRole("dialog");

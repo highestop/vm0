@@ -28,7 +28,7 @@ pub(crate) use cow_cleanup::cow_destroy_retry_policy;
 pub(crate) use invariant::InvariantConfig;
 pub use invariant::{PREWARM_SCRIPT, config_hash};
 
-pub struct FirecrackerFactory {
+pub(crate) struct FirecrackerFactory {
     config: FirecrackerConfig,
     factory_paths: FactoryPaths,
     runtime_paths: RuntimePaths,
@@ -53,7 +53,7 @@ impl FirecrackerFactory {
     ///
     /// When `netns_pool` is provided, the factory shares it instead of
     /// creating a new one in `startup()` (used for multi-profile runners).
-    pub async fn new(
+    pub(crate) async fn new(
         config: FirecrackerConfig,
         netns_pool: Option<NetnsPoolHandle>,
         device_pool: nbd_cow::pool::DevicePoolHandle,
@@ -93,11 +93,6 @@ impl FirecrackerFactory {
             cleanup_group: FactoryCleanupGroup::new(),
             leak_cleaner: None,
         })
-    }
-
-    /// Whether this factory uses snapshot restore (vs fresh boot).
-    pub fn has_snapshot(&self) -> bool {
-        self.config.snapshot.is_some()
     }
 
     /// # Panics

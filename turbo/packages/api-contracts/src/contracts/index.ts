@@ -1336,4 +1336,6 @@ export {
   zeroIntegrationsAgentPhoneContract,
   type ZeroIntegrationsAgentPhoneContract,
   type AgentPhoneConnectResponse,
+  type AgentPhoneLinkStatusResponse,
+  type AgentPhoneStartLinkResponse,
 } from "./zero-integrations-agentphone";

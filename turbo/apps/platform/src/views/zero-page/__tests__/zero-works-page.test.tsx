@@ -18,8 +18,10 @@ import {
   zeroIntegrationsSlackContract,
   type SlackOrgStatus,
 } from "@vm0/api-contracts/contracts/zero-integrations-slack";
+import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { createMockApi } from "../../../mocks/msw-contract.ts";
 import { pathname$ } from "../../../signals/route.ts";
+import { setMockAgentPhoneIntegration } from "../../../mocks/handlers/api-integrations-agentphone.ts";
 
 const context = testContext();
 const mockApi = createMockApi(context);
@@ -66,13 +68,21 @@ describe("works page - slack integration status display", () => {
   });
 
   it("shows a connected indicator when Slack is connected (CONN-D-059)", async () => {
-    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: false });
+    mockSlackAPI({
+      isConnected: true,
+      isInstalled: true,
+      isAdmin: false,
+      workspaceName: "VM0 HQ",
+    });
     await renderWorksPage();
 
     await waitFor(() => {
       expect(
         screen.getByTestId("slack-connected-indicator"),
       ).toBeInTheDocument();
+      expect(screen.getByTestId("slack-connected-indicator")).toHaveTextContent(
+        "Connected (VM0 HQ)",
+      );
     });
   });
 
@@ -117,6 +127,85 @@ describe("works page - telegram integration card", () => {
 
     await waitFor(() => {
       expect(context.store.get(pathname$)).toBe("/settings/telegram");
+    });
+  });
+});
+
+describe("works page - AgentPhone integration card", () => {
+  it("hides AgentPhone when the feature switch is off", async () => {
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
+    detachedSetupPage({
+      context,
+      path: "/works",
+      featureSwitches: { [FeatureSwitchKey.AgentPhoneAppUi]: false },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Telegram")).toBeInTheDocument();
+      expect(screen.queryByText("AgentPhone")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows AgentPhone connection status and opens settings", async () => {
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
+    setMockAgentPhoneIntegration({
+      linked: true,
+      phoneHandle: "+15555551212",
+      agentPhoneNumber: "+19039853128",
+      configured: true,
+    });
+    detachedSetupPage({
+      context,
+      path: "/works",
+      featureSwitches: { [FeatureSwitchKey.AgentPhoneAppUi]: true },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("AgentPhone")).toBeInTheDocument();
+      expect(screen.getByText("Text Zero at +19039853128")).toBeInTheDocument();
+      expect(screen.queryByText(/Connected as/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("agentphone-connected-indicator"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("agentphone-connected-indicator"),
+      ).toHaveTextContent("Connected (+15555551212)");
+      expect(
+        screen.getByLabelText("Open AgentPhone settings"),
+      ).toBeInTheDocument();
+    });
+
+    click(screen.getByLabelText("Open AgentPhone settings"));
+
+    await waitFor(() => {
+      expect(context.store.get(pathname$)).toBe("/settings/agentphone");
+    });
+  });
+
+  it("opens AgentPhone settings when the user is unlinked", async () => {
+    mockSlackAPI({ isConnected: true, isInstalled: true, isAdmin: true });
+    setMockAgentPhoneIntegration({
+      linked: false,
+      agentPhoneNumber: "+19039853128",
+      configured: true,
+    });
+    detachedSetupPage({
+      context,
+      path: "/works",
+      featureSwitches: { [FeatureSwitchKey.AgentPhoneAppUi]: true },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Open AgentPhone settings"),
+      ).toBeInTheDocument();
+      expect(screen.queryByLabelText("Connect AgentPhone")).toBeNull();
+    });
+
+    click(screen.getByLabelText("Open AgentPhone settings"));
+
+    await waitFor(() => {
+      expect(context.store.get(pathname$)).toBe("/settings/agentphone");
     });
   });
 });

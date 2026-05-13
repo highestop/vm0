@@ -21,8 +21,9 @@
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::io::RawFd;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -34,22 +35,34 @@ use tokio::time::{self, Instant};
 use vsock_proto::{
     CommandCapturedOutput, CommandOutputPolicy, CommandOutputStream, CommandTermination, Decoder,
     MSG_COMMAND_CANCEL, MSG_COMMAND_OUTPUT, MSG_COMMAND_RESULT, MSG_COMMAND_START, MSG_ERROR,
-    MSG_EXEC, MSG_EXEC_RESULT, MSG_PING, MSG_PONG, MSG_PROCESS_EXIT, MSG_READY, MSG_SHUTDOWN,
-    MSG_SHUTDOWN_ACK, MSG_SPAWN_WATCH, MSG_SPAWN_WATCH_RESULT, MSG_STDOUT_CHUNK, MSG_WRITE_FILE,
+    MSG_PING, MSG_PONG, MSG_PROCESS_EXIT, MSG_READY, MSG_SHUTDOWN, MSG_SHUTDOWN_ACK,
+    MSG_SPAWN_WATCH, MSG_SPAWN_WATCH_RESULT, MSG_STDOUT_CHUNK, MSG_WRITE_FILE,
     MSG_WRITE_FILE_RESULT, RawMessage,
 };
 
 const READ_BUF_SIZE: usize = 64 * 1024;
 const DEFAULT_COMMAND_CAPTURE_LIMIT_BYTES: u32 = 1024 * 1024;
+const SMALL_COMMAND_CAPTURE_LIMIT_BYTES: u32 = 64 * 1024;
+const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 const DEFAULT_COMMAND_STREAM_CAPACITY: usize = 32;
-const MAX_COMMAND_STREAM_CAPACITY: usize = 1024;
+// Large enough for the current 64 MiB guest-log copy cap even when the guest
+// emits stream events at the command drainer's 8 KiB read granularity.
+const MAX_COMMAND_STREAM_CAPACITY: usize = 8192;
+const COPY_TEMP_CREATE_ATTEMPTS: usize = 16;
 const COMMAND_LABEL_LOG_PREFIX_MAX_BYTES: usize = 100;
 const COMMAND_CLOSE_ACTIVE_LOG_LIMIT: usize = 16;
 const COMMAND_FRAME_WRITE_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
 const COMMAND_STAGE_SLOW_THRESHOLD: Duration = Duration::from_secs(5);
+const COMMAND_DROP_CANCEL_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+const COPY_FILE_STREAM_CHUNK_LIMIT: u32 = 64 * 1024;
+const COPY_FILE_STREAM_MAX_BYTES: u64 = 64 * 1024 * 1024;
+// Copying is the one built-in streaming consumer that must tolerate the host
+// reader briefly outrunning the temp-file writer without failing the command.
+const COPY_FILE_STREAM_QUEUE_CAPACITY: usize = MAX_COMMAND_STREAM_CAPACITY;
 const COMMAND_FRAME_WRITE_NOT_STARTED: u8 = 0;
 const COMMAND_FRAME_WRITE_STARTED: u8 = 1;
 const COMMAND_FRAME_WRITE_COMPLETED: u8 = 2;
+static COPY_TEMP_NONCE: AtomicU64 = AtomicU64::new(1);
 
 /// Result of executing a command on the guest.
 #[derive(Debug, Clone)]
@@ -57,6 +70,8 @@ pub struct ExecResult {
     pub exit_code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 /// Event emitted when a spawned process exits.
@@ -141,6 +156,30 @@ pub struct CommandStreamRequest<'a> {
     /// `None` uses the default queue capacity. Zero and oversized capacities
     /// are rejected.
     pub stream_queue_capacity: Option<usize>,
+}
+
+/// Request parameters for copying a guest file to a host path through command
+/// operation streaming.
+#[derive(Debug, Clone, Copy)]
+pub struct CopyFileOptions {
+    pub max_bytes: u64,
+    pub timeout_ms: u32,
+    pub missing_ok: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CopyFileResult {
+    pub bytes_copied: u64,
+}
+
+enum CopyFileCommandStatus {
+    Present,
+    Missing,
+}
+
+enum CopyFileOutcome {
+    Copied { bytes_copied: u64 },
+    Missing,
 }
 
 struct CommandOperation {
@@ -589,6 +628,81 @@ impl Drop for CommandOperationHandle {
     }
 }
 
+struct CommandCancelOnDropGuard {
+    shared: Option<Arc<Shared>>,
+    seq: u32,
+    diagnostic: CommandOperationDiagnostic,
+}
+
+impl CommandCancelOnDropGuard {
+    fn new(handle: &CommandOperationHandle) -> Option<Self> {
+        Some(Self {
+            shared: Some(Arc::clone(&handle.shared)),
+            seq: handle.seq?,
+            diagnostic: handle.diagnostic.clone(),
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.shared = None;
+    }
+}
+
+impl Drop for CommandCancelOnDropGuard {
+    fn drop(&mut self) {
+        let Some(shared) = self.shared.take() else {
+            return;
+        };
+        let seq = self.seq;
+        let diagnostic = self.diagnostic.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+
+        handle.spawn(async move {
+            let payload = vsock_proto::encode_command_cancel();
+            let result = tokio::time::timeout(
+                COMMAND_DROP_CANCEL_WRITE_TIMEOUT,
+                write_command_frame(
+                    &shared,
+                    MSG_COMMAND_CANCEL,
+                    seq,
+                    &payload,
+                    Some(diagnostic.frame("drop-cancel")),
+                ),
+            )
+            .await;
+            match result {
+                Ok(Ok(())) => {
+                    tracing::info!(
+                        seq = seq,
+                        label = %diagnostic.label_log,
+                        elapsed_ms = diagnostic.elapsed_ms(),
+                        "command operation cancel sent on drop"
+                    );
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(
+                        seq = seq,
+                        label = %diagnostic.label_log,
+                        elapsed_ms = diagnostic.elapsed_ms(),
+                        error = %err,
+                        "command operation cancel on drop failed"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        seq = seq,
+                        label = %diagnostic.label_log,
+                        elapsed_ms = diagnostic.elapsed_ms(),
+                        "command operation cancel on drop timed out"
+                    );
+                }
+            }
+        });
+    }
+}
+
 struct ChunkedWriteCleanupGuard {
     shared: Option<Arc<Shared>>,
     command: String,
@@ -642,6 +756,40 @@ impl Drop for ChunkedWriteCleanupGuard {
                 )
                 .await;
             });
+        }
+    }
+}
+
+struct HostTempFileGuard {
+    path: PathBuf,
+    active: bool,
+}
+
+impl HostTempFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, active: true }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    async fn remove_now(&mut self) {
+        if self.active {
+            self.active = false;
+            remove_temp_file(&self.path).await;
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for HostTempFileGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -1387,6 +1535,343 @@ async fn write_command_frame(
     Ok(())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn command_capture_output_to_bytes(
+    name: &str,
+    output: CommandOwnedCapturedOutput,
+) -> io::Result<(Vec<u8>, bool)> {
+    match output {
+        CommandOwnedCapturedOutput::Captured { bytes, truncated } => Ok((bytes, truncated)),
+        CommandOwnedCapturedOutput::Discarded => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("command result discarded {name} for capture request"),
+        )),
+    }
+}
+
+fn append_diagnostic(stderr: &mut Vec<u8>, diagnostic: &str) {
+    if diagnostic.is_empty() {
+        return;
+    }
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+        stderr.push(b'\n');
+    }
+    stderr.extend_from_slice(diagnostic.as_bytes());
+}
+
+fn command_result_to_exec_result(result: CommandOperationResult) -> io::Result<ExecResult> {
+    if result.stream_overflowed {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "capture command unexpectedly overflowed a stream queue",
+        ));
+    }
+
+    let (stdout, stdout_truncated) = command_capture_output_to_bytes("stdout", result.stdout)?;
+    let (mut stderr, stderr_truncated) = command_capture_output_to_bytes("stderr", result.stderr)?;
+
+    let exit_code = match result.termination {
+        CommandTermination::Exited { exit_code } => exit_code,
+        CommandTermination::TimedOut => {
+            if stderr.is_empty() {
+                stderr.extend_from_slice(b"Timeout");
+            }
+            EXEC_TIMEOUT_EXIT_CODE
+        }
+        CommandTermination::Cancelled => {
+            if stderr.is_empty() {
+                stderr.extend_from_slice(b"Cancelled");
+            }
+            append_diagnostic(&mut stderr, &result.diagnostic);
+            1
+        }
+        CommandTermination::StartFailed | CommandTermination::WaitFailed => {
+            append_diagnostic(&mut stderr, &result.diagnostic);
+            1
+        }
+    };
+
+    Ok(ExecResult {
+        exit_code,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+    })
+}
+
+fn copy_temp_path(host_path: &Path, process_id: u32, seq: u32, nonce: u64) -> PathBuf {
+    let file_name = host_path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "copy".into());
+    host_path.with_file_name(format!(".{file_name}.vm0tmp-{process_id}-{seq}-{nonce}"))
+}
+
+async fn remove_temp_file(path: &Path) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => {}
+    }
+}
+
+async fn create_copy_temp_file(
+    host_path: &Path,
+    seq: u32,
+) -> io::Result<(PathBuf, tokio::fs::File)> {
+    for _ in 0..COPY_TEMP_CREATE_ATTEMPTS {
+        let nonce = COPY_TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+        let temp_path = copy_temp_path(host_path, std::process::id(), seq, nonce);
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "copy_file could not create a unique temp file after {COPY_TEMP_CREATE_ATTEMPTS} attempts"
+        ),
+    ))
+}
+
+async fn write_copy_stream_event(
+    temp_file: &mut tokio::fs::File,
+    bytes_copied: &mut u64,
+    max_bytes: u64,
+    event: CommandOutputEvent,
+) -> io::Result<()> {
+    if event.stream != CommandOutputStream::Stdout {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "copy_file received stderr stream event",
+        ));
+    }
+    if event.truncated {
+        return Err(io::Error::other("copy_file stdout stream was truncated"));
+    }
+    *bytes_copied = bytes_copied
+        .checked_add(event.chunk.len() as u64)
+        .ok_or_else(|| io::Error::other("copy_file byte count overflow"))?;
+    if *bytes_copied > max_bytes {
+        return Err(io::Error::other(format!(
+            "copy_file exceeded {max_bytes} bytes"
+        )));
+    }
+    temp_file.write_all(&event.chunk).await
+}
+
+fn copy_command_stderr(result: &CommandOperationResult) -> io::Result<(Vec<u8>, bool)> {
+    match &result.stderr {
+        CommandOwnedCapturedOutput::Captured { bytes, truncated } => {
+            Ok((bytes.clone(), *truncated))
+        }
+        CommandOwnedCapturedOutput::Discarded => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "copy_file command discarded stderr capture",
+        )),
+    }
+}
+
+fn validate_copy_command_result(
+    path: &str,
+    result: CommandOperationResult,
+    missing_ok: bool,
+) -> io::Result<CopyFileCommandStatus> {
+    if result.stream_overflowed {
+        return Err(io::Error::other(
+            "copy_file stream queue overflowed before all chunks were written",
+        ));
+    }
+    if !matches!(&result.stdout, CommandOwnedCapturedOutput::Discarded) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "copy_file command unexpectedly captured stdout",
+        ));
+    }
+    let (mut stderr, stderr_truncated) = copy_command_stderr(&result)?;
+    if stderr_truncated {
+        append_diagnostic(&mut stderr, "stderr truncated");
+    }
+    match result.termination {
+        CommandTermination::Exited { exit_code: 0 } if !stderr_truncated => {
+            Ok(CopyFileCommandStatus::Present)
+        }
+        CommandTermination::Exited { exit_code: 0 } => Err(io::Error::other(format!(
+            "copy_file stderr exceeded diagnostic limit for {path}: {}",
+            String::from_utf8_lossy(&stderr)
+        ))),
+        CommandTermination::Exited { exit_code: 66 } if missing_ok => {
+            Ok(CopyFileCommandStatus::Missing)
+        }
+        CommandTermination::Exited { exit_code: 66 } => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("guest file not found: {path}"),
+        )),
+        CommandTermination::Exited { exit_code } => Err(io::Error::other(format!(
+            "copy_file failed for {path} with exit code {exit_code}: {}",
+            String::from_utf8_lossy(&stderr)
+        ))),
+        CommandTermination::TimedOut => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("copy_file timed out for {path}"),
+        )),
+        CommandTermination::Cancelled => Err(io::Error::other(format!(
+            "copy_file was cancelled for {path}: {}",
+            result.diagnostic
+        ))),
+        CommandTermination::StartFailed | CommandTermination::WaitFailed => Err(io::Error::other(
+            format!("copy_file command failed for {path}: {}", result.diagnostic),
+        )),
+    }
+}
+
+async fn start_command_operation_on_shared(
+    shared: &Arc<Shared>,
+    request: CommandOperationRequest<'_>,
+) -> io::Result<CommandOperationHandle> {
+    if request.timeout_ms == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command operation requires a positive timeout; use spawn_watch for unbounded commands",
+        ));
+    }
+    if matches!(request.stream_queue_capacity, Some(0)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command stream queue capacity must be positive",
+        ));
+    }
+    if let Some(capacity) = request.stream_queue_capacity
+        && capacity > MAX_COMMAND_STREAM_CAPACITY
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("command stream queue capacity must be at most {MAX_COMMAND_STREAM_CAPACITY}"),
+        ));
+    }
+    let streams_output = command_output_policy_streams(request.stdout)
+        || command_output_policy_streams(request.stderr);
+    if !streams_output && request.stream_queue_capacity.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command stream queue capacity requires a streaming output policy",
+        ));
+    }
+    let stream_queue_capacity = if streams_output {
+        Some(
+            request
+                .stream_queue_capacity
+                .unwrap_or(DEFAULT_COMMAND_STREAM_CAPACITY),
+        )
+    } else {
+        None
+    };
+
+    let payload = vsock_proto::encode_command_start(
+        request.timeout_ms,
+        request.command,
+        request.env,
+        request.sudo,
+        request.label,
+        request.stdout,
+        request.stderr,
+    )
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+
+    let (stream_tx, stream_rx) = match stream_queue_capacity {
+        Some(capacity) => {
+            let (tx, rx) = mpsc::channel(capacity);
+            (Some(tx), Some(rx))
+        }
+        None => (None, None),
+    };
+    let (result_tx, result_rx) = oneshot::channel();
+    let seq = shared.next_seq();
+    let diagnostic = CommandOperationDiagnostic::new(seq, request.label);
+    let operation = CommandOperation {
+        diagnostic: diagnostic.clone(),
+        result_tx,
+        stream_tx,
+        stdout_capture: command_capture_state(request.stdout),
+        stderr_capture: command_capture_state(request.stderr),
+        stdout_stream: command_stream_state(request.stdout),
+        stderr_stream: command_stream_state(request.stderr),
+        expected_output_seq: 0,
+        stream_overflowed: false,
+    };
+
+    {
+        let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &mut *guard {
+            ConnectionState::Closed { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed",
+                ));
+            }
+            ConnectionState::Connected { operations, .. } => {
+                operations.insert(seq, Operation::Command(operation));
+            }
+        }
+    }
+
+    let mut registration_guard = CommandOperationRegistrationGuard::new(Arc::clone(shared), seq);
+    write_command_frame(
+        shared,
+        MSG_COMMAND_START,
+        seq,
+        &payload,
+        Some(diagnostic.frame("start")),
+    )
+    .await?;
+    registration_guard.disarm();
+
+    Ok(CommandOperationHandle {
+        shared: Arc::clone(shared),
+        seq: Some(seq),
+        diagnostic,
+        result_rx: Some(result_rx),
+        stream_rx,
+    })
+}
+
+async fn command_capture_on_shared(
+    shared: &Arc<Shared>,
+    request: CommandCaptureRequest<'_>,
+) -> io::Result<CommandOperationResult> {
+    let handle = start_command_operation_on_shared(
+        shared,
+        CommandOperationRequest {
+            timeout_ms: request.timeout_ms,
+            command: request.command,
+            env: request.env,
+            sudo: request.sudo,
+            label: request.label,
+            stdout: CommandOutputPolicy::Capture {
+                limit_bytes: request.stdout_limit_bytes,
+            },
+            stderr: CommandOutputPolicy::Capture {
+                limit_bytes: request.stderr_limit_bytes,
+            },
+            stream_queue_capacity: None,
+        },
+    )
+    .await?;
+    handle.wait(request.wait_timeout).await
+}
+
 async fn exec_on_shared(
     shared: &Arc<Shared>,
     command: &str,
@@ -1395,8 +1880,20 @@ async fn exec_on_shared(
     sudo: bool,
 ) -> io::Result<ExecResult> {
     let request_timeout = Duration::from_millis(timeout_ms as u64 + 5000);
-    exec_on_shared_with_request_timeout(shared, command, timeout_ms, env, sudo, request_timeout)
-        .await
+    exec_capture_on_shared(
+        shared,
+        CommandCaptureRequest {
+            timeout_ms,
+            command,
+            env,
+            sudo,
+            label: "exec",
+            stdout_limit_bytes: DEFAULT_COMMAND_CAPTURE_LIMIT_BYTES,
+            stderr_limit_bytes: DEFAULT_COMMAND_CAPTURE_LIMIT_BYTES,
+            wait_timeout: request_timeout,
+        },
+    )
+    .await
 }
 
 async fn exec_cleanup_on_shared(
@@ -1406,59 +1903,34 @@ async fn exec_cleanup_on_shared(
     env: &[(&str, &str)],
     sudo: bool,
 ) -> io::Result<ExecResult> {
-    exec_on_shared_with_request_timeout(
+    exec_capture_on_shared(
         shared,
-        command,
-        timeout_ms,
-        env,
-        sudo,
-        Duration::from_millis(timeout_ms as u64),
+        CommandCaptureRequest {
+            timeout_ms,
+            command,
+            env,
+            sudo,
+            label: "exec-cleanup",
+            stdout_limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+            stderr_limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+            wait_timeout: Duration::from_millis(timeout_ms as u64),
+        },
     )
     .await
 }
 
-async fn exec_on_shared_with_request_timeout(
+async fn exec_capture_on_shared(
     shared: &Arc<Shared>,
-    command: &str,
-    timeout_ms: u32,
-    env: &[(&str, &str)],
-    sudo: bool,
-    request_timeout: Duration,
+    request: CommandCaptureRequest<'_>,
 ) -> io::Result<ExecResult> {
-    if timeout_ms == 0 {
+    if request.timeout_ms == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "exec requires a positive timeout; use spawn_watch for unbounded commands",
         ));
     }
-    let payload = vsock_proto::encode_exec(timeout_ms, command, env, sudo);
-    let resp = request_on_shared(shared, MSG_EXEC, &payload, request_timeout).await?;
-
-    if resp.msg_type == MSG_ERROR {
-        let msg = vsock_proto::decode_error(&resp.payload)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        return Ok(ExecResult {
-            exit_code: 1,
-            stdout: Vec::new(),
-            stderr: msg.as_bytes().to_vec(),
-        });
-    }
-
-    if resp.msg_type != MSG_EXEC_RESULT {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unexpected response type: 0x{:02X}", resp.msg_type),
-        ));
-    }
-
-    let (exit_code, stdout, stderr) = vsock_proto::decode_exec_result(&resp.payload)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-    Ok(ExecResult {
-        exit_code,
-        stdout: stdout.to_vec(),
-        stderr: stderr.to_vec(),
-    })
+    let result = command_capture_on_shared(shared, request).await?;
+    command_result_to_exec_result(result)
 }
 
 impl VsockHost {
@@ -1628,113 +2100,7 @@ impl VsockHost {
         &self,
         request: CommandOperationRequest<'_>,
     ) -> io::Result<CommandOperationHandle> {
-        if request.timeout_ms == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "command operation requires a positive timeout; use spawn_watch for unbounded commands",
-            ));
-        }
-        if matches!(request.stream_queue_capacity, Some(0)) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "command stream queue capacity must be positive",
-            ));
-        }
-        if let Some(capacity) = request.stream_queue_capacity
-            && capacity > MAX_COMMAND_STREAM_CAPACITY
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "command stream queue capacity must be at most {MAX_COMMAND_STREAM_CAPACITY}"
-                ),
-            ));
-        }
-        let streams_output = command_output_policy_streams(request.stdout)
-            || command_output_policy_streams(request.stderr);
-        if !streams_output && request.stream_queue_capacity.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "command stream queue capacity requires a streaming output policy",
-            ));
-        }
-        let stream_queue_capacity = if streams_output {
-            Some(
-                request
-                    .stream_queue_capacity
-                    .unwrap_or(DEFAULT_COMMAND_STREAM_CAPACITY),
-            )
-        } else {
-            None
-        };
-
-        let payload = vsock_proto::encode_command_start(
-            request.timeout_ms,
-            request.command,
-            request.env,
-            request.sudo,
-            request.label,
-            request.stdout,
-            request.stderr,
-        )
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-
-        let (stream_tx, stream_rx) = match stream_queue_capacity {
-            Some(capacity) => {
-                let (tx, rx) = mpsc::channel(capacity);
-                (Some(tx), Some(rx))
-            }
-            None => (None, None),
-        };
-        let (result_tx, result_rx) = oneshot::channel();
-        let seq = self.shared.next_seq();
-        let diagnostic = CommandOperationDiagnostic::new(seq, request.label);
-        let operation = CommandOperation {
-            diagnostic: diagnostic.clone(),
-            result_tx,
-            stream_tx,
-            stdout_capture: command_capture_state(request.stdout),
-            stderr_capture: command_capture_state(request.stderr),
-            stdout_stream: command_stream_state(request.stdout),
-            stderr_stream: command_stream_state(request.stderr),
-            expected_output_seq: 0,
-            stream_overflowed: false,
-        };
-
-        {
-            let mut guard = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-            match &mut *guard {
-                ConnectionState::Closed { .. } => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::ConnectionReset,
-                        "connection closed",
-                    ));
-                }
-                ConnectionState::Connected { operations, .. } => {
-                    operations.insert(seq, Operation::Command(operation));
-                }
-            }
-        }
-
-        let mut registration_guard =
-            CommandOperationRegistrationGuard::new(Arc::clone(&self.shared), seq);
-        write_command_frame(
-            &self.shared,
-            MSG_COMMAND_START,
-            seq,
-            &payload,
-            Some(diagnostic.frame("start")),
-        )
-        .await?;
-        registration_guard.disarm();
-
-        Ok(CommandOperationHandle {
-            shared: Arc::clone(&self.shared),
-            seq: Some(seq),
-            diagnostic,
-            result_rx: Some(result_rx),
-            stream_rx,
-        })
+        start_command_operation_on_shared(&self.shared, request).await
     }
 
     /// Run a capture-only command operation with default capture limits.
@@ -1765,23 +2131,7 @@ impl VsockHost {
         &self,
         request: CommandCaptureRequest<'_>,
     ) -> io::Result<CommandOperationResult> {
-        let handle = self
-            .start_command_operation(CommandOperationRequest {
-                timeout_ms: request.timeout_ms,
-                command: request.command,
-                env: request.env,
-                sudo: request.sudo,
-                label: request.label,
-                stdout: CommandOutputPolicy::Capture {
-                    limit_bytes: request.stdout_limit_bytes,
-                },
-                stderr: CommandOutputPolicy::Capture {
-                    limit_bytes: request.stderr_limit_bytes,
-                },
-                stream_queue_capacity: None,
-            })
-            .await?;
-        handle.wait(request.wait_timeout).await
+        command_capture_on_shared(&self.shared, request).await
     }
 
     /// Start a streaming command operation with a bounded output event receiver.
@@ -1827,6 +2177,235 @@ impl VsockHost {
         exec_on_shared(&self.shared, command, timeout_ms, env, sudo).await
     }
 
+    /// Execute a capture-style command with explicit output limits.
+    pub async fn exec_capture(&self, request: CommandCaptureRequest<'_>) -> io::Result<ExecResult> {
+        exec_capture_on_shared(&self.shared, request).await
+    }
+
+    /// Read a small file from the guest through command capture.
+    ///
+    /// Missing files return `Ok(None)`. Files larger than `max_bytes` return
+    /// an error instead of silently returning truncated bytes.
+    pub async fn read_file(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        timeout_ms: u32,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let stdout_limit_bytes = u32::try_from(max_bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read_file max_bytes exceeds command capture limit",
+            )
+        })?;
+        if stdout_limit_bytes == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read_file max_bytes must be positive",
+            ));
+        }
+
+        const MISSING_FILE_EXIT_CODE: i32 = 66;
+        let command = format!(
+            "if test -f {path}; then cat -- {path}; else exit {MISSING_FILE_EXIT_CODE}; fi",
+            path = shell_quote(path)
+        );
+        let result = self
+            .exec_capture(CommandCaptureRequest {
+                timeout_ms,
+                command: &command,
+                env: &[],
+                sudo: false,
+                label: "read-file",
+                stdout_limit_bytes,
+                stderr_limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                wait_timeout: Duration::from_millis(timeout_ms as u64 + 5000),
+            })
+            .await?;
+        if result.exit_code == MISSING_FILE_EXIT_CODE {
+            return Ok(None);
+        }
+        if result.exit_code != 0 {
+            return Err(io::Error::other(format!(
+                "failed to read file {path}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            )));
+        }
+        if result.stdout_truncated {
+            return Err(io::Error::other(format!(
+                "file {path} exceeded {max_bytes} bytes"
+            )));
+        }
+        if result.stderr_truncated {
+            return Err(io::Error::other(format!(
+                "stderr while reading file {path} exceeded diagnostic limit"
+            )));
+        }
+        Ok(Some(result.stdout))
+    }
+
+    /// Stream a guest file to a host path and atomically rename it into place
+    /// after the command exits successfully.
+    pub async fn copy_file(
+        &self,
+        path: &str,
+        host_path: &Path,
+        options: CopyFileOptions,
+    ) -> io::Result<CopyFileResult> {
+        if options.max_bytes == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "copy_file max_bytes must be positive",
+            ));
+        }
+        if options.max_bytes > COPY_FILE_STREAM_MAX_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("copy_file max_bytes must be at most {COPY_FILE_STREAM_MAX_BYTES}"),
+            ));
+        }
+        let stream_limit_bytes = u32::try_from(options.max_bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "copy_file max_bytes exceeds command stream limit",
+            )
+        })?;
+        if options.timeout_ms == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "copy_file timeout must be positive",
+            ));
+        }
+
+        if let Some(parent) = host_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let (temp_path, temp_file) =
+            create_copy_temp_file(host_path, self.shared.next_seq()).await?;
+        let mut temp_guard = HostTempFileGuard::new(temp_path);
+        let copy_result = self
+            .copy_file_to_temp(
+                path,
+                temp_file,
+                stream_limit_bytes,
+                options.timeout_ms,
+                options.missing_ok,
+            )
+            .await;
+        match copy_result {
+            Ok(CopyFileOutcome::Copied { bytes_copied }) => {
+                match tokio::fs::rename(temp_guard.path(), host_path).await {
+                    Ok(()) => {
+                        temp_guard.disarm();
+                        Ok(CopyFileResult { bytes_copied })
+                    }
+                    Err(err) => {
+                        temp_guard.remove_now().await;
+                        Err(err)
+                    }
+                }
+            }
+            Ok(CopyFileOutcome::Missing) => {
+                temp_guard.remove_now().await;
+                Ok(CopyFileResult { bytes_copied: 0 })
+            }
+            Err(err) => {
+                temp_guard.remove_now().await;
+                Err(err)
+            }
+        }
+    }
+
+    async fn copy_file_to_temp(
+        &self,
+        path: &str,
+        mut temp_file: tokio::fs::File,
+        stream_limit_bytes: u32,
+        timeout_ms: u32,
+        missing_ok: bool,
+    ) -> io::Result<CopyFileOutcome> {
+        const MISSING_FILE_EXIT_CODE: i32 = 66;
+        let command = format!(
+            "if test -f {path}; then cat -- {path}; else exit {MISSING_FILE_EXIT_CODE}; fi",
+            path = shell_quote(path)
+        );
+        let mut handle = self
+            .command_stream(CommandStreamRequest {
+                timeout_ms,
+                command: &command,
+                env: &[],
+                sudo: false,
+                label: "copy-file",
+                stdout: CommandOutputPolicy::Stream {
+                    limit_bytes: stream_limit_bytes,
+                    chunk_limit_bytes: COPY_FILE_STREAM_CHUNK_LIMIT,
+                },
+                stderr: CommandOutputPolicy::Capture {
+                    limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                },
+                stream_queue_capacity: Some(COPY_FILE_STREAM_QUEUE_CAPACITY),
+            })
+            .await?;
+        let mut cancel_on_drop = CommandCancelOnDropGuard::new(&handle);
+        let mut stream_rx = handle.take_stream_receiver().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "copy_file command did not create a stream receiver",
+            )
+        })?;
+        let wait_timeout = Duration::from_millis(timeout_ms as u64 + 5000);
+        let mut bytes_copied = 0u64;
+
+        let drain_result = tokio::time::timeout(wait_timeout, async {
+            while let Some(event) = stream_rx.recv().await {
+                write_copy_stream_event(
+                    &mut temp_file,
+                    &mut bytes_copied,
+                    stream_limit_bytes as u64,
+                    event,
+                )
+                .await?;
+            }
+            io::Result::Ok(())
+        })
+        .await;
+        match drain_result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                let _ = handle.cancel_and_wait(Duration::from_secs(1)).await;
+                if let Some(cancel_on_drop) = &mut cancel_on_drop {
+                    cancel_on_drop.disarm();
+                }
+                return Err(err);
+            }
+            Err(_) => {
+                let _ = handle.cancel_and_wait(Duration::from_secs(1)).await;
+                if let Some(cancel_on_drop) = &mut cancel_on_drop {
+                    cancel_on_drop.disarm();
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("copy_file stream drain timed out for {path}"),
+                ));
+            }
+        };
+
+        let result = handle.wait(Duration::from_secs(5)).await?;
+        if let Some(cancel_on_drop) = &mut cancel_on_drop {
+            cancel_on_drop.disarm();
+        }
+        match validate_copy_command_result(path, result, missing_ok)? {
+            CopyFileCommandStatus::Present => {}
+            CopyFileCommandStatus::Missing => return Ok(CopyFileOutcome::Missing),
+        }
+        temp_file.flush().await?;
+
+        Ok(CopyFileOutcome::Copied { bytes_copied })
+    }
+
     /// Maximum content per write_file message.  Leaves headroom below
     /// [`vsock_proto::MAX_MESSAGE_SIZE`] for the path and frame overhead.
     const WRITE_FILE_CHUNK_LIMIT: usize = 15 * 1024 * 1024;
@@ -1856,8 +2435,8 @@ impl VsockHost {
         // suffix prevents concurrent large writes to the same destination
         // from appending to or cleaning up each other's staging file.
         let tmp = format!("{path}.vm0tmp-{}", self.shared.next_seq());
-        let escaped_tmp = tmp.replace('\'', "'\\''");
-        let rm_tmp = format!("rm -f -- '{escaped_tmp}'");
+        let quoted_tmp = shell_quote(&tmp);
+        let rm_tmp = format!("rm -f -- {quoted_tmp}");
         let mut cleanup_guard =
             ChunkedWriteCleanupGuard::new(Arc::clone(&self.shared), rm_tmp, sudo);
 
@@ -1876,10 +2455,18 @@ impl VsockHost {
         }
 
         // Atomic rename temp → target.
-        let escaped_path = path.replace('\'', "'\\''");
-        let mv_cmd = format!("mv -f -- '{escaped_tmp}' '{escaped_path}'");
+        let mv_cmd = format!("mv -f -- {quoted_tmp} {}", shell_quote(path));
         match self
-            .exec(&mv_cmd, Self::HELPER_EXEC_TIMEOUT_MS, &[], sudo)
+            .exec_capture(CommandCaptureRequest {
+                command: &mv_cmd,
+                timeout_ms: Self::HELPER_EXEC_TIMEOUT_MS,
+                env: &[],
+                sudo,
+                label: "write-file-rename",
+                stdout_limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                stderr_limit_bytes: SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                wait_timeout: Duration::from_millis(Self::HELPER_EXEC_TIMEOUT_MS as u64 + 5000),
+            })
             .await
         {
             Ok(r) if r.exit_code == 0 => {
@@ -2391,6 +2978,27 @@ mod tests {
         stream.write_all(&frame).await.unwrap();
     }
 
+    async fn send_stream_command_result(
+        stream: &mut UnixStream,
+        seq: u32,
+        termination: CommandTermination,
+        stderr: &[u8],
+    ) {
+        let payload = vsock_proto::encode_command_result(
+            termination,
+            12,
+            CommandCapturedOutput::Discarded,
+            CommandCapturedOutput::Captured {
+                bytes: stderr,
+                truncated: false,
+            },
+            "",
+        )
+        .unwrap();
+        let frame = vsock_proto::encode(MSG_COMMAND_RESULT, seq, &payload).unwrap();
+        stream.write_all(&frame).await.unwrap();
+    }
+
     async fn send_raw_command_result(stream: &mut UnixStream, seq: u32, payload: Vec<u8>) {
         let frame = vsock_proto::encode(MSG_COMMAND_RESULT, seq, &payload).unwrap();
         stream.write_all(&frame).await.unwrap();
@@ -2437,7 +3045,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn assert_connection_accepts_legacy_exec(
+    async fn assert_connection_accepts_command_exec(
         host: &Arc<VsockHost>,
         guest: &mut UnixStream,
         decoder: &mut Decoder,
@@ -2447,12 +3055,109 @@ mod tests {
             tokio::spawn(async move { host.exec("echo ok", 5000, &[], false).await })
         };
         let msg = read_guest_message(guest, decoder).await;
-        assert_eq!(msg.msg_type, MSG_EXEC);
-        let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
-        let response = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-        guest.write_all(&response).await.unwrap();
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
+        assert_eq!(decoded.command, "echo ok");
+        assert_eq!(decoded.label, "exec");
+        send_command_result(
+            guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
         let exec_result = exec_task.await.unwrap().unwrap();
         assert_eq!(exec_result.stdout, b"ok");
+    }
+
+    #[test]
+    fn copy_temp_path_distinguishes_process_seq_and_nonce() {
+        let host_path = PathBuf::from("/tmp/system.log");
+
+        let base = copy_temp_path(&host_path, 101, 7, 1);
+        assert_ne!(base, copy_temp_path(&host_path, 102, 7, 1));
+        assert_ne!(base, copy_temp_path(&host_path, 101, 8, 1));
+        assert_ne!(base, copy_temp_path(&host_path, 101, 7, 2));
+        assert_eq!(
+            base.file_name().and_then(|name| name.to_str()),
+            Some(".system.log.vm0tmp-101-7-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_copy_temp_file_uses_unique_paths_for_same_seq() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-temp-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+
+        let (first_path, first_file) = create_copy_temp_file(&host_path, 7).await.unwrap();
+        let (second_path, second_file) = create_copy_temp_file(&host_path, 7).await.unwrap();
+
+        assert_ne!(first_path, second_path);
+        assert!(first_path.exists());
+        assert!(second_path.exists());
+        drop(first_file);
+        drop(second_file);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn host_temp_file_guard_removes_temp_on_drop() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-temp-guard-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".system.log.vm0tmp-guard");
+        std::fs::write(&path, b"partial").unwrap();
+
+        {
+            let _guard = HostTempFileGuard::new(path.clone());
+        }
+
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_file_stream_settings_cover_max_copy_without_queue_overflow() {
+        assert_eq!(
+            COPY_FILE_STREAM_MAX_BYTES,
+            COPY_FILE_STREAM_CHUNK_LIMIT as u64 * 1024
+        );
+        assert_eq!(COPY_FILE_STREAM_QUEUE_CAPACITY, MAX_COMMAND_STREAM_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_max_bytes_above_stream_budget() {
+        let (host, _guest, _decoder) = setup_host_and_guest().await;
+        let err = host
+            .copy_file(
+                "/tmp/large.log",
+                Path::new("/tmp/large.log"),
+                CopyFileOptions {
+                    max_bytes: COPY_FILE_STREAM_MAX_BYTES + 1,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("copy_file max_bytes"));
     }
 
     #[tokio::test]
@@ -2602,7 +3307,7 @@ mod tests {
             assert!(is_connected(&host));
         }
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -2895,7 +3600,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -2925,7 +3630,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3002,7 +3707,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3029,7 +3734,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3059,7 +3764,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3086,7 +3791,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3690,7 +4395,7 @@ mod tests {
         assert_eq!(err.to_string(), "command operation already active");
         assert_eq!(operation_count(&host), 0);
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3863,10 +4568,17 @@ mod tests {
 
         let exec_task = tokio::spawn(async move { host.exec("echo ok", 5000, &[], false).await });
         let exec_msg = read_guest_message(&mut guest, &mut decoder).await;
-        assert_eq!(exec_msg.msg_type, MSG_EXEC);
-        let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
-        let response = vsock_proto::encode(MSG_EXEC_RESULT, exec_msg.seq, &payload).unwrap();
-        guest.write_all(&response).await.unwrap();
+        assert_eq!(exec_msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&exec_msg.payload).unwrap();
+        assert_eq!(decoded.command, "echo ok");
+        send_command_result(
+            &mut guest,
+            exec_msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
         let exec_result = exec_task.await.unwrap().unwrap();
         assert_eq!(exec_result.stdout, b"ok");
     }
@@ -3895,7 +4607,7 @@ mod tests {
         let frame = vsock_proto::encode(MSG_COMMAND_OUTPUT, msg.seq, &[0]).unwrap();
         guest.write_all(&frame).await.unwrap();
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3915,7 +4627,7 @@ mod tests {
         let result_frame = vsock_proto::encode(MSG_COMMAND_RESULT, msg.seq, &[0]).unwrap();
         guest.write_all(&result_frame).await.unwrap();
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3953,7 +4665,7 @@ mod tests {
         )
         .await;
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -3985,7 +4697,7 @@ mod tests {
         let frame = vsock_proto::encode(MSG_COMMAND_RESULT, msg.seq, &[0]).unwrap();
         guest.write_all(&frame).await.unwrap();
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -4016,10 +4728,18 @@ mod tests {
             tokio::spawn(async move { host.exec("echo ok", 5000, &[], false).await })
         };
         let msg = read_guest_message(&mut guest, &mut decoder).await;
-        assert_eq!(msg.msg_type, MSG_EXEC, "start frame should not be written");
-        let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
-        let response = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-        guest.write_all(&response).await.unwrap();
+        assert_eq!(
+            msg.msg_type, MSG_COMMAND_START,
+            "start frame should not be written"
+        );
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
         let exec_result = exec_task.await.unwrap().unwrap();
         assert_eq!(exec_result.stdout, b"ok");
         assert!(is_connected(&host));
@@ -4040,10 +4760,18 @@ mod tests {
             tokio::spawn(async move { host.exec("echo ok", 5000, &[], false).await })
         };
         let msg = read_guest_message(&mut guest, &mut decoder).await;
-        assert_eq!(msg.msg_type, MSG_EXEC, "drop must not send command cancel");
-        let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
-        let response = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-        guest.write_all(&response).await.unwrap();
+        assert_eq!(
+            msg.msg_type, MSG_COMMAND_START,
+            "drop must not send command cancel"
+        );
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
         let exec_result = exec_task.await.unwrap().unwrap();
         assert_eq!(exec_result.stdout, b"ok");
         assert!(is_connected(&host));
@@ -4101,7 +4829,7 @@ mod tests {
             CommandTermination::Exited { exit_code: 0 }
         );
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -4131,7 +4859,7 @@ mod tests {
         assert_eq!(operation_count(&host), 0);
         assert!(is_connected(&host));
 
-        assert_connection_accepts_legacy_exec(&host, &mut guest, &mut decoder).await;
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
     }
 
     #[tokio::test]
@@ -4174,17 +4902,23 @@ mod tests {
             let mut buf = [0u8; 4096];
             let n = guest.read(&mut buf).await.unwrap();
             let msgs = decoder.decode(&buf[..n]).unwrap();
-            assert_eq!(msgs[0].msg_type, MSG_EXEC);
+            assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
 
-            let d = vsock_proto::decode_exec(&msgs[0].payload).unwrap();
+            let d = vsock_proto::decode_command_start(&msgs[0].payload).unwrap();
             assert_eq!(d.command, "echo hello");
             assert_eq!(d.timeout_ms, 5000);
             assert!(d.env.is_empty());
             assert!(!d.sudo);
+            assert_eq!(d.label, "exec");
 
-            let payload = vsock_proto::encode_exec_result(0, b"hello\n", b"");
-            let resp = vsock_proto::encode(MSG_EXEC_RESULT, msgs[0].seq, &payload).unwrap();
-            guest.write_all(&resp).await.unwrap();
+            send_command_result(
+                &mut guest,
+                msgs[0].seq,
+                CommandTermination::Exited { exit_code: 0 },
+                b"hello\n",
+                b"",
+            )
+            .await;
         });
 
         let host = host_from_stream(host_stream).await.unwrap();
@@ -4229,9 +4963,598 @@ mod tests {
         });
 
         let host = host_from_stream(host_stream).await.unwrap();
-        let result = host.exec("badcmd", 5000, &[], false).await.unwrap();
-        assert_eq!(result.exit_code, 1);
-        assert_eq!(result.stderr, b"command not found");
+        let err = host.exec("badcmd", 5000, &[], false).await.unwrap_err();
+        assert!(err.to_string().contains("command not found"));
+    }
+
+    #[tokio::test]
+    async fn read_file_returns_content_and_missing() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let host = Arc::new(host);
+
+        let read_task = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move { host.read_file("/tmp/session.txt", 1024, 5000).await })
+        };
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
+        assert_eq!(decoded.label, "read-file");
+        assert!(decoded.command.contains("cat -- '/tmp/session.txt'"));
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"session-id\n",
+            b"",
+        )
+        .await;
+        let content = read_task.await.unwrap().unwrap();
+        assert_eq!(content.as_deref(), Some(&b"session-id\n"[..]));
+
+        let missing_task = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move { host.read_file("/tmp/missing.txt", 1024, 5000).await })
+        };
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 66 },
+            b"",
+            b"",
+        )
+        .await;
+        let missing = missing_task.await.unwrap().unwrap();
+        assert_eq!(missing, None);
+    }
+
+    #[tokio::test]
+    async fn read_file_errors_on_truncated_stdout() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let read_task =
+            tokio::spawn(async move { host.read_file("/tmp/large.txt", 5, 5000).await });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let payload = vsock_proto::encode_command_result(
+            CommandTermination::Exited { exit_code: 0 },
+            12,
+            CommandCapturedOutput::Captured {
+                bytes: b"hello",
+                truncated: true,
+            },
+            CommandCapturedOutput::Captured {
+                bytes: b"",
+                truncated: false,
+            },
+            "",
+        )
+        .unwrap();
+        send_raw_command_result(&mut guest, msg.seq, payload).await;
+
+        let err = read_task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("exceeded 5 bytes"));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_invalid_max_bytes_without_sending_frame() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let host = Arc::new(host);
+
+        let err = host.read_file("/tmp/empty.txt", 0, 5000).await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(operation_count(&host), 0);
+
+        let err = host
+            .read_file("/tmp/huge.txt", u64::from(u32::MAX) + 1, 5000)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(operation_count(&host), 0);
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
+    }
+
+    #[tokio::test]
+    async fn read_file_quotes_guest_path_with_single_quote() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let read_task =
+            tokio::spawn(async move { host.read_file("/tmp/session'one.txt", 1024, 5000).await });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
+        assert_eq!(
+            decoded.command,
+            "if test -f '/tmp/session'\\''one.txt'; then cat -- '/tmp/session'\\''one.txt'; else exit 66; fi"
+        );
+        send_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
+
+        let content = read_task.await.unwrap().unwrap();
+        assert_eq!(content.as_deref(), Some(&b"ok"[..]));
+    }
+
+    #[tokio::test]
+    async fn copy_file_streams_to_temp_then_renames() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("vsock-host-copy-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/vm0-system-run.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
+        assert_eq!(decoded.label, "copy-file");
+        assert_eq!(
+            decoded.command,
+            "if test -f '/tmp/vm0-system-run.log'; then cat -- '/tmp/vm0-system-run.log'; else exit 66; fi"
+        );
+        assert_eq!(
+            decoded.stdout,
+            CommandOutputPolicy::Stream {
+                limit_bytes: 1024,
+                chunk_limit_bytes: 64 * 1024,
+            }
+        );
+        send_command_output(
+            &mut guest,
+            msg.seq,
+            0,
+            CommandOutputStream::Stdout,
+            b"line 1\n",
+            false,
+        )
+        .await;
+        send_command_output(
+            &mut guest,
+            msg.seq,
+            1,
+            CommandOutputStream::Stdout,
+            b"line 2\n",
+            false,
+        )
+        .await;
+        send_stream_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"",
+        )
+        .await;
+
+        let result = copy_task.await.unwrap().unwrap();
+        assert_eq!(result.bytes_copied, 14);
+        assert_eq!(std::fs::read(&host_path).unwrap(), b"line 1\nline 2\n");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "copy temp file should not remain"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_rejects_invalid_options_without_sending_frame_or_creating_parent() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let host = Arc::new(host);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-invalid-{}-{unique}",
+            std::process::id()
+        ));
+        let host_path = dir.join("nested/system.log");
+
+        let err = host
+            .copy_file(
+                "/tmp/system.log",
+                &host_path,
+                CopyFileOptions {
+                    max_bytes: 0,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!dir.exists());
+
+        let err = host
+            .copy_file(
+                "/tmp/system.log",
+                &host_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 0,
+                    missing_ok: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!dir.exists());
+        assert_eq!(operation_count(&host), 0);
+
+        assert_connection_accepts_command_exec(&host, &mut guest, &mut decoder).await;
+    }
+
+    #[tokio::test]
+    async fn copy_file_creates_parent_and_quotes_guest_path_with_single_quote() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-parent-quote-{}-{unique}",
+            std::process::id()
+        ));
+        let host_path = dir.join("nested/system.log");
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/vm0-system-run's.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
+        assert_eq!(
+            decoded.command,
+            "if test -f '/tmp/vm0-system-run'\\''s.log'; then cat -- '/tmp/vm0-system-run'\\''s.log'; else exit 66; fi"
+        );
+        send_command_output(
+            &mut guest,
+            msg.seq,
+            0,
+            CommandOutputStream::Stdout,
+            b"quoted path\n",
+            false,
+        )
+        .await;
+        send_stream_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 0 },
+            b"",
+        )
+        .await;
+
+        let result = copy_task.await.unwrap().unwrap();
+        assert_eq!(result.bytes_copied, 12);
+        assert_eq!(std::fs::read(&host_path).unwrap(), b"quoted path\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_removes_temp_without_publishing_on_stream_truncation() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-truncated-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        std::fs::write(&host_path, b"old host log").unwrap();
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/vm0-system-run.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        send_command_output(
+            &mut guest,
+            msg.seq,
+            0,
+            CommandOutputStream::Stdout,
+            b"partial",
+            true,
+        )
+        .await;
+
+        let cancel = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(cancel.msg_type, MSG_COMMAND_CANCEL);
+        assert_eq!(cancel.seq, msg.seq);
+        send_stream_command_result(&mut guest, msg.seq, CommandTermination::Cancelled, b"").await;
+
+        let err = copy_task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("truncated"));
+        assert_eq!(std::fs::read(&host_path).unwrap(), b"old host log");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "failed copy temp file should be removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_nonzero_exit_removes_temp_without_publishing_partial_output() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-nonzero-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        std::fs::write(&host_path, b"old host log").unwrap();
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/vm0-system-run.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        send_command_output(
+            &mut guest,
+            msg.seq,
+            0,
+            CommandOutputStream::Stdout,
+            b"partial",
+            false,
+        )
+        .await;
+        send_stream_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 1 },
+            b"read error",
+        )
+        .await;
+
+        let err = copy_task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("read error"));
+        assert_eq!(std::fs::read(&host_path).unwrap(), b"old host log");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "failed copy temp file should be removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_missing_ok_leaves_no_final_or_temp_file() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-missing-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/missing.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: true,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        send_stream_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 66 },
+            b"",
+        )
+        .await;
+
+        let result = copy_task.await.unwrap().unwrap();
+        assert_eq!(result.bytes_copied, 0);
+        assert!(!host_path.exists());
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "missing copy temp file should be removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_missing_without_missing_ok_preserves_existing_file_and_removes_temp() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-missing-error-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        std::fs::write(&host_path, b"old host log").unwrap();
+        let copy_path = host_path.clone();
+
+        let copy_task = tokio::spawn(async move {
+            host.copy_file(
+                "/tmp/missing.log",
+                &copy_path,
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout_ms: 5000,
+                    missing_ok: false,
+                },
+            )
+            .await
+        });
+
+        let msg = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(msg.msg_type, MSG_COMMAND_START);
+        send_stream_command_result(
+            &mut guest,
+            msg.seq,
+            CommandTermination::Exited { exit_code: 66 },
+            b"",
+        )
+        .await;
+
+        let err = copy_task.await.unwrap().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read(&host_path).unwrap(), b"old host log");
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "missing copy temp file should be removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn copy_file_cancellation_cancels_guest_command_and_removes_temp() {
+        let (host, mut guest, mut decoder) = setup_host_and_guest().await;
+        let host = Arc::new(host);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vsock-host-copy-cancel-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_path = dir.join("system.log");
+        let copy_path = host_path.clone();
+
+        let task_host = Arc::clone(&host);
+        let copy_task = tokio::spawn(async move {
+            task_host
+                .copy_file(
+                    "/tmp/vm0-system-run.log",
+                    &copy_path,
+                    CopyFileOptions {
+                        max_bytes: 1024,
+                        timeout_ms: 5000,
+                        missing_ok: false,
+                    },
+                )
+                .await
+        });
+
+        let start = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(start.msg_type, MSG_COMMAND_START);
+        let temp_paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("vm0tmp"))
+            })
+            .collect();
+        assert_eq!(temp_paths.len(), 1);
+
+        copy_task.abort();
+        assert!(copy_task.await.unwrap_err().is_cancelled());
+
+        let cancel = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(cancel.msg_type, MSG_COMMAND_CANCEL);
+        assert_eq!(cancel.seq, start.seq);
+        assert!(!host_path.exists());
+        assert!(
+            std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("vm0tmp")),
+            "cancelled copy temp file should be removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -4306,17 +5629,23 @@ mod tests {
                         let resp =
                             vsock_proto::encode(MSG_WRITE_FILE_RESULT, msg.seq, &payload).unwrap();
                         guest.write_all(&resp).await.unwrap();
-                    } else if msg.msg_type == MSG_EXEC {
+                    } else if msg.msg_type == MSG_COMMAND_START {
                         // Atomic rename: mv temp → target
-                        let decoded = vsock_proto::decode_exec(&msg.payload).unwrap();
+                        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
                         let temp_path = temp_path.as_ref().expect("temp path");
                         assert!(decoded.command.contains("mv -f --"));
                         assert!(decoded.command.contains(temp_path));
                         assert!(decoded.command.contains("/tmp/big.bin"));
+                        assert_eq!(decoded.label, "write-file-rename");
 
-                        let payload = vsock_proto::encode_exec_result(0, &[], &[]);
-                        let resp = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                        guest.write_all(&resp).await.unwrap();
+                        send_command_result(
+                            &mut guest,
+                            msg.seq,
+                            CommandTermination::Exited { exit_code: 0 },
+                            &[],
+                            &[],
+                        )
+                        .await;
                         // Done — verify chunks and return
                         assert_eq!(chunks_received.len(), 2);
                         assert!(!chunks_received[0].0); // first: create
@@ -4418,15 +5747,21 @@ mod tests {
                         let resp =
                             vsock_proto::encode(MSG_WRITE_FILE_RESULT, msg.seq, &payload).unwrap();
                         guest.write_all(&resp).await.unwrap();
-                    } else if msg.msg_type == MSG_EXEC {
+                    } else if msg.msg_type == MSG_COMMAND_START {
                         // Cleanup: rm -f temp file
-                        let decoded = vsock_proto::decode_exec(&msg.payload).unwrap();
+                        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
                         let temp_path = temp_path.as_ref().expect("temp path");
                         assert!(decoded.command.contains("rm -f --"));
                         assert!(decoded.command.contains(temp_path));
-                        let payload = vsock_proto::encode_exec_result(0, &[], &[]);
-                        let resp = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                        guest.write_all(&resp).await.unwrap();
+                        assert_eq!(decoded.label, "exec-cleanup");
+                        send_command_result(
+                            &mut guest,
+                            msg.seq,
+                            CommandTermination::Exited { exit_code: 0 },
+                            &[],
+                            &[],
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -4475,26 +5810,35 @@ mod tests {
                         let resp =
                             vsock_proto::encode(MSG_WRITE_FILE_RESULT, msg.seq, &payload).unwrap();
                         guest.write_all(&resp).await.unwrap();
-                    } else if msg.msg_type == MSG_EXEC {
+                    } else if msg.msg_type == MSG_COMMAND_START {
                         exec_count += 1;
-                        let decoded = vsock_proto::decode_exec(&msg.payload).unwrap();
+                        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
                         let temp_path = temp_path.as_ref().expect("temp path");
                         if decoded.command.contains("mv -f --") {
                             // mv fails
                             assert!(decoded.command.contains(temp_path));
-                            let payload =
-                                vsock_proto::encode_exec_result(1, &[], b"permission denied");
-                            let resp =
-                                vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                            guest.write_all(&resp).await.unwrap();
+                            assert_eq!(decoded.label, "write-file-rename");
+                            send_command_result(
+                                &mut guest,
+                                msg.seq,
+                                CommandTermination::Exited { exit_code: 1 },
+                                &[],
+                                b"permission denied",
+                            )
+                            .await;
                         } else {
                             // cleanup rm
                             assert!(decoded.command.contains("rm -f --"));
                             assert!(decoded.command.contains(temp_path));
-                            let payload = vsock_proto::encode_exec_result(0, &[], &[]);
-                            let resp =
-                                vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                            guest.write_all(&resp).await.unwrap();
+                            assert_eq!(decoded.label, "exec-cleanup");
+                            send_command_result(
+                                &mut guest,
+                                msg.seq,
+                                CommandTermination::Exited { exit_code: 0 },
+                                &[],
+                                &[],
+                            )
+                            .await;
                             assert_eq!(exec_count, 2); // mv then rm
                             return;
                         }
@@ -4553,17 +5897,23 @@ mod tests {
                         if let Some(tx) = first_chunk_tx.take() {
                             let _ = tx.send(());
                         }
-                    } else if msg.msg_type == MSG_EXEC {
-                        let decoded = vsock_proto::decode_exec(&msg.payload).unwrap();
+                    } else if msg.msg_type == MSG_COMMAND_START {
+                        let decoded = vsock_proto::decode_command_start(&msg.payload).unwrap();
                         let temp_path = temp_path.as_ref().expect("temp path");
                         assert!(decoded.command.contains("rm -f --"));
                         assert!(decoded.command.contains(temp_path));
+                        assert_eq!(decoded.label, "exec-cleanup");
                         if let Some(tx) = cleanup_tx.take() {
                             let _ = tx.send(decoded.command.to_string());
                         }
-                        let payload = vsock_proto::encode_exec_result(0, &[], &[]);
-                        let resp = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                        guest.write_all(&resp).await.unwrap();
+                        send_command_result(
+                            &mut guest,
+                            msg.seq,
+                            CommandTermination::Exited { exit_code: 0 },
+                            &[],
+                            &[],
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -4993,15 +6343,20 @@ mod tests {
                 all_msgs.extend(msgs);
             }
             assert_eq!(all_msgs.len(), 2);
-            assert!(all_msgs.iter().all(|m| m.msg_type == MSG_EXEC));
+            assert!(all_msgs.iter().all(|m| m.msg_type == MSG_COMMAND_START));
 
             // Reply in reverse order to exercise seq-based dispatching.
             for msg in all_msgs.iter().rev() {
-                let d = vsock_proto::decode_exec(&msg.payload).unwrap();
+                let d = vsock_proto::decode_command_start(&msg.payload).unwrap();
                 let out = format!("reply:{}", d.command);
-                let payload = vsock_proto::encode_exec_result(0, out.as_bytes(), b"");
-                let resp = vsock_proto::encode(MSG_EXEC_RESULT, msg.seq, &payload).unwrap();
-                guest.write_all(&resp).await.unwrap();
+                send_command_result(
+                    &mut guest,
+                    msg.seq,
+                    CommandTermination::Exited { exit_code: 0 },
+                    out.as_bytes(),
+                    b"",
+                )
+                .await;
             }
 
             let mut discard = [0u8; 1];
@@ -5042,13 +6397,18 @@ mod tests {
             let mut buf = [0u8; 4096];
             let n = guest.read(&mut buf).await.unwrap();
             let msgs = decoder.decode(&buf[..n]).unwrap();
-            assert_eq!(msgs[0].msg_type, MSG_EXEC);
+            assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
             // Handshake used seq=1, so first request must be seq=2.
             assert_eq!(msgs[0].seq, 2, "first post-handshake seq should be 2");
 
-            let payload = vsock_proto::encode_exec_result(0, b"ok", b"");
-            let resp = vsock_proto::encode(MSG_EXEC_RESULT, msgs[0].seq, &payload).unwrap();
-            guest.write_all(&resp).await.unwrap();
+            send_command_result(
+                &mut guest,
+                msgs[0].seq,
+                CommandTermination::Exited { exit_code: 0 },
+                b"ok",
+                b"",
+            )
+            .await;
         });
 
         let host = host_from_stream(host_stream).await.unwrap();
@@ -5268,14 +6628,19 @@ mod tests {
             let mut buf = [0u8; 4096];
             let n = guest.read(&mut buf).await.unwrap();
             let msgs = decoder.decode(&buf[..n]).unwrap();
-            assert_eq!(msgs[0].msg_type, MSG_EXEC);
+            assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
 
             // Write the response and close the socket. The response must
             // race with EOF such that reader_loop processes both before the
             // host's `request_raw` returns from its select!.
-            let payload = vsock_proto::encode_exec_result(0, b"race-survived", b"");
-            let resp = vsock_proto::encode(MSG_EXEC_RESULT, msgs[0].seq, &payload).unwrap();
-            guest.write_all(&resp).await.unwrap();
+            send_command_result(
+                &mut guest,
+                msgs[0].seq,
+                CommandTermination::Exited { exit_code: 0 },
+                b"race-survived",
+                b"",
+            )
+            .await;
             drop(guest);
         });
 
@@ -5315,13 +6680,18 @@ mod tests {
             // Now read the exec request (sent concurrently with wait_for_exit)
             let n = guest.read(&mut buf).await.unwrap();
             let msgs = decoder.decode(&buf[..n]).unwrap();
-            assert_eq!(msgs[0].msg_type, MSG_EXEC);
+            assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
             let exec_seq = msgs[0].seq;
 
             // Reply to exec first
-            let exec_payload = vsock_proto::encode_exec_result(0, b"concurrent", b"");
-            let exec_resp = vsock_proto::encode(MSG_EXEC_RESULT, exec_seq, &exec_payload).unwrap();
-            guest.write_all(&exec_resp).await.unwrap();
+            send_command_result(
+                &mut guest,
+                exec_seq,
+                CommandTermination::Exited { exit_code: 0 },
+                b"concurrent",
+                b"",
+            )
+            .await;
 
             let _ = exit_after_exec.await;
             let exit_payload = vsock_proto::encode_process_exit(50, 42, b"exited", b"");

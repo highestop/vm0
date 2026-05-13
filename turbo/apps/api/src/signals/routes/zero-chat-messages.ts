@@ -1904,6 +1904,7 @@ const createNormalChatRun$ = command(
         apiStartTime: args.apiStartTime,
         chatThreadId: prepared.thread.threadId,
         includeZeroTokenSecret: true,
+        validateEnvironmentReferences: false,
         callbacks: [
           {
             url: chatCallbackUrl(),

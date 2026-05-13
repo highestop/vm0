@@ -379,7 +379,6 @@ export {
   modelProviderListResponseSchema,
   upsertModelProviderRequestSchema,
   upsertModelProviderResponseSchema,
-  updateModelRequestSchema,
   orgModelPolicyRouteStatusSchema,
   orgModelPolicySchema,
   updateOrgModelPolicySchema,
@@ -423,7 +422,6 @@ export {
   type ModelProviderListResponse,
   type UpsertModelProviderRequest,
   type UpsertModelProviderResponse,
-  type UpdateModelRequest,
   type OrgModelPolicyRouteStatus,
   type OrgModelPolicy,
   type UpdateOrgModelPolicy,
@@ -931,12 +929,8 @@ export {
 export {
   zeroModelProvidersMainContract,
   zeroModelProvidersByTypeContract,
-  zeroModelProvidersDefaultContract,
-  zeroModelProvidersUpdateModelContract,
   type ZeroModelProvidersMainContract,
   type ZeroModelProvidersByTypeContract,
-  type ZeroModelProvidersDefaultContract,
-  type ZeroModelProvidersUpdateModelContract,
 } from "./zero-model-providers";
 export {
   zeroPersonalModelProvidersMainContract,

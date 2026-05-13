@@ -34,8 +34,6 @@ interface ResolvedAgentPhoneAgent {
   composeId: string;
   agentId: string;
   agentName: string;
-  modelProviderId: string | null;
-  selectedModel: string | null;
 }
 
 function parseAgentPhoneCommand(text: string): string | undefined {
@@ -109,7 +107,7 @@ function formatHelpMessage(): string {
     "",
     "/connect - Connect this phone number to VM0",
     "/new_session - Start a new conversation",
-    "/model - Choose your personal default model",
+    "/model - Choose your model",
     "/disconnect - Disconnect this phone number from VM0",
     "/help - Show these commands",
     "",
@@ -146,8 +144,6 @@ async function resolveAgentPhoneAgent(
     composeId,
     agentId: agent.agentId,
     agentName: getAgentDisplayLabel(agent),
-    modelProviderId: agent.modelProviderId,
-    selectedModel: agent.selectedModel,
   };
 }
 
@@ -303,8 +299,6 @@ export async function handleAgentPhoneMessage(
       userId: userLink.vm0UserId,
       orgId: userLink.orgId,
       agentComposeId: agent.composeId,
-      modelProviderId: agent.modelProviderId,
-      selectedModel: agent.selectedModel,
     });
     if (!canReuseSession) {
       log.debug("Model changed, starting new AgentPhone session", {

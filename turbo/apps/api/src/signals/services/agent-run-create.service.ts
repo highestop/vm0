@@ -17,6 +17,7 @@ import {
   getVm0Vendor,
   hasAuthMethods,
   MODEL_PROVIDER_TYPES,
+  type ModelProviderCredentialScope,
   type ModelProviderType,
 } from "@vm0/api-contracts/contracts/model-providers";
 import {
@@ -266,6 +267,7 @@ interface CreateAgentRunArgs {
   readonly body: CreateRunBody;
   readonly apiStartTime: number;
   readonly modelProviderId?: string;
+  readonly modelProviderCredentialScope?: ModelProviderCredentialScope;
   readonly modelProviderType?: string;
   readonly selectedModelOverride?: string;
   readonly callbacks?: readonly RunCallback[];
@@ -809,6 +811,7 @@ interface ResolveModelProviderEnvironmentArgs {
   readonly userId: string;
   readonly framework: SupportedFramework;
   readonly modelProviderId?: string;
+  readonly modelProviderCredentialScope?: ModelProviderCredentialScope;
   readonly modelProviderType?: string;
   readonly selectedModelOverride?: string;
 }
@@ -832,6 +835,18 @@ function isCandidateModelProviderRow(
   args: ResolveModelProviderEnvironmentArgs,
 ): row is ResolvableModelProviderEnvironmentRow {
   if (args.modelProviderId && row.id !== args.modelProviderId) {
+    return false;
+  }
+  if (
+    args.modelProviderCredentialScope === "org" &&
+    row.userId !== ORG_SENTINEL_USER_ID
+  ) {
+    return false;
+  }
+  if (
+    args.modelProviderCredentialScope === "member" &&
+    row.userId !== args.userId
+  ) {
     return false;
   }
   if (args.modelProviderType && row.type !== args.modelProviderType) {
@@ -2456,14 +2471,18 @@ async function resolveRunModelProvider(
   signal: AbortSignal,
 ): Promise<ResolvedModelProviderEnvironment | null | CreateRunErrorResult> {
   const hasFrameworkKey = hasExplicitFrameworkApiKey(content, framework);
+  const hasProviderOverride =
+    args.modelProviderId !== undefined ||
+    args.modelProviderCredentialScope !== undefined;
   const shouldResolveModelProvider =
-    !hasFrameworkKey || args.modelProviderType === "vm0";
+    hasProviderOverride || !hasFrameworkKey || args.modelProviderType === "vm0";
   const modelProvider = shouldResolveModelProvider
     ? await resolveModelProviderEnvironment(db, {
         orgId: args.orgId,
         userId: args.userId,
         framework,
         modelProviderId: args.modelProviderId,
+        modelProviderCredentialScope: args.modelProviderCredentialScope,
         modelProviderType: args.modelProviderType,
         selectedModelOverride: args.selectedModelOverride,
       })

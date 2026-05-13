@@ -343,7 +343,7 @@ function effectiveModelFirstThreadPin(params: {
   });
 }
 
-function resolveAttachFileUrls(
+export function resolveAttachFileUrls(
   userId: string,
   fileIds: readonly string[],
 ): Computed<Promise<readonly ResolvedAttachFile[]>> {
@@ -413,7 +413,7 @@ function genericErrorStreakForRun(params: {
   });
 }
 
-function formatChatRunErrorMessage(params: {
+export function formatChatRunErrorMessage(params: {
   readonly chatThreadId: string;
   readonly runId: string;
   readonly errorMessage: string;

@@ -19,9 +19,10 @@ interface NavMenuProps {
   label: string;
   alignOffset?: number;
   items: NavMenuItem[];
-  openId: string | null;
-  onOpen: (id: string) => void;
+  open: boolean;
+  onOpen: () => void;
   onClose: () => void;
+  onSelect: () => void;
   onCancelClose: () => void;
   onScheduleClose: () => void;
 }
@@ -31,20 +32,15 @@ export function NavMenu({
   label,
   items,
   alignOffset = 0,
-  openId,
+  open,
   onOpen,
   onClose,
+  onSelect,
   onCancelClose,
   onScheduleClose,
 }: NavMenuProps) {
-  const open = openId === id;
-
-  const openSelf = React.useCallback(() => {
-    onOpen(id);
-  }, [id, onOpen]);
-
   const handleSelect = () => {
-    onClose();
+    onSelect();
   };
 
   return (
@@ -52,7 +48,7 @@ export function NavMenu({
       open={open}
       onOpenChange={(next) => {
         if (next) {
-          onOpen(id);
+          onOpen();
           return;
         }
         onClose();
@@ -62,8 +58,8 @@ export function NavMenu({
         type="button"
         className={`nav-trigger${open ? " nav-trigger-active" : ""}`}
         data-nav-menu-id={id}
-        onPointerEnter={openSelf}
-        onFocus={openSelf}
+        onPointerEnter={onOpen}
+        onFocus={onOpen}
         onBlur={onScheduleClose}
       >
         {label}
@@ -83,6 +79,9 @@ export function NavMenu({
           onPointerEnter={onCancelClose}
           onPointerLeave={onScheduleClose}
           onOpenAutoFocus={(event: Event) => {
+            event.preventDefault();
+          }}
+          onCloseAutoFocus={(event: Event) => {
             event.preventDefault();
           }}
         >

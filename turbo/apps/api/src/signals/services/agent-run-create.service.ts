@@ -49,6 +49,7 @@ import {
 import { writeDb$, type Db } from "../external/db";
 import { publishRunnerJobNotification } from "../external/realtime";
 import { now, nowDate } from "../external/time";
+import { generateZeroToken } from "../auth/tokens";
 import { safeAsync } from "../utils";
 import {
   decryptSecretValue,
@@ -56,6 +57,7 @@ import {
   encryptSecretsMap,
 } from "./crypto.utils";
 import { prepareAgentRunStorageManifest } from "./agent-run-storage.service";
+import { userFeatureSwitchOverrides } from "./feature-switches.service";
 
 const PENDING_RUN_TTL_MS = 15 * 60 * 1000;
 const AUTO_MEMORY_ARTIFACT_NAME = "memory";
@@ -73,6 +75,23 @@ const ORG_SENTINEL_USER_ID = "__org__";
 
 type CreateRunBody = z.infer<typeof unifiedRunRequestSchema>;
 type ComputedGetter = Getter;
+
+function withZeroTokenSecret(
+  body: CreateRunBody,
+  zeroToken: string,
+): CreateRunBody {
+  return {
+    ...body,
+    secrets: {
+      ...body.secrets,
+      ZERO_TOKEN: zeroToken,
+    },
+  };
+}
+
+function withPendingZeroTokenSecret(body: CreateRunBody): CreateRunBody {
+  return withZeroTokenSecret(body, "__pending_zero_token__");
+}
 
 interface ContextArtifact {
   readonly name: string;
@@ -1005,6 +1024,7 @@ async function dispatchRun(
     readonly modelProvider: ResolvedModelProviderEnvironment | null;
     readonly apiStartTime: number;
     readonly additionalVolumes: readonly AdditionalVolume[] | undefined;
+    readonly includeZeroTokenSecret: boolean | undefined;
   },
 ): Promise<{ readonly status: RunStatus; readonly sandboxId?: string }> {
   await db
@@ -1022,11 +1042,25 @@ async function dispatchRun(
   }
 
   const profile = runnerProfile(args.resolved.content);
+  const featureSwitchOverrides = args.includeZeroTokenSecret
+    ? await get(userFeatureSwitchOverrides(args.orgId, args.userId))
+    : undefined;
+  const body = args.includeZeroTokenSecret
+    ? withZeroTokenSecret(
+        args.body,
+        generateZeroToken(
+          args.userId,
+          args.run.id,
+          args.orgId,
+          featureSwitchOverrides,
+        ),
+      )
+    : args.body;
   const storageManifest = await prepareAgentRunStorageManifest({
     get,
     db,
     content: args.resolved.content,
-    vars: args.body.vars,
+    vars: body.vars,
     agentOrgId: args.resolved.orgId,
     runtimeOrgId: args.orgId,
     userId: args.userId,
@@ -1037,6 +1071,7 @@ async function dispatchRun(
   });
   const storedContext = buildStoredExecutionContext({
     ...args,
+    body,
     runId: args.run.id,
     storageManifest,
   });
@@ -1102,27 +1137,26 @@ export const createAgentRun$ = command(
       readonly apiStartTime: number;
       readonly callbacks?: readonly RunCallback[];
       readonly chatThreadId?: string;
+      readonly includeZeroTokenSecret?: boolean;
     },
     signal: AbortSignal,
   ): Promise<CreateRunRouteResult> => {
     const db = set(writeDb$);
+    const body = args.includeZeroTokenSecret
+      ? withPendingZeroTokenSecret(args.body)
+      : args.body;
 
     const captureGate = await enforceCaptureNetworkBodiesGate(
       db,
       args.userId,
-      args.body.captureNetworkBodies,
+      body.captureNetworkBodies,
     );
     signal.throwIfAborted();
     if (captureGate) {
       return captureGate;
     }
 
-    const resolved = await resolveCompose(
-      db,
-      args.body,
-      args.userId,
-      args.orgId,
-    );
+    const resolved = await resolveCompose(db, body, args.userId, args.orgId);
     signal.throwIfAborted();
     if (isRouteError(resolved)) {
       return resolved;
@@ -1134,8 +1168,8 @@ export const createAgentRun$ = command(
 
     const validation = validateCompose(
       resolved.content,
-      args.body.vars,
-      args.body.secrets,
+      body.vars,
+      body.secrets,
     );
     if (isRouteError(validation)) {
       return validation;
@@ -1164,10 +1198,10 @@ export const createAgentRun$ = command(
     const artifacts = artifactsForRun({
       resolved,
       framework: validation.framework,
-      bodyArtifacts: args.body.artifacts,
+      bodyArtifacts: body.artifacts,
     });
     const additionalVolumes =
-      args.body.additionalVolumes ?? resolved.additionalVolumes;
+      body.additionalVolumes ?? resolved.additionalVolumes;
 
     const transactionResult = await db.transaction(async (tx) => {
       await tx.execute(
@@ -1181,7 +1215,7 @@ export const createAgentRun$ = command(
         userId: args.userId,
         orgId: args.orgId,
         resolved,
-        body: args.body,
+        body,
         artifacts,
         additionalVolumes,
         modelProvider,
@@ -1201,12 +1235,13 @@ export const createAgentRun$ = command(
         userId: args.userId,
         orgId: args.orgId,
         resolved,
-        body: args.body,
+        body,
         artifacts,
         framework: validation.framework,
         modelProvider,
         apiStartTime: args.apiStartTime,
         additionalVolumes,
+        includeZeroTokenSecret: args.includeZeroTokenSecret,
       });
     });
     signal.throwIfAborted();

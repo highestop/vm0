@@ -1140,11 +1140,13 @@ fn read_streaming_result(
 
             // Collect stdout chunks and return on process_exit
             if msg.msg_type == MSG_STDOUT_CHUNK
+                && msg.seq == seq
                 && let Ok((chunk_pid, data)) = vsock_proto::decode_stdout_chunk(&msg.payload)
                 && chunk_pid == p
             {
                 stdout_data.extend_from_slice(data);
             } else if msg.msg_type == MSG_PROCESS_EXIT
+                && msg.seq == seq
                 && let Ok((exit_pid, code, _stdout, stderr)) =
                     vsock_proto::decode_process_exit(&msg.payload)
                 && exit_pid == p
@@ -1289,9 +1291,9 @@ fn streaming_monitor_clean_exit_returns_before_long_timeout() {
     let _ = handle.join();
 }
 
-/// `MSG_SPAWN_WATCH_RESULT` must arrive before stdout chunks for that pid.
-/// The host only registers the stdout stream after processing the spawn
-/// result, so a chunk sent first would be dropped by older host code.
+/// `MSG_SPAWN_WATCH_RESULT` must arrive before stdout chunks for that request.
+/// The host records the pid from the result and rejects lifecycle frames for
+/// that request until the pid is known.
 #[test]
 fn streaming_spawn_watch_result_precedes_stdout_chunks() {
     use std::os::unix::net::UnixStream as StdUnixStream;
@@ -1336,7 +1338,7 @@ fn streaming_spawn_watch_result_precedes_stdout_chunks() {
                 continue;
             }
 
-            if msg.msg_type == MSG_STDOUT_CHUNK {
+            if msg.msg_type == MSG_STDOUT_CHUNK && msg.seq == 1 {
                 let Some(p) = pid else {
                     panic!("stdout chunk arrived before spawn_watch_result");
                 };
@@ -1344,7 +1346,7 @@ fn streaming_spawn_watch_result_precedes_stdout_chunks() {
                 if chunk_pid == p {
                     stdout_data.extend_from_slice(data);
                 }
-            } else if msg.msg_type == MSG_PROCESS_EXIT {
+            } else if msg.msg_type == MSG_PROCESS_EXIT && msg.seq == 1 {
                 let Some(p) = pid else {
                     panic!("process_exit arrived before spawn_watch_result");
                 };
@@ -1547,6 +1549,7 @@ fn read_buffered_spawn_watch_result(
             }
             let Some(p) = pid else { continue };
             if msg.msg_type == MSG_PROCESS_EXIT
+                && msg.seq == seq
                 && let Ok((exit_pid, code, stdout, stderr)) =
                     vsock_proto::decode_process_exit(&msg.payload)
                 && exit_pid == p
@@ -1881,7 +1884,7 @@ fn streaming_terminates_child_on_vsock_disconnect() {
         for msg in decoder.decode(buf.get(..n).unwrap_or_default()).unwrap() {
             if msg.msg_type == MSG_SPAWN_WATCH_RESULT && msg.seq == 1 {
                 pid = vsock_proto::decode_spawn_watch_result(&msg.payload).ok();
-            } else if msg.msg_type == MSG_STDOUT_CHUNK {
+            } else if msg.msg_type == MSG_STDOUT_CHUNK && msg.seq == 1 {
                 got_chunk = true;
             }
         }

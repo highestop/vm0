@@ -12,7 +12,14 @@ import { and, eq } from "drizzle-orm";
 import { afterEach } from "vitest";
 
 import { accept, setupApp, testContext } from "../../../__tests__/test-helpers";
+import { now } from "../../../lib/time";
+import { signSandboxJwtForTests } from "../../auth/tokens";
 import { writeDb$ } from "../../external/db";
+import {
+  deleteOrgMembership$,
+  seedOrgMembership$,
+  type OrgMembershipFixture,
+} from "./helpers/zero-org-membership";
 import { createZeroRouteMocks } from "./helpers/zero-route-test";
 
 const context = testContext();
@@ -31,11 +38,16 @@ async function enableLocalBrowser(
   });
 }
 
+function currentSecond(): number {
+  return Math.floor(now() / 1000);
+}
+
 describe("GET /api/zero/connectors/search", () => {
   const seededFeatureSwitches: {
     readonly orgId: string;
     readonly userId: string;
   }[] = [];
+  const seededOrgs: OrgMembershipFixture[] = [];
 
   afterEach(async () => {
     const writeDb = store.set(writeDb$);
@@ -52,6 +64,12 @@ describe("GET /api/zero/connectors/search", () => {
           );
       }
     }
+    while (seededOrgs.length > 0) {
+      const fixture = seededOrgs.pop();
+      if (fixture) {
+        await store.set(deleteOrgMembership$, fixture, context.signal);
+      }
+    }
   });
 
   it("returns 401 when not authenticated", async () => {
@@ -65,7 +83,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("returns connectors array with correct shape", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -91,7 +109,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("filters connectors by keyword matching label", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -113,7 +131,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("filters connectors by keyword matching description", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -135,7 +153,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("returns empty array for non-matching keyword", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -150,7 +168,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("performs case-insensitive keyword search", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
 
@@ -173,7 +191,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("hides feature-flagged connectors without api-token for non-enabled users", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -232,7 +250,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("shows feature-flagged connector with api-token even when flag is disabled", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -270,7 +288,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("includes connectors without feature flags", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -297,7 +315,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("exposes openai as api-token only", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -316,7 +334,7 @@ describe("GET /api/zero/connectors/search", () => {
   });
 
   it("shows zapier with api-token even when ZapierConnector flag is disabled", async () => {
-    mocks.clerk.session(`user_${randomUUID()}`, null);
+    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
 
     const client = setupApp({ context })(zeroConnectorsSearchContract);
     const response = await accept(
@@ -332,5 +350,72 @@ describe("GET /api/zero/connectors/search", () => {
     });
     expect(zapier).toBeDefined();
     expect(zapier?.authMethods).toContain("api-token");
+  });
+
+  it("accepts a ZERO_TOKEN carrying the connector:read capability", async () => {
+    const userId = `user_${randomUUID()}`;
+    const orgId = `org_${randomUUID()}`;
+    seededOrgs.push(
+      await store.set(
+        seedOrgMembership$,
+        { orgId, userId, role: "admin" },
+        context.signal,
+      ),
+    );
+    const seconds = currentSecond();
+    const token = signSandboxJwtForTests({
+      scope: "zero",
+      userId,
+      orgId,
+      runId: `run_${randomUUID()}`,
+      capabilities: ["connector:read"],
+      iat: seconds,
+      exp: seconds + 600,
+    });
+
+    const client = setupApp({ context })(zeroConnectorsSearchContract);
+    const response = await accept(
+      client.search({
+        query: {},
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      [200],
+    );
+
+    expect(response.body.connectors).toBeInstanceOf(Array);
+    expect(response.body.connectors.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a ZERO_TOKEN missing the connector:read capability with 403", async () => {
+    const userId = `user_${randomUUID()}`;
+    const orgId = `org_${randomUUID()}`;
+    seededOrgs.push(
+      await store.set(
+        seedOrgMembership$,
+        { orgId, userId, role: "admin" },
+        context.signal,
+      ),
+    );
+    const seconds = currentSecond();
+    const token = signSandboxJwtForTests({
+      scope: "zero",
+      userId,
+      orgId,
+      runId: `run_${randomUUID()}`,
+      capabilities: [],
+      iat: seconds,
+      exp: seconds + 600,
+    });
+
+    const client = setupApp({ context })(zeroConnectorsSearchContract);
+    const response = await accept(
+      client.search({
+        query: {},
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      [403],
+    );
+
+    expect(response.body.error.code).toBe("FORBIDDEN");
   });
 });

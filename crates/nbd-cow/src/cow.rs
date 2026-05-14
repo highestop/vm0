@@ -220,9 +220,10 @@ impl CowLayer {
         self.flush_buffered(|offset, data| fd.write_all_at(data, offset))
     }
 
-    /// Drain `write_buffer` through `write_fn`. On mid-drain failure at index `i`,
-    /// reinserts blocks `[i..]` into `write_buffer`, recomputes `buffer_bytes`, and
-    /// returns the error. Dirty bits are set only for blocks the writer accepted.
+    /// Drain `write_buffer` through `write_fn`. On failure, restores the failed
+    /// block and all unprocessed blocks to `write_buffer`, recomputes
+    /// `buffer_bytes`, and returns the error. Dirty bits are set only for blocks
+    /// the writer accepted.
     ///
     /// The writer boundary is a closure so tests can cover partial-success-then-fail
     /// at arbitrary index, which real-I/O injection (/dev/full, file seals,
@@ -232,19 +233,17 @@ impl CowLayer {
         W: FnMut(u64, &[u8]) -> std::io::Result<()>,
     {
         let block_size = self.block_size;
-        let blocks: Vec<(u64, Vec<u8>)> =
-            std::mem::take(&mut self.write_buffer).into_iter().collect();
+        let mut blocks = std::mem::take(&mut self.write_buffer).into_iter();
 
-        for (i, entry) in blocks.iter().enumerate() {
-            let offset = entry.0 * block_size as u64;
-            if let Err(e) = write_fn(offset, &entry.1) {
-                for (idx, buf) in blocks.into_iter().skip(i) {
-                    self.write_buffer.insert(idx, buf);
-                }
+        while let Some((block_idx, block_data)) = blocks.next() {
+            let offset = block_idx * block_size as u64;
+            if let Err(e) = write_fn(offset, &block_data) {
+                self.write_buffer.insert(block_idx, block_data);
+                self.write_buffer.extend(blocks);
                 self.buffer_bytes = self.write_buffer.len() * block_size;
                 return Err(e.into());
             }
-            self.set_dirty(entry.0);
+            self.set_dirty(block_idx);
         }
 
         self.buffer_bytes = 0;
@@ -837,7 +836,7 @@ mod tests {
                 if call_count <= 2 {
                     Ok(())
                 } else {
-                    // Fail on the 3rd call (i=2).
+                    // Fail on the 3rd call.
                     Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
                 }
             })
@@ -860,7 +859,7 @@ mod tests {
     fn flush_buffered_recovers_on_retry_after_mid_drain_failure() {
         let (_b, _c, mut cow) = seed_cow_with_writes(&[(0, 0xA0), (1, 0xA1), (2, 0xA2), (3, 0xA3)]);
 
-        // Stage 1: mid-drain failure at i=2.
+        // Stage 1: mid-drain failure on the 3rd call.
         let mut call_count = 0;
         let _ = cow.flush_buffered(|_off, _data| {
             call_count += 1;
@@ -897,15 +896,15 @@ mod tests {
                 if call_count <= 3 {
                     Ok(())
                 } else {
-                    // Fail on the 4th call (i=3, last block).
+                    // Fail on the 4th call, which is the last block.
                     Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
                 }
             })
             .unwrap_err();
         assert!(matches!(err, NbdCowError::Io(_)));
 
-        // Guards the skip(i) arithmetic at the tail boundary: only block 3
-        // should be restored; blocks [0..=2] stay written.
+        // Guards the tail boundary: only block 3 should be restored; blocks
+        // [0..=2] stay written.
         assert_eq!(cow.dirty_block_count(), 3);
         assert_eq!(cow.buffered_block_count(), 1);
         assert_eq!(cow.buffer_bytes(), 4096);

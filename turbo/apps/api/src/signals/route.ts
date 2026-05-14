@@ -149,6 +149,7 @@ import { testOAuthProviderUserinfoRoutes } from "./routes/test-oauth-provider-us
 import { testSlackDispatchProbeRoutes } from "./routes/test-slack-dispatch-probe";
 import { testSlackMockRoutes } from "./routes/test-slack-mock";
 import { testSlackStateRoutes } from "./routes/test-slack-state";
+import { testTelegramDispatchProbeRoutes } from "./routes/test-telegram-dispatch-probe";
 import { testTelegramMockRoutes } from "./routes/test-telegram-mock";
 import { testTelegramStateRoutes } from "./routes/test-telegram-state";
 
@@ -310,6 +311,7 @@ export const ROUTES: readonly RouteEntry[] = [
   ...testSlackDispatchProbeRoutes,
   ...testSlackMockRoutes,
   ...testSlackStateRoutes,
+  ...testTelegramDispatchProbeRoutes,
   ...testTelegramMockRoutes,
   ...testTelegramStateRoutes,
 ];

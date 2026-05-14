@@ -53,6 +53,12 @@ import {
   MOUNT_PATH_TEMPLATE,
   type SupportedFramework,
 } from "@vm0/core";
+import { resolveSkillRef, parseGitHubTreeUrl } from "@vm0/core/github-url";
+import {
+  getCustomSkillStorageName,
+  getSkillStorageName,
+} from "@vm0/core/storage-names";
+import { SEED_SKILLS } from "@vm0/core/zero-seed-skills";
 import {
   expandVariables,
   extractAndGroupVariables,
@@ -291,7 +297,11 @@ interface CreateAgentRunArgs {
   readonly chatThreadId?: string;
   readonly includeZeroTokenSecret?: boolean;
   readonly extraEnvironment?: Record<string, string>;
-  readonly prependAdditionalVolumes?: readonly AdditionalVolume[];
+  // When set, system + custom skill volumes are built and prepended in
+  // prepareRunContext using the run's resolved (model-provider) framework.
+  readonly injectSkillVolumes?: {
+    readonly customSkills: readonly string[];
+  };
   readonly allowedConnectorTypes?: readonly ConnectorType[];
   readonly allowedCustomConnectorIds?: readonly string[];
   readonly validateEnvironmentReferences?: boolean;
@@ -355,6 +365,70 @@ function mergeAdditionalVolumes(args: {
   return args.prepend || args.base
     ? [...(args.prepend ?? []), ...(args.base ?? [])]
     : undefined;
+}
+
+function frameworkSkillsMountPath(framework: SupportedFramework): string {
+  return framework === "codex"
+    ? "/home/user/.codex/skills"
+    : "/home/user/.claude/skills";
+}
+
+function skillMountPath(
+  framework: SupportedFramework,
+  skillName: string,
+): string {
+  return `${frameworkSkillsMountPath(framework)}/${skillName}`;
+}
+
+// Skill volume mount paths are framework-specific. The framework MUST be the
+// one resolved from the model provider (see prepareRunContext), never the one
+// declared in the compose — a run can execute on a provider whose framework
+// differs from the compose, and skills mounted at the wrong path are invisible
+// to the agent.
+function buildSystemSkillVolumes(
+  connectorTypes: readonly ConnectorType[],
+  framework: SupportedFramework,
+): readonly AdditionalVolume[] {
+  const allSkillNames = [...new Set([...SEED_SKILLS, ...connectorTypes])];
+  return allSkillNames.flatMap((skillName) => {
+    const url = resolveSkillRef(skillName);
+    const parsed = parseGitHubTreeUrl(url);
+    if (!parsed) {
+      return [];
+    }
+    return [
+      {
+        name: getSkillStorageName(parsed.fullPath),
+        mountPath: skillMountPath(framework, parsed.skillName),
+        system: true,
+      },
+    ];
+  });
+}
+
+function buildCustomSkillVolumes(
+  customSkills: readonly string[],
+  framework: SupportedFramework,
+): readonly AdditionalVolume[] {
+  return customSkills.map((name) => {
+    return {
+      name: getCustomSkillStorageName(name),
+      mountPath: skillMountPath(framework, name),
+    };
+  });
+}
+
+function buildInjectedSkillVolumes(
+  args: CreateAgentRunArgs,
+  framework: SupportedFramework,
+): readonly AdditionalVolume[] | undefined {
+  if (!args.injectSkillVolumes) {
+    return undefined;
+  }
+  return [
+    ...buildSystemSkillVolumes(args.allowedConnectorTypes ?? [], framework),
+    ...buildCustomSkillVolumes(args.injectSkillVolumes.customSkills, framework),
+  ];
 }
 
 function isRouteError(value: unknown): value is CreateRunErrorResult {
@@ -2830,7 +2904,7 @@ async function prepareRunContext(
     bodyArtifacts: body.artifacts,
   });
   const additionalVolumes = mergeAdditionalVolumes({
-    prepend: args.prependAdditionalVolumes,
+    prepend: buildInjectedSkillVolumes(args, framework),
     base: body.additionalVolumes ?? resolved.additionalVolumes,
   });
 

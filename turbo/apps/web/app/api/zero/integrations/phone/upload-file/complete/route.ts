@@ -18,10 +18,11 @@ import {
   sendAgentPhoneMessage,
 } from "../../../../../../../src/lib/zero/agentphone/client";
 import {
-  normalizePhoneHandle,
+  normalizeAgentPhoneHandle,
   resolveAgentPhoneAgentIdForUserLink,
   resolveAgentPhoneUserLinkForOwner,
   storeOutboundAgentPhoneMessage,
+  type AgentPhoneChannel,
 } from "../../../../../../../src/lib/zero/agentphone/shared";
 import type {
   PhoneUploadCompleteBody,
@@ -108,7 +109,7 @@ function buildAgentPhoneUploadMetadata(params: {
 }): Record<string, unknown> {
   const { body, uploadId, sourceUrl, agentphoneMessageId } = params;
   return {
-    toNumber: normalizePhoneHandle(body.toNumber),
+    toNumber: normalizeAgentPhoneHandle(body.toNumber, "sms"),
     uploadId,
     sourceUrl,
     ...(body.caption ? { caption: body.caption } : {}),
@@ -126,9 +127,11 @@ async function sendAndRecordAgentPhoneFile(params: {
   uploadedFile: UploadedFileInfo;
 }): Promise<PhoneUploadCompleteResponse | RouteErrorResponse> {
   const { body, userId, orgId, runId, uploadedFile } = params;
-  const phoneHandle = normalizePhoneHandle(body.toNumber);
+  const userChannel: AgentPhoneChannel = "sms";
+  const phoneHandle = normalizeAgentPhoneHandle(body.toNumber, userChannel);
   const userLink = await resolveAgentPhoneUserLinkForOwner({
     phoneHandle,
+    channel: userChannel,
     vm0UserId: userId,
     orgId,
   });
@@ -139,6 +142,7 @@ async function sendAndRecordAgentPhoneFile(params: {
   const agentphoneAgentId = await resolveAgentPhoneAgentIdForUserLink({
     userLinkId: userLink.id,
     phoneHandle,
+    channel: userChannel,
     agentphoneAgentId: body.agentphoneAgentId,
   });
   if (!agentphoneAgentId) {
@@ -182,6 +186,7 @@ async function sendAndRecordAgentPhoneFile(params: {
       toNumber: sent.toNumber ?? phoneHandle,
       body: body.caption,
       channel: sent.channel,
+      userChannel,
       mediaUrl: uploadedFile.fileUrl,
     });
 

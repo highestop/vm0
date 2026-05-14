@@ -5,7 +5,10 @@ import { agentphoneThreadSessions } from "@vm0/db/schema/agentphone-thread-sessi
 import { agentphoneUserAgentPreferences } from "@vm0/db/schema/agentphone-user-agent-preference";
 import { agentphoneUserLinks } from "@vm0/db/schema/agentphone-user-link";
 import { signAgentPhoneConnectParams } from "../../lib/zero/agentphone/connect-token";
-import { normalizePhoneHandle } from "../../lib/zero/agentphone/shared";
+import {
+  normalizeAgentPhoneHandle,
+  type AgentPhoneChannel,
+} from "../../lib/zero/agentphone/shared";
 
 /**
  * @why-db-direct Creates official shared AgentPhone user link rows for inbound
@@ -15,13 +18,15 @@ export async function insertTestAgentPhoneUserLink(params: {
   phoneHandle: string;
   vm0UserId: string;
   orgId: string;
+  channel?: AgentPhoneChannel;
 }): Promise<{ id: string }> {
   initServices();
 
+  const channel: AgentPhoneChannel = params.channel ?? "sms";
   const [row] = await globalThis.services.db
     .insert(agentphoneUserLinks)
     .values({
-      phoneHandle: normalizePhoneHandle(params.phoneHandle),
+      phoneHandle: normalizeAgentPhoneHandle(params.phoneHandle, channel),
       vm0UserId: params.vm0UserId,
       orgId: params.orgId,
     })
@@ -101,21 +106,22 @@ export async function insertTestAgentPhoneMessage(params: {
   direction: "inbound" | "outbound";
   body?: string | null;
   mediaUrl?: string | null;
-  channel?: string;
+  channel?: AgentPhoneChannel;
   isBot?: boolean;
   createdAt?: Date;
 }): Promise<void> {
   initServices();
 
+  const channel: AgentPhoneChannel = params.channel ?? "sms";
   await globalThis.services.db.insert(agentphoneMessages).values({
     agentphoneMessageId: params.agentphoneMessageId,
     agentphoneAgentId: params.agentphoneAgentId ?? "agt-test",
     agentphoneUserLinkId: params.agentphoneUserLinkId ?? null,
-    phoneHandle: normalizePhoneHandle(params.phoneHandle),
-    fromNumber: normalizePhoneHandle(params.fromNumber),
-    toNumber: normalizePhoneHandle(params.toNumber),
+    phoneHandle: normalizeAgentPhoneHandle(params.phoneHandle, channel),
+    fromNumber: normalizeAgentPhoneHandle(params.fromNumber, channel),
+    toNumber: normalizeAgentPhoneHandle(params.toNumber, "sms"),
     direction: params.direction,
-    channel: params.channel ?? "sms",
+    channel,
     body: params.body ?? null,
     mediaUrl: params.mediaUrl ?? null,
     isBot: params.isBot ?? params.direction === "outbound",
@@ -127,13 +133,15 @@ export function signTestAgentPhoneConnectParams(
   phoneHandle: string,
   agentphoneAgentId: string,
   secret: string,
+  channel: AgentPhoneChannel = "sms",
 ): { sig: string; ts: number } {
   const ts = Math.floor(Date.now() / 1000);
-  const sig = signAgentPhoneConnectParams(
-    normalizePhoneHandle(phoneHandle),
+  const sig = signAgentPhoneConnectParams({
+    phoneHandle: normalizeAgentPhoneHandle(phoneHandle, channel),
     agentphoneAgentId,
-    ts,
+    timestamp: ts,
+    channel,
     secret,
-  );
+  });
   return { sig, ts };
 }

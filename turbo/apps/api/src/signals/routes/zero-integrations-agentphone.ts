@@ -141,16 +141,12 @@ function agentPhoneCooldownKeys(params: {
   });
 }
 
-function normalizePhoneHandle(value: string): string {
-  return value.trim().replace(/[^\d+]/gu, "");
-}
-
 function isValidPhoneHandle(value: string): boolean {
   return /^\+[1-9]\d{7,14}$/u.test(value);
 }
 
 function maskPhoneHandle(value: string): string {
-  const normalized = normalizePhoneHandle(value);
+  const normalized = value.trim().replace(/[^\d+]/gu, "");
   if (normalized.length <= 4) {
     return "[redacted]";
   }
@@ -167,16 +163,25 @@ function truncateForLog(value: string): string {
   return value.length > 500 ? `${value.slice(0, 500)}...` : value;
 }
 
+// `startLink` only ever delivers via SMS, so we hard-code the channel for
+// signing. Keep the HMAC payload format in lock-step with apps/web's
+// `signAgentPhoneConnectParams` (`<handle>:<agentId>:<ts>:<channel>`) so the
+// platform connect page can verify either origin's signature.
+const APPS_API_CONNECT_CHANNEL: AgentPhoneChannel = "sms";
+
+type AgentPhoneChannel = "imessage" | "sms" | "mms";
+
 function signAgentPhoneConnectParams(params: {
   readonly phoneHandle: string;
   readonly agentphoneAgentId: string;
   readonly timestamp: number;
+  readonly channel: AgentPhoneChannel;
 }): string {
   return createHmac("sha256", env("SECRETS_ENCRYPTION_KEY"))
     .update(
       `${params.phoneHandle}:${params.agentphoneAgentId}:${String(
         params.timestamp,
-      )}`,
+      )}:${params.channel}`,
     )
     .digest("hex");
 }
@@ -194,7 +199,9 @@ function buildAgentPhoneConnectUrl(params: {
       phoneHandle: params.phoneHandle,
       agentphoneAgentId: params.agentphoneAgentId,
       timestamp,
+      channel: APPS_API_CONNECT_CHANNEL,
     }),
+    channel: APPS_API_CONNECT_CHANNEL,
   });
   return `${env("APP_URL").replace(/\/$/u, "")}/agentphone/connect?${query.toString()}`;
 }
@@ -394,7 +401,9 @@ const startLink$ = command(async ({ get, set }, signal: AbortSignal) => {
     return bodyResult.response;
   }
 
-  const phoneHandle = normalizePhoneHandle(bodyResult.data.phoneHandle);
+  const phoneHandle = bodyResult.data.phoneHandle
+    .trim()
+    .replace(/[^\d+]/gu, "");
   if (!isValidPhoneHandle(phoneHandle)) {
     return badRequestMessage(
       "Enter a phone number with country code, like +1 555 555 1212",

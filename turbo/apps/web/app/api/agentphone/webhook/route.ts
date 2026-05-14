@@ -4,9 +4,13 @@ import { initServices } from "../../../../src/lib/init-services";
 import { env } from "../../../../src/env";
 import { handleAgentPhoneMessage } from "../../../../src/lib/zero/agentphone/handlers/inbound";
 import {
-  normalizePhoneHandle,
+  describeAgentPhoneHandleShape,
+  isAgentPhoneChannel,
+  isValidAgentPhoneHandle,
+  normalizeAgentPhoneHandle,
   resolveAgentPhoneUserLink,
   storeInboundAgentPhoneMessage,
+  type AgentPhoneChannel,
   type AgentPhoneMessageEvent,
 } from "../../../../src/lib/zero/agentphone/shared";
 import { verifyAgentPhoneWebhook } from "../../../../src/lib/zero/agentphone/verify";
@@ -15,7 +19,6 @@ import { logger } from "../../../../src/lib/shared/logger";
 const log = logger("agentphone:webhook");
 
 const webhookBodySchema = z.record(z.string(), z.unknown());
-const supportedAgentPhoneMessageChannels = new Set(["imessage", "sms", "mms"]);
 
 function valueObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -45,7 +48,7 @@ function parseDate(value: unknown): Date | null {
 function extractAgentPhoneEvent(
   body: Record<string, unknown>,
   webhookId: string | null,
-  channel: string,
+  channel: AgentPhoneChannel,
 ): AgentPhoneMessageEvent | null {
   const data = valueObject(body.data);
   const messageId =
@@ -141,14 +144,15 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const data = valueObject(body.data);
-  const channel = (
+  const rawChannel = (
     stringValue(body, ["channel"]) ??
     stringValue(data, ["channel"]) ??
     ""
   ).toLowerCase();
-  if (!supportedAgentPhoneMessageChannels.has(channel)) {
+  if (!isAgentPhoneChannel(rawChannel)) {
     return new Response("OK", { status: 200 });
   }
+  const channel: AgentPhoneChannel = rawChannel;
 
   const webhookId = request.headers.get("x-webhook-id");
   const event = extractAgentPhoneEvent(body, webhookId, channel);
@@ -157,13 +161,31 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (
-    normalizePhoneHandle(event.toNumber) !==
-    normalizePhoneHandle(AGENTPHONE_PHONE_NUMBER)
+    normalizeAgentPhoneHandle(event.toNumber, "sms") !==
+    normalizeAgentPhoneHandle(AGENTPHONE_PHONE_NUMBER, "sms")
   ) {
     return new Response("OK", { status: 200 });
   }
 
-  const userLink = await resolveAgentPhoneUserLink(event.fromNumber);
+  const normalizedFrom = normalizeAgentPhoneHandle(event.fromNumber, channel);
+  log.info("AgentPhone webhook accepted", {
+    webhookId,
+    channel,
+    fromShape: describeAgentPhoneHandleShape(event.fromNumber),
+    fromHandleNormalized: Boolean(normalizedFrom),
+    hasMedia: Boolean(event.mediaUrl),
+  });
+
+  if (!normalizedFrom || !isValidAgentPhoneHandle(normalizedFrom, channel)) {
+    log.warn("AgentPhone webhook from-handle is not usable", {
+      webhookId,
+      channel,
+      fromShape: describeAgentPhoneHandleShape(event.fromNumber),
+    });
+    return new Response("OK", { status: 200 });
+  }
+
+  const userLink = await resolveAgentPhoneUserLink(event.fromNumber, channel);
   const stored = await storeInboundAgentPhoneMessage({
     event,
     userLinkId: userLink?.id ?? null,

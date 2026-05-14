@@ -828,6 +828,8 @@ const GUEST_SYSTEM_LOG_PREFIX: &str = "/tmp/vm0-system-";
 const GUEST_SYSTEM_LOG_SUFFIX: &str = ".log";
 const GUEST_METRICS_LOG_PREFIX: &str = "/tmp/vm0-metrics-";
 const GUEST_METRICS_LOG_SUFFIX: &str = ".jsonl";
+const GUEST_SANDBOX_OPS_LOG_PREFIX: &str = "/tmp/vm0-sandbox-ops-";
+const GUEST_SANDBOX_OPS_LOG_SUFFIX: &str = ".jsonl";
 
 /// Copy guest log files to host (best-effort, post-job).
 ///
@@ -846,6 +848,10 @@ async fn copy_guest_logs(sandbox: &dyn Sandbox, context: &ExecutionContext, log_
         (
             format!("{GUEST_METRICS_LOG_PREFIX}{run_id}{GUEST_METRICS_LOG_SUFFIX}"),
             log_paths.metrics_log(run_id),
+        ),
+        (
+            format!("{GUEST_SANDBOX_OPS_LOG_PREFIX}{run_id}{GUEST_SANDBOX_OPS_LOG_SUFFIX}"),
+            log_paths.sandbox_ops_log(run_id),
         ),
     ];
 
@@ -2752,9 +2758,13 @@ mod tests {
         .await
         .unwrap();
 
-        // Queue two guest-copy results: system log + metrics log.
+        // Queue guest-copy results: system log + metrics log + sandbox ops log.
         sandbox.push_copy_file_result(Ok(b"system log line 1\nsystem log line 2\n".to_vec()));
         sandbox.push_copy_file_result(Ok(b"{\"cpu\":0.5}\n".to_vec()));
+        sandbox.push_copy_file_result(Ok(
+            b"{\"action_type\":\"final_telemetry_upload\",\"duration_ms\":10,\"success\":true}\n"
+                .to_vec(),
+        ));
 
         copy_guest_logs(&sandbox, &ctx, &log_paths).await;
 
@@ -2768,6 +2778,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metrics_log, "{\"cpu\":0.5}\n");
+
+        let sandbox_ops_log = tokio::fs::read_to_string(log_paths.sandbox_ops_log(ctx.run_id))
+            .await
+            .unwrap();
+        assert!(sandbox_ops_log.contains("final_telemetry_upload"));
+
+        let calls = sandbox.copy_file_calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(
+            calls[2].path,
+            format!("/tmp/vm0-sandbox-ops-{}.jsonl", ctx.run_id)
+        );
+        assert_eq!(calls[2].host_path, log_paths.sandbox_ops_log(ctx.run_id));
+        assert_eq!(calls[0].max_bytes, GUEST_LOG_COPY_MAX_BYTES);
+        assert_eq!(calls[1].max_bytes, GUEST_LOG_COPY_MAX_BYTES);
+        assert_eq!(calls[2].max_bytes, GUEST_LOG_COPY_MAX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn copy_guest_logs_keeps_existing_logs_when_sandbox_ops_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_paths = LogPaths::new(dir.path().to_path_buf());
+        let sandbox = MockSandbox::new("test");
+        let ctx = minimal_context();
+
+        sandbox.push_copy_file_result(Ok(b"system log\n".to_vec()));
+        sandbox.push_copy_file_result(Ok(b"{\"cpu\":0.5}\n".to_vec()));
+
+        copy_guest_logs(&sandbox, &ctx, &log_paths).await;
+
+        let system_log = tokio::fs::read_to_string(log_paths.system_log(ctx.run_id))
+            .await
+            .unwrap();
+        assert_eq!(system_log, "system log\n");
+
+        let metrics_log = tokio::fs::read_to_string(log_paths.metrics_log(ctx.run_id))
+            .await
+            .unwrap();
+        assert_eq!(metrics_log, "{\"cpu\":0.5}\n");
+        assert!(!log_paths.sandbox_ops_log(ctx.run_id).exists());
+
+        let calls = sandbox.copy_file_calls();
+        assert_eq!(calls.len(), 3);
+        assert!(
+            calls[2].missing_ok,
+            "missing sandbox ops log should be a best-effort no-op"
+        );
     }
 
     #[tokio::test]
@@ -2780,12 +2837,14 @@ mod tests {
         // Copy fails (file doesn't exist in guest).
         sandbox.push_copy_file_result(Err(sandbox_exec_error("No such file")));
         sandbox.push_copy_file_result(Err(sandbox_exec_error("No such file")));
+        sandbox.push_copy_file_result(Err(sandbox_exec_error("No such file")));
 
         copy_guest_logs(&sandbox, &ctx, &log_paths).await;
 
         // Host files should not be created
         assert!(!log_paths.system_log(ctx.run_id).exists());
         assert!(!log_paths.metrics_log(ctx.run_id).exists());
+        assert!(!log_paths.sandbox_ops_log(ctx.run_id).exists());
     }
 
     #[tokio::test]
@@ -2797,11 +2856,13 @@ mod tests {
 
         sandbox.push_copy_file_result(Err(sandbox_exec_error("vsock down")));
         sandbox.push_copy_file_result(Err(sandbox_exec_error("vsock down")));
+        sandbox.push_copy_file_result(Err(sandbox_exec_error("vsock down")));
 
         copy_guest_logs(&sandbox, &ctx, &log_paths).await;
 
         assert!(!log_paths.system_log(ctx.run_id).exists());
         assert!(!log_paths.metrics_log(ctx.run_id).exists());
+        assert!(!log_paths.sandbox_ops_log(ctx.run_id).exists());
     }
 
     // -----------------------------------------------------------------------

@@ -184,6 +184,12 @@ export {
   type TelegramCallbackPayload,
 } from "./internal-callbacks-telegram";
 export {
+  internalCallbacksAgentPhoneContract,
+  agentPhoneCallbackPayloadSchema,
+  type InternalCallbacksAgentPhoneContract,
+  type AgentPhoneCallbackPayload,
+} from "./internal-callbacks-agentphone";
+export {
   testTelegramDispatchProbeContract,
   type TestTelegramDispatchProbeContract,
 } from "./test-telegram-dispatch-probe";
@@ -1067,6 +1073,8 @@ export {
   type IntegrationsPhoneMessageContract,
   type SendPhoneMessageBody,
   type SendPhoneMessageResponse,
+  integrationsPhoneDownloadFileContract,
+  type IntegrationsPhoneDownloadFileContract,
   integrationsTelegramBotListContract,
   type IntegrationsTelegramBotListContract,
   type TelegramBotListItem,

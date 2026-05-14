@@ -7,12 +7,6 @@ import { createHash } from "node:crypto";
  * When a route is migrated out of apps/web, remove its entry here as part of
  * the same change. Do not add new entries without an intentional exception.
  *
- * Intentional exception (Epic #12128, Plan D): the voice-chat realtime
- * billing surface lives in apps/web because the relay design is killed by
- * Vercel's lack of WebSocket-upgrade support. The browser self-reports
- * `response.done` and `transcription.completed` usage to these
- * Vercel-served endpoints; apps/api would not be a viable home today.
- *
  * Intentional exception: remote-agent routes are implemented in apps/api, but
  * CLI and platform callers use the same VM0_API_URL prefix as `vm0 auth login`
  * (`http://localhost:3000`). The web routes are thin proxies to
@@ -24,9 +18,6 @@ import { createHash } from "node:crypto";
  *
  */
 export const WEB_API_ROUTE_BASELINE = [
-  "app/api/zero/voice-chat/[id]/usage/route.ts",
-  "app/api/zero/voice-chat/[id]/session-started/route.ts",
-  "app/api/zero/voice-chat/[id]/session-ended/route.ts",
   "app/api/agent/checkpoints/[id]/route.ts",
   "app/api/agent/composes/[id]/instructions/route.ts",
   "app/api/agent/composes/[id]/metadata/route.ts",
@@ -282,7 +273,7 @@ export const WEB_API_ROUTE_BASELINE = [
 ] as const;
 
 export const WEB_API_ROUTE_BASELINE_HASH =
-  "7701f39441671f40f72f1ac6da88a1bd84ed75bef917ec39fe884f454aead833";
+  "bba95ded7ac326a4f8b0186ad94f859b1ab4a601b93b7b433c37bb625972b34b";
 
 export function computeWebApiRouteBaselineHash(
   routes: readonly string[] = WEB_API_ROUTE_BASELINE,

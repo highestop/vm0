@@ -1564,10 +1564,6 @@ mod tests {
             "destroy-panic".into()
         }
 
-        async fn startup(&mut self) -> sandbox::Result<()> {
-            self.inner.startup().await
-        }
-
         async fn create(&self, config: SandboxConfig) -> sandbox::Result<Box<dyn Sandbox>> {
             self.inner.create(config).await
         }
@@ -3053,8 +3049,7 @@ mod tests {
     async fn execute_inner_happy_path() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let (exit_code, error_msg) =
             run_execute_inner(&factory, &minimal_context(), &config, &default_params())
@@ -3069,8 +3064,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
         let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
-        let mut factory = sandbox_mock::MockSandboxFactory::with_overrides(overrides.clone());
-        factory.startup().await.unwrap();
+        let factory = sandbox_mock::MockSandboxFactory::with_overrides(overrides.clone());
 
         let (exit_code, error_msg) =
             run_execute_inner(&factory, &minimal_context(), &config, &default_params())
@@ -3089,8 +3083,7 @@ mod tests {
     async fn execute_inner_with_snapshot_runs_clock_fix_and_reseed() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let params = JobParams {
             restore_guest_state: true,
@@ -3106,8 +3099,7 @@ mod tests {
     async fn execute_inner_with_storage_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let mut ctx = minimal_context();
         ctx.storage_manifest = Some(StorageManifest {
@@ -3129,8 +3121,7 @@ mod tests {
     async fn execute_inner_with_resume_session() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let mut ctx = minimal_context();
         ctx.resume_session = Some(ResumeSession {
@@ -3147,8 +3138,7 @@ mod tests {
     async fn execute_inner_create_failure_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
         factory.push_create_result(Err(sandbox_create_error("no free devices")));
 
         let err = run_execute_inner(&factory, &minimal_context(), &config, &default_params())
@@ -3168,8 +3158,7 @@ mod tests {
         let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_error(
             "wait timeout",
         ));
-        let mut factory = sandbox_mock::MockSandboxFactory::with_overrides(overrides);
-        factory.startup().await.unwrap();
+        let factory = sandbox_mock::MockSandboxFactory::with_overrides(overrides);
 
         let (exit_code, error) =
             run_execute_inner(&factory, &minimal_context(), &config, &default_params())
@@ -3188,10 +3177,9 @@ mod tests {
         overrides.push_start_result(Err(SandboxError::Start {
             message: "boot failed".into(),
         }));
-        let mut factory = DestroyPanicFactory {
+        let factory = DestroyPanicFactory {
             inner: MockSandboxFactory::with_overrides(overrides),
         };
-        factory.startup().await.unwrap();
 
         let ctx = minimal_context();
         let mut telemetry = test_telemetry(&config, &ctx);
@@ -3219,8 +3207,7 @@ mod tests {
     async fn execute_job_wraps_execute_inner() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let (outcome, _telemetry) = execute_job(
@@ -3244,8 +3231,7 @@ mod tests {
     async fn execute_job_create_failure_returns_exit_1() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
         factory.push_create_result(Err(sandbox_create_error("boom")));
 
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -3274,8 +3260,7 @@ mod tests {
     async fn execute_job_reuse_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         // First: create a sandbox via normal execute_job
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -3309,8 +3294,7 @@ mod tests {
     async fn execute_job_reuse_with_session_context() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         // First turn: execute with resume_session
         let mut ctx = minimal_context();
@@ -3363,8 +3347,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         // Execute first job
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -3543,8 +3526,7 @@ mod tests {
     async fn execute_job_nonzero_exit_still_returns_sandbox() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let (outcome, _telemetry) = execute_job(
@@ -3965,8 +3947,7 @@ mod tests {
     async fn execute_job_records_sandbox_reuse_miss_in_telemetry() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let (_outcome, telemetry) = execute_job(
@@ -3995,8 +3976,7 @@ mod tests {
     async fn execute_job_reuse_records_sandbox_reuse_hit_in_telemetry() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_executor_config(dir.path()).await;
-        let mut factory = MockSandboxFactory::new();
-        factory.startup().await.unwrap();
+        let factory = MockSandboxFactory::new();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let (outcome, _telemetry) = execute_job(

@@ -19,7 +19,7 @@
 //!
 //! See issue #11877 and parent Epic #11872 for full context.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -71,7 +71,9 @@ const FAR_FUTURE_EXP_SECS: i64 = 100 * 365 * 24 * 3600;
 /// the request hits a closed port and fails fast instead of escaping
 /// to `auth.openai.com`. The firewall additionally denies that
 /// hostname from inside the sandbox (Epic #11872 risk-mitigation row).
-const REFRESH_TOKEN_NOOP_URL: &str = "http://127.0.0.1:1/blocked";
+pub(crate) const REFRESH_TOKEN_NOOP_URL: &str = "http://127.0.0.1:1/blocked";
+const CODEX_HOME_MODE: u32 = 0o700;
+const AUTH_JSON_MODE: u32 = 0o600;
 
 // ---------------------------------------------------------------------------
 // JWT builder
@@ -163,6 +165,66 @@ fn build_auth_json(now: DateTime<Utc>) -> Result<Value, AgentError> {
     }))
 }
 
+fn prepare_codex_home(home_dir: &Path) -> Result<PathBuf, AgentError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let codex_home = home_dir.join(".codex");
+    let metadata = match std::fs::symlink_metadata(&codex_home) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(&codex_home)?;
+            std::fs::symlink_metadata(&codex_home)?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(AgentError::Execution(format!(
+            "refusing to write codex auth through symlinked directory {}",
+            codex_home.display()
+        )));
+    }
+    if !metadata.is_dir() {
+        return Err(AgentError::Execution(format!(
+            "codex auth path is not a directory: {}",
+            codex_home.display()
+        )));
+    }
+
+    std::fs::set_permissions(
+        &codex_home,
+        std::fs::Permissions::from_mode(CODEX_HOME_MODE),
+    )?;
+
+    Ok(codex_home)
+}
+
+fn write_auth_json_atomic(codex_home: &Path, serialized: &str) -> Result<(), AgentError> {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    let auth_path = codex_home.join("auth.json");
+    let mut temp = tempfile::NamedTempFile::new_in(codex_home)?;
+
+    {
+        let file = temp.as_file_mut();
+        file.set_permissions(std::fs::Permissions::from_mode(AUTH_JSON_MODE))?;
+        file.write_all(serialized.as_bytes())?;
+        file.flush()?;
+    }
+
+    temp.persist(&auth_path).map_err(|e| {
+        AgentError::Io(std::io::Error::new(
+            e.error.kind(),
+            format!(
+                "failed to replace {} atomically: {}",
+                auth_path.display(),
+                e.error
+            ),
+        ))
+    })?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Setup function
 //
@@ -175,30 +237,11 @@ pub(crate) fn setup_codex_chatgpt_inner(
     home_dir: &Path,
     now: DateTime<Utc>,
 ) -> Result<(), AgentError> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let codex_home = home_dir.join(".codex");
-    std::fs::create_dir_all(&codex_home)?;
+    let codex_home = prepare_codex_home(home_dir)?;
 
     let auth_json = build_auth_json(now)?;
     let serialized = serde_json::to_string(&auth_json)?;
-
-    let auth_path = codex_home.join("auth.json");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&auth_path)?;
-    file.write_all(serialized.as_bytes())?;
-
-    // SAFETY: `setup_codex_chatgpt_inner` runs from `main.rs` during
-    // single-threaded init, before any worker thread spawns. No other
-    // thread is reading the env concurrently.
-    unsafe {
-        std::env::set_var("CODEX_REFRESH_TOKEN_URL_OVERRIDE", REFRESH_TOKEN_NOOP_URL);
-    }
+    write_auth_json_atomic(&codex_home, &serialized)?;
 
     Ok(())
 }
@@ -216,7 +259,7 @@ mod tests {
     //! project's "Integration Tests Only" rule.
     use super::*;
 
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use chrono::TimeZone;
     use tempfile::TempDir;
@@ -247,10 +290,10 @@ mod tests {
     /// Asserts the three independent ChatGPT-mode signals, the placeholder
     /// account_id, both JWT shapes (3 segments + HS256 header), the
     /// ChatGPT-namespace claims (account id, plan type ≠ free, user id,
-    /// fedramp flag), the far-future `exp`, the empty refresh token, and
-    /// the RFC3339 `last_refresh` — i.e. everything the private builders
-    /// previously asserted in isolation, asserted here against the
-    /// fabricated file.
+    /// fedramp flag), the far-future `exp`, the non-empty placeholder
+    /// refresh token, and the RFC3339 `last_refresh` — i.e. everything
+    /// the private builders previously asserted in isolation, asserted
+    /// here against the fabricated file.
     #[test]
     fn setup_codex_chatgpt_inner_writes_well_formed_chatgpt_auth_json() {
         let tmp = TempDir::new().unwrap();
@@ -361,22 +404,6 @@ mod tests {
         }
     }
 
-    /// CAUTION: this test mutates global env via `unsafe { set_var }`
-    /// inside `setup_codex_chatgpt_inner`. Cargo runs tests in parallel
-    /// by default; the var is single-write within this crate's tests so
-    /// the race is benign, but any future test that *reads*
-    /// `CODEX_REFRESH_TOKEN_URL_OVERRIDE` should not run alongside this
-    /// one. Same precedent as `artifact.rs:826`.
-    #[test]
-    fn setup_codex_chatgpt_inner_sets_refresh_url_override_env() {
-        let tmp = TempDir::new().unwrap();
-        setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap();
-        assert_eq!(
-            std::env::var("CODEX_REFRESH_TOKEN_URL_OVERRIDE").unwrap(),
-            REFRESH_TOKEN_NOOP_URL
-        );
-    }
-
     #[test]
     fn setup_codex_chatgpt_inner_overwrites_existing_auth_json() {
         let tmp = TempDir::new().unwrap();
@@ -390,9 +417,143 @@ mod tests {
         let body = std::fs::read_to_string(&auth_path).unwrap();
         assert!(
             !body.contains("STALE_CONTENT_FROM_PRIOR_RUN"),
-            "stale content must be truncated: {body}"
+            "stale content must be replaced: {body}"
         );
         // And the new content must parse as our auth.json shape.
         serde_json::from_str::<Value>(&body).unwrap();
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_replaces_permissive_auth_json_with_private_file() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let auth_path = codex_home.join("auth.json");
+        std::fs::write(&auth_path, b"STALE_CONTENT_FROM_PRIOR_RUN").unwrap();
+        std::fs::set_permissions(&auth_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap();
+
+        let mode = std::fs::metadata(&auth_path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o7777,
+            AUTH_JSON_MODE,
+            "auth.json must be replaced with mode 0o600 (got {mode:o})"
+        );
+
+        let body = std::fs::read_to_string(&auth_path).unwrap();
+        assert!(
+            !body.contains("STALE_CONTENT_FROM_PRIOR_RUN"),
+            "stale content must be replaced: {body}"
+        );
+        serde_json::from_str::<Value>(&body).unwrap();
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_replaces_auth_json_symlink_without_truncating_target() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let auth_path = codex_home.join("auth.json");
+        let symlink_target = tmp.path().join("target-auth.json");
+        std::fs::write(&symlink_target, b"TARGET_CONTENT_MUST_SURVIVE").unwrap();
+        symlink(&symlink_target, &auth_path).unwrap();
+
+        setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&symlink_target).unwrap(),
+            "TARGET_CONTENT_MUST_SURVIVE",
+            "atomic replacement must not truncate the old symlink target"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&auth_path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "auth.json should be a regular replacement file, not the old symlink"
+        );
+
+        let mode = std::fs::metadata(&auth_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, AUTH_JSON_MODE);
+        let body = std::fs::read_to_string(&auth_path).unwrap();
+        serde_json::from_str::<Value>(&body).unwrap();
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_normalizes_existing_codex_home_permissions() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::set_permissions(&codex_home, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap();
+
+        let mode = std::fs::metadata(&codex_home).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o7777,
+            CODEX_HOME_MODE,
+            ".codex must be mode 0o700 (got {mode:o})"
+        );
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_rejects_symlinked_codex_home() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("real-codex-home");
+        std::fs::create_dir_all(&target).unwrap();
+        symlink(&target, tmp.path().join(".codex")).unwrap();
+
+        let err = setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap_err();
+        assert!(
+            err.to_string().contains("symlinked directory"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_rejects_file_at_codex_home_path() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        std::fs::write(&codex_home, b"not a directory").unwrap();
+
+        let err = setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap_err();
+        assert!(
+            err.to_string().contains(".codex"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&codex_home).unwrap(),
+            "not a directory",
+            "setup must not replace a non-directory .codex path"
+        );
+    }
+
+    #[test]
+    fn setup_codex_chatgpt_inner_preserves_auth_json_directory_on_error() {
+        let tmp = TempDir::new().unwrap();
+        let codex_home = tmp.path().join(".codex");
+        let auth_path = codex_home.join("auth.json");
+        std::fs::create_dir_all(&auth_path).unwrap();
+
+        let err = setup_codex_chatgpt_inner(tmp.path(), fixed_now()).unwrap_err();
+        assert!(
+            err.to_string().contains("auth.json"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            auth_path.is_dir(),
+            "failed atomic replacement must preserve an existing auth.json directory"
+        );
+
+        let entries = std::fs::read_dir(&codex_home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("auth.json")],
+            "failed atomic replacement must not leave temp files behind"
+        );
     }
 }

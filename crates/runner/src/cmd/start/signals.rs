@@ -158,13 +158,47 @@ impl LifecycleController {
 pub(crate) struct SignalController {
     pub mode_rx: tokio::sync::watch::Receiver<RunnerMode>,
     pub lifecycle: LifecycleController,
-    /// Abort handle for the spawned signal-handler task. `None` for test
-    /// overrides where no task was spawned. Teardown calls `.abort()` to
-    /// reap the task symmetrically with `mitm_retry.handle.abort()` — the
-    /// handler otherwise would run until runtime drop, which is safe for
-    /// the runner binary but leaks the task when `run()` is embedded in a
-    /// longer-lived host runtime.
-    pub handler_abort: Option<tokio::task::AbortHandle>,
+    /// Spawned signal-handler task. `None` for test overrides where no real
+    /// task was spawned. Teardown aborts and awaits this handle so the task
+    /// releases its signal stream subscriptions before `run()` returns. If
+    /// `run()` is externally cancelled before teardown, dropping this wrapper
+    /// still aborts the task so it cannot outlive its runner.
+    pub handler_task: Option<SignalHandlerTask>,
+}
+
+pub(crate) struct SignalHandlerTask {
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl SignalHandlerTask {
+    pub(crate) fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    pub(super) async fn abort_and_wait(mut self) -> Result<(), tokio::task::JoinError> {
+        let Some(handle) = self.handle.take() else {
+            return Ok(());
+        };
+        handle.abort();
+        handle.await
+    }
+
+    async fn wait(&mut self) -> Result<(), String> {
+        match self.handle.as_mut() {
+            Some(handle) => handle.await.map_err(|error| error.to_string()),
+            None => Err("signal handler task handle missing".to_string()),
+        }
+    }
+}
+
+impl Drop for SignalHandlerTask {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
+    }
 }
 
 impl SignalController {
@@ -191,9 +225,9 @@ impl SignalController {
     ///
     /// ## Lifetime
     ///
-    /// The spawned task loops forever and is implicitly cancelled when the
-    /// tokio runtime is dropped. Its `JoinHandle` is discarded — panics in
-    /// the handler will be logged by tokio but not surfaced.
+    /// The spawned task owns the registered signal streams and normally runs
+    /// until `run()` teardown aborts and awaits `handler_task`. Test overrides
+    /// construct a controller with no real handler task.
     pub(super) fn spawn(
         cancel: CancellationToken,
         cancel_tokens: Arc<tokio::sync::Mutex<HashMap<RunId, CancellationToken>>>,
@@ -230,8 +264,26 @@ impl SignalController {
         Self {
             mode_rx,
             lifecycle,
-            handler_abort: Some(handle.abort_handle()),
+            handler_task: Some(SignalHandlerTask::new(handle)),
         }
+    }
+}
+
+/// Await a signal-handler task, or pend forever when tests supply no task.
+///
+/// This mirrors the retry-task helper used by the main loop: keeping the
+/// `Option` outside the future lets `tokio::select!` watch the task without
+/// taking ownership unless it actually completes.
+pub(super) async fn recv_handler_task(
+    handler_task: &mut Option<SignalHandlerTask>,
+) -> Result<(), String> {
+    match handler_task {
+        Some(task) => {
+            let result = task.wait().await;
+            *handler_task = None;
+            result
+        }
+        None => std::future::pending().await,
     }
 }
 
@@ -325,9 +377,71 @@ mod tests {
 
         // Abort so the task releases its Signal stream subscriptions
         // and does not linger to consume signals raised by later tests.
-        if let Some(abort) = controller.handler_abort {
-            abort.abort();
+        if let Some(handler_task) = controller.handler_task {
+            let result = handler_task
+                .abort_and_wait()
+                .await
+                .expect_err("signal handler should be cancelled");
+            assert!(result.is_cancelled());
         }
+    }
+
+    #[tokio::test]
+    async fn recv_handler_task_clears_completed_task() {
+        let mut handler_task = Some(SignalHandlerTask::new(tokio::spawn(async {})));
+
+        recv_handler_task(&mut handler_task)
+            .await
+            .expect("completed handler task");
+
+        assert!(handler_task.is_none());
+    }
+
+    #[tokio::test]
+    async fn recv_handler_task_reports_cancelled_task() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        task.abort();
+        let mut handler_task = Some(SignalHandlerTask::new(task));
+
+        let result = recv_handler_task(&mut handler_task)
+            .await
+            .expect_err("cancelled handler task should be reported");
+
+        assert!(result.contains("cancelled"));
+        assert!(handler_task.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_handler_task_aborts_task() {
+        struct NotifyOnDrop(Arc<tokio::sync::Notify>);
+
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                self.0.notify_one();
+            }
+        }
+
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(tokio::sync::Notify::new());
+        let task = {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            tokio::spawn(async move {
+                let _guard = NotifyOnDrop(dropped);
+                started.notify_one();
+                std::future::pending::<()>().await;
+            })
+        };
+        let handler_task = SignalHandlerTask::new(task);
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .expect("signal handler test task should start");
+
+        drop(handler_task);
+
+        tokio::time::timeout(Duration::from_secs(2), dropped.notified())
+            .await
+            .expect("dropping signal handler task should abort the task");
     }
 
     /// `handle_drain_signal` state guard: SIGUSR1 is honored only from

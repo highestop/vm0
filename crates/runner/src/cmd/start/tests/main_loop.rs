@@ -6,7 +6,7 @@ use super::support::{
     wait_discover_entered, wait_parking_state, wait_status_mode,
 };
 
-use super::super::signals::handle_resume_signal;
+use super::super::signals::{SignalController, SignalHandlerTask, handle_resume_signal};
 use crate::idle_pool::ParkingState;
 
 // -----------------------------------------------------------------------
@@ -573,6 +573,117 @@ async fn hard_shutdown_cancels_active_jobs() {
     }
 
     // The cancelled job reports the synthetic "cancelled by user" error.
+    let comps = env.handle.completions.lock().unwrap();
+    let c = comps
+        .iter()
+        .find(|c| c.run_id == run_id)
+        .expect("cancelled job should still report completion");
+    assert_eq!(c.error.as_deref(), Some("cancelled by user"));
+}
+
+#[tokio::test]
+async fn signal_handler_exit_cancels_active_jobs() {
+    let handler_exit = Arc::new(tokio::sync::Notify::new());
+    let handler_task = {
+        let handler_exit = Arc::clone(&handler_exit);
+        tokio::spawn(async move {
+            handler_exit.notified().await;
+        })
+    };
+
+    assert_signal_handler_task_end_cancels_active_jobs(handler_task, || {
+        handler_exit.notify_one();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn signal_handler_panic_cancels_active_jobs() {
+    let handler_panic = Arc::new(tokio::sync::Notify::new());
+    let handler_task = {
+        let handler_panic = Arc::clone(&handler_panic);
+        tokio::spawn(async move {
+            handler_panic.notified().await;
+            panic!("signal handler task panic");
+        })
+    };
+
+    assert_signal_handler_task_end_cancels_active_jobs(handler_task, || {
+        handler_panic.notify_one();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn graceful_shutdown_aborts_signal_handler_task() {
+    struct ReleaseOnDrop(Arc<tokio::sync::Semaphore>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.add_permits(1);
+        }
+    }
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(tokio::sync::Semaphore::new(0));
+    let handler_task = {
+        let started = Arc::clone(&started);
+        let dropped = Arc::clone(&dropped);
+        tokio::spawn(async move {
+            let _guard = ReleaseOnDrop(dropped);
+            started.notify_one();
+            std::future::pending::<()>().await;
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .expect("signal handler test task should start");
+
+    let (mut config, env) = mock_run_config(test_profiles(), 8, 32768, 4);
+    config.signal_source = SignalSource::Override(SignalController {
+        mode_rx: env.mode_tx.subscribe(),
+        lifecycle: env.lifecycle.clone(),
+        handler_task: Some(SignalHandlerTask::new(handler_task)),
+    });
+    let run_handle = tokio::spawn(run(config));
+    wait_discover_entered(&env, Duration::from_secs(2)).await;
+
+    shutdown(&env, run_handle).await;
+
+    let _permit = dropped
+        .try_acquire()
+        .expect("graceful shutdown should await signal handler task abort");
+}
+
+async fn assert_signal_handler_task_end_cancels_active_jobs(
+    handler_task: tokio::task::JoinHandle<()>,
+    trigger_handler_task_end: impl FnOnce(),
+) {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+        gate,
+    ));
+    let (mut config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
+    config.signal_source = SignalSource::Override(SignalController {
+        mode_rx: env.mode_tx.subscribe(),
+        lifecycle: env.lifecycle.clone(),
+        handler_task: Some(SignalHandlerTask::new(handler_task)),
+    });
+    let run_handle = tokio::spawn(run(config));
+
+    let run_id = RunId::new_v4();
+    push_job(&env, run_id, "vm0/default", Some(minimal_context(run_id)));
+    let _token = wait_cancel_token(&env.cancel_tokens, run_id, Duration::from_secs(5)).await;
+
+    trigger_handler_task_end();
+
+    match tokio::time::timeout(Duration::from_secs(3), run_handle).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => panic!("run() returned error: {e}"),
+        Ok(Err(e)) => panic!("task panicked: {e}"),
+        Err(_) => panic!("signal handler exit should cancel active jobs and stop promptly"),
+    }
+
     let comps = env.handle.completions.lock().unwrap();
     let c = comps
         .iter()

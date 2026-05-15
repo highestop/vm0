@@ -4,12 +4,14 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use vsock_proto::{
-    CommandTermination, Decoder, MSG_COMMAND_START, MSG_ERROR, MSG_OPERATIONS_QUIESCED,
+    Decoder, ExecTermination, MSG_ERROR, MSG_EXEC_START, MSG_OPERATIONS_QUIESCED,
     MSG_OPERATIONS_RESUMED, MSG_QUIESCE_OPERATIONS, MSG_RESUME_OPERATIONS, MSG_SHUTDOWN,
     MSG_SHUTDOWN_ACK,
 };
 
-use super::support::{host_from_stream, make_pair, mock_handshake, send_command_result};
+use super::support::{
+    host_from_stream, make_pair, mock_handshake, read_guest_message, send_exec_result,
+};
 use crate::VsockHost;
 
 #[tokio::test]
@@ -198,25 +200,24 @@ async fn quiesce_operations_rejects_non_empty_ack_payload() {
 #[tokio::test]
 async fn quiesce_operations_times_out_and_late_ack_is_ignored() {
     let (host_stream, mut guest) = make_pair();
+    let (quiesce_seen_tx, quiesce_seen_rx) = tokio::sync::oneshot::channel();
     let (send_late_ack, receive_late_ack) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
         let mut decoder = Decoder::new();
         mock_handshake(&mut guest, &mut decoder).await;
 
-        let mut buf = [0u8; 4096];
-        let n = guest.read(&mut buf).await.unwrap();
-        let msgs = decoder.decode(&buf[..n]).unwrap();
-        assert_eq!(msgs[0].msg_type, MSG_QUIESCE_OPERATIONS);
+        let quiesce = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(quiesce.msg_type, MSG_QUIESCE_OPERATIONS);
+        quiesce_seen_tx.send(()).unwrap();
 
         receive_late_ack.await.unwrap();
-        let late = vsock_proto::encode(MSG_OPERATIONS_QUIESCED, msgs[0].seq, &[]).unwrap();
+        let late = vsock_proto::encode(MSG_OPERATIONS_QUIESCED, quiesce.seq, &[]).unwrap();
         guest.write_all(&late).await.unwrap();
 
-        let n = guest.read(&mut buf).await.unwrap();
-        let msgs = decoder.decode(&buf[..n]).unwrap();
-        assert_eq!(msgs[0].msg_type, MSG_RESUME_OPERATIONS);
-        let resp = vsock_proto::encode(MSG_OPERATIONS_RESUMED, msgs[0].seq, &[]).unwrap();
+        let resume = read_guest_message(&mut guest, &mut decoder).await;
+        assert_eq!(resume.msg_type, MSG_RESUME_OPERATIONS);
+        let resp = vsock_proto::encode(MSG_OPERATIONS_RESUMED, resume.seq, &[]).unwrap();
         guest.write_all(&resp).await.unwrap();
     });
 
@@ -224,6 +225,10 @@ async fn quiesce_operations_times_out_and_late_ack_is_ignored() {
     let err = host.quiesce_operations(Duration::ZERO).await.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
 
+    tokio::time::timeout(Duration::from_secs(2), quiesce_seen_rx)
+        .await
+        .unwrap()
+        .unwrap();
     send_late_ack.send(()).unwrap();
     host.resume_operations(Duration::from_secs(2))
         .await
@@ -307,16 +312,16 @@ async fn test_concurrent_execs() {
             all_msgs.extend(msgs);
         }
         assert_eq!(all_msgs.len(), 2);
-        assert!(all_msgs.iter().all(|m| m.msg_type == MSG_COMMAND_START));
+        assert!(all_msgs.iter().all(|m| m.msg_type == MSG_EXEC_START));
 
         // Reply in reverse order to exercise seq-based dispatching.
         for msg in all_msgs.iter().rev() {
-            let d = vsock_proto::decode_command_start(&msg.payload).unwrap();
+            let d = vsock_proto::decode_exec_start(&msg.payload).unwrap();
             let out = format!("reply:{}", d.command);
-            send_command_result(
+            send_exec_result(
                 &mut guest,
                 msg.seq,
-                CommandTermination::Exited { exit_code: 0 },
+                ExecTermination::Exited { exit_code: 0 },
                 out.as_bytes(),
                 b"",
             )
@@ -361,14 +366,14 @@ async fn test_seq_starts_at_2() {
         let mut buf = [0u8; 4096];
         let n = guest.read(&mut buf).await.unwrap();
         let msgs = decoder.decode(&buf[..n]).unwrap();
-        assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
+        assert_eq!(msgs[0].msg_type, MSG_EXEC_START);
         // Handshake used seq=1, so first request must be seq=2.
         assert_eq!(msgs[0].seq, 2, "first post-handshake seq should be 2");
 
-        send_command_result(
+        send_exec_result(
             &mut guest,
             msgs[0].seq,
-            CommandTermination::Exited { exit_code: 0 },
+            ExecTermination::Exited { exit_code: 0 },
             b"ok",
             b"",
         )
@@ -400,15 +405,15 @@ async fn test_response_then_close_returns_ok() {
         let mut buf = [0u8; 4096];
         let n = guest.read(&mut buf).await.unwrap();
         let msgs = decoder.decode(&buf[..n]).unwrap();
-        assert_eq!(msgs[0].msg_type, MSG_COMMAND_START);
+        assert_eq!(msgs[0].msg_type, MSG_EXEC_START);
 
         // Write the response and close the socket. The response must
         // race with EOF such that reader_loop processes both before the
         // host's `request_raw` returns from its select!.
-        send_command_result(
+        send_exec_result(
             &mut guest,
             msgs[0].seq,
-            CommandTermination::Exited { exit_code: 0 },
+            ExecTermination::Exited { exit_code: 0 },
             b"race-survived",
             b"",
         )

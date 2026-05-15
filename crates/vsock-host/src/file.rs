@@ -6,21 +6,21 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use vsock_proto::{
-    CommandOutputPolicy, CommandOutputStream, CommandTermination, MSG_ERROR, MSG_WRITE_FILE,
+    ExecOutputPolicy, ExecOutputStream, ExecTermination, MSG_ERROR, MSG_WRITE_FILE,
     MSG_WRITE_FILE_RESULT,
 };
 
 use crate::{
-    CommandCaptureRequest, CommandOperationResult, CommandOutputEvent, CommandOwnedCapturedOutput,
-    CommandStreamRequest, Shared, VsockHost, command,
+    ExecCaptureRequest, ExecOperationResult, ExecOutputEvent, ExecOwnedCapturedOutput,
+    ExecStreamRequest, Shared, VsockHost, exec_operation,
 };
 
 const COPY_TEMP_CREATE_ATTEMPTS: usize = 16;
 const COPY_FILE_STREAM_CHUNK_LIMIT: u32 = 64 * 1024;
 const COPY_FILE_STREAM_MAX_BYTES: u64 = 64 * 1024 * 1024;
 // Copying is the one built-in streaming consumer that must tolerate the host
-// reader briefly outrunning the temp-file writer without failing the command.
-const COPY_FILE_STREAM_QUEUE_CAPACITY: usize = command::MAX_COMMAND_STREAM_CAPACITY;
+// reader briefly outrunning the temp-file writer without failing the exec operation.
+const COPY_FILE_STREAM_QUEUE_CAPACITY: usize = exec_operation::MAX_EXEC_STREAM_CAPACITY;
 static COPY_TEMP_NONCE: AtomicU64 = AtomicU64::new(1);
 
 /// Maximum content per write_file message. Leaves headroom below
@@ -34,7 +34,7 @@ const HELPER_EXEC_TIMEOUT_MS: u32 = 5000;
 /// already be broken. Avoids blocking for a full 5 s on a dead socket.
 const CLEANUP_EXEC_TIMEOUT_MS: u32 = 1000;
 
-/// Request parameters for copying a guest file to a host path through command
+/// Request parameters for copying a guest file to a host path through exec
 /// operation streaming.
 #[derive(Debug, Clone, Copy)]
 pub struct CopyFileOptions {
@@ -48,7 +48,7 @@ pub struct CopyFileResult {
     pub bytes_copied: u64,
 }
 
-enum CopyFileCommandStatus {
+enum CopyFileExecStatus {
     Present,
     Missing,
 }
@@ -79,7 +79,7 @@ impl ChunkedWriteCleanupGuard {
 
     async fn cleanup_now(&mut self) {
         if let Some(shared) = self.shared.as_ref() {
-            let _ = command::exec_cleanup_on_shared(
+            let _ = exec_operation::exec_cleanup_on_shared(
                 shared,
                 &self.command,
                 CLEANUP_EXEC_TIMEOUT_MS,
@@ -102,7 +102,7 @@ impl Drop for ChunkedWriteCleanupGuard {
         let sudo = self.sudo;
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                let _ = command::exec_cleanup_on_shared(
+                let _ = exec_operation::exec_cleanup_on_shared(
                     &shared,
                     &command,
                     CLEANUP_EXEC_TIMEOUT_MS,
@@ -200,9 +200,9 @@ async fn write_copy_stream_event(
     temp_file: &mut tokio::fs::File,
     bytes_copied: &mut u64,
     max_bytes: u64,
-    event: CommandOutputEvent,
+    event: ExecOutputEvent,
 ) -> io::Result<()> {
-    if event.stream != CommandOutputStream::Stdout {
+    if event.stream != ExecOutputStream::Stdout {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "copy_file received stderr stream event",
@@ -222,73 +222,72 @@ async fn write_copy_stream_event(
     temp_file.write_all(&event.chunk).await
 }
 
-fn copy_command_stderr(result: &CommandOperationResult) -> io::Result<(Vec<u8>, bool)> {
+fn copy_exec_stderr(result: &ExecOperationResult) -> io::Result<(Vec<u8>, bool)> {
     match &result.stderr {
-        CommandOwnedCapturedOutput::Captured { bytes, truncated } => {
-            Ok((bytes.clone(), *truncated))
-        }
-        CommandOwnedCapturedOutput::Discarded => Err(io::Error::new(
+        ExecOwnedCapturedOutput::Captured { bytes, truncated } => Ok((bytes.clone(), *truncated)),
+        ExecOwnedCapturedOutput::Discarded => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "copy_file command discarded stderr capture",
+            "copy_file exec operation discarded stderr capture",
         )),
     }
 }
 
-fn validate_copy_command_result(
+fn validate_copy_exec_result(
     path: &str,
-    result: CommandOperationResult,
+    result: ExecOperationResult,
     missing_ok: bool,
-) -> io::Result<CopyFileCommandStatus> {
+) -> io::Result<CopyFileExecStatus> {
     if result.stream_overflowed {
         return Err(io::Error::other(
             "copy_file stream queue overflowed before all chunks were written",
         ));
     }
-    if !matches!(&result.stdout, CommandOwnedCapturedOutput::Discarded) {
+    if !matches!(&result.stdout, ExecOwnedCapturedOutput::Discarded) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "copy_file command unexpectedly captured stdout",
+            "copy_file exec operation unexpectedly captured stdout",
         ));
     }
-    let (mut stderr, stderr_truncated) = copy_command_stderr(&result)?;
+    let (mut stderr, stderr_truncated) = copy_exec_stderr(&result)?;
     if stderr_truncated {
-        command::append_diagnostic(&mut stderr, "stderr truncated");
+        exec_operation::append_diagnostic(&mut stderr, "stderr truncated");
     }
     match result.termination {
-        CommandTermination::Exited { exit_code: 0 } if !stderr_truncated => {
-            Ok(CopyFileCommandStatus::Present)
+        ExecTermination::Exited { exit_code: 0 } if !stderr_truncated => {
+            Ok(CopyFileExecStatus::Present)
         }
-        CommandTermination::Exited { exit_code: 0 } => Err(io::Error::other(format!(
+        ExecTermination::Exited { exit_code: 0 } => Err(io::Error::other(format!(
             "copy_file stderr exceeded diagnostic limit for {path}: {}",
             String::from_utf8_lossy(&stderr)
         ))),
-        CommandTermination::Exited { exit_code: 66 } if missing_ok => {
-            Ok(CopyFileCommandStatus::Missing)
-        }
-        CommandTermination::Exited { exit_code: 66 } => Err(io::Error::new(
+        ExecTermination::Exited { exit_code: 66 } if missing_ok => Ok(CopyFileExecStatus::Missing),
+        ExecTermination::Exited { exit_code: 66 } => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("guest file not found: {path}"),
         )),
-        CommandTermination::Exited { exit_code } => Err(io::Error::other(format!(
+        ExecTermination::Exited { exit_code } => Err(io::Error::other(format!(
             "copy_file failed for {path} with exit code {exit_code}: {}",
             String::from_utf8_lossy(&stderr)
         ))),
-        CommandTermination::TimedOut => Err(io::Error::new(
+        ExecTermination::TimedOut => Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!("copy_file timed out for {path}"),
         )),
-        CommandTermination::Cancelled => Err(io::Error::other(format!(
+        ExecTermination::Cancelled => Err(io::Error::other(format!(
             "copy_file was cancelled for {path}: {}",
             result.diagnostic
         ))),
-        CommandTermination::StartFailed | CommandTermination::WaitFailed => Err(io::Error::other(
-            format!("copy_file command failed for {path}: {}", result.diagnostic),
-        )),
+        ExecTermination::StartFailed | ExecTermination::WaitFailed => {
+            Err(io::Error::other(format!(
+                "copy_file exec operation failed for {path}: {}",
+                result.diagnostic
+            )))
+        }
     }
 }
 
 impl VsockHost {
-    /// Read a small file from the guest through command capture.
+    /// Read a small file from the guest through exec capture.
     ///
     /// Missing files return `Ok(None)`. Files larger than `max_bytes` return
     /// an error instead of silently returning truncated bytes.
@@ -301,7 +300,7 @@ impl VsockHost {
         let stdout_limit_bytes = u32::try_from(max_bytes).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "read_file max_bytes exceeds command capture limit",
+                "read_file max_bytes exceeds exec capture limit",
             )
         })?;
         if stdout_limit_bytes == 0 {
@@ -317,14 +316,14 @@ impl VsockHost {
             path = shell_quote(path)
         );
         let result = self
-            .exec_capture(CommandCaptureRequest {
+            .exec_capture(ExecCaptureRequest {
                 timeout_ms,
                 command: &command,
                 env: &[],
                 sudo: false,
                 label: "read-file",
                 stdout_limit_bytes,
-                stderr_limit_bytes: command::SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                stderr_limit_bytes: exec_operation::SMALL_EXEC_CAPTURE_LIMIT_BYTES,
                 expected_exit_codes: &[MISSING_FILE_EXIT_CODE],
                 wait_timeout: Duration::from_millis(timeout_ms as u64 + 5000),
             })
@@ -352,7 +351,7 @@ impl VsockHost {
     }
 
     /// Stream a guest file to a host path and atomically rename it into place
-    /// after the command exits successfully.
+    /// after the exec operation exits successfully.
     pub async fn copy_file(
         &self,
         path: &str,
@@ -374,7 +373,7 @@ impl VsockHost {
         let stream_limit_bytes = u32::try_from(options.max_bytes).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "copy_file max_bytes exceeds command stream limit",
+                "copy_file max_bytes exceeds exec stream limit",
             )
         })?;
         if options.timeout_ms == 0 {
@@ -445,28 +444,28 @@ impl VsockHost {
             &[]
         };
         let mut handle = self
-            .command_stream(CommandStreamRequest {
+            .exec_operation_stream(ExecStreamRequest {
                 timeout_ms,
                 command: &command,
                 env: &[],
                 sudo: false,
                 label: "copy-file",
-                stdout: CommandOutputPolicy::Stream {
+                stdout: ExecOutputPolicy::Stream {
                     limit_bytes: stream_limit_bytes,
                     chunk_limit_bytes: COPY_FILE_STREAM_CHUNK_LIMIT,
                 },
-                stderr: CommandOutputPolicy::Capture {
-                    limit_bytes: command::SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                stderr: ExecOutputPolicy::Capture {
+                    limit_bytes: exec_operation::SMALL_EXEC_CAPTURE_LIMIT_BYTES,
                 },
                 expected_exit_codes,
                 stream_queue_capacity: Some(COPY_FILE_STREAM_QUEUE_CAPACITY),
             })
             .await?;
-        let mut cancel_on_drop = command::CommandCancelOnDropGuard::new(&handle);
+        let mut cancel_on_drop = exec_operation::ExecOperationCancelOnDropGuard::new(&handle);
         let mut stream_rx = handle.take_stream_receiver().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                "copy_file command did not create a stream receiver",
+                "copy_file exec operation did not create a stream receiver",
             )
         })?;
         let wait_timeout = Duration::from_millis(timeout_ms as u64 + 5000);
@@ -510,9 +509,9 @@ impl VsockHost {
         if let Some(cancel_on_drop) = &mut cancel_on_drop {
             cancel_on_drop.disarm();
         }
-        match validate_copy_command_result(path, result, missing_ok)? {
-            CopyFileCommandStatus::Present => {}
-            CopyFileCommandStatus::Missing => return Ok(CopyFileOutcome::Missing),
+        match validate_copy_exec_result(path, result, missing_ok)? {
+            CopyFileExecStatus::Present => {}
+            CopyFileExecStatus::Missing => return Ok(CopyFileOutcome::Missing),
         }
         temp_file.flush().await?;
 
@@ -559,14 +558,14 @@ impl VsockHost {
         // Atomic rename temp → target.
         let mv_cmd = format!("mv -f -- {quoted_tmp} {}", shell_quote(path));
         match self
-            .exec_capture(CommandCaptureRequest {
+            .exec_capture(ExecCaptureRequest {
                 command: &mv_cmd,
                 timeout_ms: HELPER_EXEC_TIMEOUT_MS,
                 env: &[],
                 sudo,
                 label: "write-file-rename",
-                stdout_limit_bytes: command::SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
-                stderr_limit_bytes: command::SMALL_COMMAND_CAPTURE_LIMIT_BYTES,
+                stdout_limit_bytes: exec_operation::SMALL_EXEC_CAPTURE_LIMIT_BYTES,
+                stderr_limit_bytes: exec_operation::SMALL_EXEC_CAPTURE_LIMIT_BYTES,
                 expected_exit_codes: &[],
                 wait_timeout: Duration::from_millis(HELPER_EXEC_TIMEOUT_MS as u64 + 5000),
             })
@@ -708,7 +707,7 @@ mod tests {
         );
         assert_eq!(
             COPY_FILE_STREAM_QUEUE_CAPACITY,
-            command::test_support::MAX_STREAM_CAPACITY
+            exec_operation::test_support::MAX_STREAM_CAPACITY
         );
     }
 }

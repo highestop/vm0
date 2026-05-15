@@ -2,8 +2,25 @@ import { createWriteStream, readFileSync, statSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import { Realtime, type AuthOptions, type InboundMessage } from "ably";
+import type {
+  ZeroBuiltInGenerationAcceptedResponse,
+  ZeroBuiltInGenerationResponse,
+} from "@vm0/api-contracts/contracts/zero-built-in-generation";
 import { ApiRequestError, getBaseUrl } from "../core/client-factory";
 import { getActiveToken } from "../config";
+
+const BUILT_IN_GENERATION_POLL_INTERVAL_MS = 2_000;
+const BUILT_IN_GENERATION_WAIT_TIMEOUT_MS_BY_TYPE = {
+  image: 15 * 60 * 1000,
+  video: 30 * 60 * 1000,
+  presentation: 60 * 60 * 1000,
+} as const satisfies Record<
+  ZeroBuiltInGenerationAcceptedResponse["type"],
+  number
+>;
+const ABLY_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
  * Minimal extension → MIME map covering the server allowlist for
@@ -345,6 +362,299 @@ async function parseErrorBody(
   return { message, code };
 }
 
+function authenticatedJsonHeaders(token: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+  const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypassSecret) {
+    headers["x-vercel-protection-bypass"] = bypassSecret;
+  }
+  return headers;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBuiltInGenerationAcceptedResponse(
+  value: unknown,
+): value is ZeroBuiltInGenerationAcceptedResponse {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.generationId === "string" &&
+    value.status === "queued" &&
+    (value.type === "image" ||
+      value.type === "video" ||
+      value.type === "presentation") &&
+    isRecord(value.realtime)
+  );
+}
+
+interface BuiltInGenerationNotifier {
+  wait(timeoutMs: number): Promise<void>;
+  close(): void;
+}
+
+function createBuiltInGenerationRealtime(
+  accepted: ZeroBuiltInGenerationAcceptedResponse,
+): Realtime {
+  let nextAuthRequest = accepted.realtime.tokenRequest;
+  const authCallback: NonNullable<AuthOptions["authCallback"]> = (
+    _params,
+    callback,
+  ) => {
+    const current = nextAuthRequest;
+    nextAuthRequest = accepted.realtime.tokenRequest;
+    callback(null, current);
+  };
+
+  return new Realtime({
+    authCallback,
+    autoConnect: true,
+    disconnectedRetryTimeout: 5000,
+    suspendedRetryTimeout: 15_000,
+  });
+}
+
+function waitForRealtimeConnected(
+  ably: Realtime,
+  timeoutMs = ABLY_CONNECT_TIMEOUT_MS,
+): Promise<void> {
+  if (ably.connection.state === "connected") {
+    return Promise.resolve();
+  }
+  if (ably.connection.state === "failed") {
+    return Promise.reject(new Error("Ably connection failed"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Timed out connecting to Ably"));
+    }, timeoutMs);
+
+    ably.connection.once("connected", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ably.connection.once("failed", (stateChange) => {
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `Ably connection failed: ${stateChange?.reason?.message ?? "unknown"}`,
+        ),
+      );
+    });
+  });
+}
+
+async function createBuiltInGenerationNotifier(
+  accepted: ZeroBuiltInGenerationAcceptedResponse,
+): Promise<BuiltInGenerationNotifier | null> {
+  const ably = createBuiltInGenerationRealtime(accepted);
+
+  try {
+    await waitForRealtimeConnected(ably);
+    const channel = ably.channels.get(accepted.realtime.channelName);
+
+    let pendingEvent = false;
+    let closed = false;
+    let wake: (() => void) | null = null;
+
+    const wakeWaiter = () => {
+      const current = wake;
+      wake = null;
+      current?.();
+    };
+
+    const onMessage = (_message: InboundMessage) => {
+      if (wake) {
+        wakeWaiter();
+        return;
+      }
+      pendingEvent = true;
+    };
+
+    await channel.subscribe(accepted.realtime.eventName, onMessage);
+
+    return {
+      wait(timeoutMs: number): Promise<void> {
+        if (pendingEvent || closed || timeoutMs <= 0) {
+          pendingEvent = false;
+          return Promise.resolve();
+        }
+
+        return new Promise((resolve) => {
+          function done() {
+            clearTimeout(timer);
+            if (wake === done) {
+              wake = null;
+            }
+            resolve();
+          }
+          const timer = setTimeout(done, timeoutMs);
+          wake = done;
+        });
+      },
+      close(): void {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        channel.unsubscribe(accepted.realtime.eventName, onMessage);
+        wakeWaiter();
+        ably.close();
+      },
+    };
+  } catch {
+    ably.close();
+    return null;
+  }
+}
+
+async function getBuiltInGenerationStatus(
+  baseUrl: string,
+  token: string,
+  generationId: string,
+): Promise<ZeroBuiltInGenerationResponse> {
+  const response = await fetch(
+    new URL(`/api/zero/built-in-generations/${generationId}`, baseUrl),
+    { headers: authenticatedJsonHeaders(token) },
+  );
+
+  if (!response.ok) {
+    const { message, code } = await parseErrorBody(
+      response,
+      "Failed to get generation status",
+    );
+    throw new ApiRequestError(message, code, response.status);
+  }
+
+  return (await response.json()) as ZeroBuiltInGenerationResponse;
+}
+
+function readBuiltInGenerationResult<T>(
+  status: ZeroBuiltInGenerationResponse,
+  fallback: string,
+): T | undefined {
+  if (status.status === "completed") {
+    if (!status.result) {
+      throw new ApiRequestError(
+        `${fallback} returned no result`,
+        "EMPTY_RESULT",
+        502,
+      );
+    }
+    return status.result as T;
+  }
+
+  if (status.status === "failed") {
+    const code = status.error?.code ?? "GENERATION_FAILED";
+    throw new ApiRequestError(
+      status.error?.message ?? `${fallback} failed`,
+      code,
+      statusForBuiltInGenerationError(code),
+    );
+  }
+
+  return undefined;
+}
+
+function statusForBuiltInGenerationError(code: string): number {
+  if (code === "BAD_REQUEST") {
+    return 400;
+  }
+  if (code === "INSUFFICIENT_CREDITS") {
+    return 402;
+  }
+  if (code === "NOT_CONFIGURED") {
+    return 503;
+  }
+  if (code === "GENERATION_TIMEOUT") {
+    return 504;
+  }
+  if (code.startsWith("NO_") || code.endsWith("_FAILED")) {
+    return 502;
+  }
+  return 500;
+}
+
+async function waitForBuiltInGenerationResult<T>(args: {
+  readonly accepted: ZeroBuiltInGenerationAcceptedResponse;
+  readonly baseUrl: string;
+  readonly token: string;
+  readonly fallback: string;
+}): Promise<T> {
+  let notifier: BuiltInGenerationNotifier | null = null;
+  let notifierCreated = false;
+  const startedAt = Date.now();
+  const timeoutMs =
+    BUILT_IN_GENERATION_WAIT_TIMEOUT_MS_BY_TYPE[args.accepted.type];
+
+  try {
+    while (Date.now() - startedAt < timeoutMs) {
+      const status = await getBuiltInGenerationStatus(
+        args.baseUrl,
+        args.token,
+        args.accepted.generationId,
+      );
+      const result = readBuiltInGenerationResult<T>(status, args.fallback);
+      if (result) {
+        return result;
+      }
+
+      const elapsed = Date.now() - startedAt;
+      const remaining = timeoutMs - elapsed;
+      const waitMs = Math.min(BUILT_IN_GENERATION_POLL_INTERVAL_MS, remaining);
+      if (!notifierCreated) {
+        notifier = await createBuiltInGenerationNotifier(args.accepted);
+        notifierCreated = true;
+      }
+      if (notifier) {
+        await notifier.wait(waitMs);
+      } else {
+        await delay(waitMs);
+      }
+    }
+  } finally {
+    notifier?.close();
+  }
+
+  throw new ApiRequestError(
+    `${args.fallback} timed out (generationId: ${args.accepted.generationId})`,
+    "GENERATION_TIMEOUT",
+    504,
+  );
+}
+
+async function readBuiltInGenerationResponse<T>(args: {
+  readonly response: Response;
+  readonly baseUrl: string;
+  readonly token: string;
+  readonly fallback: string;
+}): Promise<T> {
+  const body: unknown = await args.response.json();
+  if (isBuiltInGenerationAcceptedResponse(body)) {
+    return waitForBuiltInGenerationResult<T>({
+      accepted: body,
+      baseUrl: args.baseUrl,
+      token: args.token,
+      fallback: args.fallback,
+    });
+  }
+  if (args.response.status === 202) {
+    throw new ApiRequestError(
+      `${args.fallback} returned an invalid generation response`,
+      "INVALID_GENERATION_RESPONSE",
+      502,
+    );
+  }
+  return body as T;
+}
+
 /**
  * Upload a local file and receive back metadata including a 7-day presigned
  * GET URL. Authenticates via ZERO_TOKEN (`file:write` capability) or a CLI
@@ -553,7 +863,12 @@ export async function generateWebImage(
     throw new ApiRequestError(message, code, response.status);
   }
 
-  return (await response.json()) as GenerateWebImageResult;
+  return readBuiltInGenerationResponse<GenerateWebImageResult>({
+    response,
+    baseUrl,
+    token,
+    fallback: "Failed to generate image",
+  });
 }
 
 /**
@@ -613,7 +928,12 @@ export async function generateWebVideo(
     throw new ApiRequestError(message, code, response.status);
   }
 
-  return (await response.json()) as GenerateWebVideoResult;
+  return readBuiltInGenerationResponse<GenerateWebVideoResult>({
+    response,
+    baseUrl,
+    token,
+    fallback: "Failed to generate video",
+  });
 }
 
 /**
@@ -669,5 +989,10 @@ export async function generateWebPresentation(
     throw new ApiRequestError(message, code, response.status);
   }
 
-  return (await response.json()) as GenerateWebPresentationResult;
+  return readBuiltInGenerationResponse<GenerateWebPresentationResult>({
+    response,
+    baseUrl,
+    token,
+    fallback: "Failed to generate presentation",
+  });
 }

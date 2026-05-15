@@ -22,14 +22,62 @@ interface BuiltInGenerationProvider {
   reason: string;
 }
 
+interface BuiltInGenerationCommand {
+  label: string;
+  command: string;
+  models: string;
+}
+
 const BUILT_IN_GENERATION_PROVIDERS: Partial<
   Record<DoctorGenerationType, readonly BuiltInGenerationProvider[]>
 > = {
   image: [
     {
-      label: "Built-in",
+      label: "Built-in OpenAI",
       model: "gpt-image-2",
-      command: "zero built-in generate image -h",
+      command: "zero built-in generate image --model gpt-image-2 -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in OpenAI",
+      model: "gpt-image-1.5",
+      command: "zero built-in generate image --model gpt-image-1.5 -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in OpenAI",
+      model: "gpt-image-1",
+      command: "zero built-in generate image --model gpt-image-1 -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in OpenAI",
+      model: "gpt-image-1-mini",
+      command: "zero built-in generate image --model gpt-image-1-mini -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in fal.ai",
+      model: "fal-ai/flux-pro/v1.1",
+      command: "zero built-in generate image --model flux-pro-1.1 -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in fal.ai",
+      model: "fal-ai/flux-pro/v1.1-ultra",
+      command: "zero built-in generate image --model flux-pro-1.1-ultra -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in fal.ai",
+      model: "fal-ai/qwen-image",
+      command: "zero built-in generate image --model qwen-image -h",
+      reason: "available without connector setup",
+    },
+    {
+      label: "Built-in fal.ai",
+      model: "fal-ai/bytedance/seedream/v4/text-to-image",
+      command: "zero built-in generate image --model seedream4 -h",
       reason: "available without connector setup",
     },
   ],
@@ -87,6 +135,33 @@ const BUILT_IN_GENERATION_PROVIDERS: Partial<
       reason: "available without connector setup",
     },
   ],
+};
+
+const BUILT_IN_GENERATION_COMMANDS: Partial<
+  Record<DoctorGenerationType, BuiltInGenerationCommand>
+> = {
+  image: {
+    label: "Built-in image generation",
+    command: "zero built-in generate image -h",
+    models:
+      "OpenAI: gpt-image-2, gpt-image-1.5, gpt-image-1, gpt-image-1-mini; fal.ai: flux-pro-1.1, flux-pro-1.1-ultra, qwen-image, seedream4",
+  },
+  video: {
+    label: "Built-in video generation",
+    command: "zero built-in generate video -h",
+    models:
+      "veo3.1-fast, veo3.1, kling-o3-standard, kling-v3-4k, seedance2.0, seedance2.0-fast",
+  },
+  presentation: {
+    label: "Built-in presentation generation",
+    command: "zero built-in generate presentation -h",
+    models: "gpt-5.5",
+  },
+  voice: {
+    label: "Built-in voice generation",
+    command: "zero built-in generate voice -h",
+    models: "gpt-4o-mini-tts",
+  },
 };
 
 const GENERATION_TYPE_ORDER: readonly DoctorGenerationType[] = [
@@ -152,6 +227,12 @@ function getBuiltInProviders(
   generationType: DoctorGenerationType,
 ): readonly BuiltInGenerationProvider[] {
   return BUILT_IN_GENERATION_PROVIDERS[generationType] ?? [];
+}
+
+function getBuiltInCommand(
+  generationType: DoctorGenerationType,
+): BuiltInGenerationCommand | null {
+  return BUILT_IN_GENERATION_COMMANDS[generationType] ?? null;
 }
 
 function getAvailableGenerationTypes(): DoctorGenerationType[] {
@@ -337,6 +418,16 @@ function renderActions(candidates: GenerationCandidate[]): void {
 }
 
 function renderBuiltInProvider(generationType: DoctorGenerationType): void {
+  const command = getBuiltInCommand(generationType);
+  if (command) {
+    console.log("");
+    console.log("Built-in command:");
+    console.log(`  vm0  ${command.label}`);
+    console.log(`  Models: ${command.models}`);
+    console.log(`  Use: ${command.command}`);
+    return;
+  }
+
   const providers = getBuiltInProviders(generationType);
   if (providers.length === 0) return;
 

@@ -110,11 +110,16 @@ describe("zero doctor generate command", () => {
     expect(text).toContain("openai");
     expect(text).toContain("OpenAI");
     expect(text).not.toContain("replicate-user");
-    expect(text).toContain("Built-in provider:");
+    expect(text).toContain("Built-in command:");
     expect(text).toContain("vm0");
-    expect(text).toContain("Built-in");
-    expect(text).toContain("Model: gpt-image-2");
+    expect(text).toContain("Built-in image generation");
+    expect(text).toContain(
+      "Models: OpenAI: gpt-image-2, gpt-image-1.5, gpt-image-1, gpt-image-1-mini; fal.ai: flux-pro-1.1, flux-pro-1.1-ultra, qwen-image, seedream4",
+    );
     expect(text).toContain("Use: zero built-in generate image -h");
+    expect(text).not.toContain("Use: zero built-in generate image --model");
+    expect(text).not.toContain("Model: gpt-image-1.5");
+    expect(text).not.toContain("Model: fal-ai/flux-pro/v1.1");
     expect(text).not.toContain("Fallback option:");
     expect(text).not.toContain("Official provider:");
     expect(text).not.toContain("Next actions:");
@@ -186,10 +191,20 @@ describe("zero doctor generate command", () => {
     );
     expect(json).toMatchObject({
       builtInProvider: {
-        label: "Built-in",
+        label: "Built-in OpenAI",
         model: "gpt-image-2",
-        command: "zero built-in generate image -h",
+        command: "zero built-in generate image --model gpt-image-2 -h",
       },
+    });
+    expect(json).toMatchObject({
+      builtInProviders: expect.arrayContaining([
+        expect.objectContaining({ model: "gpt-image-1.5" }),
+        expect.objectContaining({ model: "fal-ai/flux-pro/v1.1" }),
+        expect.objectContaining({ model: "fal-ai/qwen-image" }),
+        expect.objectContaining({
+          model: "fal-ai/bytedance/seedream/v4/text-to-image",
+        }),
+      ]),
     });
   });
 
@@ -205,33 +220,18 @@ describe("zero doctor generate command", () => {
     expect(text).toContain("Video generation choices for current agent");
     expect(text).toContain("Connectors:");
     expect(text).toContain("No ready video generation connectors found.");
-    expect(text).toContain("Built-in providers:");
-    expect(text).toContain("Model: fal-ai/veo3.1/fast");
+    expect(text).toContain("Built-in command:");
+    expect(text).toContain("Built-in video generation");
     expect(text).toContain(
-      "Use: zero built-in generate video --model veo3.1-fast -h",
+      "Models: veo3.1-fast, veo3.1, kling-o3-standard, kling-v3-4k, seedance2.0, seedance2.0-fast",
     );
-    expect(text).toContain("Model: fal-ai/veo3.1");
-    expect(text).toContain(
-      "Use: zero built-in generate video --model veo3.1 -h",
-    );
-    expect(text).toContain(
+    expect(text).toContain("Use: zero built-in generate video -h");
+    expect(text).not.toContain("Use: zero built-in generate video --model");
+    expect(text).not.toContain("Model: fal-ai/veo3.1/fast");
+    expect(text).not.toContain(
       "Model: fal-ai/kling-video/o3/standard/text-to-video",
     );
-    expect(text).toContain(
-      "Use: zero built-in generate video --model kling-o3-standard -h",
-    );
-    expect(text).toContain("Model: fal-ai/kling-video/v3/4k/text-to-video");
-    expect(text).toContain(
-      "Use: zero built-in generate video --model kling-v3-4k -h",
-    );
-    expect(text).toContain("Model: bytedance/seedance-2.0/text-to-video");
-    expect(text).toContain(
-      "Use: zero built-in generate video --model seedance2.0 -h",
-    );
-    expect(text).toContain("Model: bytedance/seedance-2.0/fast/text-to-video");
-    expect(text).toContain(
-      "Use: zero built-in generate video --model seedance2.0-fast -h",
-    );
+    expect(text).not.toContain("Model: bytedance/seedance-2.0/text-to-video");
     expect(text).not.toContain("Fallback option:");
     expect(text).not.toContain("Official provider:");
     expect(text).not.toContain("Next actions:");
@@ -251,9 +251,11 @@ describe("zero doctor generate command", () => {
     expect(text).toContain(
       "No ready presentation generation connectors found.",
     );
-    expect(text).toContain("Built-in provider:");
-    expect(text).toContain("Model: gpt-5.5");
+    expect(text).toContain("Built-in command:");
+    expect(text).toContain("Built-in presentation generation");
+    expect(text).toContain("Models: gpt-5.5");
     expect(text).toContain("Use: zero built-in generate presentation -h");
+    expect(text).not.toContain("Model: gpt-5.5");
     expect(text).not.toContain("Fallback option:");
     expect(text).not.toContain("Official provider:");
   });
@@ -273,9 +275,11 @@ describe("zero doctor generate command", () => {
     expect(text).toContain("Voice generation choices for current agent");
     expect(text).toContain("Connectors:");
     expect(text).toContain("No ready voice generation connectors found.");
-    expect(text).toContain("Built-in provider:");
-    expect(text).toContain("Model: gpt-4o-mini-tts");
+    expect(text).toContain("Built-in command:");
+    expect(text).toContain("Built-in voice generation");
+    expect(text).toContain("Models: gpt-4o-mini-tts");
     expect(text).toContain("Use: zero built-in generate voice -h");
+    expect(text).not.toContain("Model: gpt-4o-mini-tts");
     expect(text).not.toContain("Fallback option:");
     expect(text).not.toContain("Official provider:");
     expect(text).not.toContain("Next actions:");
@@ -298,9 +302,11 @@ describe("zero doctor generate command", () => {
     expect(text).toContain("Connectors:");
     expect(text).toContain("OpenAI");
     expect(text).toContain("@openai-user");
-    expect(text).toContain("Built-in provider:");
-    expect(text).toContain("Model: gpt-4o-mini-tts");
-    expect(text).toContain("zero built-in generate voice");
+    expect(text).toContain("Built-in command:");
+    expect(text).toContain("Built-in voice generation");
+    expect(text).toContain("Models: gpt-4o-mini-tts");
+    expect(text).toContain("Use: zero built-in generate voice -h");
+    expect(text).not.toContain("Model: gpt-4o-mini-tts");
   });
 
   it("rejects unknown generation types with available type guidance", async () => {

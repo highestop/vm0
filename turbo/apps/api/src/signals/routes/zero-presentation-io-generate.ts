@@ -5,6 +5,7 @@ import { organizationAuthContext$ } from "../auth/auth-context";
 import { authRoute } from "../auth/auth-route";
 import { bodyResultOf } from "../context/request";
 import { logger } from "../../lib/log";
+import { now } from "../../lib/time";
 import type { RouteEntry } from "../route";
 import { env } from "../../lib/env";
 import { imagePricing$ } from "../services/zero-image-io-generate.service";
@@ -13,6 +14,7 @@ import {
   createOpenAiPresentationRequest,
   generatePresentationVisuals$,
   OPENAI_PRESENTATION_GENERATION_URL,
+  PRESENTATION_IO_SYNC_RESPONSE_BUDGET_MS,
   parsePresentationGenerationResult,
   parsePresentationOptions,
   presentationInsufficientCredits,
@@ -27,6 +29,7 @@ const presentationBody$ = bodyResultOf(zeroPresentationIoGenerateContract.post);
 
 const postPresentationInner$ = command(
   async ({ get, set }, signal: AbortSignal) => {
+    const deadlineAtMs = now() + PRESENTATION_IO_SYNC_RESPONSE_BUDGET_MS;
     const auth = get(organizationAuthContext$);
     const bodyResult = await get(presentationBody$);
     signal.throwIfAborted();
@@ -115,6 +118,7 @@ const postPresentationInner$ = command(
               imagePricing,
               generation,
               options,
+              deadlineAtMs,
             },
             signal,
           )

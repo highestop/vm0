@@ -12,9 +12,10 @@ use vsock_proto::{
 
 use crate::drain::drain_into_vec_cancellable;
 use crate::error::to_io_error;
-use crate::exec::spawn_in_own_process_group;
 use crate::log::log;
-use crate::process::{extract_exit_code, kill_and_reap_child, kill_process_tree};
+use crate::process::{
+    extract_exit_code, kill_and_reap_child, kill_process_tree, spawn_in_own_process_group,
+};
 use crate::shutdown::handle_shutdown;
 use crate::threading::{SystemThreadSpawner, ThreadSpawner, spawn_scoped_named};
 use crate::user::apply_write_file_identity;
@@ -91,7 +92,7 @@ where
     // After the child exits, the drain thread either reaches EOF naturally or
     // — if a grandchild somehow still holds stderr — is cut at the deadline so
     // its last write returns EPIPE.
-    // Defensive: same invariant as the exec drain helper — reap the child if
+    // Defensive: same invariant as the shared drain helper — reap the child if
     // its stderr is somehow already gone, so we don't leave a zombie.
     let stderr_pipe = match child.stderr.take() {
         Some(p) => p,

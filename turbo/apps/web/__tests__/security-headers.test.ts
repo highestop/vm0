@@ -264,6 +264,10 @@ describe("API backend rewrites", () => {
           source: VOICE_CHAT_SESSION_REWRITE_SOURCE,
           destination: "https://api.example.test/api/zero/voice-chat/:id",
         },
+        {
+          source: "/api/zero/web/download-file",
+          destination: "https://api.example.test/api/zero/web/download-file",
+        },
       ]),
     );
   });
@@ -315,6 +319,15 @@ describe("API backend rewrites", () => {
       rewrites.some((rewrite) => {
         return rewrite.source === "/api/:path*";
       }),
+    ).toBe(false);
+  });
+
+  it("should match the zero web download route for middleware pass-through", async () => {
+    expect(matchesApiBackendRewritePath("/api/zero/web/download-file")).toBe(
+      true,
+    );
+    expect(
+      matchesApiBackendRewritePath("/api/zero/web/download-file/extra"),
     ).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import { agentmailHandler } from "./providers/agentmail-handler";
 import { amplitudeHandler } from "./providers/amplitude-handler";
 import { anthropicManagedAgentsHandler } from "./providers/anthropic-managed-agents-handler";
 import { ahrefsHandler } from "./providers/ahrefs-handler";
+import { agoraHandler } from "./providers/agora-handler";
 import { airtableHandler } from "./providers/airtable-handler";
 import { apolloHandler } from "./providers/apollo-handler";
 import { apifyHandler } from "./providers/apify-handler";
@@ -209,6 +210,7 @@ export const PROVIDER_HANDLERS: Record<
   amplitude: amplitudeHandler,
   "anthropic-managed-agents": anthropicManagedAgentsHandler,
   ahrefs: ahrefsHandler,
+  agora: agoraHandler,
   airtable: airtableHandler,
   apollo: apolloHandler,
   apify: apifyHandler,

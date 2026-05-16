@@ -14,7 +14,7 @@ import {
 } from "../external/slack-oauth-client";
 import { logger } from "../../lib/log";
 import { env, optionalEnv } from "../../lib/env";
-import { safeAsync, safeJsonParse } from "../utils";
+import { safeJsonParse, settle, tapError } from "../utils";
 import { encryptSecretValue } from "../services/crypto.utils";
 import { getMemberRoleAndUpdateCache$ } from "../services/auth.service";
 import {
@@ -240,20 +240,25 @@ function notifyAfterConnect(args: {
   readonly signal: AbortSignal;
 }): void {
   waitUntil(
-    Promise.resolve(
-      args.set(
-        notifySlackConnect$,
-        {
-          installation: args.installation,
-          slackUserId: args.slackUserId,
-          orgId: args.orgId,
-          ...(args.pendingPrompt ? { pendingPrompt: args.pendingPrompt } : {}),
-        },
-        args.signal,
+    tapError(
+      Promise.resolve(
+        args.set(
+          notifySlackConnect$,
+          {
+            installation: args.installation,
+            slackUserId: args.slackUserId,
+            orgId: args.orgId,
+            ...(args.pendingPrompt
+              ? { pendingPrompt: args.pendingPrompt }
+              : {}),
+          },
+          args.signal,
+        ),
       ),
-    ).catch((error: unknown) => {
-      L.warn("Failed to notify connect success", { error });
-    }),
+      (error) => {
+        L.warn("Failed to notify connect success", { error });
+      },
+    ),
   );
 }
 
@@ -339,24 +344,24 @@ async function handleInstallCallback(args: {
   };
   readonly signal: AbortSignal;
 }): Promise<Response> {
-  const exchange = await safeAsync(() => {
-    return exchangeSlackOAuthCode(
+  const exchange = await settle(
+    exchangeSlackOAuthCode(
       args.credentials.clientId,
       args.credentials.clientSecret,
       args.code,
       callbackRedirectUri(),
-    );
-  });
+    ),
+  );
   args.signal.throwIfAborted();
 
-  if ("error" in exchange) {
+  if (!exchange.ok) {
     L.error("Slack OAuth exchange failed", { error: exchange.error });
     return failedRedirect(
       "Failed to complete Slack installation. Please try again.",
     );
   }
 
-  const oauthResult = exchange.ok;
+  const oauthResult = exchange.value;
   const writeDb = args.set(writeDb$);
   const encryptedBotToken = encryptSecretValue(oauthResult.accessToken);
   const botScopes = oauthResult.scope
@@ -459,17 +464,17 @@ async function handleConnectCallback(args: {
     return settingsErrorRedirect("Invalid connect state.");
   }
 
-  const exchange = await safeAsync(() => {
-    return exchangeSlackOAuthCodeForUser(
+  const exchange = await settle(
+    exchangeSlackOAuthCodeForUser(
       args.credentials.clientId,
       args.credentials.clientSecret,
       args.code,
       callbackRedirectUri(),
-    );
-  });
+    ),
+  );
   args.signal.throwIfAborted();
 
-  if ("error" in exchange) {
+  if (!exchange.ok) {
     L.error("Slack OAuth exchange failed (connect flow)", {
       error: exchange.error,
     });
@@ -492,7 +497,7 @@ async function handleConnectCallback(args: {
     );
   }
 
-  if (exchange.ok.teamId !== installation.slackWorkspaceId) {
+  if (exchange.value.teamId !== installation.slackWorkspaceId) {
     return settingsErrorRedirect(
       "You authenticated with a different Slack workspace. Please use the workspace connected to your organization.",
     );
@@ -517,7 +522,7 @@ async function handleConnectCallback(args: {
       orgId: args.state.orgId,
       orgRole: member.role,
       workspaceId: installation.slackWorkspaceId,
-      slackUserId: exchange.ok.authedUserId,
+      slackUserId: exchange.value.authedUserId,
     },
     args.signal,
   );
@@ -537,7 +542,7 @@ async function handleConnectCallback(args: {
   notifyAfterConnect({
     set: args.set,
     installation,
-    slackUserId: exchange.ok.authedUserId,
+    slackUserId: exchange.value.authedUserId,
     orgId: args.state.orgId,
     pendingPrompt: args.state.prompt,
     signal: args.signal,

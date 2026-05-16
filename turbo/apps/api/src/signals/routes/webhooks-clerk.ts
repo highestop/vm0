@@ -7,7 +7,7 @@ import { logger } from "../../lib/log";
 import { request$ } from "../context/hono";
 import { waitUntil } from "../context/wait-until";
 import type { RouteEntry } from "../route";
-import { safeAsync } from "../utils";
+import { settle, tapError } from "../utils";
 import {
   cleanupClerkDeletedOrg$,
   cleanupClerkDeletedUser$,
@@ -36,15 +36,15 @@ const postClerkWebhook$ = command(
     const request = get(request$).raw;
     const signingSecret = optionalEnv("CLERK_WEBHOOK_SIGNING_SECRET");
 
-    const eventResult = await safeAsync(() => {
-      return verifyWebhook(request.clone(), { signingSecret });
-    });
+    const eventResult = await settle(
+      verifyWebhook(request.clone(), { signingSecret }),
+    );
     signal.throwIfAborted();
-    if ("error" in eventResult) {
+    if (!eventResult.ok) {
       return jsonError("Invalid webhook signature", 401);
     }
 
-    const event = eventResult.ok;
+    const event = eventResult.value;
     L.debug("clerk webhook received", { type: event.type });
 
     if (event.type === "organization.deleted") {
@@ -57,7 +57,7 @@ const postClerkWebhook$ = command(
       }
 
       waitUntil(
-        set(cleanupClerkDeletedOrg$, orgId, signal).catch((error: unknown) => {
+        tapError(set(cleanupClerkDeletedOrg$, orgId, signal), (error) => {
           L.error("organization.deleted cleanup failed", { orgId, error });
         }),
       );
@@ -72,11 +72,9 @@ const postClerkWebhook$ = command(
       }
 
       waitUntil(
-        set(cleanupClerkDeletedUser$, userId, signal).catch(
-          (error: unknown) => {
-            L.error("user.deleted cleanup failed", { userId, error });
-          },
-        ),
+        tapError(set(cleanupClerkDeletedUser$, userId, signal), (error) => {
+          L.error("user.deleted cleanup failed", { userId, error });
+        }),
       );
       return new Response("OK", { status: 200 });
     }

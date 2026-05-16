@@ -5,7 +5,7 @@ import { zeroRuns } from "@vm0/db/schema/zero-run";
 import { logger } from "../../lib/log";
 import { optionalEnv } from "../../lib/env";
 import { writeDb$ } from "../external/db";
-import { safeAsync } from "../utils";
+import { settle } from "../utils";
 
 const log = logger("run-summary");
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -49,9 +49,8 @@ async function generateText(
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => {
-      return "unknown error";
-    });
+    const settled = await settle(response.text());
+    const text = settled.ok ? settled.value : "unknown error";
     throw new Error(`OpenRouter request failed: ${response.status} ${text}`);
   }
 
@@ -124,32 +123,34 @@ export const saveRunSummary$ = command(
     },
     signal: AbortSignal,
   ): Promise<void> => {
-    const result = await safeAsync(async () => {
-      const summary = await generateRunSummary(
-        args.triggerSource,
-        args.prompt,
-        args.resultText,
-      );
-      signal.throwIfAborted();
+    const result = await settle(
+      (async () => {
+        const summary = await generateRunSummary(
+          args.triggerSource,
+          args.prompt,
+          args.resultText,
+        );
+        signal.throwIfAborted();
 
-      if (!summary) {
-        log.warn("Run summary generation returned null (API key missing?)", {
-          runId: args.runId,
-          triggerSource: args.triggerSource,
-        });
-        return;
-      }
+        if (!summary) {
+          log.warn("Run summary generation returned null (API key missing?)", {
+            runId: args.runId,
+            triggerSource: args.triggerSource,
+          });
+          return;
+        }
 
-      const writeDb = set(writeDb$);
-      await writeDb
-        .update(zeroRuns)
-        .set({ summary })
-        .where(eq(zeroRuns.id, args.runId));
-      signal.throwIfAborted();
-    });
+        const writeDb = set(writeDb$);
+        await writeDb
+          .update(zeroRuns)
+          .set({ summary })
+          .where(eq(zeroRuns.id, args.runId));
+        signal.throwIfAborted();
+      })(),
+    );
     signal.throwIfAborted();
 
-    if ("error" in result) {
+    if (!result.ok) {
       log.warn("Failed to generate run summary", {
         runId: args.runId,
         error: result.error,

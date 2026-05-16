@@ -191,14 +191,89 @@ const JSON_INVALID_SENTINEL = Object.freeze({});
 /**
  * Best-effort wrapper: await `p` and swallow non-abort errors.
  * Use for prefetch or fire-and-forget operations where failure is acceptable.
+ * AbortError propagates — either from `p` itself or from `signal` if one is
+ * passed — so a cancelled request never returns silently as if the work
+ * succeeded.
  */
-export async function bestEffort(p: Promise<unknown>): Promise<void> {
+export async function bestEffort(
+  p: Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<void> {
   // confirmed by ethan@vm0.ai
   // eslint-disable-next-line no-restricted-syntax
   try {
     await p;
+    signal?.throwIfAborted();
   } catch (error) {
     throwIfAbort(error);
+    signal?.throwIfAborted();
+  }
+}
+
+/**
+ * Await `p` and invoke `onError` on non-abort rejection. Abort propagates.
+ * Use as a `.catch(handler)` replacement when the caller needs to surface
+ * a side effect (toast, log) on failure but otherwise continue.
+ */
+export async function tapError<T>(
+  p: Promise<T>,
+  onError: (error: unknown) => void,
+): Promise<T | undefined> {
+  // confirmed by ethan@vm0.ai
+  // eslint-disable-next-line no-restricted-syntax
+  try {
+    return await p;
+  } catch (error) {
+    throwIfAbort(error);
+    onError(error);
+    return undefined;
+  }
+}
+
+/**
+ * Await `p` and invoke `fn` on any rejection (including abort), then re-throw.
+ * Use as a `.catch(handler)` replacement when the caller needs to run a
+ * cleanup side effect before the rejection propagates.
+ */
+export async function onRejection<T>(
+  p: Promise<T>,
+  fn: (error: unknown) => void,
+): Promise<T> {
+  // confirmed by ethan@vm0.ai
+  // eslint-disable-next-line no-restricted-syntax
+  try {
+    return await p;
+  } catch (error) {
+    fn(error);
+    throw error;
+  }
+}
+
+type Settled<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: unknown };
+
+/**
+ * Settle `p` into a discriminated union. Abort errors propagate (re-throw),
+ * either from `p` itself or from `signal` if one is passed — so the returned
+ * union is guaranteed to never represent a cancellation. Use as a
+ * `.then(onOk, onErr)` replacement when the caller needs to map both
+ * branches to a value rather than swallow the error.
+ */
+export async function settle<T>(
+  p: Promise<T>,
+  signal?: AbortSignal,
+): Promise<Settled<T>> {
+  // confirmed by ethan@vm0.ai
+  // eslint-disable-next-line no-restricted-syntax
+  try {
+    const value = await p;
+    signal?.throwIfAborted();
+    return { ok: true, value };
+  } catch (error) {
+    throwIfAbort(error);
+    signal?.throwIfAborted();
+    return { ok: false, error };
   }
 }
 

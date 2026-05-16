@@ -75,19 +75,89 @@ export function isValidTimeZone(input: string): boolean {
   }
 }
 
-// Centralized guarded async — wraps a Promise-returning thunk so callers in
-// best-effort polling loops (e.g. agent-event-visibility) can branch on the
-// outcome without scattering try/catch around. AbortError is re-raised so
-// cancellation propagates correctly.
-export async function safeAsync<T>(
-  fn: () => Promise<T>,
-): Promise<{ readonly ok: T } | { readonly error: unknown }> {
-  // eslint-disable-next-line no-restricted-syntax -- centralized guarded async
+/**
+ * Await `p`, swallowing non-abort rejections. Use for fire-and-forget work
+ * where failure is acceptable. AbortError propagates — either from `p`
+ * itself or from `signal` if one is passed — so a cancelled request never
+ * returns silently as if the work succeeded.
+ */
+export async function bestEffort(
+  p: Promise<unknown>,
+  signal?: AbortSignal,
+): Promise<void> {
+  // eslint-disable-next-line no-restricted-syntax -- centralized .catch replacement
   try {
-    return { ok: await fn() };
+    await p;
+    signal?.throwIfAborted();
   } catch (error) {
     throwIfAbort(error);
-    return { error };
+    signal?.throwIfAborted();
+  }
+}
+
+/**
+ * Await `p` and invoke `onError` on non-abort rejection. Abort propagates.
+ * Replaces `await foo().catch((e) => { L.error("...", e); })` patterns.
+ */
+export async function tapError<T>(
+  p: Promise<T>,
+  onError: (error: unknown) => void,
+): Promise<T | undefined> {
+  // eslint-disable-next-line no-restricted-syntax -- centralized .catch replacement
+  try {
+    return await p;
+  } catch (error) {
+    throwIfAbort(error);
+    onError(error);
+    return undefined;
+  }
+}
+
+/**
+ * Await `p` and invoke `fn` on any rejection (including abort), then re-throw.
+ * Replaces `.catch((e) => { cleanup(); throw e; })` cleanup patterns. `fn`
+ * runs on abort by design so cleanup (e.g. temp-dir removal) still happens
+ * when the request is cancelled — that's why `api/no-catch-abort` is muted
+ * here.
+ */
+export async function onRejection<T>(
+  p: Promise<T>,
+  fn: (error: unknown) => void,
+): Promise<T> {
+  // eslint-disable-next-line no-restricted-syntax -- centralized .catch replacement
+  try {
+    return await p;
+    // eslint-disable-next-line api/no-catch-abort -- fn must run before abort propagates so cleanup happens on cancellation
+  } catch (error) {
+    fn(error);
+    throw error;
+  }
+}
+
+type Settled<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: unknown };
+
+/**
+ * Settle `p` into a discriminated union. AbortError propagates (re-throws),
+ * either from `p` itself or from `signal` if one is passed — so the returned
+ * union is guaranteed to never represent a cancellation. Replaces
+ * `await foo().catch(() => fallback)` and `.then(onOk, onErr)` shapes when
+ * both outcomes need to be mapped.
+ */
+export async function settle<T>(
+  p: Promise<T>,
+  signal?: AbortSignal,
+): Promise<Settled<T>> {
+  // eslint-disable-next-line no-restricted-syntax -- centralized .then(onOk, onErr) replacement
+  try {
+    const value = await p;
+    signal?.throwIfAborted();
+    return { ok: true, value };
+  } catch (error) {
+    throwIfAbort(error);
+    signal?.throwIfAborted();
+    return { ok: false, error };
   }
 }
 

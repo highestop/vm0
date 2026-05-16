@@ -54,7 +54,7 @@ import {
   isOfficialTelegramBotId,
 } from "../external/telegram-official";
 import { now, nowDate } from "../external/time";
-import { safeAsync, safeUrlParse } from "../utils";
+import { safeUrlParse, settle, tapError } from "../utils";
 import { encryptSecretValue, decryptSecretValue } from "./crypto.utils";
 import { listOrgModelPolicies$ } from "./zero-model-policy.service";
 import { createZeroRun$ } from "./zero-runs-create.service";
@@ -427,22 +427,22 @@ async function configureTelegramBot(args: {
   readonly webhookSecret: string;
   readonly agentName: string;
 }): Promise<ReturnType<typeof badGateway> | undefined> {
-  const webhookResult = await safeAsync(() => {
-    return setWebhook(
+  const webhookResult = await settle(
+    setWebhook(
       args.botToken,
       buildTelegramWebhookUrl(args.telegramBotId),
       args.webhookSecret,
-    );
-  });
-  if ("error" in webhookResult) {
+    ),
+  );
+  if (!webhookResult.ok) {
     log.error("Failed to set Telegram webhook", {
       error: webhookResult.error,
     });
     return badGateway("Failed to register webhook with Telegram");
   }
 
-  const commandsResult = await safeAsync(() => {
-    return setMyCommands(args.botToken, [
+  const commandsResult = await settle(
+    setMyCommands(args.botToken, [
       { command: "new_session", description: "Start a new conversation" },
       { command: "connect", description: `Connect to ${args.agentName}` },
       { command: "model", description: "Choose your model" },
@@ -451,9 +451,9 @@ async function configureTelegramBot(args: {
         description: `Disconnect from ${args.agentName}`,
       },
       { command: "help", description: "Show available commands" },
-    ]);
-  });
-  if ("error" in commandsResult) {
+    ]),
+  );
+  if (!commandsResult.ok) {
     log.warn("Failed to register Telegram bot commands", {
       error: commandsResult.error,
     });
@@ -463,12 +463,9 @@ async function configureTelegramBot(args: {
 }
 
 async function publishTelegramOrgChanged(orgId: string): Promise<void> {
-  const result = await safeAsync(() => {
-    return publishOrgSignal(orgId, "telegram:changed");
+  await tapError(publishOrgSignal(orgId, "telegram:changed"), (error) => {
+    log.warn("Failed to publish Telegram org change", { error });
   });
-  if ("error" in result) {
-    log.warn("Failed to publish Telegram org change", { error: result.error });
-  }
 }
 
 async function buildStatusResponse(
@@ -596,18 +593,16 @@ export const registerTelegramBot$ = command(
       return registerBodyError(bodyResult.response.body.error.message);
     }
 
-    const botInfoResult = await safeAsync(() => {
-      return getMe(bodyResult.data.botToken);
-    });
+    const botInfoResult = await settle(getMe(bodyResult.data.botToken));
     signal.throwIfAborted();
-    if ("error" in botInfoResult) {
+    if (!botInfoResult.ok) {
       return badRequest(
         "Invalid bot token. Please verify your token with @BotFather.",
       );
     }
 
     const db = set(writeDb$);
-    const telegramBotId = String(botInfoResult.ok.id);
+    const telegramBotId = String(botInfoResult.value.id);
     if (
       bodyResult.data.reinstallBotId &&
       bodyResult.data.reinstallBotId !== telegramBotId
@@ -630,7 +625,7 @@ export const registerTelegramBot$ = command(
         db,
         existing,
         body: bodyResult.data,
-        botInfo: botInfoResult.ok,
+        botInfo: botInfoResult.value,
         auth,
         signal,
       });
@@ -656,7 +651,7 @@ export const registerTelegramBot$ = command(
       .insert(telegramInstallations)
       .values({
         telegramBotId,
-        botUsername: botInfoResult.ok.username,
+        botUsername: botInfoResult.value.username,
         encryptedBotToken: encryptSecretValue(bodyResult.data.botToken),
         webhookSecret,
         defaultComposeId: resolvedAgent.agentId,
@@ -740,11 +735,9 @@ export const setupTelegramStatus$ = command(
       return badRequest("botToken is required");
     }
 
-    const botInfoResult = await safeAsync(() => {
-      return getMe(bodyResult.data.botToken);
-    });
+    const botInfoResult = await settle(getMe(bodyResult.data.botToken));
     signal.throwIfAborted();
-    if ("error" in botInfoResult) {
+    if (!botInfoResult.ok) {
       if (!isInvalidTelegramTokenError(botInfoResult.error)) {
         log.warn("Unable to verify Telegram setup status", {
           error: botInfoResult.error,
@@ -755,7 +748,7 @@ export const setupTelegramStatus$ = command(
       );
     }
 
-    const botId = String(botInfoResult.ok.id);
+    const botId = String(botInfoResult.value.id);
     const db = set(writeDb$);
     const [existing] = await db
       .select({
@@ -787,9 +780,10 @@ export const setupTelegramStatus$ = command(
       status: 200 as const,
       body: {
         id: botId,
-        username: botInfoResult.ok.username ?? null,
+        username: botInfoResult.value.username ?? null,
         domainConfigured,
-        privacyDisabled: botInfoResult.ok.can_read_all_group_messages === true,
+        privacyDisabled:
+          botInfoResult.value.can_read_all_group_messages === true,
       },
     };
   },
@@ -1264,24 +1258,23 @@ async function postTelegramMessage(args: {
   readonly replyToMessageId?: number;
   readonly replyMarkup?: TelegramReplyMarkup;
 }): Promise<void> {
-  const result = await safeAsync(() => {
-    return sendMessage(args.botToken, args.chatId, args.text, {
+  const result = await tapError(
+    sendMessage(args.botToken, args.chatId, args.text, {
       replyToMessageId: args.replyToMessageId,
       replyMarkup: args.replyMarkup,
-    });
-  });
-  if ("error" in result) {
-    log.warn("Failed to send Telegram message", {
-      chatId: args.chatId,
-      error: result.error,
-    });
-    return;
-  }
-  if (result.ok.kind === "telegram-error") {
+    }),
+    (error) => {
+      log.warn("Failed to send Telegram message", {
+        chatId: args.chatId,
+        error,
+      });
+    },
+  );
+  if (result?.kind === "telegram-error") {
     log.warn("Telegram rejected message", {
       chatId: args.chatId,
-      status: result.ok.status,
-      description: result.ok.description,
+      status: result.status,
+      description: result.description,
     });
   }
 }
@@ -1290,15 +1283,12 @@ async function sendTypingActionSafely(
   botToken: string,
   chatId: string,
 ): Promise<void> {
-  const result = await safeAsync(() => {
-    return sendChatAction(botToken, chatId, "typing");
-  });
-  if ("error" in result) {
+  await tapError(sendChatAction(botToken, chatId, "typing"), (error) => {
     log.debug("Failed to send Telegram typing action", {
       chatId,
-      error: result.error,
+      error,
     });
-  }
+  });
 }
 
 async function resolveUserLink(args: {
@@ -2835,25 +2825,26 @@ export const telegramWebhook$ = command(
       if (!verifyTelegramWebhook(request, config.webhookSecret)) {
         return textResponse("Unauthorized", 401);
       }
-      const parsed = await safeAsync(() => {
-        return request.json();
-      });
+      const parsed = await settle(request.json());
       signal.throwIfAborted();
-      if ("error" in parsed || !isTelegramUpdate(parsed.ok)) {
+      if (!parsed.ok || !isTelegramUpdate(parsed.value)) {
         return textResponse("Bad Request", 400);
       }
-      const message = parsed.ok.message;
+      const message = parsed.value.message;
       if (!message || !hasTelegramMessageContextContent(message)) {
         return okText();
       }
       waitUntil(
-        set(
-          processOfficialWebhookMessage$,
-          { message, apiStartTime },
-          signal,
-        ).catch((error: unknown) => {
-          log.error("Error handling official Telegram webhook", { error });
-        }),
+        tapError(
+          set(
+            processOfficialWebhookMessage$,
+            { message, apiStartTime },
+            signal,
+          ),
+          (error) => {
+            log.error("Error handling official Telegram webhook", { error });
+          },
+        ),
       );
       return okText();
     }
@@ -2875,27 +2866,31 @@ export const telegramWebhook$ = command(
       return textResponse("Unauthorized", 401);
     }
 
-    const parsed = await safeAsync(() => {
-      return request.json();
-    });
+    const parsed = await settle(request.json());
     signal.throwIfAborted();
-    if ("error" in parsed || !isTelegramUpdate(parsed.ok)) {
+    if (!parsed.ok || !isTelegramUpdate(parsed.value)) {
       return textResponse("Bad Request", 400);
     }
 
-    const message = parsed.ok.message;
+    const message = parsed.value.message;
     if (!message || !hasTelegramMessageContextContent(message)) {
       return okText();
     }
 
     waitUntil(
-      set(
-        processCustomWebhookMessage$,
-        { telegramBotId, message, apiStartTime },
-        signal,
-      ).catch((error: unknown) => {
-        log.error("Error handling Telegram webhook", { error, telegramBotId });
-      }),
+      tapError(
+        set(
+          processCustomWebhookMessage$,
+          { telegramBotId, message, apiStartTime },
+          signal,
+        ),
+        (error) => {
+          log.error("Error handling Telegram webhook", {
+            error,
+            telegramBotId,
+          });
+        },
+      ),
     );
     return okText();
   },

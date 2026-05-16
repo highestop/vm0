@@ -27,7 +27,7 @@ import {
   getOfficialTelegramBotConfig,
   OFFICIAL_TELEGRAM_BOT_ID,
 } from "../external/telegram-official";
-import { safeAsync, safeUrlParse } from "../utils";
+import { safeUrlParse, settle } from "../utils";
 import { decryptSecretValue } from "./crypto.utils";
 import { zeroConnectorList } from "./zero-connector-data.service";
 import { userSecrets, userVariables } from "./zero-user-data.service";
@@ -695,17 +695,12 @@ export function telegramBotToken(args: {
   });
 }
 
-function resolveTokenStatus(
+async function resolveTokenStatus(
   encryptedBotToken: string,
 ): Promise<"valid" | "invalid" | "unknown"> {
   const token = decryptSecretValue(encryptedBotToken);
-  return getMe(token)
-    .then(() => {
-      return "valid" as const;
-    })
-    .catch(() => {
-      return "unknown" as const;
-    });
+  const settled = await settle(getMe(token));
+  return settled.ok ? ("valid" as const) : ("unknown" as const);
 }
 
 function isInvalidTelegramTokenError(error: unknown): boolean {
@@ -723,18 +718,16 @@ async function resolveIntegrationTokenStatus(
   installation: TelegramInstallationRow,
 ): Promise<TelegramBot["tokenStatus"]> {
   const token = decryptSecretValue(installation.encryptedBotToken);
-  const result = await safeAsync(() => {
-    return getMe(token);
-  });
+  const result = await settle(getMe(token));
 
-  if ("error" in result) {
+  if (!result.ok) {
     if (isInvalidTelegramTokenError(result.error)) {
       return "invalid";
     }
     return "unknown";
   }
 
-  if (String(result.ok.id) !== installation.telegramBotId) {
+  if (String(result.value.id) !== installation.telegramBotId) {
     return "invalid";
   }
   return "valid";

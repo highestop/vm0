@@ -40,7 +40,7 @@ import { userSecrets, userVariables } from "../services/zero-user-data.service";
 import { decryptSecretValue } from "../services/crypto.utils";
 import { env } from "../../lib/env";
 import type { RouteEntry } from "../route";
-import { safeAsync } from "../utils";
+import { bestEffort, settle } from "../utils";
 
 const c = initContract();
 
@@ -200,14 +200,12 @@ function contractErrorResponse(
   };
 }
 
-function publishAppHome(
+async function publishAppHome(
   client: ReturnType<typeof createSlackClient>,
   userId: string,
   view: View,
 ): Promise<void> {
-  return client.views.publish({ user_id: userId, view }).then(() => {
-    return undefined;
-  });
+  await client.views.publish({ user_id: userId, view });
 }
 
 function buildConnectUrl(workspaceId: string, slackUserId: string): string {
@@ -427,16 +425,16 @@ const deleteSlackIntegration$ = command(
     const client = createSlackClient(
       decryptSecretValue(installation.encryptedBotToken),
     );
-    await publishAppHome(
-      client,
-      connection.slackUserId,
-      buildDisconnectedAppHomeView({
-        workspaceId: installation.slackWorkspaceId,
-        slackUserId: connection.slackUserId,
-      }),
-    ).catch(() => {
-      return undefined;
-    });
+    await bestEffort(
+      publishAppHome(
+        client,
+        connection.slackUserId,
+        buildDisconnectedAppHomeView({
+          workspaceId: installation.slackWorkspaceId,
+          slackUserId: connection.slackUserId,
+        }),
+      ),
+    );
     signal.throwIfAborted();
 
     return { status: 200 as const, body: { ok: true } };
@@ -537,17 +535,17 @@ const getSlackDownloadFileInner$ = computed(async (get) => {
     );
   }
 
-  const fileInfoResult = await safeAsync(() => {
-    return getFileInfo(installation.botToken, fileId);
-  });
-  if ("error" in fileInfoResult) {
+  const fileInfoResult = await settle(
+    getFileInfo(installation.botToken, fileId),
+  );
+  if (!fileInfoResult.ok) {
     const response = slackApiErrorResponse(fileInfoResult.error);
     if (response) {
       return response;
     }
     throw fileInfoResult.error;
   }
-  const fileInfo = fileInfoResult.ok;
+  const fileInfo = fileInfoResult.value;
 
   const downloadUrl = fileInfo.url_private_download ?? fileInfo.url_private;
   if (!downloadUrl) {
@@ -566,17 +564,17 @@ const getSlackDownloadFileInner$ = computed(async (get) => {
     );
   }
 
-  const fileResponseResult = await safeAsync(() => {
-    return fetchSlackFile(downloadUrl, installation.botToken);
-  });
-  if ("error" in fileResponseResult) {
+  const fileResponseResult = await settle(
+    fetchSlackFile(downloadUrl, installation.botToken),
+  );
+  if (!fileResponseResult.ok) {
     const response = slackFileFetchErrorResponse(fileResponseResult.error);
     if (response) {
       return response;
     }
     throw fileResponseResult.error;
   }
-  const fileResponse = fileResponseResult.ok;
+  const fileResponse = fileResponseResult.value;
 
   const responseContentType = fileResponse.headers.get("content-type") ?? "";
   if (responseContentType.includes("text/html")) {

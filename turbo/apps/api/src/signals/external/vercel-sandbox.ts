@@ -1,5 +1,6 @@
 import { optionalEnv } from "../../lib/env";
 import { singleton } from "../../lib/singleton";
+import { onRejection } from "../utils";
 import {
   createBoundedTextCollector,
   DEFAULT_SANDBOX_FILE_LIMIT_BYTES,
@@ -213,14 +214,13 @@ async function waitForVercelCommandWithLogs(
     commandSignal,
   );
   const waitPromise = command.wait({ signal: commandSignal });
-  const [finishedCommand, output] = await Promise.all([
-    waitPromise,
-    outputPromise,
-  ]).catch((error: unknown) => {
-    commandController.abort(error);
-    closeVercelCommandLogs(logs);
-    throw error;
-  });
+  const [finishedCommand, output] = await onRejection(
+    Promise.all([waitPromise, outputPromise]),
+    (error) => {
+      commandController.abort(error);
+      closeVercelCommandLogs(logs);
+    },
+  );
   return { command: finishedCommand, output };
 }
 

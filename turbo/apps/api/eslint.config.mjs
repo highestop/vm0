@@ -51,6 +51,43 @@ const restrictedSyntax = [
   },
 ];
 
+// Promise chaining ban — see issue #13535. .then/.catch hide error and
+// loading state; production code should await and centralize guarded async
+// work in signals/utils.ts (settle, safeJsonParse, detach, etc.).
+const promiseChainSyntax = [
+  {
+    selector: "CallExpression[callee.property.name='then']",
+    message:
+      "Promise.then is not allowed. Use await, or centralize the guarded async in signals/utils.ts (settle, detach).",
+  },
+  {
+    selector: "CallExpression[callee.property.name='catch']",
+    message:
+      "Promise.catch is not allowed. Use settle from signals/utils.ts (or detach for fire-and-forget).",
+  },
+];
+
+// Narrow exception policy for the promise-chain ban (issue #13535):
+// only infrastructure that wraps runtime primitives stays on raw
+// .then/.catch. Production code under src/signals/routes and
+// src/signals/services must route through the centralized helpers
+// (settle, tapError, onRejection, detach, bestEffort).
+const promiseChainAllowlist = [
+  // pg/OTel instrumentation: needs .then chains around the wrapped pg.query
+  // call to attach span lifecycle without forcing an async wrapper around
+  // every callback-style overload.
+  "src/lib/db.ts",
+  // Logger flush: detached `?.catch(() => {})` on Sentry flush in process exit
+  // path; cannot use signals/utils helpers because lib/ must not import them.
+  "src/lib/log.ts",
+  // Centralized async helpers — these implement .then/.catch so the rest of
+  // the codebase doesn't have to.
+  "src/signals/utils.ts",
+  // sandboxOperation is the centralized SandboxError-mapping helper used by
+  // every sandbox call site; the .then chain is the contract.
+  "src/signals/external/sandbox.ts",
+];
+
 export default [
   ...config,
   {
@@ -76,6 +113,26 @@ export default [
   {
     files: ["src/**/*.ts"],
     ignores: ["src/lib/env.ts", "src/lib/time.ts", "src/__tests__/env-stub.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedSyntax,
+        ...promiseChainSyntax,
+      ],
+    },
+  },
+  // Restore the rule without the promise-chain selectors for allowlisted
+  // files and test files. Tests intentionally drive promise edge cases;
+  // allowlisted production files are tracked legacy surface (see
+  // `promiseChainAllowlist` comment). env-stub.ts stays excluded so its
+  // bootstrap-only process.env / vi.stubEnv usage is not re-flagged here.
+  {
+    files: [
+      "src/**/__tests__/**/*.ts",
+      "src/**/*.test.ts",
+      ...promiseChainAllowlist,
+    ],
+    ignores: ["src/__tests__/env-stub.ts"],
     rules: {
       "no-restricted-syntax": ["error", ...restrictedSyntax],
     },

@@ -6,7 +6,7 @@ import type { ZeroBuiltInGenerationRealtimeSubscription } from "@vm0/api-contrac
 import { env } from "../../lib/env";
 import { logger } from "../../lib/log";
 import { singleton } from "../../lib/singleton";
-import { safeAsync } from "../utils";
+import { settle, tapError } from "../utils";
 
 const L = logger("Realtime");
 
@@ -97,7 +97,7 @@ export async function createRunnerGroupRealtimeToken(
  * NOT best-effort: rejections from Ably propagate to the caller, matching
  * web's behaviour. Wave 2/3 mutation handlers should use this directly; if
  * a non-blocking publish becomes necessary for a future route, prefer
- * `safeAsync` from ../utils.
+ * `settle` from ../utils.
  */
 export async function publishUserSignal(
   userIds: readonly string[],
@@ -119,8 +119,9 @@ export async function publishRunChangedForUserSafely(
   runId: string,
   payload: unknown = null,
 ): Promise<void> {
-  await publishUserSignal([userId], `run:changed:${runId}`, payload).catch(
-    (error: unknown) => {
+  await tapError(
+    publishUserSignal([userId], `run:changed:${runId}`, payload),
+    (error) => {
       L.warn("Failed to publish run changed signal", { runId, error });
     },
   );
@@ -185,19 +186,21 @@ export async function publishRunnerJobNotification(
   profile: string,
   targetRunnerId: string | null = null,
 ): Promise<boolean> {
-  const result = await safeAsync(async () => {
-    const channel = ablyClient().channels.get(`runner-group:${group}`);
-    await channel.publish("job", {
-      runId,
-      profile,
-      ...(targetRunnerId ? { targetRunnerId } : {}),
-    });
-    L.debug(
-      `Published job ${runId} to runner-group:${group}` +
-        (targetRunnerId ? ` (target: ${targetRunnerId})` : " (broadcast)"),
-    );
-  });
-  if ("ok" in result) {
+  const result = await settle(
+    (async () => {
+      const channel = ablyClient().channels.get(`runner-group:${group}`);
+      await channel.publish("job", {
+        runId,
+        profile,
+        ...(targetRunnerId ? { targetRunnerId } : {}),
+      });
+      L.debug(
+        `Published job ${runId} to runner-group:${group}` +
+          (targetRunnerId ? ` (target: ${targetRunnerId})` : " (broadcast)"),
+      );
+    })(),
+  );
+  if (result.ok) {
     return true;
   }
   L.warn("Failed to publish runner job notification", {

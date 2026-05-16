@@ -24,7 +24,7 @@ import { env, optionalEnv } from "../../lib/env";
 import { logger } from "../../lib/log";
 import { db$, writeDb$, type Db } from "../external/db";
 import { now, nowDate } from "../external/time";
-import { isValidTimeZone, safeAsync } from "../utils";
+import { isValidTimeZone, settle } from "../utils";
 import { visibleJoinedZeroAgentCondition } from "./zero-agent-data.service";
 import { createZeroRun$ } from "./zero-runs-create.service";
 
@@ -203,9 +203,8 @@ async function generateText(
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => {
-      return "unknown error";
-    });
+    const settled = await settle(response.text());
+    const text = settled.ok ? settled.value : "unknown error";
     throw new Error(`OpenRouter request failed: ${response.status} ${text}`);
   }
 
@@ -246,8 +245,8 @@ async function generateScheduleDescription(
   request: DeployScheduleBody,
   agentName: string,
 ): Promise<string> {
-  const result = await safeAsync(() => {
-    return generateText(
+  const result = await settle(
+    generateText(
       [
         {
           role: "system",
@@ -260,10 +259,10 @@ async function generateScheduleDescription(
         },
       ],
       30,
-    );
-  });
+    ),
+  );
 
-  if ("error" in result) {
+  if (!result.ok) {
     log.warn("Schedule description generation failed, using fallback", {
       error:
         result.error instanceof Error
@@ -274,7 +273,7 @@ async function generateScheduleDescription(
     return buildTemplateDescription(request, agentName);
   }
 
-  return result.ok ?? buildTemplateDescription(request, agentName);
+  return result.value ?? buildTemplateDescription(request, agentName);
 }
 
 function resolveTrigger(
@@ -930,8 +929,8 @@ export const executeDueSchedules$ = command(
         continue;
       }
 
-      const runResult = await safeAsync(() => {
-        return set(
+      const runResult = await settle(
+        set(
           runScheduleNow$,
           {
             body: { scheduleId: schedule.id },
@@ -939,10 +938,10 @@ export const executeDueSchedules$ = command(
             apiStartTime: now(),
           },
           signal,
-        );
-      });
+        ),
+      );
       signal.throwIfAborted();
-      if ("error" in runResult) {
+      if (!runResult.ok) {
         await recordSchedulePreRunFailure(
           db,
           schedule,
@@ -952,7 +951,7 @@ export const executeDueSchedules$ = command(
         skipped++;
         continue;
       }
-      const result = runResult.ok;
+      const result = runResult.value;
       if (result.kind !== "ok") {
         await recordSchedulePreRunFailure(db, schedule, result, signal);
         skipped++;

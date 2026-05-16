@@ -4,7 +4,7 @@ import { and, eq, gt } from "drizzle-orm";
 import type { ReadonlyDb } from "../external/db";
 import { publishRunnerJobNotification } from "../external/realtime";
 import { now } from "../external/time";
-import { safeAsync } from "../utils";
+import { settle } from "../utils";
 import { logger } from "../../lib/log";
 
 const L = logger("RunnerDispatch");
@@ -61,11 +61,11 @@ export async function notifyRunnerJob(
     readonly sessionId: string | null;
   },
 ): Promise<boolean> {
-  const target = await safeAsync(() => {
-    return findBestRunner(db, args.runnerGroup, args.profile, args.sessionId);
-  });
-  const targetRunnerId = "ok" in target ? (target.ok?.runnerId ?? null) : null;
-  if (!("ok" in target)) {
+  const target = await settle(
+    findBestRunner(db, args.runnerGroup, args.profile, args.sessionId),
+  );
+  const targetRunnerId = target.ok ? (target.value?.runnerId ?? null) : null;
+  if (!target.ok) {
     L.warn("findBestRunner failed for run, using broadcast", {
       runId: args.runId,
       error: target.error,

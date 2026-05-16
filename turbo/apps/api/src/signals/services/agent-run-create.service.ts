@@ -103,7 +103,7 @@ import {
 } from "../external/realtime";
 import { now, nowDate } from "../external/time";
 import { generateZeroToken } from "../auth/tokens";
-import { safeAsync } from "../utils";
+import { settle, tapError } from "../utils";
 import {
   decryptSecretValue,
   encryptSecretValue,
@@ -2019,11 +2019,11 @@ async function resolveConversationSessionHistory(
   const { hash, legacyText } = args;
   if (hash) {
     const bucket = env("R2_USER_STORAGES_BUCKET_NAME");
-    const result = await safeAsync(() => {
-      return get(downloadS3Buffer(bucket, `blobs/${hash}.blob`));
-    });
-    if ("ok" in result) {
-      return result.ok.toString("utf8");
+    const result = await settle(
+      get(downloadS3Buffer(bucket, `blobs/${hash}.blob`)),
+    );
+    if (result.ok) {
+      return result.value.toString("utf8");
     }
     if (legacyText) {
       L.warn(
@@ -2574,8 +2574,9 @@ async function markRunFailed(
   await publishRunChangedForUserSafely(updated.userId, runId, {
     status: "failed",
   });
-  await dispatchRunCallbacks(db, runId, "failed", undefined, message).catch(
-    (error: unknown) => {
+  await tapError(
+    dispatchRunCallbacks(db, runId, "failed", undefined, message),
+    (error) => {
       L.error("Failed to dispatch failed-run callbacks", { runId, error });
     },
   );
@@ -3025,8 +3026,8 @@ async function completeQueuedRun(input: {
   readonly run: RunRecord;
   readonly signal: AbortSignal;
 }): Promise<Extract<CreateRunRouteResult, { readonly status: 201 }>> {
-  const enqueueResult = await safeAsync(() => {
-    return enqueueRunForConcurrency(input.get, input.db, {
+  const enqueueResult = await settle(
+    enqueueRunForConcurrency(input.get, input.db, {
       run: input.run,
       userId: input.args.userId,
       orgId: input.args.orgId,
@@ -3041,10 +3042,10 @@ async function completeQueuedRun(input: {
       additionalVolumes: input.context.additionalVolumes,
       includeZeroTokenSecret: input.args.includeZeroTokenSecret,
       extraEnvironment: input.args.extraEnvironment,
-    });
-  });
+    }),
+  );
   input.signal.throwIfAborted();
-  if (!("ok" in enqueueResult)) {
+  if (!enqueueResult.ok) {
     await markRunFailed(input.db, input.run.id, enqueueResult.error);
     input.signal.throwIfAborted();
     return failedRunResponse(input.run, enqueueResult.error);
@@ -3061,8 +3062,8 @@ async function completePendingRun(input: {
   readonly drainOrgQueue: () => Promise<void>;
   readonly signal: AbortSignal;
 }): Promise<Extract<CreateRunRouteResult, { readonly status: 201 }>> {
-  const dispatchResult = await safeAsync(() => {
-    return dispatchRun(input.get, input.db, {
+  const dispatchResult = await settle(
+    dispatchRun(input.get, input.db, {
       run: input.run,
       userId: input.args.userId,
       orgId: input.args.orgId,
@@ -3077,12 +3078,12 @@ async function completePendingRun(input: {
       additionalVolumes: input.context.additionalVolumes,
       includeZeroTokenSecret: input.args.includeZeroTokenSecret,
       extraEnvironment: input.args.extraEnvironment,
-    });
-  });
+    }),
+  );
   input.signal.throwIfAborted();
 
-  if ("ok" in dispatchResult) {
-    return createdRunResponse(input.run, dispatchResult.ok);
+  if (dispatchResult.ok) {
+    return createdRunResponse(input.run, dispatchResult.value);
   }
 
   const transitioned = await markRunFailed(
@@ -3092,7 +3093,7 @@ async function completePendingRun(input: {
   );
   input.signal.throwIfAborted();
   if (transitioned) {
-    await input.drainOrgQueue().catch((error: unknown) => {
+    await tapError(input.drainOrgQueue(), (error) => {
       L.error("Failed to drain org queue after run dispatch failure", {
         runId: input.run.id,
         error,

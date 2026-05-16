@@ -48,7 +48,13 @@ import {
 } from "../../external/connectors.ts";
 import { apiBaseForNavigation$ } from "../../fetch.ts";
 import { zeroClient$, type ZeroClientFactory } from "../../api-client.ts";
-import { jsonParseOr, onRef, resetSignal, withCleanup } from "../../utils.ts";
+import {
+  jsonParseOr,
+  onRef,
+  resetSignal,
+  settle,
+  withCleanup,
+} from "../../utils.ts";
 import { setAblyLoop$ } from "../../realtime.ts";
 import { localStorageSignals } from "../../external/local-storage.ts";
 import { resetPermissionDialog$ } from "./permission-dialog.ts";
@@ -1370,20 +1376,20 @@ const pollConnectorCliAuthBrowserVerification$ = command(
         status: "polling",
       });
 
-      const completeResult = await adapter
-        .complete({
+      const completeSettled = await settle(
+        adapter.complete({
           createClient,
           sessionToken: latest.sessionToken,
           signal,
-        })
-        .catch((error: unknown) => {
-          signal.throwIfAborted();
-          return {
+        }),
+        signal,
+      );
+      const completeResult = completeSettled.ok
+        ? completeSettled.value
+        : {
             status: "error" as const,
-            message: cliAuthErrorMessage(error),
+            message: cliAuthErrorMessage(completeSettled.error),
           };
-        });
-      signal.throwIfAborted();
 
       const current = get(internalConnectorCliAuthState$);
       if (!isCurrentConnectorCliAuthRequest(current, type, requestId)) {
@@ -1496,26 +1502,24 @@ export const runConnectorCliAuth$ = command(
         });
 
         const createClient = get(zeroClient$);
-        const startResult = await adapter
-          .start({
+        const startSettled = await settle(
+          adapter.start({
             createClient,
             mode: selectedMode,
             signal: flowSignal,
-          })
-          .catch((error: unknown) => {
-            flowSignal.throwIfAborted();
-            if (get(internalSelectedConnectorType$) === type) {
-              set(internalConnectorCliAuthState$, {
-                status: "error",
-                connectorType: type,
-                mode: selectedMode,
-                message: cliAuthErrorMessage(error),
-              });
-            }
-            return null;
+          }),
+          flowSignal,
+        );
+        const startResult = startSettled.ok ? startSettled.value : null;
+        if (!startSettled.ok && get(internalSelectedConnectorType$) === type) {
+          set(internalConnectorCliAuthState$, {
+            status: "error",
+            connectorType: type,
+            mode: selectedMode,
+            message: cliAuthErrorMessage(startSettled.error),
           });
+        }
         signal.throwIfAborted();
-        flowSignal.throwIfAborted();
         if (!startResult || get(internalSelectedConnectorType$) !== type) {
           return false;
         }

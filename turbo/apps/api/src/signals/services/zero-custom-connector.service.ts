@@ -5,13 +5,17 @@ import {
   getAllBuiltinConnectorHosts,
   getBuiltinConnectorDisplayName,
 } from "@vm0/connectors/firewalls";
+import {
+  expandHostWildcardsInBaseUrl,
+  validateBaseUrl,
+} from "@vm0/connectors/firewall-types";
 import { orgCustomConnectors } from "@vm0/db/schema/org-custom-connector";
 import { orgCustomConnectorSecrets } from "@vm0/db/schema/org-custom-connector-secret";
 
 import { db$, writeDb$ } from "../external/db";
 import { badRequestMessage, notFound } from "../../lib/error";
 import { logger } from "../../lib/log";
-import { safeUrlParse } from "../utils";
+import { safeSync, safeUrlParse } from "../utils";
 
 const L = logger("CustomConnectorService");
 
@@ -76,7 +80,19 @@ function normalizePrefix(raw: string): string | BadRequestResponse {
   const pathname = url.pathname.endsWith("/")
     ? url.pathname
     : `${url.pathname}/`;
-  return `${url.origin}${pathname}`;
+  const normalized = `${url.origin}${pathname}`;
+  const firewallBase = expandHostWildcardsInBaseUrl(normalized);
+  const validation = safeSync(() => {
+    validateBaseUrl(firewallBase, "custom connector");
+  });
+  if ("error" in validation) {
+    const message =
+      validation.error instanceof Error
+        ? validation.error.message.replace(firewallBase, normalized)
+        : "not a valid URL";
+    return badRequestMessage(`Invalid prefix URL: ${raw}: ${message}`);
+  }
+  return normalized;
 }
 
 function hostSlugFromPrefix(prefix: string): string {

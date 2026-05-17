@@ -953,6 +953,130 @@ async fn send_event_masks_secrets() {
     mock.delete_async().await;
 }
 
+#[tokio::test]
+async fn send_event_captures_session_metadata_before_masking() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let server = &*MOCK_SERVER;
+    let _session_files = SessionCheckpointFilesGuard::new();
+
+    let sid_file = guest_agent::paths::session_id_file();
+    let hist_file = guest_agent::paths::session_history_path_file();
+
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path("/api/webhooks/agent/events")
+            .body_includes(r#""session_id":"***""#);
+        then.status(200);
+    });
+
+    let session_id = "ses-secret-123";
+    let engine = base64::engine::general_purpose::STANDARD;
+    let encoded_session_id = engine.encode(session_id);
+    let masker = SecretMasker::from_raw(&encoded_session_id);
+    let mut event = json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": session_id
+    });
+
+    let result = guest_agent::events::send_event(&http_client!(), &mut event, 1, &masker).await;
+
+    assert!(result.is_ok());
+    mock.assert_calls_async(1).await;
+    assert_eq!(
+        event["session_id"], "***",
+        "send_event should leave the caller's event masked after payload preparation"
+    );
+
+    let stored = std::fs::read_to_string(sid_file).unwrap();
+    assert_eq!(
+        stored, session_id,
+        "checkpoint metadata should capture the unmasked session id"
+    );
+    let history = std::fs::read_to_string(hist_file).unwrap();
+    assert!(
+        history.contains(session_id),
+        "history path should contain the unmasked session id, got: {history}"
+    );
+    assert!(
+        !history.contains("***"),
+        "history path must not be built from masked metadata, got: {history}"
+    );
+
+    mock.delete_async().await;
+}
+
+#[tokio::test]
+async fn prepare_event_does_not_capture_session_metadata() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let _server = &*MOCK_SERVER;
+    let _session_files = SessionCheckpointFilesGuard::new();
+
+    let sid_file = guest_agent::paths::session_id_file();
+    let hist_file = guest_agent::paths::session_history_path_file();
+
+    let masker = SecretMasker::from_raw("");
+    let mut event = json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": "ses-prepare-only"
+    });
+    let payload = guest_agent::events::prepare_event(&mut event, 1, &masker);
+
+    assert!(
+        payload.is_some(),
+        "prepare_event should still prepare a payload when the API token is configured"
+    );
+    assert!(
+        !std::path::Path::new(sid_file).exists(),
+        "prepare_event must not write the session ID file"
+    );
+    assert!(
+        !std::path::Path::new(hist_file).exists(),
+        "prepare_event must not write the session history path file"
+    );
+}
+
+#[tokio::test]
+async fn send_event_keeps_existing_session_metadata() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let server = &*MOCK_SERVER;
+    let _session_files = SessionCheckpointFilesGuard::new();
+
+    let sid_file = guest_agent::paths::session_id_file();
+    let hist_file = guest_agent::paths::session_history_path_file();
+    std::fs::write(sid_file, "first-session").unwrap();
+    std::fs::write(hist_file, "/tmp/first-session.jsonl").unwrap();
+
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/api/webhooks/agent/events");
+        then.status(200);
+    });
+
+    let masker = SecretMasker::from_raw("");
+    let mut event = json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": "second-session"
+    });
+    let result = guest_agent::events::send_event(&http_client!(), &mut event, 1, &masker).await;
+
+    assert!(result.is_ok());
+    mock.assert_calls_async(1).await;
+    assert_eq!(
+        std::fs::read_to_string(sid_file).unwrap(),
+        "first-session",
+        "later id-bearing events must not replace checkpoint session metadata"
+    );
+    assert_eq!(
+        std::fs::read_to_string(hist_file).unwrap(),
+        "/tmp/first-session.jsonl",
+        "later id-bearing events must not replace checkpoint history metadata"
+    );
+
+    mock.delete_async().await;
+}
+
 // =========================================================================
 // Group 6: Session ID extraction
 // =========================================================================

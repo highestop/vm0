@@ -28,6 +28,40 @@ impl Drop for SystemLogOverrideGuard {
     }
 }
 
+fn cleanup_session_files() {
+    let _ = std::fs::remove_file(guest_agent::paths::session_id_file());
+    let _ = std::fs::remove_file(guest_agent::paths::session_history_path_file());
+}
+
+fn cleanup_run_files(ops_file: &str) {
+    let _ = std::fs::remove_file(guest_agent::paths::agent_log_file());
+    let _ = std::fs::remove_file(guest_agent::paths::event_error_flag());
+    cleanup_session_files();
+    let _ = std::fs::remove_file(ops_file);
+}
+
+struct RunFilesGuard {
+    ops_file: String,
+}
+
+impl RunFilesGuard {
+    fn new() -> Self {
+        let ops_file = guest_common::telemetry::sandbox_ops_log().to_string();
+        cleanup_run_files(&ops_file);
+        Self { ops_file }
+    }
+
+    fn ops_file(&self) -> &str {
+        &self.ops_file
+    }
+}
+
+impl Drop for RunFilesGuard {
+    fn drop(&mut self) {
+        cleanup_run_files(&self.ops_file);
+    }
+}
+
 #[tokio::test]
 async fn no_api_mode_drains_background_webhook_users_without_network_client()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -38,11 +72,8 @@ async fn no_api_mode_drains_background_webhook_users_without_network_client()
     }
 
     let http = HttpClient::for_current_env()?;
-    let _ = std::fs::remove_file(guest_agent::paths::event_error_flag());
-    let _ = std::fs::remove_file(guest_agent::paths::session_id_file());
-    let _ = std::fs::remove_file(guest_agent::paths::session_history_path_file());
-    let ops_file = guest_common::telemetry::sandbox_ops_log();
-    let _ = std::fs::remove_file(ops_file);
+    let run_files = RunFilesGuard::new();
+    let ops_file = run_files.ops_file();
 
     let disabled = http
         .post_json("http://127.0.0.1:1/should-not-send", &json!({}), 1)
@@ -81,6 +112,7 @@ async fn no_api_mode_drains_background_webhook_users_without_network_client()
         std::fs::read_to_string(guest_agent::paths::session_id_file())?,
         "session-no-api"
     );
+    cleanup_session_files();
 
     let complete_log_path = tmp.path().join("complete-system.log");
     let complete_log_guard = SystemLogOverrideGuard::set(&complete_log_path);
@@ -107,6 +139,21 @@ async fn no_api_mode_drains_background_webhook_users_without_network_client()
         !std::path::Path::new(guest_agent::paths::event_error_flag()).exists(),
         "no-API execute_cli must not write event error flag"
     );
+    let cli_session_id = std::fs::read_to_string(guest_agent::paths::session_id_file())?;
+    assert!(
+        cli_session_id.starts_with("mock-"),
+        "no-API execute_cli should capture session metadata from stdout events, got {cli_session_id}"
+    );
+    let cli_history_path =
+        std::fs::read_to_string(guest_agent::paths::session_history_path_file())?;
+    assert!(
+        cli_history_path.contains(cli_session_id.trim()),
+        "history path should contain the captured CLI session id, got {cli_history_path}"
+    );
+    assert!(
+        cli_history_path.trim_end().ends_with(".jsonl"),
+        "history path should be the Claude JSONL path captured from stdout events, got {cli_history_path}"
+    );
     let ops = std::fs::read_to_string(ops_file)?;
     let cli_exit_metric_count = ops
         .lines()
@@ -122,8 +169,5 @@ async fn no_api_mode_drains_background_webhook_users_without_network_client()
         "execute_cli should record exactly one last-read-event to CLI-exit sandbox op: {ops}"
     );
 
-    let _ = std::fs::remove_file(guest_agent::paths::event_error_flag());
-    let _ = std::fs::remove_file(guest_agent::paths::session_id_file());
-    let _ = std::fs::remove_file(guest_agent::paths::session_history_path_file());
     Ok(())
 }

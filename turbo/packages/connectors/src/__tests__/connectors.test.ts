@@ -102,6 +102,12 @@ describe("getAvailableConnectorAuthMethods", () => {
       }),
     ).toStrictEqual(["api-token"]);
   });
+
+  it("exposes Doubao API-token auth without a feature switch", () => {
+    expect(getAvailableConnectorAuthMethods("doubao", {})).toStrictEqual([
+      "api-token",
+    ]);
+  });
 });
 
 describe("getConnectorManagedSecretNames", () => {

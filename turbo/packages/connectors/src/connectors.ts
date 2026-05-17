@@ -162,6 +162,7 @@ import { manus } from "./connectors/manus";
 import { minio } from "./connectors/minio";
 import { pdforge } from "./connectors/pdforge";
 import { discordWebhook } from "./connectors/discord-webhook";
+import { sponge } from "./connectors/sponge";
 import { spotify } from "./connectors/spotify";
 import { slackWebhook } from "./connectors/slack-webhook";
 import { gitlab } from "./connectors/gitlab";
@@ -596,6 +597,7 @@ const CONNECTOR_TYPES_DEF = {
   ...minio,
   ...pdforge,
   ...discordWebhook,
+  ...sponge,
   ...spotify,
   ...slackWebhook,
   ...gitlab,

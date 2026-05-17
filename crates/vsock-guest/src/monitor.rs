@@ -77,6 +77,7 @@ pub(crate) struct SpawnProcessRequest<'a> {
     pub(crate) stream_stdout: bool,
     pub(crate) stdout_log_path: Option<&'a str>,
     pub(crate) process_control_guard: Option<ProcessControlGuard>,
+    pub(crate) process_control_bootstrap_endpoint: Option<String>,
 }
 
 type ProcessControlGuardSlot = Arc<Mutex<Option<ProcessControlGuard>>>;
@@ -142,6 +143,7 @@ where
         stream_stdout,
         stdout_log_path,
         process_control_guard,
+        process_control_bootstrap_endpoint,
     } = request;
 
     log(
@@ -156,7 +158,17 @@ where
         ),
     );
 
-    let spawned = match spawn_shell_command_with_pipes(command, env, sudo) {
+    let mut env_with_control;
+    let effective_env = if let Some(endpoint) = process_control_bootstrap_endpoint.as_deref() {
+        env_with_control = Vec::with_capacity(env.len() + 1);
+        env_with_control.extend_from_slice(env);
+        env_with_control.push((process_control_ipc::BOOTSTRAP_ENV, endpoint));
+        env_with_control.as_slice()
+    } else {
+        env
+    };
+
+    let spawned = match spawn_shell_command_with_pipes(command, effective_env, sudo) {
         Ok(c) => c,
         Err(e) => {
             let payload = vsock_proto::encode_error(&format!(
@@ -736,8 +748,8 @@ mod tests {
         const NONCE: vsock_proto::ProcessControlNonce = *b"0123456789abcdef";
 
         let registry = ProcessControlRegistry::default();
-        let guard_slot =
-            new_process_control_guard_slot(Some(registry.register(7, Some(NONCE)).unwrap()));
+        let registration = registry.register(7, Some(NONCE), false).unwrap();
+        let guard_slot = new_process_control_guard_slot(Some(registration.guard));
         let task_guard_slot = guard_slot.clone();
 
         let result = FailingThreadSpawner::fail_once("test-monitor").spawn_unit(
@@ -755,6 +767,48 @@ mod tests {
 
         release_process_control_guard(take_process_control_guard(&guard_slot));
         assert!(!registry.contains(7));
+    }
+
+    #[test]
+    fn spawn_process_control_endpoint_overrides_existing_env() {
+        let (guest, mut host) = UnixStream::pair().unwrap();
+        host.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let writer = GuestWriter::new(guest);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        handle_spawn_process_with_spawner(
+            SpawnProcessRequest {
+                timeout_ms: 5000,
+                command: "printf '%s' \"$VM0_PROCESS_CONTROL_ENDPOINT\"",
+                env: &[(process_control_ipc::BOOTSTRAP_ENV, "stale-endpoint")],
+                sudo: false,
+                stream_stdout: false,
+                stdout_log_path: None,
+                process_control_guard: None,
+                process_control_bootstrap_endpoint: Some("fresh-endpoint".to_owned()),
+            },
+            12,
+            operation_guard(),
+            writer,
+            cancel,
+            SystemThreadSpawner,
+        )
+        .unwrap();
+
+        let result = read_message(&mut host);
+        assert_eq!(result.msg_type, MSG_SPAWN_PROCESS_RESULT);
+        assert_eq!(result.seq, 12);
+        let pid = vsock_proto::decode_spawn_process_result(&result.payload).unwrap();
+
+        let exit = read_message(&mut host);
+        assert_eq!(exit.msg_type, MSG_PROCESS_EXIT);
+        assert_eq!(exit.seq, 12);
+        let (exit_pid, code, stdout, stderr) =
+            vsock_proto::decode_process_exit(&exit.payload).unwrap();
+        assert_eq!(exit_pid, pid);
+        assert_eq!(code, 0);
+        assert_eq!(stdout, b"fresh-endpoint");
+        assert!(stderr.is_empty(), "unexpected stderr: {stderr:?}");
     }
 
     #[test]
@@ -803,6 +857,7 @@ mod tests {
                 stream_stdout: true,
                 stdout_log_path: None,
                 process_control_guard: None,
+                process_control_bootstrap_endpoint: None,
             },
             7,
             operation_guard(),
@@ -849,6 +904,7 @@ mod tests {
                 stream_stdout: true,
                 stdout_log_path: None,
                 process_control_guard: None,
+                process_control_bootstrap_endpoint: None,
             },
             8,
             operation_guard(),
@@ -895,6 +951,7 @@ mod tests {
                 stream_stdout: true,
                 stdout_log_path: None,
                 process_control_guard: None,
+                process_control_bootstrap_endpoint: None,
             },
             10,
             operation_guard(),
@@ -941,6 +998,7 @@ mod tests {
                 stream_stdout: false,
                 stdout_log_path: None,
                 process_control_guard: None,
+                process_control_bootstrap_endpoint: None,
             },
             9,
             operation_guard(),
@@ -987,6 +1045,7 @@ mod tests {
                 stream_stdout: false,
                 stdout_log_path: None,
                 process_control_guard: None,
+                process_control_bootstrap_endpoint: None,
             },
             11,
             operation_guard(),

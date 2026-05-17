@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 use futures_util::FutureExt;
 use sandbox::{
     CopyFileOptions, EXEC_OUTPUT_LIMIT_1_MIB, EXEC_OUTPUT_LIMIT_64_KIB, ExecRequest, Sandbox,
-    SandboxConfig, SandboxFactory, SandboxId, SpawnProcessOutputMode, SpawnProcessRequest,
+    SandboxConfig, SandboxFactory, SandboxId, SpawnProcessControl, SpawnProcessOutputMode,
+    SpawnProcessRequest,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -565,6 +566,7 @@ async fn run_in_sandbox(
             output: SpawnProcessOutputMode::Stream {
                 guest_log_path: None,
             },
+            control: SpawnProcessControl::Enabled,
         })
         .await;
 
@@ -3082,6 +3084,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert!(calls[0].streams_stdout);
         assert!(calls[0].guest_log_path.is_none());
+        assert_eq!(calls[0].control, SpawnProcessControl::Enabled);
     }
 
     #[tokio::test]

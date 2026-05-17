@@ -168,6 +168,45 @@ async fn test_spawn_process_control_uses_operation_seq_and_nonce() {
 }
 
 #[tokio::test]
+async fn test_spawn_process_with_control_sink_sets_control_sink_flag() {
+    let (host_stream, mut guest) = make_pair();
+
+    tokio::spawn(async move {
+        let mut decoder = Decoder::new();
+        mock_handshake(&mut guest, &mut decoder).await;
+
+        let spawn = read_guest_message(&mut guest).await;
+        assert_eq!(spawn.msg_type, MSG_SPAWN_PROCESS);
+        let decoded_spawn = vsock_proto::decode_spawn_process(&spawn.payload).unwrap();
+        assert_eq!(decoded_spawn.command, "run-agent");
+        assert!(
+            decoded_spawn.control_nonce.is_some(),
+            "control sink spawn should include a nonce",
+        );
+        assert!(
+            decoded_spawn.control_sink,
+            "spawn_process_with_control_sink should set the control sink flag",
+        );
+
+        let payload = vsock_proto::encode_spawn_process_result(43);
+        let resp = vsock_proto::encode(MSG_SPAWN_PROCESS_RESULT, spawn.seq, &payload).unwrap();
+        guest.write_all(&resp).await.unwrap();
+
+        let mut discard = [0u8; 1];
+        let _ = guest.read(&mut discard).await;
+    });
+
+    let host = host_from_stream(host_stream).await.unwrap();
+    let handle = host
+        .spawn_process_with_control_sink("run-agent", 0, &[], false, false, None)
+        .await
+        .unwrap();
+    assert_eq!(handle.pid(), 43);
+    drop(handle);
+    assert_eq!(registration_counts(&host), (0, 0, 0));
+}
+
+#[tokio::test]
 async fn test_spawn_process_concurrent_controls_route_by_request_seq() {
     let (host_stream, mut guest) = make_pair();
 
@@ -397,6 +436,100 @@ async fn test_spawn_process_control_unsupported_status_returns_unsupported() {
 }
 
 #[tokio::test]
+async fn test_spawn_process_control_sink_statuses_use_default_error_mapping() {
+    let (host_stream, mut guest) = make_pair();
+
+    tokio::spawn(async move {
+        let mut decoder = Decoder::new();
+        mock_handshake(&mut guest, &mut decoder).await;
+
+        let spawn = read_guest_message(&mut guest).await;
+        assert_eq!(spawn.msg_type, MSG_SPAWN_PROCESS);
+        let decoded_spawn = vsock_proto::decode_spawn_process(&spawn.payload).unwrap();
+        let control_nonce = decoded_spawn.control_nonce.unwrap();
+
+        let payload = vsock_proto::encode_spawn_process_result(50);
+        let resp = vsock_proto::encode(MSG_SPAWN_PROCESS_RESULT, spawn.seq, &payload).unwrap();
+        guest.write_all(&resp).await.unwrap();
+
+        for (message_id, status) in [
+            ("message-rejected", ProcessControlStatus::Rejected),
+            (
+                "message-sink-unavailable",
+                ProcessControlStatus::SinkUnavailable,
+            ),
+            ("message-sink-timeout", ProcessControlStatus::SinkTimeout),
+            ("message-queue-full", ProcessControlStatus::QueueFull),
+            ("message-sink-error", ProcessControlStatus::SinkError),
+        ] {
+            let control = read_guest_message(&mut guest).await;
+            let decoded_control = vsock_proto::decode_process_control(&control.payload).unwrap();
+            assert_eq!(decoded_control.target_seq, spawn.seq);
+            assert_eq!(decoded_control.control_nonce, control_nonce);
+            assert_eq!(decoded_control.message_id, message_id);
+
+            send_process_control_result(
+                &mut guest,
+                control.seq,
+                decoded_control.target_seq,
+                decoded_control.control_nonce,
+                decoded_control.message_id,
+                status,
+                "",
+            )
+            .await;
+        }
+
+        let mut discard = [0u8; 1];
+        let _ = guest.read(&mut discard).await;
+    });
+
+    let host = host_from_stream(host_stream).await.unwrap();
+    let handle = host
+        .spawn_process("sleep 1", 0, &[], false, false, None)
+        .await
+        .unwrap();
+
+    for (message_id, kind, message) in [
+        (
+            "message-rejected",
+            io::ErrorKind::PermissionDenied,
+            "process control request rejected",
+        ),
+        (
+            "message-sink-unavailable",
+            io::ErrorKind::NotConnected,
+            "process control sink is not connected",
+        ),
+        (
+            "message-sink-timeout",
+            io::ErrorKind::TimedOut,
+            "process control sink timed out",
+        ),
+        (
+            "message-queue-full",
+            io::ErrorKind::WouldBlock,
+            "process control queue is full",
+        ),
+        (
+            "message-sink-error",
+            io::ErrorKind::BrokenPipe,
+            "process control sink error",
+        ),
+    ] {
+        let err = handle
+            .control(message_id, b"payload", Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), kind);
+        assert_eq!(err.to_string(), message);
+    }
+
+    drop(handle);
+    assert_eq!(registration_counts(&host), (0, 0, 0));
+}
+
+#[tokio::test]
 async fn test_spawn_process_control_malformed_result_poisons_connection() {
     let (host_stream, mut guest) = make_pair();
 
@@ -607,6 +740,58 @@ async fn test_spawn_process_control_timeout_cleans_pending_without_poisoning() {
         .await
         .unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(registration_counts(&host), (0, 1, 0));
+
+    let exec_result = host.exec("echo ok", 5000, &[], false).await.unwrap();
+    assert_eq!(exec_result.stdout, b"ok");
+    drop(handle);
+    assert_eq!(registration_counts(&host), (0, 0, 0));
+}
+
+#[tokio::test]
+async fn test_spawn_process_control_rejects_payload_over_local_ipc_limit_before_send() {
+    let (host_stream, mut guest) = make_pair();
+
+    tokio::spawn(async move {
+        let mut decoder = Decoder::new();
+        mock_handshake(&mut guest, &mut decoder).await;
+
+        let spawn = read_guest_message(&mut guest).await;
+        assert_eq!(spawn.msg_type, MSG_SPAWN_PROCESS);
+        let payload = vsock_proto::encode_spawn_process_result(51);
+        let resp = vsock_proto::encode(MSG_SPAWN_PROCESS_RESULT, spawn.seq, &payload).unwrap();
+        guest.write_all(&resp).await.unwrap();
+
+        let exec = read_guest_message(&mut guest).await;
+        assert_eq!(exec.msg_type, MSG_EXEC_START);
+        send_exec_result(
+            &mut guest,
+            exec.seq,
+            ExecTermination::Exited { exit_code: 0 },
+            b"ok",
+            b"",
+        )
+        .await;
+
+        let mut discard = [0u8; 1];
+        let _ = guest.read(&mut discard).await;
+    });
+
+    let host = host_from_stream(host_stream).await.unwrap();
+    let handle = host
+        .spawn_process("sleep 1", 0, &[], false, false, None)
+        .await
+        .unwrap();
+    let too_large = vec![0; vsock_proto::PROCESS_CONTROL_MAX_PAYLOAD_BYTES + 1];
+    let err = handle
+        .control("message-too-large", &too_large, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        err.to_string().contains("payload field too large"),
+        "unexpected error: {err}",
+    );
     assert_eq!(registration_counts(&host), (0, 1, 0));
 
     let exec_result = host.exec("echo ok", 5000, &[], false).await.unwrap();

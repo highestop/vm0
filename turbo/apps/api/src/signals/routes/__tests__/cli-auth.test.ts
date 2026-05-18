@@ -38,6 +38,7 @@ import { DEFAULT_TEST_EMAIL } from "../../services/cli-auth.service";
 const context = testContext();
 const store = createStore();
 const ORG_SENTINEL_USER_ID = "__org__";
+const DEVICE_CODE_VALID_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 interface HttpResponse {
   readonly status: number;
@@ -348,7 +349,11 @@ describe("CLI auth routes", () => {
       );
       cleanupState.deviceCodes.push(response.body.device_code);
 
-      expect(response.body.device_code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+      expect(response.body.device_code).toMatch(
+        new RegExp(
+          `^[${DEVICE_CODE_VALID_CHARS}]{4}-[${DEVICE_CODE_VALID_CHARS}]{4}$`,
+        ),
+      );
       expect(response.body.user_code).toBe(response.body.device_code);
       expect(response.body.verification_path).toBe("/cli-auth");
       expect(response.body.expires_in).toBe(900);
@@ -356,6 +361,25 @@ describe("CLI auth routes", () => {
 
       const row = await fetchDeviceCode(response.body.device_code);
       expect(row).toMatchObject({ purpose: "cli", status: "pending" });
+    });
+
+    it("generates unique CLI device codes on repeated calls", async () => {
+      const client = setupApp({ context })(cliAuthDeviceContract);
+
+      const first = await acceptResponse<DeviceAuthResponseBody>(
+        client.create({ body: {} }),
+        200,
+      );
+      const second = await acceptResponse<DeviceAuthResponseBody>(
+        client.create({ body: {} }),
+        200,
+      );
+      cleanupState.deviceCodes.push(
+        first.body.device_code,
+        second.body.device_code,
+      );
+
+      expect(first.body.device_code).not.toBe(second.body.device_code);
     });
   });
 

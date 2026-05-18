@@ -14,6 +14,7 @@ import {
   getClerkPublishableKey,
 } from "../src/lib/shared/clerk-config";
 import { getAppUrl } from "../src/lib/zero/url";
+import { SafeGoogleOneTap } from "./components/SafeGoogleOneTap";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { env } from "../src/env";
 import "./globals.css";
@@ -151,6 +152,7 @@ export default async function RootLayout({
       signUpFallbackRedirectUrl={getAppUrl()}
       allowedRedirectOrigins={[getAppUrl()]}
     >
+      <SafeGoogleOneTap redirectUrl={getAppUrl()} />
       <html lang={htmlLang} data-theme="dark" suppressHydrationWarning>
         <head>
           <Script

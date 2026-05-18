@@ -273,6 +273,38 @@ describe("API backend rewrite proxy behavior", () => {
     expect(matchesApiBackendRewritePath("/api/agent/composes")).toBe(false);
   });
 
+  it("matches only UUID-shaped agent compose by-id paths", () => {
+    expect(
+      matchesApiBackendRewritePath(`/api/agent/composes/${AGENT_COMPOSE_ID}`),
+    ).toBe(true);
+    expect(matchesApiBackendRewritePath("/api/agent/composes/not-a-uuid")).toBe(
+      false,
+    );
+    expect(matchesApiBackendRewritePath("/api/agent/composes")).toBe(false);
+    expect(
+      matchesApiBackendRewritePath(
+        `/api/agent/composes/${AGENT_COMPOSE_ID}/extra`,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps agent compose sibling rewrites explicitly matched", () => {
+    expect(matchesApiBackendRewritePath("/api/agent/composes/list")).toBe(true);
+    expect(matchesApiBackendRewritePath("/api/agent/composes/versions")).toBe(
+      true,
+    );
+    expect(
+      matchesApiBackendRewritePath(
+        `/api/agent/composes/${AGENT_COMPOSE_ID}/metadata`,
+      ),
+    ).toBe(true);
+    expect(
+      matchesApiBackendRewritePath(
+        `/api/agent/composes/${AGENT_COMPOSE_ID}/instructions`,
+      ),
+    ).toBe(true);
+  });
+
   it("matches only UUID-shaped agent composes metadata paths", () => {
     expect(
       matchesApiBackendRewritePath(
@@ -287,9 +319,6 @@ describe("API backend rewrite proxy behavior", () => {
     ).toBe(false);
     expect(
       matchesApiBackendRewritePath("/api/agent/composes/versions/metadata"),
-    ).toBe(false);
-    expect(
-      matchesApiBackendRewritePath(`/api/agent/composes/${AGENT_COMPOSE_ID}`),
     ).toBe(false);
     expect(
       matchesApiBackendRewritePath(
@@ -314,9 +343,6 @@ describe("API backend rewrite proxy behavior", () => {
     ).toBe(false);
     expect(
       matchesApiBackendRewritePath("/api/agent/composes/versions/instructions"),
-    ).toBe(false);
-    expect(
-      matchesApiBackendRewritePath(`/api/agent/composes/${AGENT_COMPOSE_ID}`),
     ).toBe(false);
     expect(
       matchesApiBackendRewritePath(

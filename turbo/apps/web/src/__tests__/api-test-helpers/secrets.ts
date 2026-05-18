@@ -1,5 +1,7 @@
-import { POST as setSecretRoute } from "../../../app/api/zero/secrets/route";
 import { POST as setVariableRoute } from "../../../app/api/zero/variables/route";
+import { getAuthContext } from "../../lib/auth/get-auth-context";
+import { resolveOrg } from "../../lib/zero/org/resolve-org";
+import { insertTestUserSecret } from "../db-test-seeders/secrets";
 import { createTestRequest } from "./core";
 
 // ============================================================================
@@ -26,19 +28,26 @@ export async function createTestSecret(
   createdAt: string;
   updatedAt: string;
 }> {
-  const request = createTestRequest("http://localhost:3000/api/zero/secrets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, value, description }),
-  });
-  const response = await setSecretRoute(request);
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(
-      `Failed to create secret: ${error.error?.message || response.status}`,
-    );
+  const authCtx = await getAuthContext();
+  if (!authCtx) {
+    throw new Error("Failed to create secret: not authenticated");
   }
-  return response.json();
+  const { org } = await resolveOrg(authCtx);
+  const secret = await insertTestUserSecret({
+    orgId: org.orgId,
+    userId: authCtx.userId,
+    name,
+    value,
+    description,
+  });
+  return {
+    id: secret.id,
+    name: secret.name,
+    description: secret.description,
+    type: secret.type,
+    createdAt: secret.createdAt.toISOString(),
+    updatedAt: secret.updatedAt.toISOString(),
+  };
 }
 
 // ============================================================================

@@ -52,6 +52,10 @@ import { infisicalFirewall } from "./infisical.generated";
 import { asanaFirewall } from "./asana.generated";
 import { attioFirewall } from "./attio.generated";
 import { atlassianFirewall } from "./atlassian.generated";
+import { aviationstackFirewall } from "./aviationstack.generated";
+// NOTE: aviationstack/builtwith/clado/diffbot/google-maps/hunter/mapbox/
+// mathpix/nyne/openrouter/openweather/reducto/suno were added in the same
+// Sponge-catalog batch and are wired below.
 import { axiomFirewall } from "./axiom.generated";
 import { bentomlFirewall } from "./bentoml.generated";
 import { bitrixFirewall } from "./bitrix.generated";
@@ -62,10 +66,12 @@ import { browserbaseFirewall } from "./browserbase.generated";
 import { browserUseFirewall } from "./browser-use.generated";
 import { browserlessFirewall } from "./browserless.generated";
 import { bufferFirewall } from "./buffer.generated";
+import { builtwithFirewall } from "./builtwith.generated";
 import { calComFirewall } from "./cal-com.generated";
 import { calendlyFirewall } from "./calendly.generated";
 import { canvaFirewall } from "./canva.generated";
 import { chatwootFirewall } from "./chatwoot.generated";
+import { cladoFirewall } from "./clado.generated";
 import { clickupFirewall } from "./clickup.generated";
 import { closeFirewall } from "./close.generated";
 import { cloudflareFirewall } from "./cloudflare.generated";
@@ -76,6 +82,7 @@ import { deepseekFirewall } from "./deepseek.generated";
 import { doubaoFirewall } from "./doubao.generated";
 import { deelFirewall } from "./deel.generated";
 import { devtoFirewall } from "./devto.generated";
+import { diffbotFirewall } from "./diffbot.generated";
 import { difyFirewall } from "./dify.generated";
 import { discordFirewall } from "./discord.generated";
 import { discordWebhookFirewall } from "./discord-webhook.generated";
@@ -102,6 +109,7 @@ import { githubFirewall } from "./github.generated";
 import { gitlabFirewall } from "./gitlab.generated";
 import { googleAdsFirewall } from "./google-ads.generated";
 import { googleCalendarFirewall } from "./google-calendar.generated";
+import { googleMapsFirewall } from "./google-maps.generated";
 import { googleDocsFirewall } from "./google-docs.generated";
 import { googleDriveFirewall } from "./google-drive.generated";
 import { googleMeetFirewall } from "./google-meet.generated";
@@ -116,6 +124,7 @@ import { htmlcsstoimageFirewall } from "./htmlcsstoimage.generated";
 import { hubspotFirewall } from "./hubspot.generated";
 import { huggingFaceFirewall } from "./hugging-face.generated";
 import { humeFirewall } from "./hume.generated";
+import { hunterFirewall } from "./hunter.generated";
 import { imgurFirewall } from "./imgur.generated";
 import { instagramFirewall } from "./instagram.generated";
 import { instantlyFirewall } from "./instantly.generated";
@@ -138,6 +147,8 @@ import { mailchimpFirewall } from "./mailchimp.generated";
 import { makeFirewall } from "./make.generated";
 import { mailsacFirewall } from "./mailsac.generated";
 import { manusFirewall } from "./manus.generated";
+import { mapboxFirewall } from "./mapbox.generated";
+import { mathpixFirewall } from "./mathpix.generated";
 import { mem0Firewall } from "./mem0.generated";
 import { mercuryFirewall } from "./mercury.generated";
 import { metabaseFirewall } from "./metabase.generated";
@@ -151,8 +162,11 @@ import { msg9Firewall } from "./msg9.generated";
 import { n8nFirewall } from "./n8n.generated";
 import { neonFirewall } from "./neon.generated";
 import { notionFirewall } from "./notion.generated";
+import { nyneFirewall } from "./nyne.generated";
 import { onyxFirewall } from "./onyx.generated";
 import { openaiFirewall } from "./openai.generated";
+import { openrouterFirewall } from "./openrouter.generated";
+import { openweatherFirewall } from "./openweather.generated";
 import { outlookCalendarFirewall } from "./outlook-calendar.generated";
 import { outlookMailFirewall } from "./outlook-mail.generated";
 import { pandadocFirewall } from "./pandadoc.generated";
@@ -175,6 +189,7 @@ import { railwayFirewall } from "./railway.generated";
 import { railwayProjectFirewall } from "./railway-project.generated";
 import { redditFirewall } from "./reddit.generated";
 import { reapFirewall } from "./reap.generated";
+import { reductoFirewall } from "./reducto.generated";
 import { reporteiFirewall } from "./reportei.generated";
 import { replicateFirewall } from "./replicate.generated";
 import { resendFirewall } from "./resend.generated";
@@ -195,6 +210,7 @@ import { stravaFirewall } from "./strava.generated";
 import { strapiFirewall } from "./strapi.generated";
 import { streakFirewall } from "./streak.generated";
 import { stripeFirewall } from "./stripe.generated";
+import { sunoFirewall } from "./suno.generated";
 import { supabaseFirewall } from "./supabase.generated";
 import { supadataFirewall } from "./supadata.generated";
 import { supermemoryFirewall } from "./supermemory.generated";
@@ -444,6 +460,19 @@ const CONNECTOR_FIREWALLS = {
   gong: gongFirewall,
   ironclad: ironcladFirewall,
   snowflake: snowflakeFirewall,
+  aviationstack: aviationstackFirewall,
+  builtwith: builtwithFirewall,
+  clado: cladoFirewall,
+  diffbot: diffbotFirewall,
+  "google-maps": googleMapsFirewall,
+  hunter: hunterFirewall,
+  mapbox: mapboxFirewall,
+  mathpix: mathpixFirewall,
+  nyne: nyneFirewall,
+  openrouter: openrouterFirewall,
+  openweather: openweatherFirewall,
+  reducto: reductoFirewall,
+  suno: sunoFirewall,
 } as const satisfies Partial<Record<ConnectorType, FirewallConfig>>;
 
 /**

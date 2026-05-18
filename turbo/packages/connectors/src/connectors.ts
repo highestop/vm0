@@ -22,6 +22,7 @@ import { xero } from "./connectors/xero";
 import { airtable } from "./connectors/airtable";
 import { docusign } from "./connectors/docusign";
 import { googleAds } from "./connectors/google-ads";
+import { googleMaps } from "./connectors/google-maps";
 import { gumroad } from "./connectors/gumroad";
 import { spotify } from "./connectors/spotify";
 import { agentmail } from "./connectors/agentmail";
@@ -35,6 +36,7 @@ import { apollo } from "./connectors/apollo";
 import { asana } from "./connectors/asana";
 import { atlassian } from "./connectors/atlassian";
 import { attio } from "./connectors/attio";
+import { aviationstack } from "./connectors/aviationstack";
 import { axiom } from "./connectors/axiom";
 import { bentoml } from "./connectors/bentoml";
 import { bitrix } from "./connectors/bitrix";
@@ -46,10 +48,12 @@ import { browserless } from "./connectors/browserless";
 import { browserstack } from "./connectors/browserstack";
 import { browserUse } from "./connectors/browser-use";
 import { buffer } from "./connectors/buffer";
+import { builtwith } from "./connectors/builtwith";
 import { calCom } from "./connectors/cal-com";
 import { calendly } from "./connectors/calendly";
 import { canva } from "./connectors/canva";
 import { chatwoot } from "./connectors/chatwoot";
+import { clado } from "./connectors/clado";
 import { clerk } from "./connectors/clerk";
 import { clickup } from "./connectors/clickup";
 import { close } from "./connectors/close";
@@ -64,6 +68,7 @@ import { db9 } from "./connectors/db9";
 import { deel } from "./connectors/deel";
 import { deepseek } from "./connectors/deepseek";
 import { devto } from "./connectors/devto";
+import { diffbot } from "./connectors/diffbot";
 import { dify } from "./connectors/dify";
 import { discord } from "./connectors/discord";
 import { discordWebhook } from "./connectors/discord-webhook";
@@ -96,6 +101,7 @@ import { heygen } from "./connectors/heygen";
 import { htmlcsstoimage } from "./connectors/htmlcsstoimage";
 import { huggingFace } from "./connectors/hugging-face";
 import { hume } from "./connectors/hume";
+import { hunter } from "./connectors/hunter";
 import { imgur } from "./connectors/imgur";
 import { infisical } from "./connectors/infisical";
 import { instagram } from "./connectors/instagram";
@@ -119,6 +125,8 @@ import { mailchimp } from "./connectors/mailchimp";
 import { mailsac } from "./connectors/mailsac";
 import { make } from "./connectors/make";
 import { manus } from "./connectors/manus";
+import { mapbox } from "./connectors/mapbox";
+import { mathpix } from "./connectors/mathpix";
 import { mem0 } from "./connectors/mem0";
 import { mercury } from "./connectors/mercury";
 import { metaAds } from "./connectors/meta-ads";
@@ -132,8 +140,11 @@ import { moss } from "./connectors/moss";
 import { msg9 } from "./connectors/msg9";
 import { n8n } from "./connectors/n8n";
 import { neon } from "./connectors/neon";
+import { nyne } from "./connectors/nyne";
 import { onyx } from "./connectors/onyx";
 import { openai } from "./connectors/openai";
+import { openrouter } from "./connectors/openrouter";
+import { openweather } from "./connectors/openweather";
 import { outlookCalendar } from "./connectors/outlook-calendar";
 import { outlookMail } from "./connectors/outlook-mail";
 import { pandadoc } from "./connectors/pandadoc";
@@ -157,6 +168,7 @@ import { railway } from "./connectors/railway";
 import { railwayProject } from "./connectors/railway-project";
 import { reap } from "./connectors/reap";
 import { reddit } from "./connectors/reddit";
+import { reducto } from "./connectors/reducto";
 import { replicate } from "./connectors/replicate";
 import { reportei } from "./connectors/reportei";
 import { resend } from "./connectors/resend";
@@ -178,6 +190,7 @@ import { stabilityAi } from "./connectors/stability-ai";
 import { strapi } from "./connectors/strapi";
 import { streak } from "./connectors/streak";
 import { stripe } from "./connectors/stripe";
+import { suno } from "./connectors/suno";
 import { supabase } from "./connectors/supabase";
 import { supadata } from "./connectors/supadata";
 import { supermemory } from "./connectors/supermemory";
@@ -459,6 +472,7 @@ const CONNECTOR_TYPES_DEF = {
   ...airtable,
   ...docusign,
   ...googleAds,
+  ...googleMaps,
   ...gumroad,
   ...spotify,
   ...agentmail,
@@ -472,6 +486,7 @@ const CONNECTOR_TYPES_DEF = {
   ...asana,
   ...atlassian,
   ...attio,
+  ...aviationstack,
   ...axiom,
   ...bentoml,
   ...bitrix,
@@ -483,10 +498,12 @@ const CONNECTOR_TYPES_DEF = {
   ...browserstack,
   ...browserUse,
   ...buffer,
+  ...builtwith,
   ...calCom,
   ...calendly,
   ...canva,
   ...chatwoot,
+  ...clado,
   ...clerk,
   ...clickup,
   ...close,
@@ -501,6 +518,7 @@ const CONNECTOR_TYPES_DEF = {
   ...deel,
   ...deepseek,
   ...devto,
+  ...diffbot,
   ...dify,
   ...discord,
   ...discordWebhook,
@@ -533,6 +551,7 @@ const CONNECTOR_TYPES_DEF = {
   ...htmlcsstoimage,
   ...huggingFace,
   ...hume,
+  ...hunter,
   ...imgur,
   ...infisical,
   ...instagram,
@@ -556,6 +575,8 @@ const CONNECTOR_TYPES_DEF = {
   ...mailsac,
   ...make,
   ...manus,
+  ...mapbox,
+  ...mathpix,
   ...mem0,
   ...mercury,
   ...metaAds,
@@ -569,8 +590,11 @@ const CONNECTOR_TYPES_DEF = {
   ...msg9,
   ...n8n,
   ...neon,
+  ...nyne,
   ...onyx,
   ...openai,
+  ...openrouter,
+  ...openweather,
   ...outlookCalendar,
   ...outlookMail,
   ...pandadoc,
@@ -594,6 +618,7 @@ const CONNECTOR_TYPES_DEF = {
   ...railwayProject,
   ...reap,
   ...reddit,
+  ...reducto,
   ...replicate,
   ...reportei,
   ...resend,
@@ -615,6 +640,7 @@ const CONNECTOR_TYPES_DEF = {
   ...strapi,
   ...streak,
   ...stripe,
+  ...suno,
   ...supabase,
   ...supadata,
   ...supermemory,

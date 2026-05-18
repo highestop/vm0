@@ -19,6 +19,7 @@ import { axiomHandler } from "./providers/axiom-handler";
 import { asanaHandler } from "./providers/asana-handler";
 import { attioHandler } from "./providers/attio-handler";
 import { atlassianHandler } from "./providers/atlassian-handler";
+import { aviationstackHandler } from "./providers/aviationstack-handler";
 import { bentomlHandler } from "./providers/bentoml-handler";
 import { bitrixHandler } from "./providers/bitrix-handler";
 import { braveSearchHandler } from "./providers/brave-search-handler";
@@ -28,10 +29,12 @@ import { browserbaseHandler } from "./providers/browserbase-handler";
 import { browserUseHandler } from "./providers/browser-use-handler";
 import { browserlessHandler } from "./providers/browserless-handler";
 import { bufferHandler } from "./providers/buffer-handler";
+import { builtwithHandler } from "./providers/builtwith-handler";
 import { calComHandler } from "./providers/cal-com-handler";
 import { calendlyHandler } from "./providers/calendly-handler";
 import { canvaHandler } from "./providers/canva-handler";
 import { chatwootHandler } from "./providers/chatwoot-handler";
+import { cladoHandler } from "./providers/clado-handler";
 import { clerkHandler } from "./providers/clerk-handler";
 import { clickupHandler } from "./providers/clickup-handler";
 import { cloudflareHandler } from "./providers/cloudflare-handler";
@@ -47,6 +50,7 @@ import { deepseekHandler } from "./providers/deepseek-handler";
 import { doubaoHandler } from "./providers/doubao-handler";
 import { difyHandler } from "./providers/dify-handler";
 import { devtoHandler } from "./providers/devto-handler";
+import { diffbotHandler } from "./providers/diffbot-handler";
 import { dopplerHandler } from "./providers/doppler-handler";
 import { infisicalHandler } from "./providers/infisical-handler";
 import { docusignHandler } from "./providers/docusign-handler";
@@ -78,12 +82,14 @@ import { heygenHandler } from "./providers/heygen-handler";
 import { heliconeHandler } from "./providers/helicone-handler";
 import { huggingFaceHandler } from "./providers/hugging-face-handler";
 import { humeHandler } from "./providers/hume-handler";
+import { hunterHandler } from "./providers/hunter-handler";
 import { htmlcsstoimageHandler } from "./providers/htmlcsstoimage-handler";
 import { hubspotHandler } from "./providers/hubspot-handler";
 import { imgurHandler } from "./providers/imgur-handler";
 import { instagramHandler } from "./providers/instagram-handler";
 import { gmailHandler } from "./providers/gmail-handler";
 import { googleAdsHandler } from "./providers/google-ads-handler";
+import { googleMapsHandler } from "./providers/google-maps-handler";
 import { googleCalendarHandler } from "./providers/google-calendar-handler";
 import { googleDocsHandler } from "./providers/google-docs-handler";
 import { googleDriveHandler } from "./providers/google-drive-handler";
@@ -108,6 +114,8 @@ import { lumaAiHandler } from "./providers/luma-ai-handler";
 import { mailsacHandler } from "./providers/mailsac-handler";
 import { makeHandler } from "./providers/make-handler";
 import { manusHandler } from "./providers/manus-handler";
+import { mapboxHandler } from "./providers/mapbox-handler";
+import { mathpixHandler } from "./providers/mathpix-handler";
 import { mem0Handler } from "./providers/mem0-handler";
 import { supermemoryHandler } from "./providers/supermemory-handler";
 import { metabaseHandler } from "./providers/metabase-handler";
@@ -121,13 +129,17 @@ import { mondayHandler } from "./providers/monday-handler";
 import { msg9Handler } from "./providers/msg9-handler";
 import { neonHandler } from "./providers/neon-handler";
 import { notionHandler } from "./providers/notion-handler";
+import { nyneHandler } from "./providers/nyne-handler";
 import { onyxHandler } from "./providers/onyx-handler";
 import { openaiHandler } from "./providers/openai-handler";
+import { openrouterHandler } from "./providers/openrouter-handler";
+import { openweatherHandler } from "./providers/openweather-handler";
 import { codexOauthHandler } from "./providers/codex-oauth-handler";
 import { railwayHandler } from "./providers/railway-handler";
 import { railwayProjectHandler } from "./providers/railway-project-handler";
 import { redditHandler } from "./providers/reddit-handler";
 import { reapHandler } from "./providers/reap-handler";
+import { reductoHandler } from "./providers/reducto-handler";
 import { localAgentHandler } from "./providers/local-agent-handler";
 import { reporteiHandler } from "./providers/reportei-handler";
 import { serpapiHandler } from "./providers/serpapi-handler";
@@ -138,6 +150,7 @@ import { shortioHandler } from "./providers/shortio-handler";
 import { stabilityAiHandler } from "./providers/stability-ai-handler";
 import { strapiHandler } from "./providers/strapi-handler";
 import { streakHandler } from "./providers/streak-handler";
+import { sunoHandler } from "./providers/suno-handler";
 import { supadataHandler } from "./providers/supadata-handler";
 import { tavilyHandler } from "./providers/tavily-handler";
 import { tldvHandler } from "./providers/tldv-handler";
@@ -417,6 +430,19 @@ export const PROVIDER_HANDLERS: Record<
   gong: gongHandler,
   ironclad: ironcladHandler,
   snowflake: snowflakeHandler,
+  aviationstack: aviationstackHandler,
+  builtwith: builtwithHandler,
+  clado: cladoHandler,
+  diffbot: diffbotHandler,
+  "google-maps": googleMapsHandler,
+  hunter: hunterHandler,
+  mapbox: mapboxHandler,
+  mathpix: mathpixHandler,
+  nyne: nyneHandler,
+  openrouter: openrouterHandler,
+  openweather: openweatherHandler,
+  reducto: reductoHandler,
+  suno: sunoHandler,
 };
 
 /**

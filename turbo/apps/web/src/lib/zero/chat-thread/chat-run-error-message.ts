@@ -1,4 +1,7 @@
-import { RUN_ERROR_GUIDANCE } from "@vm0/api-contracts/contracts/errors";
+import {
+  formatChatgptCodexUsageLimitError,
+  RUN_ERROR_GUIDANCE,
+} from "@vm0/api-contracts/contracts/errors";
 import { asc, eq } from "drizzle-orm";
 import { agentRuns } from "@vm0/db/schema/agent-run";
 import { zeroRuns } from "@vm0/db/schema/zero-run";
@@ -74,6 +77,11 @@ export async function formatChatRunErrorMessage(params: {
   errorMessage: string;
 }): Promise<string> {
   const errorMessage = params.errorMessage.trim() || "Run failed";
+  const chatgptCodexUsageLimitMessage =
+    formatChatgptCodexUsageLimitError(errorMessage);
+  if (chatgptCodexUsageLimitMessage) {
+    return chatgptCodexUsageLimitMessage;
+  }
 
   if (isActionableRunError(errorMessage)) {
     return errorMessage;

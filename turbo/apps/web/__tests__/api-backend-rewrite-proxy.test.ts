@@ -317,7 +317,13 @@ describe("API backend rewrite proxy behavior", () => {
     expect(matchesApiBackendRewritePath("/api/zero/insights/range/extra")).toBe(
       false,
     );
-    expect(matchesApiBackendRewritePath("/api/zero/insights")).toBe(false);
+  });
+
+  it("matches the zero insights rewrite path exactly", () => {
+    expect(matchesApiBackendRewritePath("/api/zero/insights")).toBe(true);
+    expect(matchesApiBackendRewritePath("/api/zero/insights/extra")).toBe(
+      false,
+    );
   });
 
   it("matches the cron sync skills rewrite path exactly", () => {

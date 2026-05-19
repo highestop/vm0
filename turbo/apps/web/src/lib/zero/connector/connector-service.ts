@@ -21,6 +21,10 @@ import {
   PROVIDER_HANDLERS,
   providerEnvFromObject,
 } from "@vm0/connectors/oauth-providers";
+import {
+  getModelProviderOAuthHandler,
+  type ModelProviderOAuthHandler,
+} from "@vm0/connectors/oauth-providers/model-provider-registry";
 import { isChatgptRefreshError } from "@vm0/connectors/oauth-providers/providers/codex-oauth";
 import { ORG_SENTINEL_USER_ID } from "../org/org-sentinel";
 import { publishUserSignal } from "../../infra/realtime/client";
@@ -31,6 +35,20 @@ import { publishUserSignal } from "../../infra/realtime/client";
  * `model_providers` and `secrets WHERE type='model-provider'`.
  */
 export type OAuthSecretSource = "connector" | "model-provider";
+
+type OAuthHandler =
+  | (typeof PROVIDER_HANDLERS)[keyof typeof PROVIDER_HANDLERS]
+  | ModelProviderOAuthHandler;
+
+function getOAuthHandler(
+  handlerKey: string,
+  sourceType: OAuthSecretSource,
+): OAuthHandler | undefined {
+  if (sourceType === "model-provider") {
+    return getModelProviderOAuthHandler(handlerKey);
+  }
+  return PROVIDER_HANDLERS[handlerKey as keyof typeof PROVIDER_HANDLERS];
+}
 
 /**
  * Resolve the storage userId for a given OAuth secret source.
@@ -487,8 +505,7 @@ export async function refreshConnectorAccessToken(
   } = {},
 ): Promise<string | null> {
   const sourceType: OAuthSecretSource = options.sourceType ?? "connector";
-  const handler =
-    PROVIDER_HANDLERS[connectorType as keyof typeof PROVIDER_HANDLERS];
+  const handler = getOAuthHandler(connectorType, sourceType);
   if (!handler?.refreshToken || !handler.getRefreshSecretName) {
     return null;
   }
@@ -514,7 +531,7 @@ export async function refreshConnectorAccessToken(
     return null;
   }
   // clientSecret may legitimately be undefined for PKCE-only handlers
-  // (e.g. codex-oauth). The handler's refreshToken is the source of truth
+  // (e.g. codex-oauth-token). The handler's refreshToken is the source of truth
   // for credential needs — if a non-PKCE handler is misconfigured the
   // upstream call will fail and the catch below records the error.
   const clientSecret = handler.getClientSecret(env);
@@ -690,8 +707,7 @@ export async function getConnectorAccessToken(
   sourceType: OAuthSecretSource = "connector",
   options: { sourceUserId?: string } = {},
 ): Promise<string | null> {
-  const handler =
-    PROVIDER_HANDLERS[connectorType as keyof typeof PROVIDER_HANDLERS];
+  const handler = getOAuthHandler(connectorType, sourceType);
   if (!handler) return null;
   return getSecretValue(
     orgId,
@@ -713,8 +729,7 @@ export async function getConnectorRefreshToken(
   sourceType: OAuthSecretSource = "connector",
   options: { sourceUserId?: string } = {},
 ): Promise<{ secretName: string; token: string } | null> {
-  const handler =
-    PROVIDER_HANDLERS[connectorType as keyof typeof PROVIDER_HANDLERS];
+  const handler = getOAuthHandler(connectorType, sourceType);
   if (!handler?.getRefreshSecretName) return null;
   const secretName = handler.getRefreshSecretName();
   const token = await getSecretValue(

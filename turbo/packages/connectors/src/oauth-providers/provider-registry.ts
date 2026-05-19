@@ -138,7 +138,6 @@ import { onyxHandler } from "./providers/onyx-handler";
 import { openaiHandler } from "./providers/openai-handler";
 import { openrouterHandler } from "./providers/openrouter-handler";
 import { openweatherHandler } from "./providers/openweather-handler";
-import { codexOauthHandler } from "./providers/codex-oauth-handler";
 import { railwayHandler } from "./providers/railway-handler";
 import { railwayProjectHandler } from "./providers/railway-project-handler";
 import { redditHandler } from "./providers/reddit-handler";
@@ -349,7 +348,6 @@ export const PROVIDER_HANDLERS: Record<
   notion: notionHandler,
   onyx: onyxHandler,
   openai: openaiHandler,
-  "codex-oauth": codexOauthHandler,
   "outlook-calendar": outlookCalendarHandler,
   "outlook-mail": outlookMailHandler,
   railway: railwayHandler,

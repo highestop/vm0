@@ -36,6 +36,7 @@ import {
   isFirewallConnectorType,
 } from "@vm0/connectors/firewalls";
 import { PROVIDER_HANDLERS } from "@vm0/connectors/oauth-providers";
+import { getModelProviderOAuthHandler } from "@vm0/connectors/oauth-providers/model-provider-registry";
 import {
   expandHostWildcardsInBaseUrl,
   extractSecretNamesFromApis,
@@ -838,19 +839,6 @@ function providerEnvironmentFromSecretMap(
   return environment;
 }
 
-function modelProviderHandlerKey(
-  providerType: ModelProviderType,
-): keyof typeof PROVIDER_HANDLERS | undefined {
-  switch (providerType) {
-    case "codex-oauth-token": {
-      return "codex-oauth";
-    }
-    default: {
-      return undefined;
-    }
-  }
-}
-
 function modelProviderRefreshMaps(
   providerType: ModelProviderType,
   sourceUserId: string,
@@ -863,24 +851,22 @@ function modelProviderRefreshMaps(
       >;
     }
   | undefined {
-  const handlerKey = modelProviderHandlerKey(providerType);
-  if (!handlerKey) {
+  const handler = getModelProviderOAuthHandler(providerType);
+  if (!handler) {
     return undefined;
   }
-
-  const handler = PROVIDER_HANDLERS[handlerKey];
   if (!handler.refreshToken) {
     return undefined;
   }
 
   const accessSecretName = handler.getSecretName();
   const secretConnectorMap: Record<string, string> = {
-    [accessSecretName]: handlerKey,
+    [accessSecretName]: providerType,
   };
   const mapping = getEnvironmentMapping(providerType);
   for (const [envName, valueRef] of Object.entries(mapping ?? {})) {
     if (valueRef === `$secrets.${accessSecretName}`) {
-      secretConnectorMap[envName] = handlerKey;
+      secretConnectorMap[envName] = providerType;
     }
   }
 

@@ -23,6 +23,7 @@ import { generate as generateAxiom } from "./axiom";
 import { generate as generateBentoml } from "./bentoml";
 import { generate as generateBitrix } from "./bitrix";
 import { generate as generateBraveSearch } from "./brave-search";
+import { generate as generateBrex } from "./brex";
 import { generate as generateBrevo } from "./brevo";
 import { generate as generateBrightData } from "./bright-data";
 import { generate as generateBrowserbase } from "./browserbase";
@@ -34,6 +35,7 @@ import { generate as generateCalCom } from "./cal-com";
 import { generate as generateCalendly } from "./calendly";
 import { generate as generateCanva } from "./canva";
 import { generate as generateChatwoot } from "./chatwoot";
+import { generate as generateCheckr } from "./checkr";
 import { generate as generateClado } from "./clado";
 import { generate as generateClickup } from "./clickup";
 import { generate as generateClose } from "./close";
@@ -62,6 +64,7 @@ import { generate as generateElevenlabs } from "./elevenlabs";
 import { generate as generateEtsy } from "./etsy";
 import { generate as generateExa } from "./exa";
 import { generate as generateExplorium } from "./explorium";
+import { generate as generateFaire } from "./faire";
 import { generate as generateFal } from "./fal";
 import { generate as generateFigma } from "./figma";
 import { generate as generateFirecrawl } from "./firecrawl";
@@ -157,6 +160,7 @@ import { generate as generateRevenuecat } from "./revenuecat";
 import { generate as generateRunway } from "./runway";
 import { generate as generateScrapeninja } from "./scrapeninja";
 import { generate as generateSalesforce } from "./salesforce";
+import { generate as generateSegment } from "./segment";
 import { generate as generateSentry } from "./sentry";
 import { generate as generateSerpapi } from "./serpapi";
 import { generate as generateShopify } from "./shopify";
@@ -227,6 +231,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   bentoml: generateBentoml,
   bitrix: generateBitrix,
   "brave-search": generateBraveSearch,
+  brex: generateBrex,
   brevo: generateBrevo,
   "bright-data": generateBrightData,
   browserbase: generateBrowserbase,
@@ -237,6 +242,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   calendly: generateCalendly,
   canva: generateCanva,
   chatwoot: generateChatwoot,
+  checkr: generateCheckr,
   clerk: generateClerk,
   clickup: generateClickup,
   close: generateClose,
@@ -263,6 +269,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   etsy: generateEtsy,
   exa: generateExa,
   explorium: generateExplorium,
+  faire: generateFaire,
   fal: generateFal,
   figma: generateFigma,
   firecrawl: generateFirecrawl,
@@ -352,6 +359,7 @@ const GENERATORS: Record<string, () => Promise<void>> = {
   runway: generateRunway,
   salesforce: generateSalesforce,
   scrapeninja: generateScrapeninja,
+  segment: generateSegment,
   sentry: generateSentry,
   serpapi: generateSerpapi,
   shopify: generateShopify,

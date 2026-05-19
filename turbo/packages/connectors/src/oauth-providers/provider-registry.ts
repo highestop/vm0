@@ -24,6 +24,7 @@ import { aviationstackHandler } from "./providers/aviationstack-handler";
 import { bentomlHandler } from "./providers/bentoml-handler";
 import { bitrixHandler } from "./providers/bitrix-handler";
 import { braveSearchHandler } from "./providers/brave-search-handler";
+import { brexHandler } from "./providers/brex-handler";
 import { brevoHandler } from "./providers/brevo-handler";
 import { brightDataHandler } from "./providers/bright-data-handler";
 import { browserbaseHandler } from "./providers/browserbase-handler";
@@ -35,6 +36,7 @@ import { calComHandler } from "./providers/cal-com-handler";
 import { calendlyHandler } from "./providers/calendly-handler";
 import { canvaHandler } from "./providers/canva-handler";
 import { chatwootHandler } from "./providers/chatwoot-handler";
+import { checkrHandler } from "./providers/checkr-handler";
 import { cladoHandler } from "./providers/clado-handler";
 import { clerkHandler } from "./providers/clerk-handler";
 import { clickupHandler } from "./providers/clickup-handler";
@@ -65,6 +67,7 @@ import { elevenlabsHandler } from "./providers/elevenlabs-handler";
 import { etsyHandler } from "./providers/etsy-handler";
 import { exaHandler } from "./providers/exa-handler";
 import { exploriumHandler } from "./providers/explorium-handler";
+import { faireHandler } from "./providers/faire-handler";
 import { falHandler } from "./providers/fal-handler";
 import { figmaHandler } from "./providers/figma-handler";
 import { firefliesHandler } from "./providers/fireflies-handler";
@@ -143,6 +146,7 @@ import { reapHandler } from "./providers/reap-handler";
 import { reductoHandler } from "./providers/reducto-handler";
 import { localAgentHandler } from "./providers/local-agent-handler";
 import { reporteiHandler } from "./providers/reportei-handler";
+import { segmentHandler } from "./providers/segment-handler";
 import { serpapiHandler } from "./providers/serpapi-handler";
 import { runwayHandler } from "./providers/runway-handler";
 import { salesforceHandler } from "./providers/salesforce-handler";
@@ -246,6 +250,7 @@ export const PROVIDER_HANDLERS: Record<
   bentoml: bentomlHandler,
   bitrix: bitrixHandler,
   "brave-search": braveSearchHandler,
+  brex: brexHandler,
   brevo: brevoHandler,
   "bright-data": brightDataHandler,
   browserbase: browserbaseHandler,
@@ -256,6 +261,7 @@ export const PROVIDER_HANDLERS: Record<
   calendly: calendlyHandler,
   canva: canvaHandler,
   chatwoot: chatwootHandler,
+  checkr: checkrHandler,
   clerk: clerkHandler,
   clickup: clickupHandler,
   cloudflare: cloudflareHandler,
@@ -284,6 +290,7 @@ export const PROVIDER_HANDLERS: Record<
   etsy: etsyHandler,
   exa: exaHandler,
   explorium: exploriumHandler,
+  faire: faireHandler,
   fal: falHandler,
   figma: figmaHandler,
   fireflies: firefliesHandler,
@@ -351,6 +358,7 @@ export const PROVIDER_HANDLERS: Record<
   "local-browser": localBrowserHandler,
   "local-agent": localAgentHandler,
   reportei: reporteiHandler,
+  segment: segmentHandler,
   serpapi: serpapiHandler,
   intercom: intercomHandler,
   jam: jamHandler,

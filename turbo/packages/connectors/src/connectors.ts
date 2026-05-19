@@ -42,6 +42,7 @@ import { axiom } from "./connectors/axiom";
 import { bentoml } from "./connectors/bentoml";
 import { bitrix } from "./connectors/bitrix";
 import { braveSearch } from "./connectors/brave-search";
+import { brex } from "./connectors/brex";
 import { brevo } from "./connectors/brevo";
 import { brightData } from "./connectors/bright-data";
 import { browserbase } from "./connectors/browserbase";
@@ -54,6 +55,7 @@ import { calCom } from "./connectors/cal-com";
 import { calendly } from "./connectors/calendly";
 import { canva } from "./connectors/canva";
 import { chatwoot } from "./connectors/chatwoot";
+import { checkr } from "./connectors/checkr";
 import { clado } from "./connectors/clado";
 import { clerk } from "./connectors/clerk";
 import { clickup } from "./connectors/clickup";
@@ -84,6 +86,7 @@ import { elevenlabs } from "./connectors/elevenlabs";
 import { etsy } from "./connectors/etsy";
 import { exa } from "./connectors/exa";
 import { explorium } from "./connectors/explorium";
+import { faire } from "./connectors/faire";
 import { fal } from "./connectors/fal";
 import { figma } from "./connectors/figma";
 import { firecrawl } from "./connectors/firecrawl";
@@ -177,6 +180,7 @@ import { revenuecat } from "./connectors/revenuecat";
 import { runway } from "./connectors/runway";
 import { salesforce } from "./connectors/salesforce";
 import { scrapeninja } from "./connectors/scrapeninja";
+import { segment } from "./connectors/segment";
 import { sendgrid } from "./connectors/sendgrid";
 import { serpapi } from "./connectors/serpapi";
 import { servicenow } from "./connectors/servicenow";
@@ -492,6 +496,7 @@ const CONNECTOR_TYPES_DEF = {
   ...bentoml,
   ...bitrix,
   ...braveSearch,
+  ...brex,
   ...brevo,
   ...brightData,
   ...browserbase,
@@ -504,6 +509,7 @@ const CONNECTOR_TYPES_DEF = {
   ...calendly,
   ...canva,
   ...chatwoot,
+  ...checkr,
   ...clado,
   ...clerk,
   ...clickup,
@@ -534,6 +540,7 @@ const CONNECTOR_TYPES_DEF = {
   ...etsy,
   ...exa,
   ...explorium,
+  ...faire,
   ...fal,
   ...figma,
   ...firecrawl,
@@ -627,6 +634,7 @@ const CONNECTOR_TYPES_DEF = {
   ...runway,
   ...salesforce,
   ...scrapeninja,
+  ...segment,
   ...sendgrid,
   ...serpapi,
   ...servicenow,

@@ -206,14 +206,27 @@ impl ConnectionDispatcher {
         if reject_operation_if_quiescing(&self.operation_state, msg.seq, &self.writer)? {
             return Ok(());
         }
-        let decoded = vsock_proto::decode_exec_start(&msg.payload).map_err(to_io_error)?;
+        let decoded = match vsock_proto::decode_exec_start(&msg.payload) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                send_error_response(msg.seq, &error.to_string(), &self.writer)?;
+                return Ok(());
+            }
+        };
+        let request = match ExecOperationWorkerRequest::from_decoded(msg.seq, decoded) {
+            Ok(request) => request,
+            Err(error) => {
+                send_error_response(msg.seq, &error.to_string(), &self.writer)?;
+                return Ok(());
+            }
+        };
         let Some(operation_guard) =
             acquire_operation_guard(&self.operation_state, msg.seq, &self.writer)?
         else {
             return Ok(());
         };
         start_exec_operation(
-            ExecOperationWorkerRequest::from_decoded(msg.seq, decoded),
+            request,
             operation_guard,
             self.writer.clone(),
             self.connection_cancel.clone(),

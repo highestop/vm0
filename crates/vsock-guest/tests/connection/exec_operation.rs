@@ -2,7 +2,9 @@ use std::io::Write;
 use std::time::Duration;
 
 use vsock_proto::{
-    self, ExecOutputPolicy, ExecOutputStream, ExecTermination, MSG_ERROR, MSG_EXEC_START,
+    self, ExecControlPolicy, ExecLifecyclePolicy, ExecOutputPolicy, ExecOutputStream,
+    ExecTermination, ExecTimeoutPolicy, MSG_ERROR, MSG_EXEC_START, MSG_OPERATIONS_QUIESCED,
+    MSG_OPERATIONS_RESUMED,
 };
 
 use super::support::*;
@@ -38,7 +40,8 @@ fn exec_operation_expected_nonzero_exit_still_returns_result() {
 
     let payload = vsock_proto::encode_exec_start_with_expected_exit_codes(
         vsock_proto::ExecStartEncodeRequest {
-            timeout_ms: 5000,
+            lifecycle: ExecLifecyclePolicy::OneShot,
+            timeout: ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
             command: "exit 66",
             env: &[],
             sudo: false,
@@ -46,6 +49,7 @@ fn exec_operation_expected_nonzero_exit_still_returns_result() {
             stdout: ExecOutputPolicy::Capture { limit_bytes: 1024 },
             stderr: ExecOutputPolicy::Capture { limit_bytes: 1024 },
             expected_exit_codes: &[66],
+            control: ExecControlPolicy::Disabled,
         },
     );
     let msg = vsock_proto::encode(MSG_EXEC_START, 102, &payload.unwrap()).unwrap();
@@ -60,6 +64,122 @@ fn exec_operation_expected_nonzero_exit_still_returns_result() {
     assert_eq!(result.stdout, Some(Vec::new()));
     assert_eq!(result.stderr, Some(Vec::new()));
     assert!(result.diagnostic.is_empty());
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn exec_operation_rejects_unsupported_start_policies() {
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_exec_start_request(
+        &mut host_stream,
+        103,
+        vsock_proto::ExecStartEncodeRequest {
+            lifecycle: ExecLifecyclePolicy::Supervised,
+            timeout: ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
+            command: "printf should-not-run",
+            env: &[],
+            sudo: false,
+            label: "test",
+            stdout: ExecOutputPolicy::Discard,
+            stderr: ExecOutputPolicy::Discard,
+            expected_exit_codes: &[],
+            control: ExecControlPolicy::Disabled,
+        },
+    );
+    assert_eq!(
+        read_error_response(&mut host_stream, 103),
+        "exec supervised lifecycle is not supported"
+    );
+
+    send_exec_start_request(
+        &mut host_stream,
+        104,
+        vsock_proto::ExecStartEncodeRequest {
+            lifecycle: ExecLifecyclePolicy::OneShot,
+            timeout: ExecTimeoutPolicy::None,
+            command: "printf should-not-run",
+            env: &[],
+            sudo: false,
+            label: "test",
+            stdout: ExecOutputPolicy::Discard,
+            stderr: ExecOutputPolicy::Discard,
+            expected_exit_codes: &[],
+            control: ExecControlPolicy::Disabled,
+        },
+    );
+    assert_eq!(
+        read_error_response(&mut host_stream, 104),
+        "exec timeout policy none is not supported"
+    );
+
+    let mut zero_timeout_payload = vsock_proto::encode_exec_start(
+        1,
+        "printf should-not-run",
+        &[],
+        false,
+        "test",
+        ExecOutputPolicy::Discard,
+        ExecOutputPolicy::Discard,
+    )
+    .unwrap();
+    zero_timeout_payload[2..6].copy_from_slice(&0u32.to_be_bytes());
+    let zero_timeout_msg = vsock_proto::encode(MSG_EXEC_START, 109, &zero_timeout_payload).unwrap();
+    host_stream.write_all(&zero_timeout_msg).unwrap();
+    assert_eq!(
+        read_error_response(&mut host_stream, 109),
+        "invalid payload: exec start timeout duration must be positive"
+    );
+
+    send_exec_start_request(
+        &mut host_stream,
+        105,
+        vsock_proto::ExecStartEncodeRequest {
+            lifecycle: ExecLifecyclePolicy::OneShot,
+            timeout: ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
+            command: "printf should-not-run",
+            env: &[],
+            sudo: false,
+            label: "test",
+            stdout: ExecOutputPolicy::Discard,
+            stderr: ExecOutputPolicy::Discard,
+            expected_exit_codes: &[],
+            control: ExecControlPolicy::Enabled {
+                control_nonce: *b"0123456789abcdef",
+                sink: false,
+            },
+        },
+    );
+    assert_eq!(
+        read_error_response(&mut host_stream, 105),
+        "exec control policy is not supported"
+    );
+
+    send_quiesce_operations(&mut host_stream, 106);
+    let quiesced = read_message(&mut host_stream);
+    assert_eq!(quiesced.msg_type, MSG_OPERATIONS_QUIESCED);
+    assert_eq!(quiesced.seq, 106);
+    assert!(quiesced.payload.is_empty());
+
+    send_resume_operations(&mut host_stream, 107);
+    let resumed = read_message(&mut host_stream);
+    assert_eq!(resumed.msg_type, MSG_OPERATIONS_RESUMED);
+    assert_eq!(resumed.seq, 107);
+    assert!(resumed.payload.is_empty());
+
+    send_exec_start(
+        &mut host_stream,
+        108,
+        "printf ok",
+        5000,
+        ExecOutputPolicy::Capture { limit_bytes: 64 },
+        ExecOutputPolicy::Discard,
+    );
+    let (chunks, result) = read_exec_result(&mut host_stream, 108);
+    assert!(chunks.is_empty());
+    assert_eq!(result.termination, ExecTermination::Exited { exit_code: 0 });
+    assert_eq!(result.stdout, Some(b"ok".to_vec()));
 
     finish_guest_connection(handle, host_stream);
 }
@@ -232,7 +352,7 @@ fn exec_operation_stream_disconnect_cancels_child() {
         &mut host_stream,
         117,
         &command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Stream {
             limit_bytes: 1024 * 1024,
             chunk_limit_bytes: 16,
@@ -483,7 +603,7 @@ fn exec_operation_explicit_cancel_kills_child_and_returns_cancelled() {
         &mut host_stream,
         111,
         &command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 64 },
         ExecOutputPolicy::Capture { limit_bytes: 64 },
     );
@@ -514,7 +634,7 @@ fn exec_operation_connection_close_cancels_child() {
         &mut host_stream,
         112,
         &command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 64 },
         ExecOutputPolicy::Capture { limit_bytes: 64 },
     );
@@ -541,7 +661,7 @@ fn exec_operation_duplicate_start_returns_error_without_cancelling_active_exec_o
         &mut host_stream,
         113,
         &command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 64 },
         ExecOutputPolicy::Capture { limit_bytes: 64 },
     );
@@ -591,7 +711,7 @@ fn exec_operation_different_sequences_run_concurrently_and_cancel_independently(
         &mut host_stream,
         120,
         &blocked_command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 64 },
         ExecOutputPolicy::Capture { limit_bytes: 64 },
     );
@@ -696,7 +816,7 @@ fn exec_operation_returns_when_orphaned_grandchild_holds_stdout() {
         &mut host_stream,
         122,
         &command,
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 1024 },
         ExecOutputPolicy::Capture { limit_bytes: 1024 },
     );
@@ -734,7 +854,7 @@ fn exec_operation_captures_grandchild_output_before_drain_deadline() {
         &mut host_stream,
         123,
         "echo stdout-early; echo stderr-early >&2; { sleep 1; echo stdout-late; echo stderr-late >&2; } &",
-        0,
+        LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 1024 },
         ExecOutputPolicy::Capture { limit_bytes: 1024 },
     );

@@ -124,6 +124,10 @@ const V1_CHAT_THREAD_DETAIL_REWRITE_SOURCE =
   "/api/v1/chat-threads/:threadId((?!messages$)[^/]+)";
 const V1_CHAT_THREAD_DETAIL_PATH_RE =
   /^\/api\/v1\/chat-threads\/(?!messages$)[^/]+$/;
+const V1_CHAT_THREAD_MESSAGES_REWRITE_SOURCE =
+  "/api/v1/chat-threads/:threadId/messages";
+const V1_CHAT_THREAD_MESSAGES_PATH_RE =
+  /^\/api\/v1\/chat-threads\/[^/]+\/messages$/;
 const ZERO_AGENT_INSTRUCTIONS_REWRITE_SOURCE =
   "/api/zero/agents/:id/instructions";
 const ZERO_AGENT_INSTRUCTIONS_PATH_RE =
@@ -331,6 +335,11 @@ export const API_BACKEND_REWRITES = [
   ["/api/test/telegram-dispatch-probe", "/api/test/telegram-dispatch-probe"],
   ["/api/user/export", "/api/user/export"],
   ["/api/v1/audio/transcriptions", "/api/v1/audio/transcriptions"],
+  [
+    V1_CHAT_THREAD_MESSAGES_REWRITE_SOURCE,
+    "/api/v1/chat-threads/:threadId/messages",
+    V1_CHAT_THREAD_MESSAGES_PATH_RE,
+  ],
   [
     V1_CHAT_THREAD_DETAIL_REWRITE_SOURCE,
     "/api/v1/chat-threads/:threadId",

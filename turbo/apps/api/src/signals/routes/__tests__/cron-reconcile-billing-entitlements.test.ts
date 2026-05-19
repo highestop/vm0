@@ -72,6 +72,22 @@ function stripeSubscription(
   };
 }
 
+function mockRecoverableStripeSubscription(subscriptionId: string) {
+  return stripeSubscription(subscriptionId, {
+    status: "active",
+    periodEnd: daysFromNow(30),
+    priceId: TEST_PRICE_PRO,
+  });
+}
+
+function stripeRetrieveSubscriptionId(args: readonly unknown[]): string {
+  const [subscriptionId] = args;
+  if (typeof subscriptionId !== "string") {
+    throw new Error("Expected Stripe retrieve subscription ID");
+  }
+  return subscriptionId;
+}
+
 async function seedBillingOrg(args: {
   readonly status: string;
   readonly tier?: string;
@@ -150,11 +166,21 @@ describe("GET /api/cron/reconcile-billing-entitlements", () => {
     const fixture = await track(
       seedBillingOrg({ status: "past_due", currentPeriodEnd: null }),
     );
-    context.mocks.stripe.subscriptions.retrieve.mockResolvedValue(
-      stripeSubscription(fixture.subscriptionId, {
-        status: "past_due",
-        periodEnd: null,
-      }),
+    context.mocks.stripe.subscriptions.retrieve.mockImplementation(
+      (...args: unknown[]) => {
+        const subscriptionId = stripeRetrieveSubscriptionId(args);
+        if (subscriptionId === fixture.subscriptionId) {
+          return Promise.resolve(
+            stripeSubscription(fixture.subscriptionId, {
+              status: "past_due",
+              periodEnd: null,
+            }),
+          );
+        }
+        return Promise.resolve(
+          mockRecoverableStripeSubscription(subscriptionId),
+        );
+      },
     );
 
     const response = await accept(
@@ -178,12 +204,22 @@ describe("GET /api/cron/reconcile-billing-entitlements", () => {
       Math.floor((nowDate().getTime() + 30 * 24 * 60 * 60 * 1000) / 1000) *
         1000,
     );
-    context.mocks.stripe.subscriptions.retrieve.mockResolvedValue(
-      stripeSubscription(fixture.subscriptionId, {
-        status: "active",
-        periodEnd: paidThrough,
-        priceId: TEST_PRICE_TEAM,
-      }),
+    context.mocks.stripe.subscriptions.retrieve.mockImplementation(
+      (...args: unknown[]) => {
+        const subscriptionId = stripeRetrieveSubscriptionId(args);
+        if (subscriptionId === fixture.subscriptionId) {
+          return Promise.resolve(
+            stripeSubscription(fixture.subscriptionId, {
+              status: "active",
+              periodEnd: paidThrough,
+              priceId: TEST_PRICE_TEAM,
+            }),
+          );
+        }
+        return Promise.resolve(
+          mockRecoverableStripeSubscription(subscriptionId),
+        );
+      },
     );
 
     const response = await accept(
@@ -338,6 +374,14 @@ describe("GET /api/cron/reconcile-billing-entitlements", () => {
         updatedAt: hoursAgo(1),
       }),
     );
+    context.mocks.stripe.subscriptions.retrieve.mockImplementation(
+      (...args: unknown[]) => {
+        const subscriptionId = stripeRetrieveSubscriptionId(args);
+        return Promise.resolve(
+          mockRecoverableStripeSubscription(subscriptionId),
+        );
+      },
+    );
 
     const response = await accept(
       apiClient().reconcile({ headers: cronHeaders() }),
@@ -345,7 +389,9 @@ describe("GET /api/cron/reconcile-billing-entitlements", () => {
     );
 
     expect(response.body).toStrictEqual({ success: true, downgraded: 0 });
-    expect(context.mocks.stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(
+      context.mocks.stripe.subscriptions.retrieve,
+    ).not.toHaveBeenCalledWith(fixture.subscriptionId);
     await expect(billingFields(fixture.orgId)).resolves.toMatchObject({
       tier: "pro",
       subscriptionStatus: "past_due",

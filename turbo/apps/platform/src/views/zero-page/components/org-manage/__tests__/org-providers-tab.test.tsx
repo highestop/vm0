@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { zeroModelProvidersMainContract } from "@vm0/api-contracts/contracts/zero-model-providers";
 import type { ModelProviderResponse } from "@vm0/api-contracts/contracts/model-providers";
@@ -136,21 +136,23 @@ async function openModelPolicyDialog(row: HTMLElement): Promise<HTMLElement> {
 function getModelPolicyDialog(): HTMLElement {
   const dialog = screen.getAllByRole("dialog").find((item) => {
     return Boolean(
-      within(item).queryByText(/Choose the model members can select/i),
+      within(item).queryByText(/Decide how members access this model/i),
     );
   });
   expect(dialog).toBeDefined();
   return dialog!;
 }
 
-function getOrgProviderDialog(): HTMLElement {
-  const dialog = screen.getAllByRole("dialog").find((item) => {
-    return Boolean(
-      within(item).queryByText(/(?:Add|Edit) workspace Anthropic/i),
-    );
-  });
-  expect(dialog).toBeDefined();
-  return dialog!;
+function openLabeledSelect(
+  dialog: HTMLElement,
+  labelText: string,
+): HTMLElement {
+  const label = within(dialog).getByText(labelText);
+  const container = label.parentElement;
+  expect(container).toBeTruthy();
+  const trigger = within(container!).getByRole("combobox");
+  click(trigger);
+  return trigger;
 }
 
 function clickRouteChoice(dialog: HTMLElement, label: string): void {
@@ -159,14 +161,18 @@ function clickRouteChoice(dialog: HTMLElement, label: string): void {
   click(button!);
 }
 
-function clickDialogButton(dialog: HTMLElement, label: string): void {
+function getDialogButton(dialog: HTMLElement, label: string): HTMLElement {
   const button = within(dialog)
     .getAllByRole("button")
     .find((item) => {
       return item.textContent?.trim() === label;
     });
   expect(button).toBeDefined();
-  click(button!);
+  return button!;
+}
+
+function clickDialogButton(dialog: HTMLElement, label: string): void {
+  click(getDialogButton(dialog, label));
 }
 
 describe("org-providers-tab — stale banner reconnect", () => {
@@ -231,7 +237,7 @@ describe("org-providers-tab — stale banner reconnect", () => {
     click(await screen.findByText("Add model"));
     const dialog = getModelPolicyDialog();
     expect(within(dialog).getByText("Claude Opus 4.6")).toBeInTheDocument();
-    click(within(dialog).getByRole("combobox"));
+    openLabeledSelect(dialog, "Model");
     const listbox = await screen.findByRole("listbox");
     expect(
       within(listbox).queryByText("Claude Opus 4.7"),
@@ -251,7 +257,7 @@ describe("org-providers-tab — stale banner reconnect", () => {
     ).resolves.toBeInTheDocument();
   });
 
-  it("keeps the add model dialog open after closing nested API key edit", async () => {
+  it("shows a masked api key when editing a model whose key is already configured", async () => {
     setMockFeatureSwitches({});
     setMockOrgModelProviders([makeAnthropicProvider()]);
 
@@ -259,73 +265,65 @@ describe("org-providers-tab — stale banner reconnect", () => {
 
     click(await screen.findByText("Add model"));
     const dialog = getModelPolicyDialog();
-    clickRouteChoice(dialog, "API Key");
-    click(within(dialog).getByText("Edit API key"));
+    clickRouteChoice(dialog, "API key");
 
-    const providerDialog = getOrgProviderDialog();
-    click(within(providerDialog).getByText("Cancel"));
-
-    await waitFor(() => {
-      expect(
-        within(getModelPolicyDialog()).getByRole("heading", {
-          name: "Add model",
-        }),
-      ).toBeInTheDocument();
-      expect(
-        within(getModelPolicyDialog()).getByText(
-          /Choose the model members can select/i,
-        ),
-      ).toBeInTheDocument();
-    });
+    const input = within(dialog).getByPlaceholderText("Enter your API key");
+    expect((input as HTMLInputElement).value).not.toBe("");
+    expect((input as HTMLInputElement).value).not.toBe("sk-ant-test");
   });
 
-  it("keeps the add model dialog open after closing nested API key add", async () => {
+  it("closes the add model dialog after inline API key save succeeds", async () => {
     setMockFeatureSwitches({});
-
-    await openProvidersPage();
-
-    click(await screen.findByText("Add model"));
-    const dialog = getModelPolicyDialog();
-    clickRouteChoice(dialog, "API Key");
-    clickDialogButton(dialog, "Add Anthropic API key");
-
-    const providerDialog = getOrgProviderDialog();
-    click(within(providerDialog).getByText("Cancel"));
-
-    await waitFor(() => {
-      expect(
-        within(getModelPolicyDialog()).getByRole("heading", {
-          name: "Add model",
-        }),
-      ).toBeInTheDocument();
-      expect(
-        within(getModelPolicyDialog()).getByText(
-          /Choose the model members can select/i,
-        ),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it("closes the add model dialog after nested API key add succeeds", async () => {
-    setMockFeatureSwitches({});
-
-    await openProvidersPage();
-
-    click(await screen.findByText("Add model"));
-    const dialog = getModelPolicyDialog();
-    clickRouteChoice(dialog, "API Key");
-    clickDialogButton(dialog, "Add Anthropic API key");
-
-    const providerDialog = getOrgProviderDialog();
-    await fill(
-      within(providerDialog).getByPlaceholderText("Enter your API key"),
-      "sk-ant-test",
+    let submittedSecret: string | undefined;
+    const upsertControl: { resolve?: () => void } = {};
+    server.use(
+      mockApi(
+        zeroModelProvidersMainContract.upsert,
+        async ({ body, deferred, respond }) => {
+          submittedSecret = body.secret;
+          const upsertGate = deferred<void>();
+          upsertControl.resolve = () => {
+            upsertGate.resolve();
+          };
+          await upsertGate.promise;
+          const provider = {
+            ...makeAnthropicProvider(),
+            id: "00000000-0000-4000-a000-0000000000b2",
+            isDefault: false,
+          };
+          setMockOrgModelProviders([provider]);
+          return respond(201, { provider, created: true });
+        },
+      ),
     );
-    click(within(providerDialog).getByText("Add"));
+
+    await openProvidersPage();
+
+    click(await screen.findByText("Add model"));
+    const dialog = getModelPolicyDialog();
+    clickRouteChoice(dialog, "API key");
+    const input = within(dialog).getByPlaceholderText("Enter your API key");
+    fireEvent.change(input, { target: { value: " sk-ant\n test " } });
+    clickDialogButton(dialog, "Add model");
+    const cancelButton = getDialogButton(dialog, "Cancel");
+
+    await waitFor(() => {
+      expect(submittedSecret).toBe("sk-anttest");
+      expect(cancelButton).toBeDisabled();
+    });
+    click(cancelButton);
+    expect(
+      screen.getByText(/Decide how members access this model/i),
+    ).toBeInTheDocument();
+    const resolveUpsert = upsertControl.resolve;
+    if (!resolveUpsert) {
+      throw new Error("Expected inline API key request to start");
+    }
+    resolveUpsert();
 
     await waitFor(() => {
       expect(
-        screen.queryByText(/Choose the model members can select/i),
+        screen.queryByText(/Decide how members access this model/i),
       ).not.toBeInTheDocument();
     });
     await expect(
@@ -360,14 +358,14 @@ describe("org-providers-tab — stale banner reconnect", () => {
       "org-model-policy-row-claude-opus-4-7",
     );
     const dialog = await openModelPolicyDialog(row);
-    clickRouteChoice(dialog, "Claude Subscription");
+    clickRouteChoice(dialog, "Claude subscription");
     expect(
       within(dialog).queryByText("OAuth provider"),
     ).not.toBeInTheDocument();
     expect(
       within(dialog).queryByText("Claude Code (OAuth token)"),
     ).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Provider")).not.toBeInTheDocument();
     expect(
       within(dialog).queryByText(/OAuth routes are personal/i),
     ).not.toBeInTheDocument();
@@ -394,14 +392,14 @@ describe("org-providers-tab — stale banner reconnect", () => {
 
     const row = await screen.findByTestId("org-model-policy-row-gpt-5.5");
     const dialog = await openModelPolicyDialog(row);
-    clickRouteChoice(dialog, "Codex Subscription");
+    clickRouteChoice(dialog, "Codex subscription");
     expect(
       within(dialog).queryByText("OAuth provider"),
     ).not.toBeInTheDocument();
     expect(
       within(dialog).queryByText("ChatGPT (Codex)"),
     ).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Provider")).not.toBeInTheDocument();
     clickDialogButton(dialog, "Save changes");
 
     await expect(

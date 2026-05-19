@@ -2,15 +2,12 @@
 // oxlint-disable max-lines-per-function
 import { useGet, useLastResolved, useLoadable, useSet } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
-import type { ReactNode } from "react";
 import {
   IconAlertTriangle,
   IconDotsVertical,
-  IconKey,
   IconPencil,
   IconPlus,
   IconTrash,
-  IconUsers,
 } from "@tabler/icons-react";
 import {
   Button,
@@ -25,6 +22,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Input,
   Select,
   SelectContent,
   SelectItem,
@@ -37,6 +35,7 @@ import {
   cn,
 } from "@vm0/ui";
 import {
+  MODEL_PROVIDER_TYPES,
   SUPPORTED_RUN_MODELS,
   getCanonicalModelDisplayName,
   getProvidersForModel,
@@ -50,21 +49,28 @@ import {
   orgModelPolicies$,
   updateOrgModelPolicies$,
 } from "../../../../signals/external/org-model-policies.ts";
-import {
-  orgConfiguredProviders$,
-  orgOpenAddDialogForModelPolicyRoute$,
-  orgOpenEditDialog$,
-} from "../../../../signals/zero-page/settings/org-model-providers.ts";
+import { orgConfiguredProviders$ } from "../../../../signals/zero-page/settings/org-model-providers.ts";
 import {
   closeModelPolicyDialog$,
+  modelPolicyApiKey$,
+  modelPolicyApiKeyError$,
+  modelPolicyApiKeyTouched$,
+  markModelPolicyApiKeyTouched$,
   modelPolicyDialogState$,
   openAddModelPolicyDialog$,
   openEditModelPolicyDialog$,
+  setModelPolicyApiKey$,
+  setModelPolicyApiKeyError$,
+  submitModelPolicyApiKeyRoute$,
   updateModelPolicyDialogModel$,
   updateModelPolicyDialogRoute$,
   type ModelPolicyDialogMode,
   type ModelPolicyRouteKind,
 } from "../../../../signals/zero-page/settings/org-model-policy-dialog.ts";
+import {
+  hasTokenInputValue,
+  sanitizeTokenInput,
+} from "../../../../signals/zero-page/settings/token-input.ts";
 import { pageSignal$ } from "../../../../signals/page-signal.ts";
 import { detach, Reason } from "../../../../signals/utils.ts";
 import {
@@ -94,22 +100,48 @@ function getOAuthProviderTypes(model: SupportedRunModel): ModelProviderType[] {
   });
 }
 
+const ZERO_BORDER = {
+  border: "0.7px solid hsl(var(--gray-400))",
+} as const;
+
 function getOAuthRouteCopy(oauthTypes: ModelProviderType[]): {
   title: string;
   description: string;
 } {
   if (oauthTypes.includes("codex-oauth-token")) {
     return {
-      title: "Codex Subscription",
-      description:
-        "Lets members use their own Codex Pro/Team subscription. Each member opens their Preferences, switches to Personal Models, and connects ChatGPT (Codex). The token only launches the Codex CLI inside a secure sandbox and is sent directly to OpenAI.",
+      title: "Codex subscription",
+      description: "Each member connects their own Pro or Team plan.",
     };
   }
   return {
-    title: "Claude Subscription",
-    description:
-      "Lets members use their own Claude Pro/Max/Team subscription. Each member opens their Preferences, switches to Personal Models, and sets a Claude Code OAuth Token. The token only launches the Claude Code CLI inside a secure sandbox and is sent directly to Anthropic.",
+    title: "Claude subscription",
+    description: "Each member connects their own Pro, Max, or Team plan.",
   };
+}
+
+function getProviderConfig(type: ModelProviderType) {
+  return MODEL_PROVIDER_TYPES[type] as
+    | { secretLabel?: string; helpText?: string }
+    | undefined;
+}
+
+function getProviderSecretLabel(type: ModelProviderType): string {
+  const config = getProviderConfig(type);
+  return config?.secretLabel ?? "API key";
+}
+
+function getProviderSecretPlaceholder(type: ModelProviderType): string {
+  return `Enter your ${getProviderSecretLabel(type)}`;
+}
+
+function getProviderSignupUrl(type: ModelProviderType): string | null {
+  const helpText = getProviderConfig(type)?.helpText;
+  if (!helpText) {
+    return null;
+  }
+  const match = /https?:\/\/[^\s)]+/.exec(helpText);
+  return match ? match[0] : null;
 }
 
 function findProviderByType(
@@ -516,14 +548,12 @@ function PolicyRow({
 function RouteChoiceButton({
   active,
   disabled = false,
-  icon,
   title,
   description,
   onClick,
 }: {
   active: boolean;
   disabled?: boolean;
-  icon: ReactNode;
   title: string;
   description: string;
   onClick: () => void;
@@ -531,28 +561,24 @@ function RouteChoiceButton({
   return (
     <button
       type="button"
-      aria-pressed={active}
+      role="radio"
+      aria-checked={active}
       disabled={disabled}
       onClick={onClick}
+      style={{
+        border: active
+          ? "0.7px solid hsl(var(--primary))"
+          : "0.7px solid hsl(var(--gray-400))",
+      }}
       className={cn(
-        "flex min-h-[88px] items-start gap-3 rounded-lg border p-3 text-left transition-colors",
-        active
-          ? "border-primary/50 bg-primary/5"
-          : "border-border bg-background/40 hover:bg-muted/40",
-        disabled && "cursor-not-allowed opacity-50 hover:bg-background/40",
+        "flex flex-col gap-0.5 rounded-xl bg-card px-5 py-4 text-left transition-colors",
+        active && "bg-primary/5",
+        !active && !disabled && "hover:bg-muted/40",
+        disabled && "cursor-not-allowed opacity-50",
       )}
     >
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-card">
-        {icon}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-sm font-medium text-foreground">
-          {title}
-        </span>
-        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-          {description}
-        </span>
-      </span>
+      <span className="text-sm font-medium text-foreground">{title}</span>
+      <span className="text-[13px] text-muted-foreground">{description}</span>
     </button>
   );
 }
@@ -560,18 +586,12 @@ function RouteChoiceButton({
 function ProviderTypeSelect({
   value,
   types,
-  providers,
   placeholder,
-  configuredLabel,
-  missingLabel,
   onChange,
 }: {
   value: ModelProviderType | null;
   types: ModelProviderType[];
-  providers: ModelProviderResponse[];
   placeholder: string;
-  configuredLabel?: string;
-  missingLabel?: string;
   onChange: (type: ModelProviderType) => void;
 }) {
   if (types.length === 0) {
@@ -585,12 +605,18 @@ function ProviderTypeSelect({
         onChange(next as ModelProviderType);
       }}
     >
-      <SelectTrigger className="h-10 rounded-lg">
-        <SelectValue placeholder={placeholder} />
+      <SelectTrigger className="h-10 rounded-lg" style={ZERO_BORDER}>
+        <SelectValue placeholder={placeholder}>
+          {value && (
+            <div className="flex min-w-0 items-center gap-2">
+              <ProviderIcon type={value} size={16} />
+              <span className="min-w-0 truncate">{getUILabel(value)}</span>
+            </div>
+          )}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {types.map((type) => {
-          const configured = Boolean(findProviderByType(providers, type));
           return (
             <SelectItem key={type} value={type}>
               <div className="flex min-w-0 items-center gap-2">
@@ -598,17 +624,97 @@ function ProviderTypeSelect({
                 <span className="min-w-0 flex-1 truncate">
                   {getUILabel(type)}
                 </span>
-                {configuredLabel && missingLabel && (
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {configured ? configuredLabel : missingLabel}
-                  </span>
-                )}
               </div>
             </SelectItem>
           );
         })}
       </SelectContent>
     </Select>
+  );
+}
+
+const MASKED_API_KEY = "••••••••••••••••";
+
+function ApiKeyProviderSection({
+  selectedProviderType,
+  apiTypes,
+  routeProvider,
+  apiKeyValue,
+  apiKeyTouched,
+  apiKeyError,
+  onChange,
+  onApiKeyChange,
+  onApiKeyFocus,
+}: {
+  selectedProviderType: ModelProviderType | null;
+  apiTypes: ModelProviderType[];
+  routeProvider: ModelProviderResponse | null;
+  apiKeyValue: string;
+  apiKeyTouched: boolean;
+  apiKeyError: string | null;
+  onChange: (type: ModelProviderType) => void;
+  onApiKeyChange: (value: string) => void;
+  onApiKeyFocus: () => void;
+}) {
+  const secretLabel = selectedProviderType
+    ? getProviderSecretLabel(selectedProviderType)
+    : "API key";
+  const secretSignupUrl = selectedProviderType
+    ? getProviderSignupUrl(selectedProviderType)
+    : null;
+  const showMaskedExistingKey = Boolean(routeProvider) && !apiKeyTouched;
+  const displayedKey = showMaskedExistingKey ? MASKED_API_KEY : apiKeyValue;
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-2">
+        <label className="text-sm font-medium text-foreground">Provider</label>
+        <ProviderTypeSelect
+          value={selectedProviderType}
+          types={apiTypes}
+          placeholder="Select a provider"
+          onChange={onChange}
+        />
+      </div>
+      {selectedProviderType && (
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-foreground">
+            {getUILabel(selectedProviderType)} {secretLabel}
+          </label>
+          <Input
+            type="password"
+            autoComplete="off"
+            value={displayedKey}
+            placeholder={getProviderSecretPlaceholder(selectedProviderType)}
+            onFocus={() => {
+              if (showMaskedExistingKey) {
+                onApiKeyFocus();
+              }
+            }}
+            onChange={(e) => {
+              onApiKeyChange(e.target.value);
+            }}
+            className={apiKeyError ? "h-10 border-destructive" : "h-10"}
+          />
+          {apiKeyError ? (
+            <p className="text-xs text-destructive">{apiKeyError}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Stored in workspace secrets.{" "}
+              {secretSignupUrl ? (
+                <a
+                  href={secretSignupUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline"
+                >
+                  Get a key
+                </a>
+              ) : null}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -662,18 +768,24 @@ function buildPolicyUpdate(params: {
 
 function getDialogPrimaryLabel(params: {
   mode: ModelPolicyDialogMode;
-  routeKind: ModelPolicyRouteKind;
-  providerType: ModelProviderType | null;
-  provider: ModelProviderResponse | null;
 }): string {
-  if (
-    params.routeKind === "api-key" &&
-    params.providerType &&
-    !params.provider
-  ) {
-    return `Add ${getUILabel(params.providerType)} API key`;
-  }
   return params.mode === "add" ? "Add model" : "Save changes";
+}
+
+function isSubmitDisabled(params: {
+  selectedModel: SupportedRunModel | null;
+  saving: boolean;
+  inlineSaving: boolean;
+  routeKind: ModelPolicyRouteKind;
+  selectedProviderType: ModelProviderType | null;
+}): boolean {
+  if (!params.selectedModel || params.saving || params.inlineSaving) {
+    return true;
+  }
+  if (params.routeKind === "built-in") {
+    return false;
+  }
+  return params.selectedProviderType === null;
 }
 
 function getDefaultProviderTypeForRoute(params: {
@@ -738,8 +850,18 @@ function ModelPolicyRouteDialog({
   const close = useSet(closeModelPolicyDialog$);
   const setModel = useSet(updateModelPolicyDialogModel$);
   const setRoute = useSet(updateModelPolicyDialogRoute$);
-  const openAddProvider = useSet(orgOpenAddDialogForModelPolicyRoute$);
-  const openEditProvider = useSet(orgOpenEditDialog$);
+  const apiKeyValue = useGet(modelPolicyApiKey$);
+  const apiKeyError = useGet(modelPolicyApiKeyError$);
+  const apiKeyTouched = useGet(modelPolicyApiKeyTouched$);
+  const setApiKey = useSet(setModelPolicyApiKey$);
+  const setApiKeyError = useSet(setModelPolicyApiKeyError$);
+  const markApiKeyTouched = useSet(markModelPolicyApiKeyTouched$);
+  const pageSignal = useGet(pageSignal$);
+  const [inlineSaveLoadable, submitInlineApiKeyRoute] = useLoadableSet(
+    submitModelPolicyApiKeyRoute$,
+  );
+  const inlineSaving = inlineSaveLoadable.state === "loading";
+  const busy = saving || inlineSaving;
   const selectedModel = dialog.model ?? addableModels[0] ?? null;
   const apiTypes = selectedModel ? getApiProviderTypes(selectedModel) : [];
   const oauthTypes = selectedModel ? getOAuthProviderTypes(selectedModel) : [];
@@ -757,6 +879,11 @@ function ModelPolicyRouteDialog({
   const selectedModelIcon = selectedModel
     ? getModelIconType(selectedModel)
     : null;
+  const isReplacingKey = dialog.routeKind === "api-key" && apiKeyTouched;
+  const needsFreshKey =
+    dialog.routeKind === "api-key" &&
+    selectedProviderType !== null &&
+    routeProvider === null;
 
   const chooseRoute = (routeKind: ModelPolicyRouteKind) => {
     setRoute({
@@ -770,19 +897,32 @@ function ModelPolicyRouteDialog({
   };
 
   const handleSubmit = () => {
-    if (!selectedModel || saving) {
+    if (!selectedModel || busy) {
       return;
     }
 
     if (
       dialog.routeKind === "api-key" &&
       selectedProviderType &&
-      !routeProvider
+      (needsFreshKey || isReplacingKey)
     ) {
-      openAddProvider({
-        model: selectedModel,
-        providerType: selectedProviderType,
-      });
+      if (!hasTokenInputValue(apiKeyValue)) {
+        setApiKeyError(
+          `${getProviderSecretLabel(selectedProviderType)} is required`,
+        );
+        return;
+      }
+      detach(
+        submitInlineApiKeyRoute(
+          {
+            model: selectedModel,
+            providerType: selectedProviderType,
+            apiKey: sanitizeTokenInput(apiKeyValue),
+          },
+          pageSignal,
+        ),
+        Reason.DomCallback,
+      );
       return;
     }
 
@@ -800,31 +940,20 @@ function ModelPolicyRouteDialog({
     close();
   };
 
-  const handleEditCredential = () => {
-    if (!selectedModel || !selectedProviderType || !routeProvider) {
-      return;
-    }
-    if (dialog.routeKind === "api-key") {
-      openEditProvider(routeProvider);
-    }
-  };
-
-  const primaryLabel = getDialogPrimaryLabel({
-    mode: dialog.mode,
+  const primaryLabel = getDialogPrimaryLabel({ mode: dialog.mode });
+  const submitDisabled = isSubmitDisabled({
+    selectedModel,
+    saving,
+    inlineSaving,
     routeKind: dialog.routeKind,
-    providerType: selectedProviderType,
-    provider: routeProvider,
+    selectedProviderType,
   });
-  const submitDisabled =
-    !selectedModel ||
-    saving ||
-    (dialog.routeKind !== "built-in" && !selectedProviderType);
 
   return (
     <Dialog
       open={dialog.open}
       onOpenChange={(open) => {
-        if (!open) {
+        if (!open && !busy) {
           close();
         }
       }}
@@ -832,126 +961,109 @@ function ModelPolicyRouteDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            {dialog.mode === "add" ? "Add model" : "Edit model route"}
+            {dialog.mode === "add" ? "Add model" : "Edit model"}
           </DialogTitle>
           <DialogDescription>
-            Choose the model members can select and decide whether it uses VM0
-            credits or your own provider credentials.
+            Decide how members access this model.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-5">
-          {dialog.mode === "add" ? (
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-foreground">
-                Model
-              </label>
-              <Select
-                value={selectedModel ?? undefined}
-                onValueChange={(next) => {
-                  setModel(next as SupportedRunModel);
-                }}
-              >
-                <SelectTrigger className="h-10 rounded-lg">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {addableModels.map((model) => {
-                    const iconType = getModelIconType(model);
-                    return (
-                      <SelectItem key={model} value={model}>
-                        <div className="flex items-center gap-2">
-                          {iconType && (
-                            <ProviderIcon type={iconType} size={16} />
-                          )}
-                          <span>{getCanonicalModelDisplayName(model)}</span>
-                        </div>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3 rounded-lg border border-border bg-background/40 p-3">
-              {selectedModelIcon && (
-                <ProviderIcon type={selectedModelIcon} size={18} />
-              )}
-              <span className="text-sm font-medium text-foreground">
-                {selectedModel
-                  ? getCanonicalModelDisplayName(selectedModel)
-                  : "Unknown model"}
-              </span>
-            </div>
-          )}
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground">Model</label>
+            <Select
+              value={selectedModel ?? undefined}
+              onValueChange={(next) => {
+                setModel(next as SupportedRunModel);
+              }}
+              disabled={dialog.mode === "edit"}
+            >
+              <SelectTrigger className="h-10 rounded-lg" style={ZERO_BORDER}>
+                <SelectValue placeholder="Select a model">
+                  {selectedModel && (
+                    <div className="flex items-center gap-2">
+                      {selectedModelIcon && (
+                        <ProviderIcon type={selectedModelIcon} size={16} />
+                      )}
+                      <span>{getCanonicalModelDisplayName(selectedModel)}</span>
+                    </div>
+                  )}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {addableModels.map((model) => {
+                  const iconType = getModelIconType(model);
+                  return (
+                    <SelectItem key={model} value={model}>
+                      <div className="flex items-center gap-2">
+                        {iconType && <ProviderIcon type={iconType} size={16} />}
+                        <span>{getCanonicalModelDisplayName(model)}</span>
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
 
-          <div className="grid gap-3">
-            <RouteChoiceButton
-              active={dialog.routeKind === "built-in"}
-              icon={<ProviderIcon type="vm0" size={18} />}
-              title="Built-in"
-              description="Use workspace credits to access the model."
-              onClick={() => {
-                chooseRoute("built-in");
-              }}
-            />
-            <RouteChoiceButton
-              active={dialog.routeKind === "api-key"}
-              disabled={apiTypes.length === 0}
-              icon={<IconKey size={18} stroke={1.6} />}
-              title="API Key"
-              description="Use an API key to access the model. API key routes are shared workspace credentials. They are best when the team should run through one billing account."
-              onClick={() => {
-                chooseRoute("api-key");
-              }}
-            />
-            {oauthTypes.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium text-foreground">
+              Provided by
+            </label>
+            <div
+              role="radiogroup"
+              aria-label="Provided by"
+              className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+            >
               <RouteChoiceButton
-                active={dialog.routeKind === "oauth"}
-                icon={<IconUsers size={18} stroke={1.6} />}
-                title={getOAuthRouteCopy(oauthTypes).title}
-                description={getOAuthRouteCopy(oauthTypes).description}
+                active={dialog.routeKind === "built-in"}
+                title="Built-in"
+                description="Workspace credits cover usage."
                 onClick={() => {
-                  chooseRoute("oauth");
+                  chooseRoute("built-in");
                 }}
               />
-            )}
+              <RouteChoiceButton
+                active={dialog.routeKind === "api-key"}
+                disabled={apiTypes.length === 0}
+                title="API key"
+                description="A shared workspace key. Best when the team bills through one account."
+                onClick={() => {
+                  chooseRoute("api-key");
+                }}
+              />
+              {oauthTypes.length > 0 && (
+                <RouteChoiceButton
+                  active={dialog.routeKind === "oauth"}
+                  title={getOAuthRouteCopy(oauthTypes).title}
+                  description={getOAuthRouteCopy(oauthTypes).description}
+                  onClick={() => {
+                    chooseRoute("oauth");
+                  }}
+                />
+              )}
+            </div>
           </div>
 
           {dialog.routeKind === "api-key" && (
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-foreground">
-                API Provider
-              </label>
-              <ProviderTypeSelect
-                value={selectedProviderType}
-                types={apiTypes}
-                providers={providers}
-                placeholder="Select API provider"
-                configuredLabel="Configured"
-                missingLabel="Needs API key"
-                onChange={(providerType) => {
-                  setRoute({ routeKind: "api-key", providerType });
-                }}
-              />
-            </div>
-          )}
-
-          {routeProvider && dialog.routeKind === "api-key" && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-fit gap-2 rounded-lg"
-              onClick={handleEditCredential}
-            >
-              <IconPencil size={14} stroke={1.5} />
-              Edit API key
-            </Button>
+            <ApiKeyProviderSection
+              selectedProviderType={selectedProviderType}
+              apiTypes={apiTypes}
+              routeProvider={routeProvider}
+              apiKeyValue={apiKeyValue}
+              apiKeyTouched={apiKeyTouched}
+              apiKeyError={apiKeyError}
+              onChange={(providerType) => {
+                setRoute({ routeKind: "api-key", providerType });
+              }}
+              onApiKeyChange={setApiKey}
+              onApiKeyFocus={markApiKeyTouched}
+            />
           )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={close} disabled={saving}>
+          <Button variant="outline" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={submitDisabled}>

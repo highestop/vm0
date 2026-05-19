@@ -39,6 +39,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 
 use operation_tracker::{
+    NormalOperationFenceRejection as TrackerNormalOperationFenceRejection,
     NormalOperationRejection, NormalOperationToken, NormalOperationTracker,
     NormalOperationTransitionError, NormalOperationTransitionHandle,
 };
@@ -92,6 +93,36 @@ impl FrameWriteObserver {
 impl Default for FrameWriteObserver {
     fn default() -> Self {
         Self::noop()
+    }
+}
+
+/// Opaque guard that fences new normal guest operations on a [`VsockHost`].
+///
+/// While this guard is alive, normal operations such as exec, file transfer, and
+/// spawn-process requests are rejected by the host-side operation tracker.
+/// Lifecycle requests such as quiesce/resume are not normal operations and can
+/// still be sent while the guard is held.
+#[derive(Debug)]
+pub struct NormalOperationFence {
+    _inner: operation_tracker::NormalOperationFence,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NormalOperationFenceRejection {
+    Busy,
+    AlreadyFenced,
+    NotParkable,
+    Closed,
+}
+
+impl From<TrackerNormalOperationFenceRejection> for NormalOperationFenceRejection {
+    fn from(error: TrackerNormalOperationFenceRejection) -> Self {
+        match error {
+            TrackerNormalOperationFenceRejection::Busy => Self::Busy,
+            TrackerNormalOperationFenceRejection::AlreadyFenced => Self::AlreadyFenced,
+            TrackerNormalOperationFenceRejection::NotParkable => Self::NotParkable,
+            TrackerNormalOperationFenceRejection::Closed => Self::Closed,
+        }
     }
 }
 
@@ -645,17 +676,74 @@ async fn normal_request_on_shared_with_write_observer(
     timeout: Duration,
     write_observer: FrameWriteObserver,
 ) -> io::Result<RawMessage> {
-    let seq = shared.next_seq();
-    normal_request_raw_on_shared_with_write_observer(
+    normal_request_on_shared_with_pre_write_observer(
         shared,
         msg_type,
-        seq,
         payload,
         terminal_msg_types,
         timeout,
+        |_| Ok(()),
         write_observer,
     )
     .await
+}
+
+async fn normal_request_on_shared_with_pre_write_observer(
+    shared: &Arc<Shared>,
+    msg_type: u8,
+    payload: &[u8],
+    terminal_msg_types: &'static [u8],
+    timeout: Duration,
+    pre_write: impl FnOnce(&mut ConnectionState) -> io::Result<()>,
+    write_observer: FrameWriteObserver,
+) -> io::Result<RawMessage> {
+    let seq = shared.next_seq();
+    let data = vsock_proto::encode(msg_type, seq, payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    let normal_operation = shared.reserve_normal_operation()?;
+
+    let (tx, rx) = oneshot::channel();
+    {
+        let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &mut *guard {
+            ConnectionState::Closed { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed",
+                ));
+            }
+            ConnectionState::Connected { pending, .. } => {
+                pending.insert(
+                    seq,
+                    PendingResponse {
+                        response_tx: tx,
+                        normal_operation: Some(PendingNormalOperation::Owned(normal_operation)),
+                        normal_terminal_msg_types: terminal_msg_types,
+                    },
+                );
+            }
+        }
+    }
+    let _pending_guard = PendingRequestGuard::new(Arc::clone(shared), seq);
+
+    write_request_frame(shared, &data, || {
+        mark_pending_normal_operation_possible_guest_write(shared, seq, pre_write)?;
+        write_observer.record_write_start()
+    })
+    .await?;
+
+    tokio::select! {
+        biased;
+        result = rx => {
+            result.map_err(|_| io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed",
+                ))
+        }
+        _ = tokio::time::sleep(timeout) => {
+            Err(io::Error::new(io::ErrorKind::TimedOut, "request timeout"))
+        }
+    }
 }
 
 async fn request_on_shared_with_composite_operation_and_observer(
@@ -717,68 +805,13 @@ async fn request_on_shared_with_composite_operation_and_observer(
     }
 }
 
-async fn normal_request_raw_on_shared_with_write_observer(
-    shared: &Arc<Shared>,
-    msg_type: u8,
-    seq: u32,
-    payload: &[u8],
-    terminal_msg_types: &'static [u8],
-    timeout: Duration,
-    write_observer: FrameWriteObserver,
-) -> io::Result<RawMessage> {
-    let data = vsock_proto::encode(msg_type, seq, payload)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-    let normal_operation = shared.reserve_normal_operation()?;
-
-    let (tx, rx) = oneshot::channel();
-    {
-        let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        match &mut *guard {
-            ConnectionState::Closed { .. } => {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed",
-                ));
-            }
-            ConnectionState::Connected { pending, .. } => {
-                pending.insert(
-                    seq,
-                    PendingResponse {
-                        response_tx: tx,
-                        normal_operation: Some(PendingNormalOperation::Owned(normal_operation)),
-                        normal_terminal_msg_types: terminal_msg_types,
-                    },
-                );
-            }
-        }
-    }
-    let _pending_guard = PendingRequestGuard::new(Arc::clone(shared), seq);
-
-    write_request_frame(shared, &data, || {
-        mark_pending_normal_operation_possible_guest_write(shared, seq)?;
-        write_observer.record_write_start()
-    })
-    .await?;
-
-    tokio::select! {
-        biased;
-        result = rx => {
-            result.map_err(|_| io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed",
-                ))
-        }
-        _ = tokio::time::sleep(timeout) => {
-            Err(io::Error::new(io::ErrorKind::TimedOut, "request timeout"))
-        }
-    }
-}
-
 fn mark_pending_normal_operation_possible_guest_write(
     shared: &Arc<Shared>,
     seq: u32,
+    pre_write: impl FnOnce(&mut ConnectionState) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut guard = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    pre_write(&mut guard)?;
     match &mut *guard {
         ConnectionState::Connected { pending, .. } => {
             let Some(pending_response) = pending.get_mut(&seq) else {
@@ -1035,11 +1068,27 @@ impl VsockHost {
         validate_empty_lifecycle_response(&response, response_payload_name)
     }
 
-    /// Fence new guest operations before a higher-level lifecycle transition.
+    /// Try to fence new normal guest operations on this connection.
     ///
-    /// This is a same-connection lifecycle check: the guest either reports no
-    /// in-flight operations with `operations_quiesced`, or returns `error` and keeps
-    /// the operation fence closed until [`resume_operations`](Self::resume_operations).
+    /// The returned guard keeps normal operations fenced until it is dropped.
+    /// Lifecycle requests such as [`quiesce_operations`](Self::quiesce_operations)
+    /// and [`resume_operations`](Self::resume_operations) remain available while
+    /// the guard is held.
+    pub fn try_fence_normal_operations(
+        &self,
+    ) -> Result<NormalOperationFence, NormalOperationFenceRejection> {
+        self.shared
+            .normal_operations
+            .try_fence()
+            .map(|inner| NormalOperationFence { _inner: inner })
+            .map_err(Into::into)
+    }
+
+    /// Ask the guest to quiesce its own operation dispatcher.
+    ///
+    /// This does not fence host-side normal operations. Callers that need a
+    /// no-new-normal-operation boundary must hold a
+    /// [`NormalOperationFence`] before sending this lifecycle request.
     pub async fn quiesce_operations(&self, timeout: Duration) -> io::Result<()> {
         self.lifecycle_request(
             MSG_QUIESCE_OPERATIONS,

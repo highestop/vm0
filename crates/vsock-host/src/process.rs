@@ -13,7 +13,7 @@ use vsock_proto::{
 
 use crate::{
     ConnectionState, FrameWriteObserver, PendingRequestGuard, PendingResponse, Shared,
-    normal_request_on_shared_with_write_observer, operation_tracker::NormalOperationToken,
+    normal_request_on_shared_with_pre_write_observer, operation_tracker::NormalOperationToken,
 };
 
 const SPAWN_PROCESS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -412,12 +412,16 @@ impl GuestProcessControlHandle {
             request_timeout_ms,
         )
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-        let response = normal_request_on_shared_with_write_observer(
+        let response = normal_request_on_shared_with_pre_write_observer(
             &self.shared,
             MSG_PROCESS_CONTROL,
             &request,
             PROCESS_CONTROL_TERMINAL_MSG_TYPES,
             timeout,
+            {
+                let target_seq = self.target_seq;
+                move |state| ensure_process_control_target_active(state, target_seq)
+            },
             write_observer,
         )
         .await?;
@@ -519,6 +523,25 @@ fn duration_to_request_timeout_ms(timeout: Duration) -> u32 {
     u32::try_from(timeout.as_millis())
         .unwrap_or(u32::MAX)
         .max(1)
+}
+
+fn ensure_process_control_target_active(
+    state: &ConnectionState,
+    target_seq: u32,
+) -> io::Result<()> {
+    match state {
+        ConnectionState::Connected { process, .. } if process.contains_operation(target_seq) => {
+            Ok(())
+        }
+        ConnectionState::Connected { .. } => Err(process_control_status_error(
+            ProcessControlStatus::Inactive,
+            "process operation is not active",
+        )),
+        ConnectionState::Closed { .. } => Err(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection closed",
+        )),
+    }
 }
 
 fn remove_process_operation(shared: &Arc<Shared>, seq: u32) {

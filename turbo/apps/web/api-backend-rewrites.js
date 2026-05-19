@@ -317,6 +317,10 @@ export const API_BACKEND_REWRITES = [
   ["/api/integrations/agentphone/link", "/api/integrations/agentphone/link"],
   ["/api/internal/callbacks/agent", "/api/internal/callbacks/agent"],
   ["/api/internal/callbacks/chat", "/api/internal/callbacks/chat"],
+  [
+    "/api/internal/callbacks/github/issues",
+    "/api/internal/callbacks/github/issues",
+  ],
   ["/api/internal/callbacks/agentphone", "/api/internal/callbacks/agentphone"],
   [
     "/api/internal/cron/aggregate-model-stats",

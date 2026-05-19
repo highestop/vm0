@@ -89,16 +89,24 @@ function callbackHeaders(args: {
 }): HeadersInit {
   const cookies = ["__session=opaque"];
   if (args.stateCookie) {
-    cookies.push(`connector_oauth_state=${args.stateCookie}`);
+    cookies.push(
+      `connector_oauth_state=${encodeURIComponent(args.stateCookie)}`,
+    );
   }
   if (args.sessionId) {
-    cookies.push(`connector_oauth_session=${args.sessionId}`);
+    cookies.push(
+      `connector_oauth_session=${encodeURIComponent(args.sessionId)}`,
+    );
   }
   if (args.codeVerifier) {
-    cookies.push(`connector_oauth_pkce=${args.codeVerifier}`);
+    cookies.push(
+      `connector_oauth_pkce=${encodeURIComponent(args.codeVerifier)}`,
+    );
   }
   if (args.oauthContext) {
-    cookies.push(`connector_oauth_context=${args.oauthContext}`);
+    cookies.push(
+      `connector_oauth_context=${encodeURIComponent(args.oauthContext)}`,
+    );
   }
   return { cookie: cookies.join("; ") };
 }
@@ -1438,7 +1446,7 @@ describe("GET /api/connectors/:type/callback", () => {
       headers: callbackHeaders({
         stateCookie: "state-123",
         codeVerifier: "pkce-verifier",
-        oauthContext: "dynamic-oauth-context",
+        oauthContext: "dynamic-oauth-context; tenant=example",
       }),
     });
 
@@ -1451,7 +1459,7 @@ describe("GET /api/connectors/:type/callback", () => {
       redirectUri: `${BASE_URL}/api/connectors/test-oauth/callback`,
       state: "state-123",
       codeVerifier: "pkce-verifier",
-      oauthContext: "dynamic-oauth-context",
+      oauthContext: "dynamic-oauth-context; tenant=example",
     });
     expect(response.headers.getSetCookie()).toStrictEqual(
       expect.arrayContaining([

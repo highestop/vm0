@@ -190,6 +190,7 @@ import { similarweb } from "./connectors/similarweb";
 import { slackWebhook } from "./connectors/slack-webhook";
 import { snowflake } from "./connectors/snowflake";
 import { sponge } from "./connectors/sponge";
+import { sproutgigs } from "./connectors/sproutgigs";
 import { square } from "./connectors/square";
 import { stabilityAi } from "./connectors/stability-ai";
 import { strapi } from "./connectors/strapi";
@@ -644,6 +645,7 @@ const CONNECTOR_TYPES_DEF = {
   ...slackWebhook,
   ...snowflake,
   ...sponge,
+  ...sproutgigs,
   ...square,
   ...stabilityAi,
   ...strapi,

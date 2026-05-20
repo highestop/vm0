@@ -22,6 +22,7 @@ import { DesktopLocalAgentManager } from "./desktop-local-agent-manager";
 import {
   detectLocalAgentBackends,
   executeLocalAgentBackend,
+  preflightLocalAgentBackend,
 } from "./desktop-local-agent-runtime";
 import { createDesktopLocalAgentStore } from "./desktop-local-agent-store";
 import {
@@ -86,6 +87,7 @@ function createDesktopLocalAgentManager(): DesktopLocalAgentManager {
     selectFolder: selectLocalAgentFolder,
     openFolder: openLocalAgentFolder,
     detectBackends: detectLocalAgentBackends,
+    preflightBackend: preflightLocalAgentBackend,
     executeBackend: executeLocalAgentBackend,
     onChange: notifyDesktopLocalAgentsChanged,
   });

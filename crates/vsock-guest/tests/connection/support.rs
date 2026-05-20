@@ -679,12 +679,115 @@ pub(crate) fn wait_for_pid_exit(pid: u32, context: &str) {
     }
 }
 
-/// Returns true iff `pid` is still a live (or zombie-but-unreaped) process
-/// the test owner has permission to signal. Implemented via `kill(pid, 0)`,
-/// the canonical existence check. After bash dies via SIGPIPE the kernel
-/// reaps it (we're not its parent — it was reparented to PID 1 when its
-/// process group died), so this transitions to false.
+#[derive(Clone, Copy)]
+struct ProcStat {
+    state: char,
+    pgid: u32,
+}
+
+fn parse_proc_stat(stat: &str) -> Option<ProcStat> {
+    let fields_start = stat.rfind(") ")? + 2;
+    let mut fields = stat[fields_start..].split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _ppid = fields.next()?;
+    let pgid = fields.next()?.parse().ok()?;
+    Some(ProcStat { state, pgid })
+}
+
+fn proc_stat(pid: u32) -> Option<ProcStat> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_proc_stat(&stat)
+}
+
+fn process_group_has_live_member(pgid: u32) -> bool {
+    if pgid == 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let file_name = entry.file_name();
+        let Some(pid_text) = file_name.to_str() else {
+            return false;
+        };
+        let Ok(pid) = pid_text.parse::<u32>() else {
+            return false;
+        };
+        let Some(stat) = proc_stat(pid) else {
+            return false;
+        };
+        if stat.pgid != pgid || stat.state == 'Z' {
+            return false;
+        }
+        // SAFETY: `kill` with sig=0 is a no-op existence check.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    })
+}
+
+/// Returns true iff `pid` is still running and signalable by the test owner.
+/// Zombie leaders are dead, but their process group can still contain live
+/// children, so wait/cleanup only treat the group as exited once no live member
+/// remains. Some CI containers leave reparented zombies visible to
+/// `kill(pid, 0)` until PID 1 reaps them.
 pub(crate) fn pid_alive(pid: u32) -> bool {
     // SAFETY: `kill` with sig=0 is a no-op existence check.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    if unsafe { libc::kill(pid as i32, 0) != 0 } {
+        return process_group_has_live_member(pid);
+    }
+    match proc_stat(pid) {
+        Some(stat) if stat.state == 'Z' => process_group_has_live_member(stat.pgid),
+        Some(_) => true,
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proc_stat_handles_process_names_with_parentheses() {
+        let stat = "123 (name ) with parens) S 1 456 456 0 -1 4194304 1 2 3 4 5 6 7 8 20 0 1 0 0";
+
+        let parsed = parse_proc_stat(stat).unwrap();
+
+        assert_eq!(parsed.state, 'S');
+        assert_eq!(parsed.pgid, 456);
+    }
+
+    #[test]
+    fn pid_alive_detects_live_group_after_leader_is_reaped() {
+        use std::os::unix::process::CommandExt;
+
+        let pid_path = unique_pid_path("reaped-leader-live-group");
+        let mut group_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "printf '%s' \"$$\" > '{}'; sleep 30 & exit 0",
+                pid_path.as_str()
+            ))
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = group_guard.read_pid();
+
+        child.wait().unwrap();
+
+        assert!(
+            pid_alive(pid),
+            "live process group should remain visible after leader is reaped"
+        );
+        kill_pid_group(pid);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while process_group_has_live_member(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cleanup should kill remaining process group members"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        group_guard.disarm();
+    }
 }

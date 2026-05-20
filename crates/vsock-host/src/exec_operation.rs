@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::{Future, ready};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -31,6 +32,7 @@ const EXEC_OPERATION_CLOSE_ACTIVE_LOG_LIMIT: usize = 16;
 const EXEC_OPERATION_FRAME_WRITE_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
 const EXEC_OPERATION_STAGE_SLOW_THRESHOLD: Duration = Duration::from_secs(5);
 const EXEC_OPERATION_DROP_CANCEL_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+const EXEC_OPERATION_START_TIMEOUT_CANCEL_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 const EXEC_OPERATION_FRAME_WRITE_NOT_STARTED: u8 = 0;
 const EXEC_OPERATION_FRAME_WRITE_STARTED: u8 = 1;
 const EXEC_OPERATION_FRAME_WRITE_COMPLETED: u8 = 2;
@@ -116,22 +118,56 @@ pub struct ExecStreamRequest<'a> {
 /// Exec control policy for supervised host operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupervisedExecControl {
+    /// Do not register an exec-control route for the operation.
     Disabled,
+    /// Register an exec-control route.
+    ///
+    /// When `sink` is true, the guest also exposes the bootstrap endpoint to
+    /// the child process through the process-control environment variable.
     Enabled { sink: bool },
 }
 
 /// Request parameters for starting a supervised exec operation.
 pub struct SupervisedExecRequest<'a> {
+    /// Guest-side process timeout policy.
+    ///
+    /// `ExecTimeoutPolicy::None` lets the process run until it exits, is
+    /// cancelled, or the connection closes.
     pub timeout: ExecTimeoutPolicy,
+    /// Shell command to run in the guest.
     pub command: &'a str,
+    /// Environment variables injected into the guest shell command.
     pub env: &'a [(&'a str, &'a str)],
+    /// Whether to run the command with guest-side sudo handling.
     pub sudo: bool,
+    /// Human-readable label used for diagnostics and logs.
     pub label: &'a str,
+    /// Stdout output policy requested from the guest.
     pub stdout: ExecOutputPolicy,
+    /// Stderr output policy requested from the guest.
     pub stderr: ExecOutputPolicy,
+    /// Exit codes that should not be treated as notable in diagnostics.
     pub expected_exit_codes: &'a [i32],
+    /// Optional exec-control route for this supervised operation.
     pub control: SupervisedExecControl,
+    /// Optional bounded host-side output event queue override.
+    ///
+    /// `None` uses the default queue capacity when either output policy
+    /// streams, and creates no queue when neither output policy streams.
+    /// `Some` is valid only when stdout or stderr streams; zero and oversized
+    /// capacities are rejected.
     pub stream_queue_capacity: Option<usize>,
+    /// Maximum time to wait for the guest `exec_started` acknowledgement.
+    ///
+    /// If this elapses after the start frame is written, the host sends
+    /// `MSG_EXEC_CANCEL` for the operation before returning a timeout error.
+    /// If that cancel frame cannot be written within the bounded fallback
+    /// window, the connection is poisoned because the guest process state is
+    /// no longer known.
+    ///
+    /// A successful start-timeout cancellation still abandons terminal proof
+    /// for this operation, so the connection should not be reused for later
+    /// normal operations.
     pub start_timeout: Duration,
 }
 
@@ -784,14 +820,17 @@ pub struct SupervisedExecHandle {
 }
 
 impl SupervisedExecHandle {
+    /// Guest process id reported by the `exec_started` acknowledgement.
     pub fn pid(&self) -> u32 {
         self.pid
     }
 
+    /// Return a cloneable exec-control handle when control was enabled.
     pub fn control_handle(&self) -> Option<ExecControlHandle> {
         self.control.clone()
     }
 
+    /// Send an exec-control request for this supervised operation.
     pub async fn control(
         &self,
         message_id: &str,
@@ -810,6 +849,7 @@ impl SupervisedExecHandle {
             .await
     }
 
+    /// Take the bounded output event receiver for streaming operations.
     pub fn take_stream_receiver(&mut self) -> Option<mpsc::Receiver<ExecOutputEvent>> {
         self.stream_rx.take()
     }
@@ -823,10 +863,20 @@ impl SupervisedExecHandle {
         }
     }
 
+    /// Wait for the terminal exec result.
+    ///
+    /// On timeout, this abandons the host-side operation registration but does
+    /// not send `MSG_EXEC_CANCEL`. Because the terminal proof is abandoned
+    /// after a guest write, the connection should not be reused for later
+    /// normal operations.
     pub async fn wait(self, timeout: Duration) -> io::Result<ExecOperationResult> {
         self.wait_with_timeout(timeout, false).await
     }
 
+    /// Send `MSG_EXEC_CANCEL` and wait for the terminal exec result.
+    ///
+    /// If the terminal result is already available before cancel is sent, this
+    /// returns that result without sending a duplicate cancel frame.
     pub async fn cancel_and_wait(self, timeout: Duration) -> io::Result<ExecOperationResult> {
         let cancel_label_log = self.diagnostic.label_log.clone();
         let registered_at = self.diagnostic.registered_at;
@@ -980,6 +1030,7 @@ pub struct ExecControlHandle {
 }
 
 impl ExecControlHandle {
+    /// Send an exec-control request and require a delivered acknowledgement.
     pub async fn control(
         &self,
         message_id: &str,
@@ -996,6 +1047,7 @@ impl ExecControlHandle {
         .into_ack()
     }
 
+    /// Send an exec-control request and return the raw guest outcome.
     pub async fn control_with_write_observer(
         &self,
         message_id: &str,
@@ -1023,6 +1075,14 @@ pub(crate) struct ExecOperationCancelOnDropGuard {
 }
 
 impl ExecOperationCancelOnDropGuard {
+    fn new_for_seq(shared: Arc<Shared>, seq: u32, diagnostic: ExecOperationDiagnostic) -> Self {
+        Self {
+            shared: Some(shared),
+            seq,
+            diagnostic,
+        }
+    }
+
     pub(crate) fn new(handle: &ExecOperationHandle) -> Option<Self> {
         Some(Self {
             shared: Some(Arc::clone(&handle.shared)),
@@ -2100,6 +2160,35 @@ pub(crate) async fn start_supervised_exec_on_shared(
     shared: &Arc<Shared>,
     request: SupervisedExecRequest<'_>,
 ) -> io::Result<SupervisedExecHandle> {
+    start_supervised_exec_on_shared_with_after_start_write(shared, request, ready(())).await
+}
+
+async fn start_supervised_exec_on_shared_with_after_start_write<F>(
+    shared: &Arc<Shared>,
+    request: SupervisedExecRequest<'_>,
+    after_start_write: F,
+) -> io::Result<SupervisedExecHandle>
+where
+    F: Future<Output = ()>,
+{
+    start_supervised_exec_on_shared_with_after_start_write_and_cancel_timeout(
+        shared,
+        request,
+        after_start_write,
+        EXEC_OPERATION_START_TIMEOUT_CANCEL_WRITE_TIMEOUT,
+    )
+    .await
+}
+
+async fn start_supervised_exec_on_shared_with_after_start_write_and_cancel_timeout<F>(
+    shared: &Arc<Shared>,
+    request: SupervisedExecRequest<'_>,
+    after_start_write: F,
+    start_timeout_cancel_write_timeout: Duration,
+) -> io::Result<SupervisedExecHandle>
+where
+    F: Future<Output = ()>,
+{
     let stream_queue_capacity = stream_queue_capacity_for(
         request.stdout,
         request.stderr,
@@ -2181,7 +2270,9 @@ pub(crate) async fn start_supervised_exec_on_shared(
     }
 
     let mut registration_guard = ExecOperationRegistrationGuard::new(Arc::clone(shared), seq);
-    write_frame(
+    let mut start_cancel_on_drop =
+        ExecOperationCancelOnDropGuard::new_for_seq(Arc::clone(shared), seq, diagnostic.clone());
+    let start_write_result = write_frame(
         shared,
         MSG_EXEC_START,
         seq,
@@ -2190,23 +2281,70 @@ pub(crate) async fn start_supervised_exec_on_shared(
         Some(seq),
         FrameWriteObserver::default(),
     )
-    .await?;
+    .await;
+    if let Err(error) = start_write_result {
+        start_cancel_on_drop.disarm();
+        return Err(error);
+    }
+    after_start_write.await;
 
     let pid = tokio::select! {
         biased;
         result = start_rx => {
-            result.map_err(|_| io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                "connection closed",
-            ))??
+            match result {
+                Ok(Ok(pid)) => pid,
+                Ok(Err(error)) => {
+                    start_cancel_on_drop.disarm();
+                    return Err(error);
+                }
+                Err(_) => {
+                    start_cancel_on_drop.disarm();
+                    return Err(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "connection closed",
+                    ));
+                }
+            }
         }
         _ = tokio::time::sleep(request.start_timeout) => {
+            let payload = vsock_proto::encode_exec_cancel();
+            shared.remove_operation(seq);
+            registration_guard.disarm();
+            let cancel_result = tokio::time::timeout(
+                start_timeout_cancel_write_timeout,
+                write_frame(
+                    shared,
+                    MSG_EXEC_CANCEL,
+                    seq,
+                    &payload,
+                    Some(diagnostic.frame("start-timeout-cancel")),
+                    None,
+                    FrameWriteObserver::default(),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    seq = seq,
+                    label = %diagnostic.label_log,
+                    elapsed_ms = diagnostic.elapsed_ms(),
+                    "supervised exec start timeout cancel write timed out"
+                );
+                shared.poison_connection();
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "supervised exec start timeout cancel write timed out",
+                ))
+            });
+            start_cancel_on_drop.disarm();
+            cancel_result?;
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "supervised exec start acknowledgement timeout",
             ));
         }
     };
+    start_cancel_on_drop.disarm();
     registration_guard.disarm();
 
     Ok(SupervisedExecHandle {
@@ -2475,6 +2613,24 @@ pub(crate) mod test_support {
     pub(crate) fn drop_started_frame_write_guard(shared: Arc<Shared>) {
         let state = Arc::new(AtomicU8::new(EXEC_OPERATION_FRAME_WRITE_STARTED));
         drop(ExecOperationFrameWriteGuard::new(shared, state));
+    }
+
+    pub(crate) async fn start_supervised_exec_after_start_write<F>(
+        shared: &Arc<Shared>,
+        request: SupervisedExecRequest<'_>,
+        after_start_write: F,
+        start_timeout_cancel_write_timeout: Duration,
+    ) -> io::Result<SupervisedExecHandle>
+    where
+        F: Future<Output = ()>,
+    {
+        start_supervised_exec_on_shared_with_after_start_write_and_cancel_timeout(
+            shared,
+            request,
+            after_start_write,
+            start_timeout_cancel_write_timeout,
+        )
+        .await
     }
 }
 

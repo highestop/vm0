@@ -1131,6 +1131,13 @@ impl VsockHost {
     }
 
     /// Start a supervised exec operation and wait for its PID acknowledgement.
+    ///
+    /// If `request.start_timeout` elapses after the start frame is written,
+    /// the host sends `MSG_EXEC_CANCEL` before returning a timeout error. If
+    /// the bounded cancel write also times out, the connection is poisoned.
+    /// If the cancel write succeeds, the connection remains open but should
+    /// not be reused for later normal operations because terminal proof for the
+    /// timed-out operation was abandoned.
     pub async fn start_supervised_exec(
         &self,
         request: SupervisedExecRequest<'_>,

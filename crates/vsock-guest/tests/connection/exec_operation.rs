@@ -1,13 +1,106 @@
 use std::io::Write;
+use std::thread;
 use std::time::Duration;
 
 use vsock_proto::{
     self, ExecControlPolicy, ExecLifecyclePolicy, ExecOutputPolicy, ExecOutputStream,
-    ExecTermination, ExecTimeoutPolicy, MSG_ERROR, MSG_EXEC_START, MSG_OPERATIONS_QUIESCED,
-    MSG_OPERATIONS_RESUMED,
+    ExecStartEncodeRequest, ExecTermination, ExecTimeoutPolicy, MSG_ERROR, MSG_EXEC_CONTROL,
+    MSG_EXEC_CONTROL_RESULT, MSG_EXEC_OUTPUT, MSG_EXEC_RESULT, MSG_EXEC_START, MSG_EXEC_STARTED,
+    MSG_OPERATIONS_QUIESCED, MSG_OPERATIONS_RESUMED, ProcessControlNonce, ProcessControlStatus,
 };
 
 use super::support::*;
+
+const EXEC_CONTROL_NONCE: ProcessControlNonce = *b"exec-ctrl-000001";
+const EXEC_CONTROL_WRONG_NONCE: ProcessControlNonce = *b"exec-ctrl-999999";
+
+fn unique_exec_control_nonce(seed: u64) -> ProcessControlNonce {
+    let mut nonce = [0u8; 16];
+    nonce[..8].copy_from_slice(&u64::from(std::process::id()).to_be_bytes());
+    nonce[8..].copy_from_slice(&seed.to_be_bytes());
+    nonce
+}
+
+fn sleep_command_with_pid(pid_path: &str) -> String {
+    format!("printf '%s' \"$$\" > '{pid_path}'; sleep 60")
+}
+
+fn send_supervised_exec_start(
+    stream: &mut impl std::io::Write,
+    seq: u32,
+    command: &str,
+    timeout: ExecTimeoutPolicy,
+    stdout: ExecOutputPolicy,
+    control: ExecControlPolicy,
+) {
+    send_exec_start_request(
+        stream,
+        seq,
+        ExecStartEncodeRequest {
+            lifecycle: ExecLifecyclePolicy::Supervised,
+            timeout,
+            command,
+            env: &[],
+            sudo: false,
+            label: "supervised-test",
+            stdout,
+            stderr: ExecOutputPolicy::Capture { limit_bytes: 1024 },
+            expected_exit_codes: &[],
+            control,
+        },
+    );
+}
+
+fn read_exec_started(stream: &mut impl std::io::Read, seq: u32) -> u32 {
+    let msg = read_message(stream);
+    assert_eq!(msg.msg_type, MSG_EXEC_STARTED);
+    assert_eq!(msg.seq, seq);
+    vsock_proto::decode_exec_started(&msg.payload).unwrap().pid
+}
+
+fn read_stdout_chunk(stream: &mut impl std::io::Read, seq: u32) -> Vec<u8> {
+    let msg = read_message(stream);
+    assert_eq!(msg.msg_type, MSG_EXEC_OUTPUT);
+    assert_eq!(msg.seq, seq);
+    let decoded = vsock_proto::decode_exec_output(&msg.payload).unwrap();
+    assert_eq!(decoded.stream, ExecOutputStream::Stdout);
+    assert!(!decoded.truncated);
+    decoded.chunk.to_vec()
+}
+
+fn send_exec_control(
+    stream: &mut impl std::io::Write,
+    request_seq: u32,
+    target_seq: u32,
+    control_nonce: ProcessControlNonce,
+    message_id: &str,
+) {
+    let payload =
+        vsock_proto::encode_exec_control(target_seq, control_nonce, message_id, b"payload", 5000)
+            .unwrap();
+    let msg = vsock_proto::encode(MSG_EXEC_CONTROL, request_seq, &payload).unwrap();
+    stream.write_all(&msg).unwrap();
+}
+
+fn assert_exec_control_result(
+    stream: &mut impl std::io::Read,
+    request_seq: u32,
+    expected_target_seq: u32,
+    expected_nonce: ProcessControlNonce,
+    expected_message_id: &str,
+    expected_status: ProcessControlStatus,
+    expected_diagnostic: &str,
+) {
+    let msg = read_message(stream);
+    assert_eq!(msg.msg_type, MSG_EXEC_CONTROL_RESULT);
+    assert_eq!(msg.seq, request_seq);
+    let decoded = vsock_proto::decode_exec_control_result(&msg.payload).unwrap();
+    assert_eq!(decoded.target_seq, expected_target_seq);
+    assert_eq!(decoded.control_nonce, expected_nonce);
+    assert_eq!(decoded.message_id, expected_message_id);
+    assert_eq!(decoded.status, expected_status);
+    assert_eq!(decoded.diagnostic, expected_diagnostic);
+}
 
 #[test]
 fn exec_operation_capture_only_stdout_stderr_success() {
@@ -69,33 +162,12 @@ fn exec_operation_expected_nonzero_exit_still_returns_result() {
 }
 
 #[test]
-fn exec_operation_rejects_unsupported_start_policies() {
+fn exec_operation_rejects_invalid_one_shot_start_policies() {
     let (handle, mut host_stream) = start_guest_connection();
 
     send_exec_start_request(
         &mut host_stream,
         103,
-        vsock_proto::ExecStartEncodeRequest {
-            lifecycle: ExecLifecyclePolicy::Supervised,
-            timeout: ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
-            command: "printf should-not-run",
-            env: &[],
-            sudo: false,
-            label: "test",
-            stdout: ExecOutputPolicy::Discard,
-            stderr: ExecOutputPolicy::Discard,
-            expected_exit_codes: &[],
-            control: ExecControlPolicy::Disabled,
-        },
-    );
-    assert_eq!(
-        read_error_response(&mut host_stream, 103),
-        "exec supervised lifecycle is not supported"
-    );
-
-    send_exec_start_request(
-        &mut host_stream,
-        104,
         vsock_proto::ExecStartEncodeRequest {
             lifecycle: ExecLifecyclePolicy::OneShot,
             timeout: ExecTimeoutPolicy::None,
@@ -110,8 +182,8 @@ fn exec_operation_rejects_unsupported_start_policies() {
         },
     );
     assert_eq!(
-        read_error_response(&mut host_stream, 104),
-        "exec timeout policy none is not supported"
+        read_error_response(&mut host_stream, 103),
+        "exec timeout policy none requires supervised lifecycle"
     );
 
     let mut zero_timeout_payload = vsock_proto::encode_exec_start(
@@ -125,10 +197,10 @@ fn exec_operation_rejects_unsupported_start_policies() {
     )
     .unwrap();
     zero_timeout_payload[2..6].copy_from_slice(&0u32.to_be_bytes());
-    let zero_timeout_msg = vsock_proto::encode(MSG_EXEC_START, 109, &zero_timeout_payload).unwrap();
+    let zero_timeout_msg = vsock_proto::encode(MSG_EXEC_START, 104, &zero_timeout_payload).unwrap();
     host_stream.write_all(&zero_timeout_msg).unwrap();
     assert_eq!(
-        read_error_response(&mut host_stream, 109),
+        read_error_response(&mut host_stream, 104),
         "invalid payload: exec start timeout duration must be positive"
     );
 
@@ -153,7 +225,7 @@ fn exec_operation_rejects_unsupported_start_policies() {
     );
     assert_eq!(
         read_error_response(&mut host_stream, 105),
-        "exec control policy is not supported"
+        "exec control policy requires supervised lifecycle"
     );
 
     send_quiesce_operations(&mut host_stream, 106);
@@ -180,6 +252,534 @@ fn exec_operation_rejects_unsupported_start_policies() {
     assert!(chunks.is_empty());
     assert_eq!(result.termination, ExecTermination::Exited { exit_code: 0 });
     assert_eq!(result.stdout, Some(b"ok".to_vec()));
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_sends_started_before_output() {
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        201,
+        "printf ready",
+        ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
+        ExecOutputPolicy::Stream {
+            limit_bytes: 1024,
+            chunk_limit_bytes: 1024,
+        },
+        ExecControlPolicy::Disabled,
+    );
+
+    assert!(read_exec_started(&mut host_stream, 201) > 0);
+    let (chunks, result) = read_exec_result(&mut host_stream, 201);
+
+    assert_eq!(result.termination, ExecTermination::Exited { exit_code: 0 });
+    assert_eq!(stdout_data(&chunks), b"ready".to_vec());
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_spawn_failure_returns_start_failed_without_started_ack() {
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        202,
+        "bad\0command",
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Capture { limit_bytes: 1024 },
+        ExecControlPolicy::Disabled,
+    );
+
+    let msg = read_message(&mut host_stream);
+    assert_eq!(msg.msg_type, MSG_EXEC_RESULT);
+    assert_eq!(msg.seq, 202);
+    let result = vsock_proto::decode_exec_result(&msg.payload).unwrap();
+    assert_eq!(result.termination, ExecTermination::StartFailed);
+    assert!(result.diagnostic.contains("Failed to execute"));
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_control_spawn_failure_releases_registration() {
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        208,
+        "bad\0command",
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Capture { limit_bytes: 1024 },
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+
+    let msg = read_message(&mut host_stream);
+    assert_eq!(msg.msg_type, MSG_EXEC_RESULT);
+    assert_eq!(msg.seq, 208);
+    let result = vsock_proto::decode_exec_result(&msg.payload).unwrap();
+    assert_eq!(result.termination, ExecTermination::StartFailed);
+    assert!(result.diagnostic.contains("Failed to execute"));
+
+    send_exec_control(
+        &mut host_stream,
+        310,
+        208,
+        EXEC_CONTROL_NONCE,
+        "message-after-start-failed",
+    );
+    assert_exec_control_result(
+        &mut host_stream,
+        310,
+        208,
+        EXEC_CONTROL_NONCE,
+        "message-after-start-failed",
+        ProcessControlStatus::Inactive,
+        "exec operation is not active",
+    );
+
+    send_quiesce_operations(&mut host_stream, 311);
+    let quiesced = read_message(&mut host_stream);
+    assert_eq!(quiesced.msg_type, MSG_OPERATIONS_QUIESCED);
+    assert_eq!(quiesced.seq, 311);
+    assert!(quiesced.payload.is_empty());
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_control_forwards_to_bootstrap_sink() {
+    let pid_path = unique_pid_path("supervised-exec-bootstrap-sink");
+    let mut child_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+    let target_seq = 203;
+    let control_nonce = unique_exec_control_nonce(u64::from(target_seq));
+    let endpoint = process_control_ipc::endpoint_name(target_seq, &control_nonce);
+    let command = format!(
+        "printf '%s' \"$$\" > '{}'; printf '%s' \"$VM0_PROCESS_CONTROL_ENDPOINT\"; sleep 60",
+        pid_path.as_str()
+    );
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_exec_start_request(
+        &mut host_stream,
+        target_seq,
+        ExecStartEncodeRequest {
+            lifecycle: ExecLifecyclePolicy::Supervised,
+            timeout: ExecTimeoutPolicy::None,
+            command: &command,
+            env: &[(process_control_ipc::BOOTSTRAP_ENV, "stale-endpoint")],
+            sudo: false,
+            label: "supervised-test",
+            stdout: ExecOutputPolicy::CaptureAndStream {
+                capture_limit_bytes: 1024,
+                stream_limit_bytes: 1024,
+                chunk_limit_bytes: 1024,
+            },
+            stderr: ExecOutputPolicy::Capture { limit_bytes: 1024 },
+            expected_exit_codes: &[],
+            control: ExecControlPolicy::Enabled {
+                control_nonce,
+                sink: true,
+            },
+        },
+    );
+    assert!(read_exec_started(&mut host_stream, target_seq) > 0);
+    let pid = child_guard.read_pid();
+    assert_eq!(
+        read_stdout_chunk(&mut host_stream, target_seq),
+        endpoint.as_bytes()
+    );
+
+    let client_endpoint = endpoint.clone();
+    let client = thread::spawn(move || {
+        let mut stream = process_control_ipc::connect_abstract(&client_endpoint).unwrap();
+        process_control_ipc::write_hello(&mut stream).unwrap();
+        let request = process_control_ipc::read_request(&mut stream).unwrap();
+        assert_eq!(request.message_id, "message");
+        assert_eq!(request.payload, b"payload");
+        process_control_ipc::write_response(
+            &mut stream,
+            &process_control_ipc::ControlResponse {
+                message_id: request.message_id,
+                status: process_control_ipc::ControlResponseStatus::Accepted,
+                diagnostic: "ok".to_owned(),
+            },
+        )
+        .unwrap();
+    });
+
+    send_exec_control(&mut host_stream, 303, target_seq, control_nonce, "message");
+    assert_exec_control_result(
+        &mut host_stream,
+        303,
+        target_seq,
+        control_nonce,
+        "message",
+        ProcessControlStatus::Delivered,
+        "ok",
+    );
+    client.join().unwrap();
+
+    send_exec_cancel(&mut host_stream, target_seq);
+    let (_chunks, result) = read_exec_result(&mut host_stream, target_seq);
+    assert_eq!(result.termination, ExecTermination::Cancelled);
+    assert_eq!(result.stdout, Some(endpoint.into_bytes()));
+    wait_for_pid_exit(pid, "supervised exec bootstrap sink cleanup");
+    child_guard.disarm();
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_control_reports_unsupported_without_sink() {
+    let pid_path = unique_pid_path("supervised-exec-unsupported-control");
+    let mut child_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+    let (handle, mut host_stream) = start_guest_connection();
+    let command = sleep_command_with_pid(pid_path.as_str());
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        204,
+        &command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+    assert!(read_exec_started(&mut host_stream, 204) > 0);
+    let pid = child_guard.read_pid();
+
+    send_exec_control(&mut host_stream, 304, 204, EXEC_CONTROL_NONCE, "message");
+    assert_exec_control_result(
+        &mut host_stream,
+        304,
+        204,
+        EXEC_CONTROL_NONCE,
+        "message",
+        ProcessControlStatus::Unsupported,
+        "exec control sink is not configured",
+    );
+
+    send_exec_cancel(&mut host_stream, 204);
+    let (_chunks, result) = read_exec_result(&mut host_stream, 204);
+    assert_eq!(result.termination, ExecTermination::Cancelled);
+    wait_for_pid_exit(pid, "supervised exec unsupported control cleanup");
+    child_guard.disarm();
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_control_registries_are_isolated_per_connection() {
+    let first_pid_path = unique_pid_path("supervised-exec-first-isolated");
+    let second_pid_path = unique_pid_path("supervised-exec-second-isolated");
+    let mut first_child_guard = ProcessGroupFileGuard::new(first_pid_path.as_str());
+    let mut second_child_guard = ProcessGroupFileGuard::new(second_pid_path.as_str());
+    let (first_handle, mut first_stream) = start_guest_connection();
+    let (second_handle, mut second_stream) = start_guest_connection();
+    let first_command = sleep_command_with_pid(first_pid_path.as_str());
+    let second_command = sleep_command_with_pid(second_pid_path.as_str());
+
+    send_supervised_exec_start(
+        &mut first_stream,
+        209,
+        &first_command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+    send_supervised_exec_start(
+        &mut second_stream,
+        209,
+        &second_command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+
+    assert!(read_exec_started(&mut first_stream, 209) > 0);
+    assert!(read_exec_started(&mut second_stream, 209) > 0);
+    let first_pid = first_child_guard.read_pid();
+    let second_pid = second_child_guard.read_pid();
+
+    send_exec_control(
+        &mut first_stream,
+        312,
+        209,
+        EXEC_CONTROL_NONCE,
+        "message-first",
+    );
+    send_exec_control(
+        &mut second_stream,
+        312,
+        209,
+        EXEC_CONTROL_NONCE,
+        "message-second",
+    );
+
+    assert_exec_control_result(
+        &mut first_stream,
+        312,
+        209,
+        EXEC_CONTROL_NONCE,
+        "message-first",
+        ProcessControlStatus::Unsupported,
+        "exec control sink is not configured",
+    );
+    assert_exec_control_result(
+        &mut second_stream,
+        312,
+        209,
+        EXEC_CONTROL_NONCE,
+        "message-second",
+        ProcessControlStatus::Unsupported,
+        "exec control sink is not configured",
+    );
+
+    send_exec_cancel(&mut first_stream, 209);
+    send_exec_cancel(&mut second_stream, 209);
+
+    let (_chunks, first_result) = read_exec_result(&mut first_stream, 209);
+    let (_chunks, second_result) = read_exec_result(&mut second_stream, 209);
+    assert_eq!(first_result.termination, ExecTermination::Cancelled);
+    assert_eq!(second_result.termination, ExecTermination::Cancelled);
+    wait_for_pid_exit(first_pid, "first supervised exec isolation cleanup");
+    wait_for_pid_exit(second_pid, "second supervised exec isolation cleanup");
+    first_child_guard.disarm();
+    second_child_guard.disarm();
+
+    finish_guest_connection(first_handle, first_stream);
+    finish_guest_connection(second_handle, second_stream);
+}
+
+#[test]
+fn supervised_exec_control_duplicate_start_preserves_active_nonce() {
+    let pid_path = unique_pid_path("supervised-exec-duplicate-control");
+    let mut child_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+    let (handle, mut host_stream) = start_guest_connection();
+    let command = sleep_command_with_pid(pid_path.as_str());
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        206,
+        &command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+    assert!(read_exec_started(&mut host_stream, 206) > 0);
+    let pid = child_guard.read_pid();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        206,
+        "printf duplicate",
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_WRONG_NONCE,
+            sink: false,
+        },
+    );
+    assert_eq!(
+        read_error_response(&mut host_stream, 206),
+        "exec operation already active"
+    );
+
+    send_exec_control(
+        &mut host_stream,
+        306,
+        206,
+        EXEC_CONTROL_WRONG_NONCE,
+        "message-wrong-nonce",
+    );
+    assert_exec_control_result(
+        &mut host_stream,
+        306,
+        206,
+        EXEC_CONTROL_WRONG_NONCE,
+        "message-wrong-nonce",
+        ProcessControlStatus::NonceMismatch,
+        "exec operation nonce mismatch",
+    );
+
+    send_exec_control(
+        &mut host_stream,
+        307,
+        206,
+        EXEC_CONTROL_NONCE,
+        "message-original-nonce",
+    );
+    assert_exec_control_result(
+        &mut host_stream,
+        307,
+        206,
+        EXEC_CONTROL_NONCE,
+        "message-original-nonce",
+        ProcessControlStatus::Unsupported,
+        "exec control sink is not configured",
+    );
+
+    send_exec_cancel(&mut host_stream, 206);
+    let (_chunks, result) = read_exec_result(&mut host_stream, 206);
+    assert_eq!(result.termination, ExecTermination::Cancelled);
+    wait_for_pid_exit(pid, "supervised exec duplicate control cleanup");
+    child_guard.disarm();
+
+    send_quiesce_operations(&mut host_stream, 308);
+    let quiesced = read_message(&mut host_stream);
+    assert_eq!(quiesced.msg_type, MSG_OPERATIONS_QUIESCED);
+    assert_eq!(quiesced.seq, 308);
+    assert!(quiesced.payload.is_empty());
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_duplicate_start_with_control_does_not_leak_registration() {
+    let pid_path = unique_pid_path("supervised-exec-duplicate-registration");
+    let mut child_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+    let (handle, mut host_stream) = start_guest_connection();
+    let command = sleep_command_with_pid(pid_path.as_str());
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        210,
+        &command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Disabled,
+    );
+    assert!(read_exec_started(&mut host_stream, 210) > 0);
+    let pid = child_guard.read_pid();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        210,
+        "printf duplicate",
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+    assert_eq!(
+        read_error_response(&mut host_stream, 210),
+        "exec operation already active"
+    );
+
+    send_exec_control(
+        &mut host_stream,
+        313,
+        210,
+        EXEC_CONTROL_NONCE,
+        "message-duplicate-control",
+    );
+    assert_exec_control_result(
+        &mut host_stream,
+        313,
+        210,
+        EXEC_CONTROL_NONCE,
+        "message-duplicate-control",
+        ProcessControlStatus::Inactive,
+        "exec operation is not active",
+    );
+
+    send_exec_cancel(&mut host_stream, 210);
+    let (_chunks, result) = read_exec_result(&mut host_stream, 210);
+    assert_eq!(result.termination, ExecTermination::Cancelled);
+    wait_for_pid_exit(pid, "supervised exec duplicate registration cleanup");
+    child_guard.disarm();
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_control_after_exit_returns_inactive() {
+    let (handle, mut host_stream) = start_guest_connection();
+
+    send_supervised_exec_start(
+        &mut host_stream,
+        207,
+        "printf done",
+        ExecTimeoutPolicy::Duration { timeout_ms: 5000 },
+        ExecOutputPolicy::Capture { limit_bytes: 1024 },
+        ExecControlPolicy::Enabled {
+            control_nonce: EXEC_CONTROL_NONCE,
+            sink: false,
+        },
+    );
+    assert!(read_exec_started(&mut host_stream, 207) > 0);
+    let (_chunks, result) = read_exec_result(&mut host_stream, 207);
+    assert_eq!(result.termination, ExecTermination::Exited { exit_code: 0 });
+    assert_eq!(result.stdout, Some(b"done".to_vec()));
+
+    send_exec_control(
+        &mut host_stream,
+        309,
+        207,
+        EXEC_CONTROL_NONCE,
+        "message-after-exit",
+    );
+    assert_exec_control_result(
+        &mut host_stream,
+        309,
+        207,
+        EXEC_CONTROL_NONCE,
+        "message-after-exit",
+        ProcessControlStatus::Inactive,
+        "exec operation is not active",
+    );
+
+    finish_guest_connection(handle, host_stream);
+}
+
+#[test]
+fn supervised_exec_none_timeout_runs_until_cancelled() {
+    let pid_path = unique_pid_path("supervised-exec-cancel");
+    let mut child_guard = ProcessGroupFileGuard::new(pid_path.as_str());
+    let (handle, mut host_stream) = start_guest_connection();
+
+    let command = format!("echo $$ > '{}'; sleep 60", pid_path.as_str());
+    send_supervised_exec_start(
+        &mut host_stream,
+        205,
+        &command,
+        ExecTimeoutPolicy::None,
+        ExecOutputPolicy::Discard,
+        ExecControlPolicy::Disabled,
+    );
+    assert!(read_exec_started(&mut host_stream, 205) > 0);
+    let pid = child_guard.read_pid();
+    assert!(
+        pid_alive(pid),
+        "supervised exec child should be running before cancel"
+    );
+
+    send_exec_cancel(&mut host_stream, 205);
+    let (_chunks, result) = read_exec_result(&mut host_stream, 205);
+    assert_eq!(result.termination, ExecTermination::Cancelled);
+    assert_eq!(result.stdout, None);
+    wait_for_pid_exit(pid, "supervised exec explicit cancel");
+    child_guard.disarm();
 
     finish_guest_connection(handle, host_stream);
 }
@@ -768,7 +1368,7 @@ fn exec_operation_unknown_cancel_is_ignored() {
 }
 
 #[test]
-fn exec_operation_seq_zero_start_and_cancel_return_error() {
+fn exec_operation_seq_zero_start_cancel_and_control_return_error() {
     let (handle, mut host_stream) = start_guest_connection();
 
     send_exec_start(
@@ -794,6 +1394,16 @@ fn exec_operation_seq_zero_start_and_cancel_return_error() {
     assert_eq!(cancel_error.seq, 0);
     assert!(
         vsock_proto::decode_error(&cancel_error.payload)
+            .unwrap()
+            .contains("non-zero sequence")
+    );
+
+    send_exec_control(&mut host_stream, 0, 1, EXEC_CONTROL_NONCE, "message-zero");
+    let control_error = read_message(&mut host_stream);
+    assert_eq!(control_error.msg_type, MSG_ERROR);
+    assert_eq!(control_error.seq, 0);
+    assert!(
+        vsock_proto::decode_error(&control_error.payload)
             .unwrap()
             .contains("non-zero sequence")
     );
@@ -844,16 +1454,23 @@ fn exec_operation_returns_when_orphaned_grandchild_holds_stdout() {
 fn exec_operation_captures_grandchild_output_before_drain_deadline() {
     use std::time::Instant;
 
+    let fifo_path = unique_tmp_path("exec-operation-grandchild-output", ".fifo");
     let (handle, mut host_stream) = start_guest_connection();
     host_stream
         .set_read_timeout(Some(Duration::from_secs(8)))
         .unwrap();
 
+    let command = format!(
+        "mkfifo '{}'; {{ cat '{}' >/dev/null; echo stdout-late; echo stderr-late >&2; }} & exec 3>'{}'; echo stdout-early; echo stderr-early >&2",
+        fifo_path.as_str(),
+        fifo_path.as_str(),
+        fifo_path.as_str()
+    );
     let start = Instant::now();
     send_exec_start(
         &mut host_stream,
         123,
-        "echo stdout-early; echo stderr-early >&2; { sleep 1; echo stdout-late; echo stderr-late >&2; } &",
+        &command,
         LONG_RUNNING_EXEC_TIMEOUT_MS,
         ExecOutputPolicy::Capture { limit_bytes: 1024 },
         ExecOutputPolicy::Capture { limit_bytes: 1024 },

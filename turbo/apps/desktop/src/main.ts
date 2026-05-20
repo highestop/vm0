@@ -46,6 +46,7 @@ import {
   shouldHideMainWindowOnClose,
   showAndFocusWindow,
 } from "./desktop-window-lifecycle";
+import { buildDesktopWindowChromeOptions } from "./desktop-window-chrome";
 import { buildSignedOutPageUrl } from "./signed-out-page";
 import { decideWindowOpen, isAllowedAppNavigation } from "./window-policy";
 
@@ -283,6 +284,7 @@ function browserWindowOptions() {
     title: config.identity.displayName,
     backgroundColor: "#19191b",
     icon: appIconPath(),
+    ...buildDesktopWindowChromeOptions(process.platform),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

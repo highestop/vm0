@@ -196,6 +196,7 @@ pub async fn run_start(
         ));
     }
 
+    let runner_host_env = crate::host_env::read_runner_host_env()?;
     let config::SandboxConfig {
         max_concurrent,
         concurrency_factor: yaml_concurrency_factor,
@@ -203,7 +204,10 @@ pub async fn run_start(
         max_idle,
     } = runner_config.sandbox;
     let (concurrency_factor, concurrency_factor_source) =
-        crate::runtime_overrides::resolve_concurrency_factor(yaml_concurrency_factor)?;
+        crate::runtime_overrides::resolve_concurrency_factor(
+            yaml_concurrency_factor,
+            &runner_host_env,
+        )?;
     if concurrency_factor_source.is_override() {
         info!(
             env_var = crate::host_env::RUNNER_CONCURRENCY_FACTOR_ENV,
@@ -365,6 +369,31 @@ pub async fn run_start(
         profiles = runner_config.profiles.len(),
         "resource budget initialized"
     );
+    let io_limit_resolution =
+        crate::io_limits::resolve_io_limits(&runner_config.profiles, &budget, &runner_host_env);
+    let device_rate_limits = io_limit_resolution.device_rate_limits();
+    match &io_limit_resolution {
+        crate::io_limits::IoLimitResolution::Disabled => {
+            info!("I/O limiters disabled");
+        }
+        crate::io_limits::IoLimitResolution::Misconfigured { reason } => {
+            warn!(%reason, "I/O limiter host env config invalid; disabling I/O limiter capacity");
+        }
+        crate::io_limits::IoLimitResolution::Configured {
+            limits,
+            denominator,
+        } => {
+            info!(
+                denominator,
+                disk_bandwidth_bytes_per_sec = limits.block.bandwidth_bytes_per_sec,
+                disk_ops_per_sec = limits.block.ops_per_sec,
+                net_rx_bytes_per_sec = limits.network.rx_bytes_per_sec,
+                net_tx_bytes_per_sec = limits.network.tx_bytes_per_sec,
+                feature_flag = crate::io_limits::SANDBOX_IO_LIMITERS_FEATURE_FLAG,
+                "I/O limiter capacity configured; applying limiters only for flagged jobs"
+            );
+        }
+    }
 
     // Idle sandbox pool for VM reuse across conversation turns.
     let parking_gate = ParkingGate::new_open();
@@ -463,6 +492,7 @@ pub async fn run_start(
         runtime,
         home,
         budget,
+        device_rate_limits,
         idle_pool,
         parking_gate,
         status,
@@ -498,6 +528,7 @@ struct RunConfig {
     runtime: Box<dyn SandboxRuntime>,
     home: HomePaths,
     budget: Arc<ResourceBudget>,
+    device_rate_limits: Option<sandbox::DeviceRateLimits>,
     idle_pool: SharedIdlePool,
     parking_gate: ParkingGate,
     status: Arc<StatusTracker>,
@@ -803,6 +834,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
         mut runtime,
         home,
         budget,
+        device_rate_limits,
         idle_pool,
         parking_gate,
         status,
@@ -934,6 +966,7 @@ async fn run(config: RunConfig) -> RunnerResult<()> {
         orphaned_active_runs: orphaned_active_runs.clone(),
         parking_gate: parking_gate.clone(),
         park_notify: Arc::clone(&park_notify),
+        device_rate_limits: device_rate_limits.clone(),
         #[cfg(test)]
         outer_job_panic,
         #[cfg(test)]

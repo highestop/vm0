@@ -47,7 +47,10 @@ const MIN_EPOCH_MS_TIMESTAMP: u64 = 1_000_000_000_000;
 static INVALID_API_START_TIME_WARNED: AtomicBool = AtomicBool::new(false);
 
 use crate::error::{RunnerError, RunnerResult};
-use crate::host_env::RUNNER_CONCURRENCY_FACTOR_ENV;
+use crate::host_env::{
+    RUNNER_CONCURRENCY_FACTOR_ENV, RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV, RUNNER_DISK_IOPS_ENV,
+    RUNNER_NET_RX_MIB_PER_SEC_ENV, RUNNER_NET_TX_MIB_PER_SEC_ENV,
+};
 use crate::http::HttpClient;
 use crate::idle_pool::ReusableIdleSandbox;
 use crate::network_log_drain::NetworkLogDrainCoordinator;
@@ -77,6 +80,7 @@ pub struct JobParams {
     pub vcpu: u32,
     pub memory_mb: u32,
     pub restore_guest_state: bool,
+    pub device_rate_limits: Option<sandbox::DeviceRateLimits>,
 }
 
 /// Outcome of a job execution, including the sandbox for possible reuse.
@@ -284,6 +288,7 @@ fn record_reuse_result(telemetry: &mut JobTelemetry, result: SandboxReuseResult)
         SandboxReuseResult::NoSessionId
         | SandboxReuseResult::PoolMiss
         | SandboxReuseResult::ProfileMismatch
+        | SandboxReuseResult::DeviceLimitMismatch
         | SandboxReuseResult::UnparkFailed => "sandbox_reuse_miss",
     };
     telemetry.record(action_type, Duration::ZERO, true, None);
@@ -359,6 +364,7 @@ async fn execute_new_sandbox(
             cpu_count: params.vcpu,
             memory_mb: params.memory_mb,
         },
+        device_rate_limits: params.device_rate_limits.clone(),
     };
 
     // Create and start sandbox
@@ -1654,6 +1660,10 @@ const RUNNER_OWNED_ENV_KEYS: &[&str] = &[
     "VM0_SECRET_VALUES",
     "VM0_FEATURE_FLAGS",
     RUNNER_CONCURRENCY_FACTOR_ENV,
+    RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV,
+    RUNNER_DISK_IOPS_ENV,
+    RUNNER_NET_RX_MIB_PER_SEC_ENV,
+    RUNNER_NET_TX_MIB_PER_SEC_ENV,
     "USE_MOCK_CLAUDE",
     "USE_MOCK_CODEX",
     "VM0_MOCK_CLAUDE_PATH",
@@ -1875,6 +1885,10 @@ mod tests {
             (SandboxReuseResult::NoSessionId, "noSessionId"),
             (SandboxReuseResult::PoolMiss, "poolMiss"),
             (SandboxReuseResult::ProfileMismatch, "profileMismatch"),
+            (
+                SandboxReuseResult::DeviceLimitMismatch,
+                "deviceLimitMismatch",
+            ),
             (SandboxReuseResult::UnparkFailed, "unparkFailed"),
         ] {
             let env = build_env_json_with_host_env(
@@ -1992,6 +2006,10 @@ mod tests {
             ("VM0_API_TOKEN".into(), "stolen".into()),
             ("VM0_FEATURE_FLAGS".into(), r#"{"bad":true}"#.into()),
             (RUNNER_CONCURRENCY_FACTOR_ENV.into(), "99".into()),
+            (RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV.into(), "999".into()),
+            (RUNNER_DISK_IOPS_ENV.into(), "999".into()),
+            (RUNNER_NET_RX_MIB_PER_SEC_ENV.into(), "999".into()),
+            (RUNNER_NET_TX_MIB_PER_SEC_ENV.into(), "999".into()),
             ("CLI_AGENT_TYPE".into(), "claude-code".into()),
             ("USE_MOCK_CLAUDE".into(), "true".into()),
             ("USE_MOCK_CODEX".into(), "1".into()),
@@ -2011,6 +2029,10 @@ mod tests {
         assert_eq!(env.get("CLI_AGENT_TYPE").unwrap(), "codex");
         assert!(!env.contains_key("VM0_FEATURE_FLAGS"));
         assert!(!env.contains_key(RUNNER_CONCURRENCY_FACTOR_ENV));
+        assert!(!env.contains_key(RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV));
+        assert!(!env.contains_key(RUNNER_DISK_IOPS_ENV));
+        assert!(!env.contains_key(RUNNER_NET_RX_MIB_PER_SEC_ENV));
+        assert!(!env.contains_key(RUNNER_NET_TX_MIB_PER_SEC_ENV));
         assert!(!env.contains_key("USE_MOCK_CLAUDE"));
         assert!(!env.contains_key("USE_MOCK_CODEX"));
         assert!(!env.contains_key("VERCEL_PROTECTION_BYPASS"));
@@ -3313,6 +3335,20 @@ mod tests {
             vcpu: 2,
             memory_mb: 2048,
             restore_guest_state: false,
+            device_rate_limits: None,
+        }
+    }
+
+    fn test_device_rate_limits() -> sandbox::DeviceRateLimits {
+        sandbox::DeviceRateLimits {
+            block: sandbox::BlockRateLimits {
+                bandwidth_bytes_per_sec: 100 * 1024 * 1024,
+                ops_per_sec: 10_000,
+            },
+            network: sandbox::NetworkRateLimits {
+                rx_bytes_per_sec: 50 * 1024 * 1024,
+                tx_bytes_per_sec: 25 * 1024 * 1024,
+            },
         }
     }
 
@@ -3344,6 +3380,7 @@ mod tests {
                 session_id: session_id.into(),
                 sandbox_id: SandboxId::new_v4(),
                 profile_name: "vm0/default".into(),
+                device_rate_limits: None,
                 budget_lease: test_budget_lease(),
                 source_ip,
                 storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
@@ -3405,6 +3442,30 @@ mod tests {
                 .unwrap();
         assert_eq!(exit_code, 0);
         assert!(error_msg.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_inner_passes_device_rate_limits_to_sandbox_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::new());
+        let factory = MockSandboxFactory::with_overrides(Arc::clone(&overrides));
+        let limits = test_device_rate_limits();
+        let params = JobParams {
+            device_rate_limits: Some(limits.clone()),
+            ..default_params()
+        };
+
+        let (exit_code, error_msg) =
+            run_execute_inner(&factory, &minimal_context(), &config, &params)
+                .await
+                .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert!(error_msg.is_none());
+        let configs = overrides.create_configs();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].device_rate_limits, Some(limits));
     }
 
     #[tokio::test]
@@ -3781,6 +3842,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
+            device_rate_limits: None,
             budget_lease: test_budget_lease(),
             source_ip: outcome.source_ip,
             storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
@@ -3832,6 +3894,7 @@ mod tests {
             session_id: "test-session".into(),
             sandbox_id: SandboxId::new_v4(),
             profile_name: "vm0/default".into(),
+            device_rate_limits: None,
             budget_lease: test_budget_lease(),
             source_ip: "10.0.0.1".into(),
             storage_fingerprints: crate::idle_pool::StorageFingerprints::default(),
@@ -4335,6 +4398,7 @@ mod tests {
             SandboxReuseResult::NoSessionId,
             SandboxReuseResult::PoolMiss,
             SandboxReuseResult::ProfileMismatch,
+            SandboxReuseResult::DeviceLimitMismatch,
             SandboxReuseResult::UnparkFailed,
         ];
         for variant in variants {

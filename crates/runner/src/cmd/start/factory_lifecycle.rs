@@ -99,6 +99,7 @@ pub(super) async fn shutdown_factories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
@@ -107,6 +108,7 @@ mod tests {
     struct RecordingRuntime {
         create_calls: AtomicUsize,
         factory_shutdowns: Arc<AtomicUsize>,
+        factory_configs: Mutex<Vec<sandbox::FactoryConfig>>,
         runtime_shutdowns: AtomicUsize,
         fail_at: usize,
     }
@@ -116,6 +118,7 @@ mod tests {
             Self {
                 create_calls: AtomicUsize::new(0),
                 factory_shutdowns: Arc::new(AtomicUsize::new(0)),
+                factory_configs: Mutex::new(Vec::new()),
                 runtime_shutdowns: AtomicUsize::new(0),
                 fail_at,
             }
@@ -126,7 +129,7 @@ mod tests {
     impl SandboxRuntime for RecordingRuntime {
         async fn create_factory(
             &self,
-            _config: sandbox::FactoryConfig,
+            config: sandbox::FactoryConfig,
         ) -> sandbox::Result<Box<dyn SandboxFactory>> {
             let call = self.create_calls.fetch_add(1, Ordering::SeqCst) + 1;
             if call == self.fail_at {
@@ -135,6 +138,10 @@ mod tests {
                     message: "factory failed".into(),
                 });
             }
+            self.factory_configs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(config);
             Ok(Box::new(RecordingFactory {
                 shutdowns: Arc::clone(&self.factory_shutdowns),
             }))

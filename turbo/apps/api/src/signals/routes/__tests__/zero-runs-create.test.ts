@@ -212,6 +212,9 @@ async function fixture(): Promise<UsageInsightFixture> {
     ],
   });
   context.mocks.s3.send.mockResolvedValue({});
+  context.mocks.s3.getSignedUrl.mockResolvedValue(
+    "https://r2.example.com/archive.tar.gz?sig=test",
+  );
   mockOptionalEnv("RUNNER_DEFAULT_GROUP", "vm0/test");
   return created;
 }
@@ -482,9 +485,15 @@ describe("POST /api/zero/runs", () => {
     await db.insert(userFeatureSwitches).values({
       orgId: fx.orgId,
       userId: fx.userId,
-      switches: { [FeatureSwitchKey.ComputerUse]: true },
+      switches: {
+        [FeatureSwitchKey.ComputerUse]: true,
+        [FeatureSwitchKey.SandboxIoLimiters]: true,
+      },
     });
-    const agent = await seedRunnableZeroAgent({ fixture: fx });
+    const agent = await seedRunnableZeroAgent({
+      fixture: fx,
+      framework: "codex",
+    });
     const first = await accept(
       zeroRunsClient().create({
         headers: { authorization: "Bearer clerk-session" },
@@ -562,6 +571,7 @@ describe("POST /api/zero/runs", () => {
     expect(executionContext.environment?.ZERO_AGENT_ID).toBe(agent.agentId);
     expect(executionContext.featureFlags).toMatchObject({
       [FeatureSwitchKey.ComputerUse]: true,
+      [FeatureSwitchKey.SandboxIoLimiters]: true,
     });
     const zeroToken = decryptSecretsMap(
       executionContext.encryptedSecrets ?? null,

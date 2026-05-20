@@ -63,9 +63,9 @@ impl FirecrackerRuntime {
         })
     }
 
-    fn to_firecracker_config(&self, config: FactoryConfig) -> FirecrackerConfig {
+    fn to_firecracker_config(&self, config: FactoryConfig) -> sandbox::Result<FirecrackerConfig> {
         let snapshot = config.snapshot.map(|s| Self::resolve_snapshot(&s));
-        FirecrackerConfig {
+        Ok(FirecrackerConfig {
             binary_path: config.binary_path,
             kernel_path: config.kernel_path,
             rootfs_path: config.rootfs_path,
@@ -74,7 +74,7 @@ impl FirecrackerRuntime {
             proxy_port: self.proxy_port,
             dns_port: self.dns_port,
             snapshot,
-        }
+        })
     }
 
     fn resolve_snapshot(snapshot_ref: &SnapshotRef) -> SnapshotConfig {
@@ -98,7 +98,7 @@ impl SandboxRuntime for FirecrackerRuntime {
         &self,
         config: FactoryConfig,
     ) -> sandbox::Result<Box<dyn SandboxFactory>> {
-        let fc_config = self.to_firecracker_config(config);
+        let fc_config = self.to_firecracker_config(config)?;
         let factory = FirecrackerFactory::start(
             fc_config,
             Some(self.netns_pool.clone()),

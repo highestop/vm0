@@ -354,6 +354,13 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     enabled: false,
     enabledOrgIdHashes: STAFF_ORG_ID_HASHES,
   },
+  [FeatureSwitchKey.SandboxIoLimiters]: {
+    maintainer: "liangyou@vm0.ai",
+    description:
+      "Enable runner-provided disk and network device rate limiters for sandbox VMs.",
+    enabled: false,
+    enabledOrgIdHashes: STAFF_ORG_ID_HASHES,
+  },
 };
 
 interface ResolvedHashes {

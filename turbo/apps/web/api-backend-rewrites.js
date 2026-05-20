@@ -225,6 +225,7 @@ const ZERO_CONNECTORS_AUTHORIZE_REWRITE_SOURCE =
   "/api/zero/connectors/:type/authorize";
 const ZERO_CONNECTORS_AUTHORIZE_PATH_RE =
   /^\/api\/zero\/connectors\/[^/]+\/authorize$/;
+const ZERO_CONNECTORS_SEARCH_REWRITE_SOURCE = "/api/zero/connectors/search";
 const ZERO_CONNECTORS_OAUTH_START_REWRITE_SOURCE =
   "/api/zero/connectors/:type/oauth/start";
 const ZERO_CONNECTORS_OAUTH_START_PATH_RE =
@@ -551,6 +552,7 @@ export const API_BACKEND_REWRITES = [
   [ZERO_BILLING_CHECKOUT_REWRITE_SOURCE, "/api/zero/billing/checkout"],
   [ZERO_BILLING_DOWNGRADE_REWRITE_SOURCE, "/api/zero/billing/downgrade"],
   [ZERO_BILLING_STATUS_REWRITE_SOURCE, "/api/zero/billing/status"],
+  [ZERO_CONNECTORS_SEARCH_REWRITE_SOURCE, "/api/zero/connectors/search"],
   [
     ZERO_CONNECTORS_AUTHORIZE_REWRITE_SOURCE,
     "/api/zero/connectors/:type/authorize",

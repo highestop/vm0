@@ -1893,6 +1893,16 @@ describe("API backend rewrite proxy behavior", () => {
     ).toBe(false);
   });
 
+  it("matches the zero image generation rewrite path exactly", () => {
+    expect(matchesApiBackendRewritePath("/api/zero/image-io/generate")).toBe(
+      true,
+    );
+    expect(
+      matchesApiBackendRewritePath("/api/zero/image-io/generate/extra"),
+    ).toBe(false);
+    expect(matchesApiBackendRewritePath("/api/zero/image-io")).toBe(false);
+  });
+
   it("matches the zero website generation rewrite path exactly", () => {
     expect(matchesApiBackendRewritePath("/api/zero/website-io/generate")).toBe(
       true,

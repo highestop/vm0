@@ -769,7 +769,7 @@ describe("API backend rewrite proxy behavior", () => {
       false,
     );
     expect(
-      matchesApiBackendRewritePath("/api/zero/integrations/telegram/message"),
+      matchesApiBackendRewritePath("/api/zero/integrations/telegram"),
     ).toBe(false);
   });
 
@@ -786,7 +786,7 @@ describe("API backend rewrite proxy behavior", () => {
       false,
     );
     expect(
-      matchesApiBackendRewritePath("/api/zero/integrations/telegram/message"),
+      matchesApiBackendRewritePath("/api/zero/integrations/telegram"),
     ).toBe(false);
   });
 
@@ -828,6 +828,23 @@ describe("API backend rewrite proxy behavior", () => {
         `/api/zero/connectors/sessions/${ZERO_CONNECTOR_SESSION_ID}`,
       ),
     ).toBe(false);
+  });
+
+  it("matches the zero integrations Telegram message rewrite path exactly", () => {
+    expect(
+      matchesApiBackendRewritePath("/api/zero/integrations/telegram/message"),
+    ).toBe(true);
+    expect(
+      matchesApiBackendRewritePath(
+        "/api/zero/integrations/telegram/message/extra",
+      ),
+    ).toBe(false);
+    expect(
+      matchesApiBackendRewritePath("/api/zero/integrations/telegram"),
+    ).toBe(false);
+    expect(matchesApiBackendRewritePath("/api/zero/integrations/slack")).toBe(
+      false,
+    );
   });
 
   it("matches the zero connector OAuth start rewrite path exactly", () => {

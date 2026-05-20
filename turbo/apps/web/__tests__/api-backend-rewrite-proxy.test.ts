@@ -2426,7 +2426,12 @@ describe("API backend rewrite proxy behavior", () => {
       false,
     );
     expect(matchesApiBackendRewritePath("/api/runners")).toBe(false);
-    expect(matchesApiBackendRewritePath("/api/runners/poll")).toBe(false);
+  });
+
+  it("matches the runners poll rewrite path exactly", () => {
+    expect(matchesApiBackendRewritePath("/api/runners/poll")).toBe(true);
+    expect(matchesApiBackendRewritePath("/api/runners/poll/extra")).toBe(false);
+    expect(matchesApiBackendRewritePath("/api/runners")).toBe(false);
   });
 
   it("matches the zero secrets by-name rewrite path exactly", () => {

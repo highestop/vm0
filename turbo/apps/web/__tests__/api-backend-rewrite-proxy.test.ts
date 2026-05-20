@@ -1279,6 +1279,19 @@ describe("API backend rewrite proxy behavior", () => {
     expect(matchesApiBackendRewritePath("/api/zero/billing/status")).toBe(true);
   });
 
+  it("matches the zero billing checkout rewrite path exactly", () => {
+    expect(matchesApiBackendRewritePath("/api/zero/billing/checkout")).toBe(
+      true,
+    );
+    expect(
+      matchesApiBackendRewritePath("/api/zero/billing/checkout/extra"),
+    ).toBe(false);
+    expect(matchesApiBackendRewritePath("/api/zero/billing")).toBe(false);
+    expect(
+      matchesApiBackendRewritePath("/api/zero/billing/checkout-session"),
+    ).toBe(false);
+  });
+
   it("matches the zero billing status rewrite path exactly", () => {
     expect(matchesApiBackendRewritePath("/api/zero/billing/status")).toBe(true);
     expect(matchesApiBackendRewritePath("/api/zero/billing/status/extra")).toBe(
@@ -1286,7 +1299,7 @@ describe("API backend rewrite proxy behavior", () => {
     );
     expect(matchesApiBackendRewritePath("/api/zero/billing")).toBe(false);
     expect(matchesApiBackendRewritePath("/api/zero/billing/checkout")).toBe(
-      false,
+      true,
     );
   });
 

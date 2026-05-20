@@ -225,6 +225,10 @@ const ZERO_CONNECTORS_AUTHORIZE_REWRITE_SOURCE =
   "/api/zero/connectors/:type/authorize";
 const ZERO_CONNECTORS_AUTHORIZE_PATH_RE =
   /^\/api\/zero\/connectors\/[^/]+\/authorize$/;
+const ZERO_CONNECTORS_OAUTH_START_REWRITE_SOURCE =
+  "/api/zero/connectors/:type/oauth/start";
+const ZERO_CONNECTORS_OAUTH_START_PATH_RE =
+  /^\/api\/zero\/connectors\/[^/]+\/oauth\/start$/;
 const ZERO_SLACK_OAUTH_INSTALL_REWRITE_SOURCE = "/api/zero/slack/oauth/install";
 const ZERO_SLACK_OAUTH_CONNECT_REWRITE_SOURCE = "/api/zero/slack/oauth/connect";
 const ZERO_SLACK_OAUTH_CALLBACK_REWRITE_SOURCE =
@@ -549,6 +553,11 @@ export const API_BACKEND_REWRITES = [
     ZERO_CONNECTORS_AUTHORIZE_REWRITE_SOURCE,
     "/api/zero/connectors/:type/authorize",
     ZERO_CONNECTORS_AUTHORIZE_PATH_RE,
+  ],
+  [
+    ZERO_CONNECTORS_OAUTH_START_REWRITE_SOURCE,
+    "/api/zero/connectors/:type/oauth/start",
+    ZERO_CONNECTORS_OAUTH_START_PATH_RE,
   ],
   [ZERO_SLACK_OAUTH_INSTALL_REWRITE_SOURCE, "/api/zero/slack/oauth/install"],
   [ZERO_SLACK_OAUTH_CONNECT_REWRITE_SOURCE, "/api/zero/slack/oauth/connect"],
@@ -879,7 +888,8 @@ export function matchesConnectorOAuthRewritePath(pathname) {
   return (
     CONNECTORS_AUTHORIZE_PATH_RE.test(pathname) ||
     CONNECTORS_CALLBACK_PATH_RE.test(pathname) ||
-    ZERO_CONNECTORS_AUTHORIZE_PATH_RE.test(pathname)
+    ZERO_CONNECTORS_AUTHORIZE_PATH_RE.test(pathname) ||
+    ZERO_CONNECTORS_OAUTH_START_PATH_RE.test(pathname)
   );
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { toast } from "@vm0/ui/components/ui/sonner";
 import { chatMessagesContract } from "@vm0/api-contracts/contracts/chat-threads";
 import { zeroUploadsContract } from "@vm0/api-contracts/contracts/zero-uploads";
 import { server } from "../../../mocks/server.ts";
@@ -17,6 +18,7 @@ import {
   PLACEHOLDER,
   sendMessageInUI,
 } from "./chat-test-helpers.ts";
+import { downloadAttachmentUrl } from "../zero-attachment-chips.tsx";
 
 const context = testContext();
 const mockApi = createMockApi(context);
@@ -397,32 +399,67 @@ describe("chat-i-061: backdrop click closes lightbox", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CHAT-I-066: Lightbox download fallback stays in-page and forces attachment
+// CHAT-I-066: Lightbox download fetches blobs instead of opening image URLs
 // ---------------------------------------------------------------------------
 
-describe("chat-i-066: lightbox download fallback uses direct download", () => {
-  it("appends download=1 and avoids opening a new tab", async () => {
-    const user = userEvent.setup();
-    const imageUrl = "http://localhost:3000/f/user-1/file-1/photo.png";
+describe("chat-i-066: lightbox download fetches blobs", () => {
+  it("fetches legacy file URLs through the compatibility route", async () => {
+    const legacyUrl =
+      "https://tunnel-yuma-vm0-www.vm7.ai/f/3BennfUepyJwP3OaiYD0rK8CZKs/9c4c6df4-f0ed-4c25-af3a-b58bc40faf0f/image-9c4c6df4.png";
+    let legacyRequests = 0;
     server.use(
-      http.get(imageUrl, ({ request }) => {
-        if (new URL(request.url).searchParams.get("download") === "1") {
-          return HttpResponse.error();
-        }
-        return new HttpResponse(null, { status: 200 });
+      http.get(legacyUrl, () => {
+        legacyRequests += 1;
+        return HttpResponse.text("img", {
+          headers: { "content-type": "image/png" },
+        });
+      }),
+    );
+    const createObjectURLSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:download");
+    const revokeObjectURLSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {});
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function () {
+        return;
+      });
+
+    try {
+      await downloadAttachmentUrl(legacyUrl, context.signal, "image.png");
+
+      expect(legacyRequests).toBe(1);
+      expect(createObjectURLSpy).toHaveBeenCalledOnce();
+      expect(anchorClickSpy).toHaveBeenCalledOnce();
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:download");
+    } finally {
+      createObjectURLSpy.mockRestore();
+      revokeObjectURLSpy.mockRestore();
+      anchorClickSpy.mockRestore();
+    }
+  });
+
+  it("does not fall back to opening the image URL when fetch fails", async () => {
+    const user = userEvent.setup();
+    const imageUrl = "http://localhost:3000/files/user-1/file-1/photo.png";
+    server.use(
+      http.get(imageUrl, () => {
+        return HttpResponse.error();
       }),
     );
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => {
       return null;
     });
+    const toastErrorSpy = vi.spyOn(toast, "error").mockImplementation(() => {
+      return "" as ReturnType<typeof toast.error>;
+    });
 
-    let clickedHref = "";
-    let clickedDownload = "";
     const anchorClickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        clickedHref = this.href;
-        clickedDownload = this.download;
+      .mockImplementation(function () {
+        return;
       });
 
     server.use(
@@ -463,11 +500,10 @@ describe("chat-i-066: lightbox download fallback uses direct download", () => {
     click(downloadButton);
 
     await waitFor(() => {
-      expect(anchorClickSpy).toHaveBeenCalledOnce();
+      expect(toastErrorSpy).toHaveBeenCalledWith("Download failed");
     });
 
-    expect(clickedHref).toBe(`${imageUrl}?download=1`);
-    expect(clickedDownload).toBe("photo.png");
+    expect(anchorClickSpy).not.toHaveBeenCalled();
     expect(openSpy).not.toHaveBeenCalled();
   });
 });
@@ -550,7 +586,7 @@ describe("chat-d-063: preview button renders for previewable file attachment", (
   });
 
   it("renders a preview button from the structured attachFiles field", async () => {
-    const fileUrl = "http://localhost:3000/f/user-1/file-1/spec.pdf";
+    const fileUrl = "https://cdn.vm7.io/artifacts/user-1/file-1/spec.pdf";
     const filename = "spec.pdf";
 
     mockChatLifecycle({

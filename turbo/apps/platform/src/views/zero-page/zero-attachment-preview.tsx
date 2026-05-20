@@ -9,7 +9,7 @@ import {
 } from "@tabler/icons-react";
 import { useGet, useLastResolved, useSet } from "ccstate-react";
 import type { Computed } from "ccstate";
-import { jsonParseOr } from "../../signals/utils.ts";
+import { detach, jsonParseOr, Reason } from "../../signals/utils.ts";
 import {
   textPreviewCollapsedByKey$,
   toggleTextPreviewCollapsed$,
@@ -26,6 +26,7 @@ import {
   FilePreviewIcon,
   getFilePreviewAccentClass,
 } from "./zero-file-preview-icon.tsx";
+import { downloadAttachmentUrl } from "./zero-attachment-chips.tsx";
 
 interface ChatAttachmentDescriptor {
   filename: string;
@@ -62,30 +63,6 @@ function contentTypeForDocumentPreviewKind(kind: DocumentPreviewKind): string {
 
 function normalizePlatformFileUrl(url: string): string {
   return url;
-}
-
-function appendSearchParam(url: string, key: string, value: string): string {
-  const normalizedUrl = normalizePlatformFileUrl(url);
-  if (!URL.canParse(normalizedUrl, window.location.origin)) {
-    const hashIndex = normalizedUrl.indexOf("#");
-    const base =
-      hashIndex === -1 ? normalizedUrl : normalizedUrl.slice(0, hashIndex);
-    const hash = hashIndex === -1 ? "" : normalizedUrl.slice(hashIndex);
-    if (base.includes(`${key}=${value}`)) {
-      return normalizedUrl;
-    }
-    return `${base}${base.includes("?") ? "&" : "?"}${key}=${value}${hash}`;
-  }
-
-  const parsed = new URL(normalizedUrl, window.location.origin);
-  if (parsed.searchParams.get(key) !== value) {
-    parsed.searchParams.set(key, value);
-  }
-  return parsed.toString();
-}
-
-function toDownloadUrl(url: string): string {
-  return appendSearchParam(url, "download", "1");
 }
 
 function formatPreviewText(kind: "text" | "json", text: string): string {
@@ -132,15 +109,25 @@ function TextPreview({ filename, url, kind, text$ }: TextPreviewProps) {
       className="relative rounded-xl border border-foreground/10 bg-background/60 p-3"
       data-testid={`attachment-preview-${kind}`}
     >
-      <a
-        href={toDownloadUrl(url)}
-        download={filename}
+      <button
+        type="button"
+        onClick={() => {
+          detach(
+            downloadAttachmentUrl(
+              normalizePlatformFileUrl(url),
+              undefined,
+              filename,
+            ),
+            Reason.DomCallback,
+            "attachment download",
+          );
+        }}
         title={filename}
         aria-label={`Download ${filename}`}
         className="absolute top-3 right-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-background/90 text-muted-foreground hover:text-foreground"
       >
         <IconDownload size={12} />
-      </a>
+      </button>
       <button
         type="button"
         onClick={() => {
@@ -245,9 +232,19 @@ function FileThumbnailPreview({
   const accentClass = getFilePreviewAccentClass(filename, contentType);
 
   return (
-    <a
-      href={toDownloadUrl(url)}
-      download={filename}
+    <button
+      type="button"
+      onClick={() => {
+        detach(
+          downloadAttachmentUrl(
+            normalizePlatformFileUrl(url),
+            undefined,
+            filename,
+          ),
+          Reason.DomCallback,
+          "attachment download",
+        );
+      }}
       title={filename}
       data-testid="attachment-preview-file"
       aria-label={`Download ${filename}`}
@@ -275,7 +272,7 @@ function FileThumbnailPreview({
           </div>
         </div>
       </div>
-    </a>
+    </button>
   );
 }
 
@@ -294,15 +291,25 @@ function AudioPreview({ filename, url }: { filename: string; url: string }) {
             {filename}
           </div>
         </div>
-        <a
-          href={toDownloadUrl(url)}
-          download={filename}
+        <button
+          type="button"
+          onClick={() => {
+            detach(
+              downloadAttachmentUrl(
+                normalizePlatformFileUrl(url),
+                undefined,
+                filename,
+              ),
+              Reason.DomCallback,
+              "attachment download",
+            );
+          }}
           title={filename}
           aria-label={`Download ${filename}`}
           className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background/90 text-muted-foreground hover:text-foreground"
         >
           <IconDownload size={12} />
-        </a>
+        </button>
       </div>
       <audio
         src={url}

@@ -87,38 +87,12 @@ function filenameFromUrl(url: string): string {
   return last && last.length > 0 ? last : "image";
 }
 
-function getAttachmentDownloadUrl(url: string): string {
-  if (!URL.canParse(url, window.location.origin)) {
-    return url;
-  }
-  const parsed = new URL(url, window.location.origin);
-  const isFileRoute = /^\/f\/[^/]+\/[^/]+\/[^/]+$/.test(parsed.pathname);
-  if (isFileRoute) {
-    parsed.searchParams.set("download", "1");
-  }
-  return parsed.toString();
+export function publicAttachmentUrl(url: string): string {
+  return url;
 }
 
 export function getAttachmentRawUrl(url: string): string {
-  if (!URL.canParse(url, window.location.origin)) {
-    return url;
-  }
-  const parsed = new URL(url, window.location.origin);
-  const isFileRoute = /^\/f\/[^/]+\/[^/]+\/[^/]+$/.test(parsed.pathname);
-  if (isFileRoute) {
-    parsed.searchParams.delete("download");
-    parsed.searchParams.set("raw", "1");
-  }
-  return parsed.toString();
-}
-
-function triggerDirectDownload(url: string, filename: string): void {
-  const a = document.createElement("a");
-  a.href = getAttachmentDownloadUrl(url);
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  return url;
 }
 
 export function TextPreviewLoader({
@@ -234,21 +208,20 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(blobUrl);
 }
 
-// Fetch the asset as a blob, degrading to a new-tab fallback on network /
-// CORS failure. The `.catch` is intentionally scoped to the fetch branch so
-// only network failures fall back — any synchronous DOM / blob failure after
-// a successful fetch is a real bug and propagates to the caller. The
-// fallback keeps the user on the same page and lets the app's `/f/...`
-// route force `Content-Disposition: attachment` via `?download=1`.
-async function fetchBlobOrOpen(
+// Fetch the asset as a blob so downloads are delivered from a same-origin
+// object URL. Cross-origin `<a download>` is intentionally avoided because
+// browsers ignore it for CDN image URLs and open the asset instead.
+async function fetchBlobForDownload(
   url: string,
   signal: AbortSignal,
 ): Promise<Blob | null> {
-  // The catch branch performs the direct-download fallback.
-  // Confirmed by ethan@vm0.ai.
-  // eslint-disable-next-line no-restricted-syntax -- fetch/CORS failures intentionally fall back to direct download
+  const fetchUrl = publicAttachmentUrl(url);
+  // The catch branch reports network/CORS failures without falling back to
+  // cross-origin anchor navigation, which would open images instead.
+  // eslint-disable-next-line no-restricted-syntax -- fetch/CORS failures should surface as download failures
   try {
-    const res = await fetch(getAttachmentDownloadUrl(url), {
+    const res = await fetch(fetchUrl, {
+      cache: "reload",
       mode: "cors",
       signal,
     });
@@ -258,28 +231,25 @@ async function fetchBlobOrOpen(
     return await res.blob();
   } catch (error) {
     signal.throwIfAborted();
-    log.warn(
-      "downloadUrl: fetch failed, falling back to direct download",
-      error,
-    );
-    triggerDirectDownload(url, filenameFromUrl(url));
+    log.warn("downloadUrl: fetch failed", error);
+    toast.error("Download failed");
     return null;
   }
 }
 
 export async function downloadAttachmentUrl(
   url: string,
-  signal: AbortSignal,
+  signal: AbortSignal = AbortSignal.any([]),
   filename = filenameFromUrl(url),
 ): Promise<void> {
-  const blob = await fetchBlobOrOpen(url, signal);
+  const blob = await fetchBlobForDownload(url, signal);
   if (blob !== null) {
     triggerBlobDownload(blob, filename);
   }
 }
 
 async function copyAttachmentLinkToClipboard(url: string): Promise<void> {
-  const copied = await writeToClipboard(url);
+  const copied = await writeToClipboard(publicAttachmentUrl(url));
   if (copied) {
     toast.success("Link copied");
     return;
@@ -791,9 +761,15 @@ export function FileAttachmentChip({
   url: string;
 }) {
   return (
-    <a
-      href={getAttachmentDownloadUrl(url)}
-      download={filename}
+    <button
+      type="button"
+      onClick={() => {
+        detach(
+          downloadAttachmentUrl(url, undefined, filename),
+          Reason.DomCallback,
+          "attachment download",
+        );
+      }}
       title={filename}
       aria-label={`Download ${filename}`}
       className="inline-flex items-center justify-center rounded-lg hover:bg-foreground/10 transition-colors p-0.5"
@@ -804,7 +780,7 @@ export function FileAttachmentChip({
         className="h-9 w-9"
         testId="attachment-chip-file-icon"
       />
-    </a>
+    </button>
   );
 }
 

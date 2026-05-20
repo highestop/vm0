@@ -172,6 +172,7 @@ const TELEGRAM_SETUP_STATUS_REWRITE_SOURCE = "/api/telegram/setup-status";
 const TELEGRAM_WEBHOOK_REWRITE_SOURCE = "/api/telegram/webhook/:telegramBotId";
 const TELEGRAM_WEBHOOK_PATH_RE = /^\/api\/telegram\/webhook\/[^/]+$/;
 const TELEGRAM_INTEGRATIONS_REWRITE_SOURCE = "/api/integrations/telegram";
+const TELEGRAM_LINK_REWRITE_SOURCE = "/api/integrations/telegram/link";
 const TELEGRAM_AUTH_CALLBACK_REWRITE_SOURCE =
   "/api/integrations/telegram/auth-callback";
 const ZERO_EMAIL_REPLY_CALLBACK_REWRITE_SOURCE =
@@ -439,6 +440,7 @@ export const API_BACKEND_REWRITES = [
   [AGENT_COMPLETE_REWRITE_SOURCE, "/api/webhooks/agent/complete"],
   [AGENT_CHECKPOINTS_REWRITE_SOURCE, "/api/webhooks/agent/checkpoints"],
   [TELEGRAM_INTEGRATIONS_REWRITE_SOURCE, "/api/integrations/telegram"],
+  [TELEGRAM_LINK_REWRITE_SOURCE, "/api/integrations/telegram/link"],
   [
     AGENT_CHECKPOINTS_PREPARE_HISTORY_REWRITE_SOURCE,
     "/api/webhooks/agent/checkpoints/prepare-history",

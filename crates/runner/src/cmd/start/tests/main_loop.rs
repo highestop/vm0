@@ -320,7 +320,7 @@ async fn shutdown_drains_memory_prefetch_before_stopped() {
 #[tokio::test]
 async fn drain_then_resume_keeps_jobs_running() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -352,7 +352,7 @@ async fn drain_then_resume_keeps_jobs_running() {
     assert!(c.error.is_none(), "no cancellation error");
 
     // Runner is back in Running — a second job is claimed (cancel_token
-    // inserted). Don't wait for completion here; the shared wait_exit_gate
+    // inserted). Don't wait for completion here; the shared wait_process_gate
     // would also block this job's exit.
     let run_id_2 = RunId::new_v4();
     push_job(
@@ -382,7 +382,7 @@ async fn drain_then_resume_keeps_jobs_running() {
 #[tokio::test]
 async fn drain_resume_then_second_drain_drains_idle_pool() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -455,7 +455,7 @@ async fn drain_resume_then_second_drain_drains_idle_pool() {
 #[tokio::test(start_paused = true)]
 async fn heartbeat_fires_while_draining() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -503,7 +503,7 @@ async fn heartbeat_fires_while_draining() {
 #[tokio::test(start_paused = true)]
 async fn heartbeat_fires_while_budget_exhausted() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     // Budget sized for exactly one `test_profiles()` slot (vcpu=2, mem=4096).
@@ -592,7 +592,7 @@ async fn resume_on_running_is_noop() {
 #[tokio::test]
 async fn hard_shutdown_cancels_active_jobs() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         gate,
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -702,7 +702,7 @@ async fn assert_signal_handler_task_end_cancels_active_jobs(
     trigger_handler_task_end: impl FnOnce(),
 ) {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         gate,
     ));
     let (mut config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -739,7 +739,7 @@ async fn assert_signal_handler_task_end_cancels_active_jobs(
 #[tokio::test]
 async fn drain_then_hard_shutdown_upgrades() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         gate,
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -977,7 +977,7 @@ async fn drain_with_jobs_transitions_to_stopping_when_empty() {
 #[tokio::test]
 async fn draining_auto_stop_preserves_concurrent_resume() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);
@@ -1145,7 +1145,7 @@ async fn duplicate_discovery_deduplicated() {
     // Budget for 2 jobs — enough for the duplicate to pass the budget
     // check and reach the cancel_tokens dedup logic.
     let gate = Arc::new(tokio::sync::Notify::new());
-    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_exit_gate(
+    let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
         Arc::clone(&gate),
     ));
     let (config, env) = mock_run_config_with_overrides(test_profiles(), 8, 32768, 4, overrides);

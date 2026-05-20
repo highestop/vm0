@@ -8,17 +8,14 @@ import {
 } from "@vm0/api-contracts/contracts/internal-callbacks-telegram";
 import { agentRuns } from "@vm0/db/schema/agent-run";
 import { zeroAgents } from "@vm0/db/schema/zero-agent";
+import { zeroRuns } from "@vm0/db/schema/zero-run";
 import { eq } from "drizzle-orm";
 
 import {
   callbackPayload$,
   callbackRoute,
 } from "../../lib/callback-route/callback-route";
-import {
-  buildTelegramErrorResponse,
-  buildTelegramResponse,
-  splitMessage,
-} from "../../lib/telegram-format";
+import { buildTelegramResponse, splitMessage } from "../../lib/telegram-format";
 import type { RouteEntry } from "../route";
 import { env } from "../../lib/env";
 import { logger } from "../../lib/log";
@@ -35,6 +32,7 @@ import {
 } from "../external/telegram-official";
 import { userFeatureSwitchOverrides } from "../services/feature-switches.service";
 import { getRunOutputText } from "../services/run-output.service";
+import { formatRunErrorLikeWebMessage } from "../services/zero-chat-thread.service";
 import {
   saveTelegramThreadSession,
   storeTelegramBotMessage,
@@ -50,6 +48,7 @@ interface RunContext {
   readonly orgId: string;
   readonly sessionId: string;
   readonly lastEventSequence: number | null;
+  readonly chatThreadId: string | null;
 }
 
 type TelegramCallbackResult =
@@ -155,7 +154,7 @@ async function deleteThinkingMessageIfPresent(args: {
 function buildCompletionOutput(args: {
   readonly status: "completed" | "failed";
   readonly output: string | undefined;
-  readonly error: string | undefined;
+  readonly errorDetail: string | undefined;
   readonly logsUrl: string | undefined;
   readonly footerText: string | undefined;
 }): { readonly htmlOutput: string; readonly responseText: string | undefined } {
@@ -171,12 +170,10 @@ function buildCompletionOutput(args: {
     };
   }
 
-  const errorDetail =
-    args.error ?? "The agent encountered an error during execution.";
   return {
     responseText: undefined,
-    htmlOutput: buildTelegramErrorResponse(
-      errorDetail,
+    htmlOutput: buildTelegramResponse(
+      args.errorDetail ?? "The agent encountered an error during execution.",
       args.logsUrl,
       args.footerText,
     ),
@@ -210,8 +207,10 @@ async function loadRunContext(args: {
       orgId: agentRuns.orgId,
       sessionId: agentRuns.sessionId,
       lastEventSequence: agentRuns.lastEventSequence,
+      chatThreadId: zeroRuns.chatThreadId,
     })
     .from(agentRuns)
+    .leftJoin(zeroRuns, eq(zeroRuns.id, agentRuns.id))
     .where(eq(agentRuns.id, args.runId))
     .limit(1);
   args.signal.throwIfAborted();
@@ -364,6 +363,11 @@ async function handleCompletion(args: {
     orgId: string,
     userId: string,
   ) => Promise<Record<string, boolean>>;
+  readonly formatRunError: (params: {
+    readonly runId: string;
+    readonly chatThreadId: string | null | undefined;
+    readonly errorMessage: string;
+  }) => Promise<string>;
   readonly signal: AbortSignal;
 }): Promise<TelegramCallbackResult> {
   const {
@@ -422,10 +426,20 @@ async function handleCompletion(args: {
     getFeatureOverrides: args.getFeatureOverrides,
     signal: args.signal,
   });
+  const errorDetail =
+    args.status === "failed"
+      ? await args.formatRunError({
+          runId: args.runId,
+          chatThreadId: run?.chatThreadId,
+          errorMessage:
+            args.error ?? "The agent encountered an error during execution.",
+        })
+      : undefined;
+  args.signal.throwIfAborted();
   const { htmlOutput, responseText } = buildCompletionOutput({
     status: args.status,
     output,
-    error: args.error,
+    errorDetail,
     logsUrl,
     footerText,
   });
@@ -506,6 +520,9 @@ const handleTelegramCallback$ = command(
       payload,
       getFeatureOverrides: (orgId, userId) => {
         return get(userFeatureSwitchOverrides(orgId, userId));
+      },
+      formatRunError: (params) => {
+        return get(formatRunErrorLikeWebMessage(params));
       },
       signal,
     });

@@ -5,6 +5,7 @@ import {
   type AgentPhoneCallbackPayload,
 } from "@vm0/api-contracts/contracts/internal-callbacks-agentphone";
 import { agentRuns } from "@vm0/db/schema/agent-run";
+import { zeroRuns } from "@vm0/db/schema/zero-run";
 import { eq } from "drizzle-orm";
 
 import {
@@ -21,6 +22,7 @@ import { writeDb$, type Db } from "../external/db";
 import type { RouteEntry } from "../route";
 import { userFeatureSwitchOverrides } from "../services/feature-switches.service";
 import { getRunOutputText } from "../services/run-output.service";
+import { formatRunErrorLikeWebMessage } from "../services/zero-chat-thread.service";
 import {
   formatAgentPhoneAuditLink,
   isAgentPhoneChannel,
@@ -41,7 +43,20 @@ interface RunContext {
   readonly orgId: string;
   readonly sessionId: string;
   readonly lastEventSequence: number | null;
+  readonly chatThreadId: string | null;
 }
+
+interface FormatRunErrorParams {
+  readonly runId: string;
+  readonly chatThreadId: string | null | undefined;
+  readonly errorMessage: string;
+}
+
+type FormatRunError = (params: FormatRunErrorParams) => Promise<string>;
+type GetFeatureOverrides = (
+  orgId: string,
+  userId: string,
+) => Promise<Record<string, boolean>>;
 
 function successResponse(): {
   readonly status: 200;
@@ -97,8 +112,10 @@ async function loadRunContext(args: {
       orgId: agentRuns.orgId,
       sessionId: agentRuns.sessionId,
       lastEventSequence: agentRuns.lastEventSequence,
+      chatThreadId: zeroRuns.chatThreadId,
     })
     .from(agentRuns)
+    .leftJoin(zeroRuns, eq(zeroRuns.id, agentRuns.id))
     .where(eq(agentRuns.id, args.runId))
     .limit(1);
   args.signal.throwIfAborted();
@@ -110,10 +127,16 @@ async function resolveCompletionText(args: {
   readonly status: "completed" | "failed";
   readonly error: string | undefined;
   readonly run: RunContext | undefined;
+  readonly formatRunError: FormatRunError;
   readonly signal: AbortSignal;
 }): Promise<string> {
   if (args.status === "failed") {
-    return args.error ?? "The agent encountered an error during execution.";
+    return await args.formatRunError({
+      runId: args.runId,
+      chatThreadId: args.run?.chatThreadId,
+      errorMessage:
+        args.error ?? "The agent encountered an error during execution.",
+    });
   }
 
   const output = await getRunOutputText(args.runId, {
@@ -160,10 +183,8 @@ async function handleCompletion(args: {
   readonly status: "completed" | "failed";
   readonly error: string | undefined;
   readonly payload: AgentPhoneCallbackPayload;
-  readonly getFeatureOverrides: (
-    orgId: string,
-    userId: string,
-  ) => Promise<Record<string, boolean>>;
+  readonly getFeatureOverrides: GetFeatureOverrides;
+  readonly formatRunError: FormatRunError;
   readonly signal: AbortSignal;
 }): Promise<
   | { readonly status: 200; readonly body: { readonly success: true } }
@@ -210,6 +231,7 @@ async function handleCompletion(args: {
     status: args.status,
     error: args.error,
     run,
+    formatRunError: args.formatRunError,
     signal: args.signal,
   });
   const logsUrl = run
@@ -319,6 +341,9 @@ const handleAgentPhoneCallback$ = command(
       payload,
       getFeatureOverrides: (orgId, userId) => {
         return get(userFeatureSwitchOverrides(orgId, userId));
+      },
+      formatRunError: (params) => {
+        return get(formatRunErrorLikeWebMessage(params));
       },
       signal,
     });

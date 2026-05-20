@@ -853,6 +853,9 @@ describe("API backend rewrite proxy behavior", () => {
   });
 
   it("matches Telegram callback rewrite paths exactly", () => {
+    expect(matchesApiBackendRewritePath("/api/integrations/telegram")).toBe(
+      true,
+    );
     expect(matchesApiBackendRewritePath("/api/telegram/register")).toBe(true);
     expect(matchesApiBackendRewritePath("/api/telegram/setup-status")).toBe(
       true,
@@ -881,6 +884,9 @@ describe("API backend rewrite proxy behavior", () => {
       matchesApiBackendRewritePath(
         "/api/integrations/telegram/auth-callback/extra",
       ),
+    ).toBe(false);
+    expect(
+      matchesApiBackendRewritePath("/api/integrations/telegram/extra"),
     ).toBe(false);
     expect(
       matchesApiBackendRewritePath("/api/integrations/telegram/auth"),
@@ -2843,6 +2849,12 @@ describe("API backend rewrite proxy behavior", () => {
         expect(authPayload.url).toBe(
           "/api/integrations/telegram/auth-callback?id=1001&hash=telegram-hash",
         );
+
+        const listResponse = await fetch(`${origin}/api/integrations/telegram`);
+
+        const listPayload = (await listResponse.json()) as EchoPayload;
+        expect(listPayload.method).toBe("GET");
+        expect(listPayload.url).toBe("/api/integrations/telegram");
       },
     );
   });

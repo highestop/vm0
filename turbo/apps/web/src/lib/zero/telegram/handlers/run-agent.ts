@@ -5,6 +5,8 @@ import { formatRunErrorForExternalSurface } from "@vm0/api-contracts/contracts/e
 import { logger } from "../../../shared/logger";
 import type { TelegramCallbackPayload } from "../../../infra/callback/callback-payloads";
 import type { UserInfoOptions } from "../../integration-prompt";
+import { resolveModelFirstRouteDescriptor } from "../../model-policy/model-first-route-service";
+import { getUserModelPreferenceModel } from "../../model-policy/user-model-preference-service";
 import { adaptTelegramTrigger } from "./adapt-telegram-trigger";
 
 const log = logger("telegram:run-agent");
@@ -25,6 +27,7 @@ interface RunAgentParams {
   rootMessageId?: string | null;
   messageThreadId?: string | number | null;
   userId: string;
+  orgId: string;
   callbackContext: TelegramCallbackPayload;
   apiStartTime: number;
 }
@@ -33,6 +36,38 @@ interface RunAgentResult {
   status: "accepted" | "queued" | "failed";
   response?: string;
   runId: string | undefined;
+}
+
+async function resolveTelegramRunModelRoute(params: {
+  orgId: string;
+  userId: string;
+}): Promise<
+  | {
+      modelProviderType: string;
+      modelProviderId: string | null;
+      modelProviderCredentialScope: string;
+      selectedModel: string;
+    }
+  | undefined
+> {
+  const selectedModel = await getUserModelPreferenceModel(
+    params.orgId,
+    params.userId,
+  );
+  if (!selectedModel) {
+    return undefined;
+  }
+  const route = await resolveModelFirstRouteDescriptor({
+    orgId: params.orgId,
+    userId: params.userId,
+    selectedModel,
+  });
+  return {
+    modelProviderType: route.providerType,
+    modelProviderId: route.modelProviderId,
+    modelProviderCredentialScope: route.credentialScope,
+    selectedModel: route.selectedModel,
+  };
 }
 
 /**
@@ -46,7 +81,13 @@ export async function runAgentForTelegram(
   params: RunAgentParams,
 ): Promise<RunAgentResult> {
   try {
-    const result = await createZeroRun(adaptTelegramTrigger(params));
+    const modelRoute = await resolveTelegramRunModelRoute({
+      orgId: params.orgId,
+      userId: params.userId,
+    });
+    const result = await createZeroRun(
+      adaptTelegramTrigger({ ...params, ...(modelRoute ?? {}) }),
+    );
     const status: "accepted" | "queued" =
       result.status === "queued" ? "queued" : "accepted";
     log.debug(

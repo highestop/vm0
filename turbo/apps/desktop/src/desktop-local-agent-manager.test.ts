@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DesktopLocalAgentApiClient } from "./desktop-local-agent-api";
+import {
+  resolveLocalAgentApiBaseUrl,
+  type DesktopLocalAgentApiClient,
+} from "./desktop-local-agent-api";
 import { DesktopLocalAgentManager } from "./desktop-local-agent-manager";
 import type { executeLocalAgentBackend } from "./desktop-local-agent-runtime";
 import type {
@@ -94,6 +97,16 @@ function createHarness(
 
   return { manager, startedHosts, closedHosts, completedJobs };
 }
+
+describe("DesktopLocalAgentApiClient", () => {
+  it("derives the API backend URL from PR preview platform URLs", () => {
+    expect(
+      resolveLocalAgentApiBaseUrl(
+        new URL("https://pr-123-app.vm6.ai"),
+      ).toString(),
+    ).toBe("https://pr-123-api.vm6.ai/");
+  });
+});
 
 describe("DesktopLocalAgentManager", () => {
   it("keeps native access disabled until the feature switch enables it", async () => {

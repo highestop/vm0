@@ -1,4 +1,9 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { gzipSync } from "node:zlib";
 
 import { command, type Getter, type Setter } from "ccstate";
@@ -24,7 +29,7 @@ import { agentphoneMessages } from "@vm0/db/schema/agentphone-message";
 import { agentphoneThreadSessions } from "@vm0/db/schema/agentphone-thread-session";
 import { agentphoneUserAgentPreferences } from "@vm0/db/schema/agentphone-user-agent-preference";
 import { agentphoneUserLinks } from "@vm0/db/schema/agentphone-user-link";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 import { env, optionalEnv } from "../../lib/env";
 import { inferMimetype } from "../../lib/mimetype";
@@ -60,28 +65,47 @@ const ORG_SENTINEL_USER_ID = "__org__";
 const MAX_CONTEXT_MESSAGES = 10;
 const AGENTPHONE_SMS_MMS_SLASH_COMMAND_RISK_MESSAGE =
   "Note: SMS and MMS replies may not be delivered reliably. For the most reliable experience, use iMessage with this AgentPhone number.";
+const AGENTPHONE_GROUP_CONNECT_IN_DM_MESSAGE =
+  "To connect this phone number, message Zero directly in a 1:1 iMessage conversation.";
+const AGENTPHONE_GROUP_ACCOUNT_COMMAND_MESSAGE =
+  "Only the linked sender can use AgentPhone account commands in a group. Message Zero directly to connect or manage your link.";
 
-const AGENTPHONE_ROOT_MESSAGE_ID = "dm";
+const AGENTPHONE_DM_ROOT_MESSAGE_ID = "dm";
 export type AgentPhoneChannel = "imessage" | "sms" | "mms";
 type AgentPhoneUserLink = typeof agentphoneUserLinks.$inferSelect;
+
+export interface AgentPhoneRecentHistoryMessage {
+  readonly messageId?: string | null;
+  readonly content: string | null;
+  readonly direction: string | null;
+  readonly channel: string | null;
+  readonly fromNumber?: string | null;
+  readonly toNumber?: string | null;
+  readonly at?: string | null;
+}
 
 export interface AgentPhoneMessageEvent {
   readonly webhookId: string | null;
   readonly channel: AgentPhoneChannel;
   readonly messageId: string;
   readonly conversationId: string | null;
+  readonly isGroup: boolean;
+  readonly mentioned: boolean;
   readonly agentphoneAgentId: string;
   readonly fromNumber: string;
   readonly toNumber: string;
   readonly body: string;
   readonly mediaUrl: string | null;
   readonly receivedAt: Date | null;
+  readonly recentHistory: readonly AgentPhoneRecentHistoryMessage[];
 }
 
 interface AgentPhoneCallbackContext {
   readonly messageId: string;
   readonly conversationId: string | null;
   readonly channel: AgentPhoneChannel;
+  readonly isGroup: boolean;
+  readonly rootMessageId: string;
   readonly phoneHandle: string;
   readonly fromNumber: string;
   readonly toNumber: string;
@@ -161,6 +185,51 @@ export function describeAgentPhoneHandleShape(
     return "phone";
   }
   return "other";
+}
+
+function isAgentPhoneGroupEvent(event: AgentPhoneMessageEvent): boolean {
+  return event.channel === "imessage" && event.isGroup;
+}
+
+function agentPhoneThreadRootMessageId(event: AgentPhoneMessageEvent): string {
+  if (!isAgentPhoneGroupEvent(event) || !event.conversationId) {
+    return AGENTPHONE_DM_ROOT_MESSAGE_ID;
+  }
+
+  const root = `group:${event.conversationId}`;
+  if (root.length <= 255) {
+    return root;
+  }
+
+  return `group:${createHash("sha256")
+    .update(event.conversationId)
+    .digest("hex")}`;
+}
+
+function shouldIgnoreAgentPhoneGroupMessage(
+  event: AgentPhoneMessageEvent,
+): boolean {
+  return isAgentPhoneGroupEvent(event) && !event.mentioned;
+}
+
+function isAgentPhoneGroupAccountCommand(
+  event: AgentPhoneMessageEvent,
+  commandName: string | undefined,
+): boolean {
+  return (
+    isAgentPhoneGroupEvent(event) &&
+    (commandName === "connect" ||
+      commandName === "disconnect" ||
+      commandName === "new_session" ||
+      commandName === "model")
+  );
+}
+
+function stripZeroMention(text: string): string {
+  return text
+    .replace(/(^|\s)@(zero|vm0)\b/giu, " ")
+    .replace(/[ \t]{2,}/gu, " ")
+    .trim();
 }
 
 function normalizeHandleForConnect(handle: string): string {
@@ -502,6 +571,64 @@ export async function resolveAgentPhoneUserLink(
   return touchAgentPhoneUserLink(db, userLink, normalized, channel);
 }
 
+async function resolveAgentPhoneUserLinkById(
+  db: ReadonlyDb,
+  userLinkId: string,
+): Promise<AgentPhoneUserLink | null> {
+  const [userLink] = await db
+    .select()
+    .from(agentphoneUserLinks)
+    .where(eq(agentphoneUserLinks.id, userLinkId))
+    .limit(1);
+  return userLink ?? null;
+}
+
+async function resolveAgentPhoneConversationUserLink(
+  db: ReadonlyDb,
+  conversationId: string,
+): Promise<AgentPhoneUserLink | null> {
+  const [session] = await db
+    .select({ userLinkId: agentphoneThreadSessions.agentphoneUserLinkId })
+    .from(agentphoneThreadSessions)
+    .where(eq(agentphoneThreadSessions.conversationId, conversationId))
+    .orderBy(desc(agentphoneThreadSessions.updatedAt))
+    .limit(1);
+  if (session) {
+    return resolveAgentPhoneUserLinkById(db, session.userLinkId);
+  }
+
+  const [message] = await db
+    .select({ userLinkId: agentphoneMessages.agentphoneUserLinkId })
+    .from(agentphoneMessages)
+    .where(
+      and(
+        eq(agentphoneMessages.conversationId, conversationId),
+        isNotNull(agentphoneMessages.agentphoneUserLinkId),
+      ),
+    )
+    .orderBy(desc(agentphoneMessages.createdAt))
+    .limit(1);
+  return message?.userLinkId
+    ? resolveAgentPhoneUserLinkById(db, message.userLinkId)
+    : null;
+}
+
+export async function resolveAgentPhoneUserLinkForEvent(
+  db: Db,
+  event: AgentPhoneMessageEvent,
+): Promise<AgentPhoneUserLink | null> {
+  const direct = await resolveAgentPhoneUserLink(
+    db,
+    event.fromNumber,
+    event.channel,
+  );
+  if (direct || !isAgentPhoneGroupEvent(event) || !event.conversationId) {
+    return direct;
+  }
+
+  return resolveAgentPhoneConversationUserLink(db, event.conversationId);
+}
+
 export async function resolveAgentPhoneUserLinkForOwner(
   db: Db,
   params: {
@@ -748,6 +875,7 @@ async function resolveAgentPhoneAgent(
 async function lookupAgentPhoneThreadSession(
   db: ReadonlyDb,
   userLinkId: string,
+  rootMessageId: string,
 ): Promise<ThreadSessionLookup> {
   const [session] = await db
     .select({
@@ -758,7 +886,7 @@ async function lookupAgentPhoneThreadSession(
     .where(
       and(
         eq(agentphoneThreadSessions.agentphoneUserLinkId, userLinkId),
-        eq(agentphoneThreadSessions.rootMessageId, AGENTPHONE_ROOT_MESSAGE_ID),
+        eq(agentphoneThreadSessions.rootMessageId, rootMessageId),
       ),
     )
     .limit(1);
@@ -774,9 +902,14 @@ async function resolveCompatibleAgentPhoneThreadSession(args: {
   readonly userLinkId: string;
   readonly userId: string;
   readonly agentComposeId: string;
+  readonly rootMessageId: string;
   readonly modelRoute: ModelRoutePin | undefined;
 }): Promise<ThreadSessionLookup> {
-  const session = await lookupAgentPhoneThreadSession(args.db, args.userLinkId);
+  const session = await lookupAgentPhoneThreadSession(
+    args.db,
+    args.userLinkId,
+    args.rootMessageId,
+  );
   if (!session.existingSessionId) {
     return session;
   }
@@ -819,6 +952,7 @@ export async function saveAgentPhoneThreadSession(
   opts: {
     readonly userLinkId: string;
     readonly conversationId: string | null;
+    readonly rootMessageId: string;
     readonly existingSessionId: string | undefined;
     readonly newSessionId: string | undefined;
     readonly messageId: string;
@@ -837,10 +971,7 @@ export async function saveAgentPhoneThreadSession(
       .where(
         and(
           eq(agentphoneThreadSessions.agentphoneUserLinkId, opts.userLinkId),
-          eq(
-            agentphoneThreadSessions.rootMessageId,
-            AGENTPHONE_ROOT_MESSAGE_ID,
-          ),
+          eq(agentphoneThreadSessions.rootMessageId, opts.rootMessageId),
         ),
       )
       .returning({ id: agentphoneThreadSessions.id });
@@ -854,7 +985,7 @@ export async function saveAgentPhoneThreadSession(
       .values({
         agentphoneUserLinkId: opts.userLinkId,
         conversationId: opts.conversationId,
-        rootMessageId: AGENTPHONE_ROOT_MESSAGE_ID,
+        rootMessageId: opts.rootMessageId,
         agentSessionId: opts.newSessionId,
         lastProcessedMessageId: opts.messageId,
       })
@@ -876,10 +1007,7 @@ export async function saveAgentPhoneThreadSession(
       .where(
         and(
           eq(agentphoneThreadSessions.agentphoneUserLinkId, opts.userLinkId),
-          eq(
-            agentphoneThreadSessions.rootMessageId,
-            AGENTPHONE_ROOT_MESSAGE_ID,
-          ),
+          eq(agentphoneThreadSessions.rootMessageId, opts.rootMessageId),
         ),
       );
   }
@@ -961,6 +1089,9 @@ async function fetchAgentPhoneContext(
     readonly userLinkId: string;
     readonly phoneHandle: string;
     readonly channel: AgentPhoneChannel;
+    readonly conversationId: string | null;
+    readonly isGroup: boolean;
+    readonly recentHistory: readonly AgentPhoneRecentHistoryMessage[];
     readonly currentMessageId?: string;
   },
 ): Promise<{ readonly executionContext: string }> {
@@ -968,36 +1099,93 @@ async function fetchAgentPhoneContext(
     params.phoneHandle,
     params.channel,
   );
-  const messages = await db
-    .select({
-      messageId: agentphoneMessages.agentphoneMessageId,
-      body: agentphoneMessages.body,
-      mediaUrl: agentphoneMessages.mediaUrl,
-      isBot: agentphoneMessages.isBot,
-      direction: agentphoneMessages.direction,
-    })
-    .from(agentphoneMessages)
-    .where(
-      and(
-        eq(agentphoneMessages.agentphoneUserLinkId, params.userLinkId),
-        eq(agentphoneMessages.phoneHandle, phoneHandle),
-      ),
-    )
-    .orderBy(desc(agentphoneMessages.createdAt))
-    .limit(MAX_CONTEXT_MESSAGES);
+  const providerContext = formatAgentPhoneRecentHistoryContext(
+    params.recentHistory,
+    params.currentMessageId,
+    params.isGroup,
+  );
+  if (providerContext) {
+    return { executionContext: providerContext };
+  }
 
-  const chronological = messages.reverse().filter((message) => {
+  const messages =
+    params.isGroup && params.conversationId
+      ? await db
+          .select({
+            messageId: agentphoneMessages.agentphoneMessageId,
+            body: agentphoneMessages.body,
+            mediaUrl: agentphoneMessages.mediaUrl,
+            isBot: agentphoneMessages.isBot,
+            direction: agentphoneMessages.direction,
+            fromNumber: agentphoneMessages.fromNumber,
+          })
+          .from(agentphoneMessages)
+          .where(
+            and(
+              eq(agentphoneMessages.agentphoneUserLinkId, params.userLinkId),
+              eq(agentphoneMessages.conversationId, params.conversationId),
+            ),
+          )
+          .orderBy(desc(agentphoneMessages.createdAt))
+          .limit(MAX_CONTEXT_MESSAGES)
+      : await db
+          .select({
+            messageId: agentphoneMessages.agentphoneMessageId,
+            body: agentphoneMessages.body,
+            mediaUrl: agentphoneMessages.mediaUrl,
+            isBot: agentphoneMessages.isBot,
+            direction: agentphoneMessages.direction,
+            fromNumber: agentphoneMessages.fromNumber,
+          })
+          .from(agentphoneMessages)
+          .where(
+            and(
+              eq(agentphoneMessages.agentphoneUserLinkId, params.userLinkId),
+              eq(agentphoneMessages.phoneHandle, phoneHandle),
+            ),
+          )
+          .orderBy(desc(agentphoneMessages.createdAt))
+          .limit(MAX_CONTEXT_MESSAGES);
+
+  return {
+    executionContext: formatAgentPhoneStoredContext({
+      messages,
+      currentMessageId: params.currentMessageId,
+      fallbackSender: phoneHandle,
+      isGroup: params.isGroup,
+    }),
+  };
+}
+
+function formatAgentPhoneStoredContext(params: {
+  readonly messages: readonly {
+    readonly messageId: string;
+    readonly body: string | null;
+    readonly mediaUrl: string | null;
+    readonly isBot: boolean;
+    readonly direction: string;
+    readonly fromNumber: string;
+  }[];
+  readonly currentMessageId?: string;
+  readonly fallbackSender: string;
+  readonly isGroup: boolean;
+}): string {
+  const chronological = [...params.messages].reverse().filter((message) => {
     return (
       !params.currentMessageId || message.messageId !== params.currentMessageId
     );
   });
   if (chronological.length === 0) {
-    return { executionContext: "" };
+    return "";
   }
 
   const total = chronological.length;
   const formatted = chronological.map((message, index) => {
-    const sender = message.isBot ? "BOT" : phoneHandle;
+    const sender = message.isBot
+      ? "BOT"
+      : params.isGroup
+        ? message.fromNumber
+        : params.fallbackSender;
     const parts = [
       "---",
       "",
@@ -1020,33 +1208,88 @@ async function fetchAgentPhoneContext(
     return parts.join("\n");
   });
 
-  return {
-    executionContext: [
-      "# AgentPhone Message Context",
-      "",
-      "The messages below are from the user's text message conversation with the shared Zero number. Messages closer to RELATIVE_INDEX 0 are more recent.",
-      "",
-      formatted.join("\n\n"),
-      "",
-      "---",
-    ].join("\n"),
-  };
+  return buildAgentPhoneContextBlock(formatted, params.isGroup);
 }
 
-function enrichAgentPhonePrompt(
-  prompt: string,
-  phoneHandle: string,
-  channel: AgentPhoneChannel,
-  messageId: string,
-  mediaUrl: string | null,
-): {
+function formatAgentPhoneRecentHistoryContext(
+  recentHistory: readonly AgentPhoneRecentHistoryMessage[],
+  currentMessageId: string | undefined,
+  isGroup: boolean,
+): string {
+  const chronological = recentHistory
+    .filter((message) => {
+      return !currentMessageId || message.messageId !== currentMessageId;
+    })
+    .slice(-MAX_CONTEXT_MESSAGES);
+
+  if (chronological.length === 0) {
+    return "";
+  }
+
+  const total = chronological.length;
+  const formatted = chronological.map((message, index) => {
+    const sender = message.fromNumber ?? message.direction ?? "unknown";
+    return [
+      "---",
+      "",
+      `- RELATIVE_INDEX: ${index - total}`,
+      message.messageId ? `- MSG_ID: ${message.messageId}` : null,
+      `- SENDER: {id: ${sender}}`,
+      message.direction ? `- DIRECTION: ${message.direction}` : null,
+      message.channel ? `- CHANNEL: ${message.channel}` : null,
+      message.at ? `- AT: ${message.at}` : null,
+      "",
+      message.content ?? "",
+    ]
+      .filter((part): part is string => {
+        return part !== null;
+      })
+      .join("\n");
+  });
+
+  return buildAgentPhoneContextBlock(formatted, isGroup);
+}
+
+function buildAgentPhoneContextBlock(
+  formattedMessages: readonly string[],
+  isGroup: boolean,
+): string {
+  return [
+    "# AgentPhone Message Context",
+    "",
+    isGroup
+      ? "The messages below are from an iMessage group conversation with the shared Zero number. Messages closer to RELATIVE_INDEX 0 are more recent."
+      : "The messages below are from the user's text message conversation with the shared Zero number. Messages closer to RELATIVE_INDEX 0 are more recent.",
+    "",
+    formattedMessages.join("\n\n"),
+    "",
+    "---",
+  ].join("\n");
+}
+
+function enrichAgentPhonePrompt(opts: {
+  readonly prompt: string;
+  readonly phoneHandle: string;
+  readonly channel: AgentPhoneChannel;
+  readonly messageId: string;
+  readonly mediaUrl: string | null;
+  readonly isGroup: boolean;
+}): {
   readonly prompt: string;
   readonly userInfoExtras: { readonly agentphoneHandle: string };
 } {
-  const normalized = normalizeAgentPhoneHandle(phoneHandle, channel);
-  const parts = [prompt.trim()];
-  if (mediaUrl) {
-    parts.push(formatAgentPhoneFileForContext({ messageId, mediaUrl }));
+  const normalized = normalizeAgentPhoneHandle(opts.phoneHandle, opts.channel);
+  const promptText = opts.isGroup
+    ? stripZeroMention(opts.prompt)
+    : opts.prompt.trim();
+  const parts = [promptText];
+  if (opts.mediaUrl) {
+    parts.push(
+      formatAgentPhoneFileForContext({
+        messageId: opts.messageId,
+        mediaUrl: opts.mediaUrl,
+      }),
+    );
   }
   return {
     prompt: parts.filter(Boolean).join("\n\n"),
@@ -1064,6 +1307,7 @@ function buildAgentPhonePrompt(
     readonly phoneHandle: string;
     readonly conversationId?: string | null;
     readonly channel?: string | null;
+    readonly isGroup?: boolean;
     readonly messageId?: string;
     readonly agentphoneAgentId?: string;
   },
@@ -1077,6 +1321,9 @@ function buildAgentPhonePrompt(
   }
   if (opts.channel) {
     headerParts.push(`Channel: ${opts.channel}`);
+  }
+  if (opts.isGroup !== undefined) {
+    headerParts.push(`Conversation type: ${opts.isGroup ? "group" : "dm"}`);
   }
   if (opts.conversationId) {
     headerParts.push(`Conversation ID: ${opts.conversationId}`);
@@ -1127,7 +1374,12 @@ async function sendAgentPhoneText(
   await sendAgentPhoneMessage(
     {
       agentphoneAgentId: event.agentphoneAgentId,
-      toNumber: event.fromNumber,
+      ...(isAgentPhoneGroupEvent(event) && event.conversationId
+        ? {
+            conversationId: event.conversationId,
+            replyToMessageId: event.messageId,
+          }
+        : { toNumber: event.fromNumber }),
       body,
     },
     signal,
@@ -1209,6 +1461,54 @@ async function sendConnectPrompt(
   );
 }
 
+async function sendGroupConnectInDmPrompt(
+  event: AgentPhoneMessageEvent,
+  signal: AbortSignal,
+): Promise<void> {
+  await sendAgentPhoneText(
+    event,
+    AGENTPHONE_GROUP_CONNECT_IN_DM_MESSAGE,
+    signal,
+  );
+}
+
+async function sendGroupAccountCommandBlockedMessage(
+  event: AgentPhoneMessageEvent,
+  signal: AbortSignal,
+): Promise<void> {
+  await sendAgentPhoneText(
+    event,
+    AGENTPHONE_GROUP_ACCOUNT_COMMAND_MESSAGE,
+    signal,
+  );
+}
+
+async function blockUnauthorizedGroupAccountCommand(args: {
+  readonly db: Db;
+  readonly event: AgentPhoneMessageEvent;
+  readonly commandText: string | undefined;
+  readonly userLink: AgentPhoneUserLink | null;
+  readonly signal: AbortSignal;
+}): Promise<boolean> {
+  if (!isAgentPhoneGroupAccountCommand(args.event, args.commandText)) {
+    return false;
+  }
+
+  const directUserLink = await resolveAgentPhoneUserLink(
+    args.db,
+    args.event.fromNumber,
+    args.event.channel,
+  );
+  args.signal.throwIfAborted();
+
+  if (directUserLink && directUserLink.id === args.userLink?.id) {
+    return false;
+  }
+
+  await sendGroupAccountCommandBlockedMessage(args.event, args.signal);
+  return true;
+}
+
 async function handleConnectCommand(args: {
   readonly event: AgentPhoneMessageEvent;
   readonly userLink: AgentPhoneUserLink | null;
@@ -1268,7 +1568,10 @@ async function handleNewSessionCommand(args: {
     .where(
       and(
         eq(agentphoneThreadSessions.agentphoneUserLinkId, args.userLink.id),
-        eq(agentphoneThreadSessions.rootMessageId, AGENTPHONE_ROOT_MESSAGE_ID),
+        eq(
+          agentphoneThreadSessions.rootMessageId,
+          agentPhoneThreadRootMessageId(args.event),
+        ),
       ),
     );
   args.signal.throwIfAborted();
@@ -1508,6 +1811,34 @@ async function dispatchAgentPhoneCommand(args: {
   }
 }
 
+async function handleAgentPhoneCommandIfPresent(args: {
+  readonly get: ComputedGetter;
+  readonly set: ComputedSetter;
+  readonly db: Db;
+  readonly event: AgentPhoneMessageEvent;
+  readonly userLink: AgentPhoneUserLink | null;
+  readonly signal: AbortSignal;
+}): Promise<boolean> {
+  const commandText = parseAgentPhoneCommand(args.event.body);
+  if (commandText === undefined) {
+    return false;
+  }
+
+  if (await blockUnauthorizedGroupAccountCommand({ ...args, commandText })) {
+    return true;
+  }
+
+  return dispatchAgentPhoneCommand({
+    get: args.get,
+    set: args.set,
+    db: args.db,
+    command: commandText,
+    event: args.event,
+    userLink: args.userLink,
+    signal: args.signal,
+  });
+}
+
 async function runAgentForAgentPhone(
   set: ComputedSetter,
   args: {
@@ -1549,6 +1880,7 @@ async function runAgentForAgentPhone(
           phoneHandle: args.event.fromNumber,
           conversationId: args.event.conversationId,
           channel: args.event.channel,
+          isGroup: isAgentPhoneGroupEvent(args.event),
           messageId: args.event.messageId,
           agentphoneAgentId: args.event.agentphoneAgentId,
         },
@@ -1643,6 +1975,27 @@ async function sendAgentPhoneFailedRunResult(args: {
   );
 }
 
+async function handleAgentPhoneRunResult(args: {
+  readonly get: ComputedGetter;
+  readonly event: AgentPhoneMessageEvent;
+  readonly userLink: AgentPhoneUserLink;
+  readonly result: RunAgentResult;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  if (args.result.status === "queued") {
+    await sendAgentPhoneText(
+      args.event,
+      "Run queued because the concurrency limit was reached. It will start automatically when a slot is available.",
+      args.signal,
+    );
+    return;
+  }
+
+  if (args.result.status === "failed") {
+    await sendAgentPhoneFailedRunResult(args);
+  }
+}
+
 export const handleAgentPhoneMessage$ = command(
   async (
     { get, set },
@@ -1654,13 +2007,15 @@ export const handleAgentPhoneMessage$ = command(
     signal: AbortSignal,
   ): Promise<void> => {
     const db = set(writeDb$);
-    const commandText = parseAgentPhoneCommand(params.event.body);
+    if (shouldIgnoreAgentPhoneGroupMessage(params.event)) {
+      return;
+    }
+
     if (
-      await dispatchAgentPhoneCommand({
+      await handleAgentPhoneCommandIfPresent({
         get,
         set,
         db,
-        command: commandText,
         event: params.event,
         userLink: params.userLink,
         signal,
@@ -1670,6 +2025,11 @@ export const handleAgentPhoneMessage$ = command(
     }
 
     if (!params.userLink) {
+      if (isAgentPhoneGroupEvent(params.event)) {
+        await sendGroupConnectInDmPrompt(params.event, signal);
+        return;
+      }
+
       await sendConnectPrompt(params.event, undefined, signal);
       return;
     }
@@ -1697,30 +2057,37 @@ export const handleAgentPhoneMessage$ = command(
     });
     signal.throwIfAborted();
 
+    const rootMessageId = agentPhoneThreadRootMessageId(params.event);
     const session = await resolveCompatibleAgentPhoneThreadSession({
       db,
       userLinkId: params.userLink.id,
       userId: params.userLink.vm0UserId,
       agentComposeId: agent.composeId,
+      rootMessageId,
       modelRoute,
     });
     signal.throwIfAborted();
 
+    const isGroup = isAgentPhoneGroupEvent(params.event);
     const { executionContext } = await fetchAgentPhoneContext(db, {
       userLinkId: params.userLink.id,
       phoneHandle: params.event.fromNumber,
       channel: params.event.channel,
+      conversationId: params.event.conversationId,
+      isGroup,
+      recentHistory: params.event.recentHistory,
       currentMessageId: params.event.messageId,
     });
     signal.throwIfAborted();
 
-    const { prompt, userInfoExtras } = enrichAgentPhonePrompt(
-      params.event.body,
-      params.event.fromNumber,
-      params.event.channel,
-      params.event.messageId,
-      params.event.mediaUrl,
-    );
+    const { prompt, userInfoExtras } = enrichAgentPhonePrompt({
+      prompt: params.event.body,
+      phoneHandle: params.event.fromNumber,
+      channel: params.event.channel,
+      messageId: params.event.messageId,
+      mediaUrl: params.event.mediaUrl,
+      isGroup,
+    });
 
     const result = await runAgentForAgentPhone(
       set,
@@ -1743,6 +2110,8 @@ export const handleAgentPhoneMessage$ = command(
           messageId: params.event.messageId,
           conversationId: params.event.conversationId,
           channel: params.event.channel,
+          isGroup,
+          rootMessageId,
           phoneHandle: params.event.fromNumber,
           fromNumber: params.event.fromNumber,
           toNumber: params.event.toNumber,
@@ -1755,24 +2124,13 @@ export const handleAgentPhoneMessage$ = command(
       signal,
     );
 
-    if (result.status === "queued") {
-      await sendAgentPhoneText(
-        params.event,
-        "Run queued because the concurrency limit was reached. It will start automatically when a slot is available.",
-        signal,
-      );
-      return;
-    }
-
-    if (result.status === "failed") {
-      await sendAgentPhoneFailedRunResult({
-        get,
-        event: params.event,
-        userLink: params.userLink,
-        result,
-        signal,
-      });
-    }
+    await handleAgentPhoneRunResult({
+      get,
+      event: params.event,
+      userLink: params.userLink,
+      result,
+      signal,
+    });
   },
 );
 

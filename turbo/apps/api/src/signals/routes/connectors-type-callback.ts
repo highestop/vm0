@@ -9,9 +9,11 @@ import {
 import {
   connectorTypeSchema,
   type ConnectorType,
+  type OAuthConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   exchangeProviderCode,
+  isOAuthConnectorType,
   PROVIDER_HANDLERS,
   type OAuthTokenResult,
 } from "@vm0/connectors/oauth-providers";
@@ -39,7 +41,6 @@ const PKCE_COOKIE_NAME = "connector_oauth_pkce";
 const OAUTH_CONTEXT_COOKIE_NAME = "connector_oauth_context";
 const REDIRECT_STATUS = 307;
 
-type OAuthConnectorType = Exclude<ConnectorType, "computer">;
 type StoredOAuthState = typeof connectorOauthStates.$inferSelect;
 
 type CallbackIdentity = {
@@ -420,6 +421,13 @@ const callbackConnectorInner$ = command(
         origin,
         params.type,
         "Computer connector does not use OAuth",
+      );
+    }
+    if (!isOAuthConnectorType(connectorType)) {
+      return redirectWithError(
+        origin,
+        params.type,
+        `${params.type} connector does not use OAuth`,
       );
     }
 

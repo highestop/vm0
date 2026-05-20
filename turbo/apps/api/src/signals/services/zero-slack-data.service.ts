@@ -9,8 +9,9 @@ import { and, eq } from "drizzle-orm";
 import { env } from "../../lib/env";
 import { db$ } from "../external/db";
 import { listConversations } from "../../lib/slack-client";
-import { decryptSecretValue } from "./crypto.utils";
+import { decryptPersistentSecretValue } from "./crypto.utils";
 import type { ApiOrgRole } from "../../types/auth";
+import { userFeatureSwitchContext } from "./feature-switches.service";
 
 export const SLACK_BOT_SCOPES: readonly string[] = [
   "app_mentions:read",
@@ -226,6 +227,7 @@ export function zeroSlackOrgStatus(args: {
 
 export function zeroSlackOrgInstallation(args: {
   readonly orgId: string;
+  readonly userId?: string;
 }): Computed<
   Promise<{
     readonly workspaceId: string;
@@ -246,7 +248,12 @@ export function zeroSlackOrgInstallation(args: {
       return null;
     }
 
-    const botToken = decryptSecretValue(installation.encryptedBotToken);
+    const botToken = await decryptPersistentSecretValue(
+      installation.encryptedBotToken,
+      args.userId
+        ? await get(userFeatureSwitchContext(args.orgId, args.userId))
+        : { orgId: args.orgId },
+    );
 
     return {
       workspaceId: installation.slackWorkspaceId,
@@ -263,6 +270,7 @@ interface SlackChannel {
 
 export function zeroSlackChannels(args: {
   readonly orgId: string;
+  readonly userId?: string;
 }): Computed<Promise<readonly SlackChannel[] | null>> {
   return computed(async (get) => {
     const installation = await get(zeroSlackOrgInstallation(args));

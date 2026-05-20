@@ -20,11 +20,16 @@ import { safeJsonParse, safeSync, settle } from "../utils";
 import { writeDb$, type Db } from "../external/db";
 import { publishUserSignal } from "../external/realtime";
 import {
+  decryptPersistentSecretValue,
   decryptSecretValue,
+  encryptPersistentSecretValue,
   encryptSecretValue,
   encryptStoredSecretValue,
 } from "./crypto.utils";
-import { userFeatureSwitchContext } from "./feature-switches.service";
+import {
+  loadUserFeatureSwitchContext,
+  userFeatureSwitchContext,
+} from "./feature-switches.service";
 import {
   parseStripeCliAuthConfig,
   parseStripeCliAuthStartOutput as parseStripeCliAuthStartOutputText,
@@ -216,8 +221,14 @@ function encodeSession(payload: CliAuthStripeSessionToken): string {
   return encryptSecretValue(JSON.stringify(payload));
 }
 
-function encodeProviderState(payload: CliAuthStripeProviderState): string {
-  return encryptSecretValue(JSON.stringify(payload));
+async function encodeProviderState(
+  payload: CliAuthStripeProviderState,
+  featureSwitchContext: FeatureSwitchContext,
+): Promise<string> {
+  return await encryptPersistentSecretValue(
+    JSON.stringify(payload),
+    featureSwitchContext,
+  );
 }
 
 function decodeSession(token: string): CliAuthStripeSessionToken | null {
@@ -233,22 +244,23 @@ function decodeSession(token: string): CliAuthStripeSessionToken | null {
   return decoded.ok;
 }
 
-function decodeProviderState(
+async function decodeProviderState(
   encryptedProviderState: string | null,
-): CliAuthStripeProviderState | null {
+  featureSwitchContext: FeatureSwitchContext,
+): Promise<CliAuthStripeProviderState | null> {
   if (!encryptedProviderState) {
     return null;
   }
-  const decoded = safeSync(() => {
-    const parsed = cliAuthStripeProviderStateSchema.safeParse(
-      safeJsonParse(decryptSecretValue(encryptedProviderState)),
-    );
-    return parsed.success ? parsed.data : null;
-  });
-  if ("error" in decoded) {
+  const decrypted = await settle(
+    decryptPersistentSecretValue(encryptedProviderState, featureSwitchContext),
+  );
+  if (!decrypted.ok) {
     return null;
   }
-  return decoded.ok;
+  const parsed = cliAuthStripeProviderStateSchema.safeParse(
+    safeJsonParse(decrypted.value),
+  );
+  return parsed.success ? parsed.data : null;
 }
 
 function commandText(result: SandboxCommandResult): string {
@@ -767,6 +779,7 @@ async function markCliAuthStripeSessionAwaitingApproval(args: {
   readonly session: ConnectorCliAuthSession;
   readonly output: StripeCliAuthStartOutput;
   readonly mode: StripeCliAuthMode;
+  readonly featureSwitchContext: FeatureSwitchContext;
 }) {
   const [updated] = await args.writeDb
     .update(connectorCliAuthSessions)
@@ -774,12 +787,15 @@ async function markCliAuthStripeSessionAwaitingApproval(args: {
       status: "awaiting_user_approval",
       approvalUrl: args.output.browserUrl,
       verificationCode: args.output.verificationCode,
-      encryptedProviderState: encodeProviderState({
-        version: 1,
-        type: "stripe",
-        mode: args.mode,
-        pollUrl: args.output.pollUrl,
-      }),
+      encryptedProviderState: await encodeProviderState(
+        {
+          version: 1,
+          type: "stripe",
+          mode: args.mode,
+          pollUrl: args.output.pollUrl,
+        },
+        args.featureSwitchContext,
+      ),
       errorMessage: null,
       updatedAt: nowDate(),
     })
@@ -821,6 +837,7 @@ async function reusableCliAuthStripeStartResult(args: {
   readonly session: ConnectorCliAuthSession;
   readonly mode: StripeCliAuthMode;
   readonly now: Date;
+  readonly featureSwitchContext: FeatureSwitchContext;
 }): Promise<Extract<CliAuthStripeStartResult, { readonly ok: true }> | null> {
   if (
     args.session.status !== "awaiting_user_approval" ||
@@ -833,6 +850,7 @@ async function reusableCliAuthStripeStartResult(args: {
   }
   const providerState = await decodeProviderState(
     args.session.encryptedProviderState,
+    args.featureSwitchContext,
   );
   if (!providerState || providerState.mode !== args.mode) {
     return null;
@@ -857,6 +875,7 @@ function prepareCliAuthStripeStartSession(args: {
   readonly userId: string;
   readonly mode: StripeCliAuthMode;
   readonly now: Date;
+  readonly featureSwitchContext: FeatureSwitchContext;
 }): Promise<PreparedCliAuthStripeStart> {
   return args.writeDb.transaction(async (tx) => {
     await lockCliAuthStripeOwner({
@@ -894,6 +913,7 @@ function prepareCliAuthStripeStartSession(args: {
         session,
         mode: args.mode,
         now: args.now,
+        featureSwitchContext: args.featureSwitchContext,
       });
       if (reusable && !reusableResult) {
         reusableResult = reusable;
@@ -962,12 +982,18 @@ export async function startCliAuthStripe(args: {
 }): Promise<CliAuthStripeStartResult> {
   const now = args.now ?? nowDate();
   const client = getVercelSandboxClient();
+  const featureSwitchContext = await loadUserFeatureSwitchContext(
+    args.writeDb,
+    args.orgId,
+    args.userId,
+  );
   const prepared = await prepareCliAuthStripeStartSession({
     writeDb: args.writeDb,
     orgId: args.orgId,
     userId: args.userId,
     mode: args.mode,
     now,
+    featureSwitchContext,
   });
   await cleanupCliAuthStripeSandboxes({
     client,
@@ -1006,6 +1032,7 @@ export async function startCliAuthStripe(args: {
       session: sandboxResult.session,
       output: startResult.output,
       mode: args.mode,
+      featureSwitchContext,
     }),
   );
   if (!persistResult.ok) {
@@ -1460,6 +1487,7 @@ async function prepareCliAuthStripeCompletion(args: {
   readonly sessionToken: string;
   readonly now: Date;
   readonly signal: AbortSignal;
+  readonly featureSwitchContext: FeatureSwitchContext;
 }): Promise<PreparedCliAuthStripeCompletion> {
   const sessionToken = await decodeSession(args.sessionToken);
   args.signal.throwIfAborted();
@@ -1540,6 +1568,7 @@ async function prepareCliAuthStripeCompletion(args: {
 
   const providerState = await decodeProviderState(
     claimedSession.encryptedProviderState,
+    args.featureSwitchContext,
   );
   args.signal.throwIfAborted();
   if (!claimedSession.sandboxId || !providerState) {
@@ -1753,6 +1782,7 @@ export const completeCliAuthStripe$ = command(
       sessionToken: args.sessionToken,
       now: args.now ?? nowDate(),
       signal,
+      featureSwitchContext,
     });
     if (!prepared.ok) {
       return prepared.result;

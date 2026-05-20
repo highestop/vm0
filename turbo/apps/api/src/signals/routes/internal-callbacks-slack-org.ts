@@ -1,6 +1,9 @@
 import { command } from "ccstate";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
-import { isFeatureEnabled } from "@vm0/core/feature-switch";
+import {
+  isFeatureEnabled,
+  type FeatureSwitchContext,
+} from "@vm0/core/feature-switch";
 import { getModelDisplayName } from "@vm0/core/model-display-name";
 import {
   getFrameworkForType,
@@ -36,7 +39,7 @@ import {
   postMessage,
   setThreadStatus,
 } from "../external/slack-message-client";
-import { decryptSecretValue } from "../services/crypto.utils";
+import { decryptPersistentSecretValue } from "../services/crypto.utils";
 import { userFeatureSwitchOverrides } from "../services/feature-switches.service";
 import { getRunOutputText } from "../services/run-output.service";
 import { saveRunSummary$ } from "../services/run-summary.service";
@@ -406,8 +409,17 @@ async function handleProgress(args: {
   readonly db: Db;
   readonly runId: string;
   readonly payload: SlackOrgCallbackPayload;
+  readonly getFeatureOverrides: (
+    orgId: string,
+    userId: string,
+  ) => Promise<Record<string, boolean>>;
   readonly signal: AbortSignal;
 }): Promise<SlackOrgCallbackResult> {
+  const run = await loadRunContext({
+    db: args.db,
+    runId: args.runId,
+    signal: args.signal,
+  });
   const installation = await loadInstallation({
     db: args.db,
     workspaceId: args.payload.workspaceId,
@@ -415,8 +427,18 @@ async function handleProgress(args: {
   });
 
   if (installation) {
+    const featureSwitchContext = run
+      ? ({
+          orgId: run.orgId,
+          userId: run.userId,
+          overrides: await args.getFeatureOverrides(run.orgId, run.userId),
+        } satisfies FeatureSwitchContext)
+      : {};
     refreshThreadStatus({
-      token: decryptSecretValue(installation.encryptedBotToken),
+      token: await decryptPersistentSecretValue(
+        installation.encryptedBotToken,
+        featureSwitchContext,
+      ),
       channelId: args.payload.channelId,
       threadTs: args.payload.threadTs,
       status: "is thinking...",
@@ -462,12 +484,22 @@ async function handleCompletion(args: {
     return errorResponse(404, "Slack installation not found");
   }
 
-  const botToken = decryptSecretValue(installation.encryptedBotToken);
   const run = await loadRunContext({
     db: args.db,
     runId: args.runId,
     signal: args.signal,
   });
+  const featureSwitchContext = run
+    ? ({
+        orgId: run.orgId,
+        userId: run.userId,
+        overrides: await args.getFeatureOverrides(run.orgId, run.userId),
+      } satisfies FeatureSwitchContext)
+    : {};
+  const botToken = await decryptPersistentSecretValue(
+    installation.encryptedBotToken,
+    featureSwitchContext,
+  );
   const output = await resolveCompletionText({
     runId: args.runId,
     status: args.status,
@@ -567,6 +599,9 @@ const handleSlackOrgCallback$ = command(
         db,
         runId: callback.runId,
         payload,
+        getFeatureOverrides: (orgId, userId) => {
+          return get(userFeatureSwitchOverrides(orgId, userId));
+        },
         signal,
       });
     }

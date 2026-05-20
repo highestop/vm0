@@ -2,9 +2,17 @@ import {
   storedExecutionContextSchema,
   type StoredExecutionContext,
 } from "@vm0/api-contracts/contracts/runners";
+import type { FeatureSwitchContext } from "@vm0/core/feature-switch";
 import { z } from "zod";
 
-import { decryptSecretsMap, encryptSecretsMap } from "./crypto.utils";
+import {
+  decryptPersistentSecretsMap,
+  decryptPersistentSecretsMapWithMode,
+  encryptPersistentSecretsMap,
+  encryptPersistentSecretsMapWithMode,
+  type StoredSecretReadMode,
+  type StoredSecretWriteMode,
+} from "./crypto.utils";
 
 const QUEUED_RUNNER_JOB_PAYLOAD_KEY = "__api_runner_job_payload__";
 
@@ -18,26 +26,68 @@ const queuedRunnerJobPayloadSchema = z.object({
 
 type QueuedRunnerJobPayload = z.infer<typeof queuedRunnerJobPayloadSchema>;
 
-export function encryptQueuedRunnerJobPayload(
+export async function encryptQueuedRunnerJobPayload(
   payload: QueuedRunnerJobPayload,
-): string {
-  const encrypted = encryptSecretsMap({
-    [QUEUED_RUNNER_JOB_PAYLOAD_KEY]: JSON.stringify(payload),
-  });
+  ctx: FeatureSwitchContext = {},
+): Promise<string> {
+  const encrypted = await encryptPersistentSecretsMap(
+    {
+      [QUEUED_RUNNER_JOB_PAYLOAD_KEY]: JSON.stringify(payload),
+    },
+    ctx,
+  );
   if (!encrypted) {
     throw new Error("Failed to encrypt queued runner job payload");
   }
   return encrypted;
 }
 
-export function decryptQueuedRunnerJobPayload(
+export async function encryptQueuedRunnerJobPayloadWithMode(
+  payload: QueuedRunnerJobPayload,
+  mode: StoredSecretWriteMode,
+): Promise<string> {
+  const encrypted = await encryptPersistentSecretsMapWithMode(
+    {
+      [QUEUED_RUNNER_JOB_PAYLOAD_KEY]: JSON.stringify(payload),
+    },
+    mode,
+  );
+  if (!encrypted) {
+    throw new Error("Failed to encrypt queued runner job payload");
+  }
+  return encrypted;
+}
+
+export async function decryptQueuedRunnerJobPayload(
   encryptedParams: string | null,
-): QueuedRunnerJobPayload | null {
+  ctx: FeatureSwitchContext = {},
+): Promise<QueuedRunnerJobPayload | null> {
   if (!encryptedParams) {
     return null;
   }
 
-  const decrypted = decryptSecretsMap(encryptedParams);
+  const decrypted = await decryptPersistentSecretsMap(encryptedParams, ctx);
+  const rawPayload = decrypted?.[QUEUED_RUNNER_JOB_PAYLOAD_KEY];
+  if (!rawPayload) {
+    return null;
+  }
+
+  const parsedJson: unknown = JSON.parse(rawPayload);
+  return queuedRunnerJobPayloadSchema.parse(parsedJson);
+}
+
+export async function decryptQueuedRunnerJobPayloadWithMode(
+  encryptedParams: string | null,
+  mode: StoredSecretReadMode,
+): Promise<QueuedRunnerJobPayload | null> {
+  if (!encryptedParams) {
+    return null;
+  }
+
+  const decrypted = await decryptPersistentSecretsMapWithMode(
+    encryptedParams,
+    mode,
+  );
   const rawPayload = decrypted?.[QUEUED_RUNNER_JOB_PAYLOAD_KEY];
   if (!rawPayload) {
     return null;

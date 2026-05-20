@@ -116,8 +116,8 @@ import { generateZeroToken } from "../auth/tokens";
 import { settle, tapError } from "../utils";
 import {
   decryptStoredSecretValue,
-  encryptSecretValue,
-  encryptSecretsMap,
+  encryptPersistentSecretValue,
+  encryptPersistentSecretsMap,
 } from "./crypto.utils";
 import { prepareAgentRunStorageManifest } from "./agent-run-storage.service";
 import {
@@ -2255,6 +2255,7 @@ async function insertRunRecord(
     readonly callbacks: readonly RunCallback[] | undefined;
     readonly chatThreadId: string | undefined;
     readonly zeroRunMetadata: ZeroRunMetadata | undefined;
+    readonly featureSwitchContext: FeatureSwitchContext;
   },
 ): Promise<RunRecord> {
   const sessionId =
@@ -2314,16 +2315,20 @@ async function insertRunRecord(
   });
 
   if (args.callbacks && args.callbacks.length > 0) {
-    await tx.insert(agentRunCallbacks).values(
-      args.callbacks.map((callback) => {
+    const callbackRows = await Promise.all(
+      args.callbacks.map(async (callback) => {
         return {
           runId: run.id,
           url: callback.url,
-          encryptedSecret: encryptSecretValue(callback.secret),
+          encryptedSecret: await encryptPersistentSecretValue(
+            callback.secret,
+            args.featureSwitchContext,
+          ),
           payload: callback.payload,
         };
       }),
     );
+    await tx.insert(agentRunCallbacks).values(callbackRows);
   }
 
   return { ...run, status: "pending" };
@@ -2342,6 +2347,7 @@ async function insertQueuedRunRecord(
     readonly callbacks: readonly RunCallback[] | undefined;
     readonly chatThreadId: string | undefined;
     readonly zeroRunMetadata: ZeroRunMetadata | undefined;
+    readonly featureSwitchContext: FeatureSwitchContext;
   },
 ): Promise<RunRecord> {
   const sessionId =
@@ -2401,22 +2407,26 @@ async function insertQueuedRunRecord(
   });
 
   if (args.callbacks && args.callbacks.length > 0) {
-    await tx.insert(agentRunCallbacks).values(
-      args.callbacks.map((callback) => {
+    const callbackRows = await Promise.all(
+      args.callbacks.map(async (callback) => {
         return {
           runId: run.id,
           url: callback.url,
-          encryptedSecret: encryptSecretValue(callback.secret),
+          encryptedSecret: await encryptPersistentSecretValue(
+            callback.secret,
+            args.featureSwitchContext,
+          ),
           payload: callback.payload,
         };
       }),
     );
+    await tx.insert(agentRunCallbacks).values(callbackRows);
   }
 
   return { ...run, status: "queued" };
 }
 
-function buildStoredExecutionContext(args: {
+async function buildStoredExecutionContext(args: {
   readonly runId: string;
   readonly userId: string;
   readonly orgId: string;
@@ -2432,7 +2442,7 @@ function buildStoredExecutionContext(args: {
   readonly extraEnvironment: Record<string, string> | undefined;
   readonly userTimezone: string | undefined;
   readonly featureSwitchContext: FeatureSwitchContext;
-}): BuiltStoredExecutionContext {
+}): Promise<BuiltStoredExecutionContext> {
   const permissions = buildPermissionManifest({
     modelProvider: args.modelProvider,
     permissionPolicies: args.body.permissionPolicies,
@@ -2468,7 +2478,10 @@ function buildStoredExecutionContext(args: {
         ...args.extraEnvironment,
       },
       resumeSession: args.resolved.resumeSession ?? null,
-      encryptedSecrets: encryptSecretsMap(executionSecrets.secrets ?? null),
+      encryptedSecrets: await encryptPersistentSecretsMap(
+        executionSecrets.secrets ?? null,
+        args.featureSwitchContext,
+      ),
       secretConnectorMap: executionSecrets.secretConnectorMap,
       secretConnectorMetadataMap: executionSecrets.secretConnectorMetadataMap,
       cliAgentType: args.framework,
@@ -2744,7 +2757,7 @@ async function buildRunnerJobPayload(
     additionalVolumes: args.additionalVolumes,
     framework: args.framework,
   });
-  const builtContext = buildStoredExecutionContext({
+  const builtContext = await buildStoredExecutionContext({
     ...args,
     body,
     runId: args.run.id,
@@ -2847,7 +2860,10 @@ async function enqueueRunForConcurrency(
     runId: args.run.id,
     userId: args.userId,
     orgId: args.orgId,
-    encryptedParams: encryptQueuedRunnerJobPayload(payload),
+    encryptedParams: await encryptQueuedRunnerJobPayload(
+      payload,
+      args.featureSwitchContext,
+    ),
     createdAt: args.run.createdAt,
     expiresAt: new Date(now() + QUEUED_RUN_TTL_MS),
   });
@@ -3267,6 +3283,7 @@ async function insertRunWithConcurrency(
           callbacks: args.callbacks,
           chatThreadId: args.chatThreadId,
           zeroRunMetadata: args.zeroRunMetadata,
+          featureSwitchContext: context.featureSwitchContext,
         });
       }
       return concurrency;
@@ -3282,6 +3299,7 @@ async function insertRunWithConcurrency(
       callbacks: args.callbacks,
       chatThreadId: args.chatThreadId,
       zeroRunMetadata: args.zeroRunMetadata,
+      featureSwitchContext: context.featureSwitchContext,
     });
   });
 }

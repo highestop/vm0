@@ -55,7 +55,10 @@ import {
 } from "../external/telegram-official";
 import { now, nowDate } from "../external/time";
 import { safeUrlParse, settle, tapError } from "../utils";
-import { encryptSecretValue, decryptSecretValue } from "./crypto.utils";
+import {
+  decryptPersistentSecretValue,
+  encryptPersistentSecretValue,
+} from "./crypto.utils";
 import {
   resolveIntegrationModelRouteForUser,
   type IntegrationModelRoutePin,
@@ -73,6 +76,7 @@ import {
   updateUserModelPreference$,
   userModelPreference,
 } from "./zero-user-data.service";
+import { userFeatureSwitchContext } from "./feature-switches.service";
 import type { ApiOrgRole, AuthContext, AuthTokenType } from "../../types/auth";
 
 const log = logger("api:telegram:post");
@@ -558,12 +562,18 @@ async function handleExistingInstallation(args: {
   if (configureError) {
     return configureError;
   }
+  const featureSwitchContext = await args.get(
+    userFeatureSwitchContext(args.auth.orgId, args.auth.userId),
+  );
 
   const [updated] = await args.db
     .update(telegramInstallations)
     .set({
       botUsername: args.botInfo.username,
-      encryptedBotToken: encryptSecretValue(args.body.botToken),
+      encryptedBotToken: await encryptPersistentSecretValue(
+        args.body.botToken,
+        featureSwitchContext,
+      ),
       webhookSecret,
       defaultComposeId: resolvedAgent.agentId,
       updatedAt: nowDate(),
@@ -654,12 +664,19 @@ export const registerTelegramBot$ = command(
     }
 
     const webhookSecret = generateCallbackSecret();
+    const featureSwitchContext = await get(
+      userFeatureSwitchContext(auth.orgId, auth.userId),
+    );
+    signal.throwIfAborted();
     const [installation] = await db
       .insert(telegramInstallations)
       .values({
         telegramBotId,
         botUsername: botInfoResult.value.username,
-        encryptedBotToken: encryptSecretValue(bodyResult.data.botToken),
+        encryptedBotToken: await encryptPersistentSecretValue(
+          bodyResult.data.botToken,
+          featureSwitchContext,
+        ),
         webhookSecret,
         defaultComposeId: resolvedAgent.agentId,
         ownerUserId: auth.userId,
@@ -2661,7 +2678,13 @@ const processCustomWebhookMessage$ = command(
       return;
     }
 
-    const botToken = decryptSecretValue(installation.encryptedBotToken);
+    const botToken = await decryptPersistentSecretValue(
+      installation.encryptedBotToken,
+      await get(
+        userFeatureSwitchContext(installation.orgId, installation.ownerUserId),
+      ),
+    );
+    signal.throwIfAborted();
     const commandName = parseBotCommand(
       args.message.text ?? args.message.caption,
       installation.botUsername,

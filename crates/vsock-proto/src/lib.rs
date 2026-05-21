@@ -15,24 +15,28 @@
 //!
 //! ## Message Types
 //!
+//! Non-error message types are continuous and grouped by protocol domain:
+//! connection lifecycle, operation gates, file operations, exec operations, and
+//! the generic protocol error sentinel at `0xFF`.
+//!
 //! | Type | Direction | Name              | Payload |
 //! |------|-----------|-------------------|---------|
 //! | 0x00 | G→H       | ready             | (empty) |
 //! | 0x01 | H→G       | ping              | (empty) |
 //! | 0x02 | G→H       | pong              | (empty) |
-//! | 0x03 | H→G       | write_file        | `[2B path_len][path][1B flags][4B content_len][content]` (flags: `SUDO=0x01`, `APPEND=0x02`) |
-//! | 0x04 | G→H       | write_file_result | `[1B success][2B error_len][error]` |
-//! | 0x05 | H→G       | shutdown          | (empty) |
-//! | 0x06 | G→H       | shutdown_ack      | (empty) |
-//! | 0x07 | H→G       | exec_start     | `[1B lifecycle][timeout_policy][1B flags][4B cmd_len][command][4B env_count]... [2B label_len][label][stdout_policy][stderr_policy][2B expected_exit_count][4B exit_code]...[control_policy]` |
-//! | 0x08 | G→H       | exec_output    | `[1B stream][4B output_seq][1B flags][4B chunk_len][chunk]` |
-//! | 0x09 | G→H       | exec_result    | `[1B termination]...[4B duration_ms][stdout][stderr][2B diagnostic_len][diagnostic]` |
-//! | 0x0A | H→G       | exec_cancel    | (empty) |
-//! | 0x0B | H→G       | quiesce_operations  | (empty) |
-//! | 0x0C | G→H       | operations_quiesced    | (empty) |
-//! | 0x0D | H→G       | resume_operations | (empty) |
-//! | 0x0E | G→H       | operations_resumed | (empty) |
-//! | 0x0F | G→H       | exec_started | `[4B pid]` |
+//! | 0x03 | H→G       | shutdown          | (empty) |
+//! | 0x04 | G→H       | shutdown_ack      | (empty) |
+//! | 0x05 | H→G       | quiesce_operations  | (empty) |
+//! | 0x06 | G→H       | operations_quiesced    | (empty) |
+//! | 0x07 | H→G       | resume_operations | (empty) |
+//! | 0x08 | G→H       | operations_resumed | (empty) |
+//! | 0x09 | H→G       | write_file        | `[2B path_len][path][1B flags][4B content_len][content]` (flags: `SUDO=0x01`, `APPEND=0x02`) |
+//! | 0x0A | G→H       | write_file_result | `[1B success][2B error_len][error]` |
+//! | 0x0B | H→G       | exec_start     | `[1B lifecycle][timeout_policy][1B flags][4B cmd_len][command][4B env_count]... [2B label_len][label][stdout_policy][stderr_policy][2B expected_exit_count][4B exit_code]...[control_policy]` |
+//! | 0x0C | G→H       | exec_started | `[4B pid]` |
+//! | 0x0D | G→H       | exec_output    | `[1B stream][4B output_seq][1B flags][4B chunk_len][chunk]` |
+//! | 0x0E | G→H       | exec_result    | `[1B termination]...[4B duration_ms][stdout][stderr][2B diagnostic_len][diagnostic]` |
+//! | 0x0F | H→G       | exec_cancel    | (empty) |
 //! | 0x10 | H→G       | exec_control | `[4B target_seq][4B request_timeout_ms][16B nonce][2B message_id_len][message_id][4B payload_len][payload]` |
 //! | 0x11 | G→H       | exec_control_result | `[4B target_seq][16B nonce][2B message_id_len][message_id][1B status][2B diagnostic_len][diagnostic]` |
 //! | 0xFF | G→H       | error             | `[2B error_len][error]` |

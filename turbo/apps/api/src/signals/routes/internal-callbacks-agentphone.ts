@@ -358,8 +358,7 @@ async function handleCompletion(args: {
     ? await resolveAgentPhoneReplyFooterText({
         db: args.db,
         orgId: run.orgId,
-        runId: args.runId,
-        agentId: args.payload.agentId,
+        composeId: args.payload.agentId,
       })
     : undefined;
   args.signal.throwIfAborted();

@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use vsock_proto::{
-    ExecCapturedOutput, ExecControlPolicy, ExecLifecyclePolicy, ExecOutputPolicy, ExecOutputStream,
-    ExecTermination, ExecTimeoutPolicy, MSG_ERROR, MSG_EXEC_CANCEL, MSG_EXEC_CONTROL,
-    MSG_EXEC_START, MSG_OPERATIONS_QUIESCED, MSG_QUIESCE_OPERATIONS, ProcessControlStatus,
+    ExecCapturedOutput, ExecControlPolicy, ExecControlStatus, ExecLifecyclePolicy,
+    ExecOutputPolicy, ExecOutputStream, ExecTermination, ExecTimeoutPolicy, MSG_ERROR,
+    MSG_EXEC_CANCEL, MSG_EXEC_CONTROL, MSG_EXEC_START, MSG_OPERATIONS_QUIESCED,
+    MSG_QUIESCE_OPERATIONS,
 };
 
 use super::super::support::{
@@ -50,6 +51,31 @@ fn supervised_stream_request(command: &str) -> SupervisedExecRequest<'_> {
     }
 }
 
+async fn assert_supervised_start_rejected_without_frame(
+    request: SupervisedExecRequest<'_>,
+    expected_message: &str,
+) {
+    let (host, mut guest) = setup_host_and_guest().await;
+    let host = Arc::new(host);
+
+    let err = match host.start_supervised_exec(request).await {
+        Ok(_) => panic!("invalid supervised exec request should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        err.to_string().contains(expected_message),
+        "unexpected error: {err}",
+    );
+    assert_eq!(operation_count(&host), 0);
+    assert_eq!(
+        normal_operation_readiness(&host),
+        NormalOperationReadiness::Idle
+    );
+
+    assert_connection_accepts_exec_operation(&host, &mut guest).await;
+}
+
 async fn send_start_failed(guest: &mut tokio::net::UnixStream, seq: u32, diagnostic: &str) {
     let payload = vsock_proto::encode_exec_result(
         ExecTermination::StartFailed,
@@ -73,6 +99,58 @@ async fn send_guest_error(stream: &mut tokio::net::UnixStream, seq: u32, message
     let payload = vsock_proto::encode_error(message);
     let frame = vsock_proto::encode(MSG_ERROR, seq, &payload).unwrap();
     stream.write_all(&frame).await.unwrap();
+}
+
+#[tokio::test]
+async fn supervised_exec_rejects_zero_stream_capacity_without_sending_frame() {
+    assert_supervised_start_rejected_without_frame(
+        SupervisedExecRequest {
+            stream_queue_capacity: Some(0),
+            ..supervised_stream_request("zero-stream-capacity")
+        },
+        "exec stream queue capacity must be positive",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn supervised_exec_rejects_receiver_without_stream_policy() {
+    assert_supervised_start_rejected_without_frame(
+        SupervisedExecRequest {
+            stream_queue_capacity: Some(1),
+            ..supervised_request("receiver-without-stream")
+        },
+        "exec stream queue capacity requires a streaming output policy",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn supervised_exec_rejects_invalid_output_policy_without_sending_frame() {
+    assert_supervised_start_rejected_without_frame(
+        SupervisedExecRequest {
+            stdout: ExecOutputPolicy::Stream {
+                limit_bytes: 1024,
+                chunk_limit_bytes: 0,
+            },
+            stream_queue_capacity: Some(1),
+            ..supervised_request("invalid-output-policy")
+        },
+        "exec output chunk limit must be non-zero",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn supervised_exec_rejects_zero_duration_timeout_without_sending_frame() {
+    assert_supervised_start_rejected_without_frame(
+        SupervisedExecRequest {
+            timeout: ExecTimeoutPolicy::Duration { timeout_ms: 0 },
+            ..supervised_request("zero-duration-timeout")
+        },
+        "exec start timeout duration must be positive",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -492,6 +570,41 @@ async fn supervised_exec_cancel_and_wait_sends_cancel_and_waits_for_cancelled_re
 }
 
 #[tokio::test]
+async fn supervised_exec_cancel_after_terminal_result_returns_result_without_cancel_frame() {
+    let (host, mut guest) = setup_host_and_guest().await;
+    let host = Arc::new(host);
+    let task = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            host.start_supervised_exec(supervised_request("already-done"))
+                .await
+        })
+    };
+
+    let start = read_guest_message(&mut guest).await;
+    send_exec_started(&mut guest, start.seq, 123).await;
+    let handle = task.await.unwrap().unwrap();
+    send_exec_result(
+        &mut guest,
+        start.seq,
+        ExecTermination::Exited { exit_code: 0 },
+        b"done",
+        b"",
+    )
+    .await;
+    wait_for_operation_count(&host, 0).await;
+
+    let result = handle.cancel_and_wait(Duration::ZERO).await.unwrap();
+    assert_eq!(result.termination, ExecTermination::Exited { exit_code: 0 });
+    assert_eq!(
+        normal_operation_readiness(&host),
+        NormalOperationReadiness::Idle
+    );
+
+    assert_connection_accepts_exec_operation(&host, &mut guest).await;
+}
+
+#[tokio::test]
 async fn supervised_exec_cancel_non_cancelled_terminal_result_cleans_without_poisoning() {
     let (host, mut guest) = setup_host_and_guest().await;
     let host = Arc::new(host);
@@ -579,13 +692,58 @@ async fn supervised_exec_control_uses_exec_control_messages() {
         decoded_control.target_seq,
         decoded_control.control_nonce,
         decoded_control.message_id,
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;
     let ack = control_task.await.unwrap().unwrap();
     assert_eq!(ack.target_seq, start.seq);
     assert_eq!(ack.message_id, "message-1");
+
+    send_exec_result(
+        &mut guest,
+        start.seq,
+        ExecTermination::Exited { exit_code: 0 },
+        b"",
+        b"",
+    )
+    .await;
+    handle.wait(Duration::from_secs(5)).await.unwrap();
+}
+
+#[tokio::test]
+async fn supervised_exec_control_rejects_empty_message_id_without_frame() {
+    let (host, mut guest) = setup_host_and_guest().await;
+    let host = Arc::new(host);
+    let task = {
+        let host = Arc::clone(&host);
+        tokio::spawn(async move {
+            host.start_supervised_exec(SupervisedExecRequest {
+                control: SupervisedExecControl::Enabled { sink: true },
+                ..supervised_request("control-empty-message-id")
+            })
+            .await
+        })
+    };
+
+    let start = read_guest_message(&mut guest).await;
+    send_exec_started(&mut guest, start.seq, 123).await;
+    let handle = task.await.unwrap().unwrap();
+
+    let err = handle
+        .control("", b"payload", Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        err.to_string().contains("exec_control message_id empty"),
+        "unexpected error: {err}",
+    );
+    match guest.try_read(&mut [0u8; 1]) {
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+        Ok(n) => panic!("invalid control request must not send a frame; read {n} bytes"),
+        Err(err) => panic!("unexpected read error after invalid control request: {err}"),
+    }
 
     send_exec_result(
         &mut guest,
@@ -697,7 +855,7 @@ async fn supervised_exec_control_large_timeout_saturates_request_timeout_ms() {
         start.seq,
         control_nonce,
         "large-timeout",
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;
@@ -873,7 +1031,7 @@ async fn supervised_exec_control_reports_guest_status_and_error() {
         start.seq,
         control_nonce,
         "status",
-        ProcessControlStatus::QueueFull,
+        ExecControlStatus::QueueFull,
         "queue full",
     )
     .await;
@@ -953,7 +1111,7 @@ async fn supervised_exec_control_timeout_ignores_late_result() {
         start.seq,
         control_nonce,
         "timeout",
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;
@@ -1016,7 +1174,7 @@ async fn supervised_exec_control_nonce_mismatch_poisons_connection() {
         start.seq,
         control_nonce,
         "nonce-mismatch",
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;
@@ -1068,7 +1226,7 @@ async fn supervised_exec_control_target_seq_mismatch_poisons_connection() {
         start.seq + 1,
         control_nonce,
         "target-mismatch",
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;
@@ -1120,7 +1278,7 @@ async fn supervised_exec_control_message_id_mismatch_poisons_connection() {
         start.seq,
         control_nonce,
         "different-message-id",
-        ProcessControlStatus::Delivered,
+        ExecControlStatus::Delivered,
         "",
     )
     .await;

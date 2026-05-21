@@ -1280,6 +1280,7 @@ dependencies = [
  "tokio-util",
  "vsock-guest",
  "vsock-host",
+ "vsock-proto",
  "zstd",
 ]
 
@@ -3685,10 +3686,13 @@ name = "vsock-test"
 version = "0.9.50"
 dependencies = [
  "guest-write-file",
+ "libc",
+ "nix",
  "tempfile",
  "tokio",
  "vsock-guest",
  "vsock-host",
+ "vsock-proto",
 ]
 
 [[package]]

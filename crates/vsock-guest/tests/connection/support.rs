@@ -1,15 +1,17 @@
+use std::ffi::CString;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use vsock_guest::handle_connection;
 use vsock_proto::{
     self, ExecCapturedOutput, ExecOutputPolicy, ExecOutputStream, ExecTermination, MSG_ERROR,
-    MSG_EXEC_CANCEL, MSG_EXEC_OUTPUT, MSG_EXEC_RESULT, MSG_EXEC_START, MSG_PROCESS_CONTROL,
-    MSG_PROCESS_CONTROL_RESULT, MSG_PROCESS_EXIT, MSG_QUIESCE_OPERATIONS, MSG_RESUME_OPERATIONS,
-    MSG_SPAWN_PROCESS, MSG_SPAWN_PROCESS_RESULT, MSG_STDOUT_CHUNK, ProcessControlStatus,
+    MSG_EXEC_CANCEL, MSG_EXEC_OUTPUT, MSG_EXEC_RESULT, MSG_EXEC_START, MSG_QUIESCE_OPERATIONS,
+    MSG_RESUME_OPERATIONS,
 };
 
-pub(crate) const EXIT_CODE_TIMEOUT: i32 = 124;
 pub(crate) const DRAIN_DEADLINE_SECS: u64 = 5;
 pub(crate) const LONG_RUNNING_EXEC_TIMEOUT_MS: u32 = 60_000;
 pub(crate) const LARGE_ENV_COMMAND: &str =
@@ -370,249 +372,40 @@ pub(crate) fn read_retry_eintr(
     }
 }
 
-/// Send a MSG_SPAWN_PROCESS message with streaming enabled.
-pub(crate) fn send_spawn_process(
-    stream: &mut impl std::io::Write,
-    seq: u32,
-    command: &str,
-    log_path: Option<&str>,
-    timeout_ms: u32,
-) {
-    send_spawn_process_with_env(stream, seq, command, &[], log_path, timeout_ms);
-}
-
-pub(crate) fn send_spawn_process_with_env(
-    stream: &mut impl std::io::Write,
-    seq: u32,
-    command: &str,
-    env: &[(&str, &str)],
-    log_path: Option<&str>,
-    timeout_ms: u32,
-) {
-    let payload =
-        vsock_proto::encode_spawn_process(timeout_ms, command, env, false, true, log_path).unwrap();
-    let msg = vsock_proto::encode(MSG_SPAWN_PROCESS, seq, &payload).unwrap();
-    stream.write_all(&msg).unwrap();
-}
-
-pub(crate) fn send_spawn_process_with_control_nonce(
-    stream: &mut impl std::io::Write,
-    seq: u32,
-    command: &str,
-    control_nonce: vsock_proto::ProcessControlNonce,
-) {
-    let payload = vsock_proto::encode_spawn_process_with_control_nonce(
-        5000,
-        command,
-        &[],
-        false,
-        true,
-        control_nonce,
-        None,
-    )
-    .unwrap();
-    let msg = vsock_proto::encode(MSG_SPAWN_PROCESS, seq, &payload).unwrap();
-    stream.write_all(&msg).unwrap();
-}
-
-pub(crate) fn send_process_control(
-    stream: &mut impl std::io::Write,
-    request_seq: u32,
-    target_seq: u32,
-    control_nonce: vsock_proto::ProcessControlNonce,
-    message_id: &str,
-) {
-    let payload = vsock_proto::encode_process_control(
-        target_seq,
-        control_nonce,
-        message_id,
-        b"payload",
-        5000,
-    )
-    .unwrap();
-    let msg = vsock_proto::encode(MSG_PROCESS_CONTROL, request_seq, &payload).unwrap();
-    stream.write_all(&msg).unwrap();
-}
-
-pub(crate) fn assert_process_control_result(
-    stream: &mut impl std::io::Read,
-    request_seq: u32,
-    expected_target_seq: u32,
-    expected_nonce: vsock_proto::ProcessControlNonce,
-    expected_message_id: &str,
-    expected_status: ProcessControlStatus,
-    expected_diagnostic: &str,
-) {
-    let msg = read_message(stream);
-    assert_eq!(msg.msg_type, MSG_PROCESS_CONTROL_RESULT);
-    assert_eq!(msg.seq, request_seq);
-    let decoded = vsock_proto::decode_process_control_result(&msg.payload).unwrap();
-    assert_eq!(decoded.target_seq, expected_target_seq);
-    assert_eq!(decoded.control_nonce, expected_nonce);
-    assert_eq!(decoded.message_id, expected_message_id);
-    assert_eq!(decoded.status, expected_status);
-    assert_eq!(decoded.diagnostic, expected_diagnostic);
-}
-
-/// Read all streaming messages for a spawn_process command in a single loop.
-/// Uses one decoder to avoid losing messages when the OS batches multiple
-/// protocol frames into a single read buffer.
-///
-/// Returns `(pid, stdout_data, exit_code, stderr)`.
-pub(crate) fn read_streaming_result(
-    stream: &mut impl std::io::Read,
-    seq: u32,
-) -> (u32, Vec<u8>, i32, Vec<u8>) {
-    let mut decoder = vsock_proto::Decoder::new();
-    let mut buf = [0u8; 4096];
-    let mut pid: Option<u32> = None;
-    let mut stdout_data = Vec::new();
-    loop {
-        let n = read_retry_eintr(stream, &mut buf).unwrap();
-        assert!(n > 0, "unexpected EOF waiting for streaming result");
-        for msg in decoder.decode(buf.get(..n).unwrap_or_default()).unwrap() {
-            // Pick up the PID from spawn_process_result
-            if msg.msg_type == MSG_SPAWN_PROCESS_RESULT && msg.seq == seq {
-                pid = Some(vsock_proto::decode_spawn_process_result(&msg.payload).unwrap());
-                continue;
-            }
-            let Some(p) = pid else { continue };
-
-            // Collect stdout chunks and return on process_exit
-            if msg.msg_type == MSG_STDOUT_CHUNK
-                && msg.seq == seq
-                && let Ok((chunk_pid, data)) = vsock_proto::decode_stdout_chunk(&msg.payload)
-                && chunk_pid == p
-            {
-                stdout_data.extend_from_slice(data);
-            } else if msg.msg_type == MSG_PROCESS_EXIT
-                && msg.seq == seq
-                && let Ok((exit_pid, code, _stdout, stderr)) =
-                    vsock_proto::decode_process_exit(&msg.payload)
-                && exit_pid == p
-            {
-                return (p, stdout_data, code, stderr.to_vec());
-            }
-        }
-    }
-}
-
-pub(crate) fn read_streaming_exit_after_result(
-    stream: &mut impl std::io::Read,
-    seq: u32,
-    pid: u32,
-) -> (Vec<u8>, i32, Vec<u8>) {
-    let mut decoder = vsock_proto::Decoder::new();
-    let mut buf = [0u8; 4096];
-    let mut stdout_data = Vec::new();
-    loop {
-        let n = read_retry_eintr(stream, &mut buf).unwrap();
-        assert!(n > 0, "unexpected EOF waiting for streaming process exit");
-        for msg in decoder.decode(buf.get(..n).unwrap_or_default()).unwrap() {
-            if msg.msg_type == MSG_STDOUT_CHUNK
-                && msg.seq == seq
-                && let Ok((chunk_pid, data)) = vsock_proto::decode_stdout_chunk(&msg.payload)
-                && chunk_pid == pid
-            {
-                stdout_data.extend_from_slice(data);
-            } else if msg.msg_type == MSG_PROCESS_EXIT
-                && msg.seq == seq
-                && let Ok((exit_pid, code, _stdout, stderr)) =
-                    vsock_proto::decode_process_exit(&msg.payload)
-                && exit_pid == pid
-            {
-                return (stdout_data, code, stderr.to_vec());
-            }
-        }
-    }
-}
-
-pub(crate) fn send_spawn_process_buffered(
-    stream: &mut impl std::io::Write,
-    seq: u32,
-    command: &str,
-    timeout_ms: u32,
-) {
-    send_spawn_process_buffered_with_env(stream, seq, command, &[], timeout_ms);
-}
-
-pub(crate) fn send_spawn_process_buffered_with_env(
-    stream: &mut impl std::io::Write,
-    seq: u32,
-    command: &str,
-    env: &[(&str, &str)],
-    timeout_ms: u32,
-) {
-    let payload =
-        vsock_proto::encode_spawn_process(timeout_ms, command, env, false, false, None).unwrap();
-    let msg = vsock_proto::encode(MSG_SPAWN_PROCESS, seq, &payload).unwrap();
-    stream.write_all(&msg).unwrap();
-}
-
-/// Read `MSG_SPAWN_PROCESS_RESULT` + `MSG_PROCESS_EXIT` for a buffered
-/// spawn_process and return `(pid, exit_code, stdout, stderr)`.
-pub(crate) fn read_buffered_spawn_process_result(
-    stream: &mut impl std::io::Read,
-    seq: u32,
-) -> (u32, i32, Vec<u8>, Vec<u8>) {
-    let mut decoder = vsock_proto::Decoder::new();
-    let mut buf = [0u8; 4096];
-    let mut pid: Option<u32> = None;
-    loop {
-        let n = read_retry_eintr(stream, &mut buf).unwrap();
-        assert!(
-            n > 0,
-            "unexpected EOF waiting for buffered spawn_process result"
-        );
-        for msg in decoder.decode(buf.get(..n).unwrap_or_default()).unwrap() {
-            if msg.msg_type == MSG_SPAWN_PROCESS_RESULT && msg.seq == seq {
-                pid = Some(vsock_proto::decode_spawn_process_result(&msg.payload).unwrap());
-                continue;
-            }
-            let Some(p) = pid else { continue };
-            if msg.msg_type == MSG_PROCESS_EXIT
-                && msg.seq == seq
-                && let Ok((exit_pid, code, stdout, stderr)) =
-                    vsock_proto::decode_process_exit(&msg.payload)
-                && exit_pid == p
-            {
-                return (p, code, stdout.to_vec(), stderr.to_vec());
-            }
-        }
-    }
-}
-
-pub(crate) fn read_spawn_process_pid(stream: &mut impl std::io::Read, seq: u32) -> u32 {
-    let mut decoder = vsock_proto::Decoder::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        let n = read_retry_eintr(stream, &mut buf).unwrap();
-        assert!(n > 0, "unexpected EOF waiting for spawn_process pid");
-        for msg in decoder.decode(buf.get(..n).unwrap_or_default()).unwrap() {
-            if msg.msg_type == MSG_SPAWN_PROCESS_RESULT && msg.seq == seq {
-                return vsock_proto::decode_spawn_process_result(&msg.payload).unwrap();
-            }
-        }
-    }
-}
-
 fn read_pid_file(path: &str) -> u32 {
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let path = Path::new(path);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let watcher = DirectoryWatcher::new(
+        path.parent()
+            .unwrap_or_else(|| panic!("pid path has no parent: {}", path.display())),
+    )
+    .unwrap_or_else(|e| panic!("failed to watch pid path parent {}: {e}", path.display()));
+
     loop {
-        match std::fs::read_to_string(path) {
-            Ok(contents) => {
-                if let Ok(pid) = contents.trim().parse() {
-                    return pid;
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("failed to read pid file {path}: {e}"),
+        match try_read_pid_file(path) {
+            Ok(Some(pid)) => return pid,
+            Ok(None) => {}
+            Err(e) => panic!("failed to read pid file {}: {e}", path.display()),
         }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
         assert!(
-            std::time::Instant::now() < deadline,
-            "pid file {path} was not created",
+            !remaining.is_zero(),
+            "pid file {} was not created",
+            path.display()
         );
-        thread::sleep(Duration::from_millis(50));
+        let changed = watcher
+            .wait(remaining)
+            .unwrap_or_else(|e| panic!("failed waiting for pid file {}: {e}", path.display()));
+        assert!(changed, "pid file {} was not created", path.display());
+    }
+}
+
+fn try_read_pid_file(path: &Path) -> std::io::Result<Option<u32>> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(contents.trim().parse().ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -669,13 +462,19 @@ impl Drop for ProcessGroupFileGuard<'_> {
 }
 
 pub(crate) fn wait_for_pid_exit(pid: u32, context: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while pid_alive(pid) {
-        if std::time::Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             kill_pid_group(pid);
             panic!("pid {pid} did not terminate within 5s after {context}");
         }
-        thread::sleep(Duration::from_millis(50));
+        let changed = wait_for_pid_set_change(pid, remaining)
+            .unwrap_or_else(|e| panic!("failed waiting for pid {pid} after {context}: {e}"));
+        if !changed {
+            kill_pid_group(pid);
+            panic!("pid {pid} did not terminate within 5s after {context}");
+        }
     }
 }
 
@@ -700,29 +499,30 @@ fn proc_stat(pid: u32) -> Option<ProcStat> {
 }
 
 fn process_group_has_live_member(pgid: u32) -> bool {
+    !process_group_live_members(pgid).is_empty()
+}
+
+fn process_group_live_members(pgid: u32) -> Vec<u32> {
     if pgid == 0 {
-        return false;
+        return Vec::new();
     }
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return true;
+        return vec![pgid];
     };
-    entries.filter_map(Result::ok).any(|entry| {
-        let file_name = entry.file_name();
-        let Some(pid_text) = file_name.to_str() else {
-            return false;
-        };
-        let Ok(pid) = pid_text.parse::<u32>() else {
-            return false;
-        };
-        let Some(stat) = proc_stat(pid) else {
-            return false;
-        };
-        if stat.pgid != pgid || stat.state == 'Z' {
-            return false;
-        }
-        // SAFETY: `kill` with sig=0 is a no-op existence check.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    })
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            let Some(stat) = proc_stat(*pid) else {
+                return false;
+            };
+            if stat.pgid != pgid || stat.state == 'Z' {
+                return false;
+            }
+            // SAFETY: `kill` with sig=0 is a no-op existence check.
+            unsafe { libc::kill(*pid as i32, 0) == 0 }
+        })
+        .collect()
 }
 
 /// Returns true iff `pid` is still running and signalable by the test owner.
@@ -739,6 +539,154 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
         Some(stat) if stat.state == 'Z' => process_group_has_live_member(stat.pgid),
         Some(_) => true,
         None => true,
+    }
+}
+
+struct DirectoryWatcher {
+    fd: OwnedFd,
+}
+
+impl DirectoryWatcher {
+    fn new(dir: &Path) -> std::io::Result<Self> {
+        // SAFETY: `inotify_init1` does not dereference user pointers and
+        // returns a fresh file descriptor on success.
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // SAFETY: `fd` is a fresh descriptor returned by `inotify_init1`.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let dir = CString::new(dir.as_os_str().as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "watch directory contains a NUL byte",
+            )
+        })?;
+        let mask = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE;
+        // SAFETY: `fd` is a valid inotify descriptor and `dir` is a
+        // NUL-terminated directory path.
+        let wd = unsafe { libc::inotify_add_watch(fd.as_raw_fd(), dir.as_ptr(), mask) };
+        if wd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        Ok(Self { fd })
+    }
+
+    fn wait(&self, timeout: Duration) -> std::io::Result<bool> {
+        let pollfd = libc::pollfd {
+            fd: self.fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        match poll_until(&mut [pollfd], timeout)? {
+            true => {
+                drain_fd(self.fd.as_raw_fd());
+                Ok(true)
+            }
+            false => Ok(false),
+        }
+    }
+}
+
+fn wait_for_pid_set_change(pid: u32, timeout: Duration) -> std::io::Result<bool> {
+    let pids = live_pids_for_wait(pid);
+    if pids.is_empty() {
+        return Ok(true);
+    }
+    let pidfds = pids
+        .into_iter()
+        .filter_map(open_pidfd_if_live)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    if pidfds.is_empty() {
+        return Ok(true);
+    }
+
+    let mut pollfds = pidfds
+        .iter()
+        .map(|pidfd| libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect::<Vec<_>>();
+
+    poll_until(&mut pollfds, timeout)
+}
+
+fn live_pids_for_wait(pid: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    match proc_stat(pid) {
+        Some(stat) if stat.state == 'Z' => pids.extend(process_group_live_members(stat.pgid)),
+        Some(stat) => {
+            pids.push(pid);
+            pids.extend(process_group_live_members(stat.pgid));
+        }
+        None => {
+            // SAFETY: `kill` with sig=0 is a no-op existence check.
+            if unsafe { libc::kill(pid as i32, 0) == 0 } {
+                pids.push(pid);
+            }
+            pids.extend(process_group_live_members(pid));
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+fn open_pidfd_if_live(pid: u32) -> Option<std::io::Result<OwnedFd>> {
+    // SAFETY: `pidfd_open` does not dereference user pointers and returns a
+    // new file descriptor for the requested PID on success.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return None;
+        }
+        return Some(Err(err));
+    }
+
+    // SAFETY: `fd` is a fresh descriptor returned by `pidfd_open`.
+    Some(Ok(unsafe {
+        OwnedFd::from_raw_fd(fd as std::os::fd::RawFd)
+    }))
+}
+
+fn poll_until(pollfds: &mut [libc::pollfd], timeout: Duration) -> std::io::Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        // SAFETY: `pollfds` points to initialized pollfd entries and the len
+        // argument matches the slice length.
+        let result = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as _, timeout_ms) };
+        if result > 0 {
+            return Ok(true);
+        }
+        if result == 0 {
+            return Ok(false);
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+fn drain_fd(fd: std::os::fd::RawFd) {
+    let mut buf = [0u8; 4096];
+    loop {
+        // SAFETY: `fd` is a valid non-blocking descriptor owned by the caller;
+        // `buf` is valid writable memory for the requested length.
+        let result = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if result <= 0 {
+            break;
+        }
     }
 }
 
@@ -780,14 +728,7 @@ mod tests {
             "live process group should remain visible after leader is reaped"
         );
         kill_pid_group(pid);
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while process_group_has_live_member(pid) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "cleanup should kill remaining process group members"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_pid_exit(pid, "test cleanup for reaped leader live group");
         group_guard.disarm();
     }
 }

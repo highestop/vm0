@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 
 import { and, asc, eq, gt, isNotNull } from "drizzle-orm";
+import { delay } from "signal-timers";
 import {
   storedExecutionContextSchema,
   type StoredExecutionContext,
@@ -16,9 +17,7 @@ import { telegramInstallations } from "@vm0/db/schema/telegram-installation";
 import { closeDbPool, db } from "../lib/db";
 import {
   decryptPersistentSecretValueWithMode,
-  decryptPersistentSecretsMapWithMode,
   encryptPersistentSecretValueWithMode,
-  encryptPersistentSecretsMapWithMode,
   inspectPersistentSecretCiphertext,
   type StoredSecretCiphertextFormat,
   type StoredSecretWriteMode,
@@ -28,6 +27,7 @@ import {
   encryptQueuedRunnerJobPayloadWithMode,
 } from "../signals/services/agent-run-queue-payload.service";
 import { settle } from "../signals/utils";
+import { nowDate } from "../lib/time";
 
 interface MigrationArgs {
   readonly dryRun: boolean;
@@ -65,9 +65,25 @@ type UpdateEncryptedRow = (
 ) => Promise<number>;
 
 const DEFAULT_BATCH_SIZE = 100;
+const PROGRESS_ROW_INTERVAL = 25;
+const MAX_TRANSIENT_RETRY_ATTEMPTS = 8;
+const TRANSIENT_RETRY_BASE_DELAY_MS = 1000;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
 
 function emptyCounts(): CiphertextCounts {
   return { legacy: 0, dual: 0, kms: 0 };
+}
+
+function formatCounts(counts: CiphertextCounts): string {
+  return `legacy=${counts.legacy} dual=${counts.dual} kms=${counts.kms}`;
+}
+
+function logProgress(message: string): void {
+  process.stdout.write(`[${nowDate().toISOString()}] ${message}\n`);
+}
+
+function shouldLogRowProgress(scanned: number): boolean {
+  return scanned > 0 && scanned % PROGRESS_ROW_INTERVAL === 0;
 }
 
 function incrementCount(
@@ -165,36 +181,156 @@ function needsMigration(
   return format !== "kms";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringProperty(value: unknown, property: string): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const propertyValue = value[property];
+  return typeof propertyValue === "string" ? propertyValue : undefined;
+}
+
+function numberProperty(value: unknown, property: string): number | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const propertyValue = value[property];
+  return typeof propertyValue === "number" ? propertyValue : undefined;
+}
+
+function isTransientErrorCode(code: string): boolean {
+  return (
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "EPIPE" ||
+    code === "ETIMEDOUT" ||
+    code === "EAI_AGAIN"
+  );
+}
+
+function isTransientErrorName(name: string): boolean {
+  return (
+    name === "TimeoutError" ||
+    name === "RequestTimeout" ||
+    name === "ServiceUnavailableException" ||
+    name === "Throttling" ||
+    name === "ThrottlingException" ||
+    name === "TooManyRequestsException"
+  );
+}
+
+function isTransientOperationError(error: unknown): boolean {
+  const code = stringProperty(error, "code");
+  if (code && isTransientErrorCode(code)) {
+    return true;
+  }
+
+  const name = stringProperty(error, "name");
+  if (name && isTransientErrorName(name)) {
+    return true;
+  }
+
+  const metadata = isRecord(error) ? error.$metadata : undefined;
+  const statusCode = numberProperty(metadata, "httpStatusCode");
+  return statusCode === 429 || (statusCode !== undefined && statusCode >= 500);
+}
+
+function describeError(error: unknown): string {
+  const name = stringProperty(error, "name");
+  const code = stringProperty(error, "code");
+  const message = stringProperty(error, "message");
+  return [name, code, message].filter(Boolean).join(" ");
+}
+
+function retryDelayMs(attempt: number): number {
+  return Math.min(
+    TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+    TRANSIENT_RETRY_MAX_DELAY_MS,
+  );
+}
+
+async function withTransientRetry<T>(
+  operation: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    const result = await settle(action());
+    if (result.ok) {
+      return result.value;
+    }
+
+    if (
+      attempt >= MAX_TRANSIENT_RETRY_ATTEMPTS ||
+      !isTransientOperationError(result.error)
+    ) {
+      throw result.error;
+    }
+
+    const delayMs = retryDelayMs(attempt);
+    logProgress(
+      `${operation}: transient error on attempt ${attempt}/${MAX_TRANSIENT_RETRY_ATTEMPTS}; retrying in ${delayMs}ms; ${describeError(
+        result.error,
+      )}`,
+    );
+    await delay(delayMs, { signal: new AbortController().signal });
+  }
+}
+
+function parseStoredExecutionContext(value: unknown): StoredExecutionContext {
+  if (isRecord(value) && isRecord(value.storageManifest)) {
+    const storageManifest = value.storageManifest;
+    if (!("artifacts" in storageManifest)) {
+      return storedExecutionContextSchema.parse({
+        ...value,
+        storageManifest: {
+          ...storageManifest,
+          artifacts: [],
+        },
+      });
+    }
+  }
+
+  return storedExecutionContextSchema.parse(value);
+}
+
 async function reencryptCiphertext(
   encrypted: string,
   mode: Exclude<StoredSecretWriteMode, "legacy">,
 ): Promise<string> {
-  const plaintext = await decryptPersistentSecretValueWithMode(
-    encrypted,
-    "prefer-legacy",
+  return await withTransientRetry(
+    "persistent secret re-encryption",
+    async () => {
+      const plaintext = await decryptPersistentSecretValueWithMode(
+        encrypted,
+        "prefer-legacy",
+      );
+      return await encryptPersistentSecretValueWithMode(plaintext, mode);
+    },
   );
-  return await encryptPersistentSecretValueWithMode(plaintext, mode);
 }
 
 async function reencryptExecutionContextSecrets(
   executionContext: StoredExecutionContext,
   mode: Exclude<StoredSecretWriteMode, "legacy">,
 ): Promise<StoredExecutionContext> {
-  if (!needsMigration(executionContext.encryptedSecrets, mode)) {
+  const encryptedSecrets = executionContext.encryptedSecrets;
+  if (!encryptedSecrets || !needsMigration(encryptedSecrets, mode)) {
     return executionContext;
   }
 
-  const secrets = await decryptPersistentSecretsMapWithMode(
-    executionContext.encryptedSecrets,
-    "prefer-legacy",
-  );
   return {
     ...executionContext,
-    encryptedSecrets: await encryptPersistentSecretsMapWithMode(secrets, mode),
+    encryptedSecrets: await reencryptCiphertext(encryptedSecrets, mode),
   };
 }
 
 async function migrateDirectColumn(
+  targetName: string,
   args: MigrationArgs,
   selectBatch: SelectBatch,
   updateRow: UpdateEncryptedRow,
@@ -204,6 +340,9 @@ async function migrateDirectColumn(
   }
 
   let migrated = 0;
+  let scanned = 0;
+  let candidates = 0;
+  let batchNumber = 0;
   let cursor: string | undefined;
 
   for (;;) {
@@ -212,12 +351,20 @@ async function migrateDirectColumn(
       return migrated;
     }
     cursor = rows[rows.length - 1]?.key;
+    batchNumber += 1;
 
     for (const row of rows) {
+      scanned += 1;
+      if (shouldLogRowProgress(scanned)) {
+        logProgress(
+          `${targetName}: scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+        );
+      }
       if (!row.encrypted || !needsMigration(row.encrypted, args.mode)) {
         continue;
       }
 
+      candidates += 1;
       const encrypted = await reencryptCiphertext(row.encrypted, args.mode);
       if (!args.dryRun) {
         migrated += await updateRow(row, encrypted);
@@ -225,6 +372,10 @@ async function migrateDirectColumn(
         migrated += 1;
       }
     }
+
+    logProgress(
+      `${targetName}: batch=${batchNumber} rows=${rows.length} scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+    );
   }
 }
 
@@ -235,9 +386,13 @@ async function countSlackInstallations(): Promise<CiphertextCounts> {
   return countCiphertexts(rows);
 }
 
-async function migrateSlackInstallations(args: MigrationArgs): Promise<number> {
+async function migrateSlackInstallations(
+  args: MigrationArgs,
+  targetName: string,
+): Promise<number> {
   const database = db();
   return await migrateDirectColumn(
+    targetName,
     args,
     async (cursor, batchSize) => {
       const predicates = cursor
@@ -278,9 +433,11 @@ async function countTelegramInstallations(): Promise<CiphertextCounts> {
 
 async function migrateTelegramInstallations(
   args: MigrationArgs,
+  targetName: string,
 ): Promise<number> {
   const database = db();
   return await migrateDirectColumn(
+    targetName,
     args,
     async (cursor, batchSize) => {
       const predicates = cursor
@@ -322,9 +479,11 @@ async function countGithubInstallations(): Promise<CiphertextCounts> {
 
 async function migrateGithubInstallations(
   args: MigrationArgs,
+  targetName: string,
 ): Promise<number> {
   const database = db();
   return await migrateDirectColumn(
+    targetName,
     args,
     async (cursor, batchSize) => {
       const predicates = [isNotNull(githubInstallations.encryptedAccessToken)];
@@ -364,9 +523,13 @@ async function countAgentRunCallbacks(): Promise<CiphertextCounts> {
   return countCiphertexts(rows);
 }
 
-async function migrateAgentRunCallbacks(args: MigrationArgs): Promise<number> {
+async function migrateAgentRunCallbacks(
+  args: MigrationArgs,
+  targetName: string,
+): Promise<number> {
   const database = db();
   return await migrateDirectColumn(
+    targetName,
     args,
     async (cursor, batchSize) => {
       const predicates = cursor ? [gt(agentRunCallbacks.id, cursor)] : [];
@@ -406,9 +569,11 @@ async function countCliAuthProviderStates(): Promise<CiphertextCounts> {
 
 async function migrateCliAuthProviderStates(
   args: MigrationArgs,
+  targetName: string,
 ): Promise<number> {
   const database = db();
   return await migrateDirectColumn(
+    targetName,
     args,
     async (cursor, batchSize) => {
       const predicates = [
@@ -453,6 +618,7 @@ async function countAgentRunQueuePayloads(): Promise<CiphertextCounts> {
 
 async function migrateAgentRunQueuePayloads(
   args: MigrationArgs,
+  targetName: string,
 ): Promise<number> {
   if (args.reportOnly) {
     return 0;
@@ -460,6 +626,9 @@ async function migrateAgentRunQueuePayloads(
 
   const database = db();
   let migrated = 0;
+  let scanned = 0;
+  let candidates = 0;
+  let batchNumber = 0;
   let cursor: string | undefined;
 
   for (;;) {
@@ -481,15 +650,27 @@ async function migrateAgentRunQueuePayloads(
       return migrated;
     }
     cursor = rows[rows.length - 1]?.key;
+    batchNumber += 1;
 
     for (const row of rows) {
+      scanned += 1;
+      if (shouldLogRowProgress(scanned)) {
+        logProgress(
+          `${targetName}: scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+        );
+      }
       if (!row.encrypted) {
         continue;
       }
 
-      const payload = await decryptQueuedRunnerJobPayloadWithMode(
-        row.encrypted,
-        "prefer-legacy",
+      const payload = await withTransientRetry(
+        `${targetName}: decrypt queued payload`,
+        async () => {
+          return await decryptQueuedRunnerJobPayloadWithMode(
+            row.encrypted,
+            "prefer-legacy",
+          );
+        },
       );
       if (!payload) {
         continue;
@@ -506,12 +687,18 @@ async function migrateAgentRunQueuePayloads(
         continue;
       }
 
-      const encryptedParams = await encryptQueuedRunnerJobPayloadWithMode(
-        {
-          ...payload,
-          executionContext,
+      candidates += 1;
+      const encryptedParams = await withTransientRetry(
+        `${targetName}: encrypt queued payload`,
+        async () => {
+          return await encryptQueuedRunnerJobPayloadWithMode(
+            {
+              ...payload,
+              executionContext,
+            },
+            args.mode,
+          );
         },
-        args.mode,
       );
       if (!args.dryRun) {
         const updated = await database
@@ -529,6 +716,10 @@ async function migrateAgentRunQueuePayloads(
         migrated += 1;
       }
     }
+
+    logProgress(
+      `${targetName}: batch=${batchNumber} rows=${rows.length} scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+    );
   }
 }
 
@@ -537,9 +728,7 @@ async function countRunnerJobExecutionContexts(): Promise<CiphertextCounts> {
     .select({ executionContext: runnerJobQueue.executionContext })
     .from(runnerJobQueue);
   const encryptedRows = rows.map((row) => {
-    const executionContext = storedExecutionContextSchema.parse(
-      row.executionContext,
-    );
+    const executionContext = parseStoredExecutionContext(row.executionContext);
     return { encrypted: executionContext.encryptedSecrets };
   });
   return countCiphertexts(encryptedRows);
@@ -547,6 +736,7 @@ async function countRunnerJobExecutionContexts(): Promise<CiphertextCounts> {
 
 async function migrateRunnerJobExecutionContexts(
   args: MigrationArgs,
+  targetName: string,
 ): Promise<number> {
   if (args.reportOnly) {
     return 0;
@@ -554,6 +744,9 @@ async function migrateRunnerJobExecutionContexts(
 
   const database = db();
   let migrated = 0;
+  let scanned = 0;
+  let candidates = 0;
+  let batchNumber = 0;
   let cursor: string | undefined;
 
   for (;;) {
@@ -572,9 +765,16 @@ async function migrateRunnerJobExecutionContexts(
       return migrated;
     }
     cursor = rows[rows.length - 1]?.key;
+    batchNumber += 1;
 
     for (const row of rows) {
-      const executionContext = storedExecutionContextSchema.parse(
+      scanned += 1;
+      if (shouldLogRowProgress(scanned)) {
+        logProgress(
+          `${targetName}: scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+        );
+      }
+      const executionContext = parseStoredExecutionContext(
         row.executionContext,
       );
       const updatedContext = await reencryptExecutionContextSecrets(
@@ -585,6 +785,7 @@ async function migrateRunnerJobExecutionContexts(
         continue;
       }
 
+      candidates += 1;
       if (!args.dryRun) {
         const updated = await database
           .update(runnerJobQueue)
@@ -601,6 +802,10 @@ async function migrateRunnerJobExecutionContexts(
         migrated += 1;
       }
     }
+
+    logProgress(
+      `${targetName}: batch=${batchNumber} rows=${rows.length} scanned=${scanned} candidates=${candidates} migrated=${migrated}`,
+    );
   }
 }
 
@@ -618,19 +823,32 @@ function printReport(report: MigrationReport): void {
 async function report(
   name: string,
   count: () => Promise<CiphertextCounts>,
-  migrate: (args: MigrationArgs) => Promise<number>,
+  migrate: (args: MigrationArgs, targetName: string) => Promise<number>,
   args: MigrationArgs,
 ): Promise<MigrationReport> {
+  logProgress(`${name}: counting before`);
+  const before = await count();
+  logProgress(`${name}: before ${formatCounts(before)}`);
+  logProgress(`${name}: migrating`);
+  const migrated = await migrate(args, name);
+  logProgress(`${name}: counting after`);
+  const after = await count();
+  logProgress(`${name}: after ${formatCounts(after)} migrated=${migrated}`);
   return {
     name,
-    before: await count(),
-    migrated: await migrate(args),
-    after: await count(),
+    before,
+    migrated,
+    after,
   };
 }
 
 async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  logProgress(
+    `starting persistent secret KMS backfill mode=${args.mode} dryRun=${String(
+      args.dryRun,
+    )} batchSize=${args.batchSize}`,
+  );
   const reports: MigrationReport[] = [
     await report(
       "slack_org_installations.encrypted_bot_token",

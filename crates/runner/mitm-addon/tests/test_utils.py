@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import logging_utils
-from url_utils import get_original_url
+from url_utils import AuthorityValidationError, get_original_url
 
 
 class TestGetOriginalUrl:
@@ -41,6 +41,66 @@ class TestGetOriginalUrl:
     def test_with_path_and_query(self, real_flow):
         flow = real_flow(host="api.example.com", port=443, path="/v1/data?key=val")
         assert get_original_url(flow) == "https://api.example.com/v1/data?key=val"
+
+    def test_https_uses_sni_for_transparent_destination(self, real_flow, headers):
+        flow = real_flow(
+            host="203.0.113.10",
+            sni="api.example.com",
+            path="/v1/data?key=val",
+            request_headers=headers(("Host", "api.example.com")),
+        )
+        assert get_original_url(flow) == "https://api.example.com/v1/data?key=val"
+
+    def test_https_rejects_host_sni_mismatch(self, real_flow, headers):
+        flow = real_flow(
+            host="203.0.113.10",
+            sni="attacker.example.com",
+            path="/v1/data",
+            request_headers=headers(("Host", "api.example.com")),
+        )
+        with pytest.raises(AuthorityValidationError) as exc_info:
+            get_original_url(flow)
+
+        assert exc_info.value.reason == "authority_mismatch"
+
+    def test_https_accepts_trailing_dot_authority_equivalence(self, real_flow, headers):
+        flow = real_flow(
+            host="203.0.113.10",
+            sni="api.example.com.",
+            path="/v1/data",
+            request_headers=headers(("Host", "API.EXAMPLE.COM.")),
+        )
+        assert get_original_url(flow) == "https://api.example.com/v1/data"
+
+    def test_http_uses_request_host_not_host_header(self, real_flow, headers):
+        flow = real_flow(
+            scheme="http",
+            host="203.0.113.10",
+            port=80,
+            path="/v1/data",
+            request_headers=headers(("Host", "api.example.com")),
+        )
+        assert get_original_url(flow) == "http://203.0.113.10/v1/data"
+
+    def test_http_brackets_ipv6_request_host(self, real_flow, headers):
+        flow = real_flow(
+            scheme="http",
+            host="2001:db8::1",
+            port=8080,
+            path="/v1/data",
+            request_headers=headers(("Host", "api.example.com")),
+        )
+        assert get_original_url(flow) == "http://[2001:db8::1]:8080/v1/data"
+
+    def test_https_brackets_ipv6_sni(self, real_flow, headers):
+        flow = real_flow(
+            host="2001:db8::1",
+            port=8443,
+            sni="2001:db8::1",
+            path="/v1/data",
+            request_headers=headers(("Host", "[2001:db8::1]")),
+        )
+        assert get_original_url(flow) == "https://[2001:db8::1]:8443/v1/data"
 
 
 class TestLogProxyEntry:

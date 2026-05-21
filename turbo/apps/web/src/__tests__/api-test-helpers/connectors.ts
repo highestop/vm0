@@ -73,8 +73,7 @@ async function createTestOAuthConnector(options?: {
     externalId: options?.externalId ?? `test-${type}-external-id`,
     externalUsername: options?.externalUsername ?? "testuser",
     externalEmail: options?.externalEmail ?? "test@example.com",
-    oauthScopes:
-      options?.oauthScopes ?? getConnectorOAuthConfig(type)?.scopes ?? [],
+    oauthScopes: options?.oauthScopes ?? getConnectorOAuthConfig(type).scopes,
   });
 }
 

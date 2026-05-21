@@ -4,7 +4,7 @@ mod create_transaction;
 mod invariant;
 mod leak_cleaner;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use sandbox::{
@@ -240,35 +240,30 @@ impl SandboxFactory for FirecrackerFactory {
                         message: format!("acquire COW slot: {e}"),
                     }
                 })?;
-                tx.track_slot(slot);
+                tx.track_slot(slot)?;
 
                 // The slot workspace is {workspaces_dir}/{slot_uuid}/.
                 // Rename to {workspaces_dir}/{sandbox_id}/ for doctor correlation.
                 let target_workspace = self.factory_paths.workspace(&id);
-                if target_workspace.exists()
-                    && let Err(e) = tokio::fs::remove_dir_all(&target_workspace).await
-                {
-                    warn!(id = %id, error = %e, "failed to clean stale workspace dir");
-                }
-                let slot_workspace = tx.slot_workspace()?;
-                if let Err(e) = tokio::fs::rename(&slot_workspace, &target_workspace).await {
+                clean_stale_workspace_dir(&id, &target_workspace)?;
+                let slot_workspace = tx.begin_workspace_rename(target_workspace.clone())?;
+                // Keep rename cancellation-safe: tokio::fs::rename may keep
+                // running on the blocking pool after its future is dropped.
+                if let Err(e) = std::fs::rename(&slot_workspace, &target_workspace) {
+                    tx.abort_workspace_rename_after_error()?;
                     return Err(SandboxError::Initialization {
                         phase: SandboxInitializationPhase::SandboxAllocation,
                         message: format!("rename workspace: {e}"),
                     });
                 }
-                tx.slot_renamed_to(target_workspace.clone());
+                tx.finish_workspace_rename()?;
 
                 // Recompute cow_file path after rename (the slot path no longer exists).
                 let cow_file = target_workspace.join("cow.img");
 
                 // Clean stale sock dir and create vsock directory.
                 let sock_paths = SockPaths::new(self.runtime_paths.sock_dir(&id));
-                if sock_paths.dir().exists()
-                    && let Err(e) = tokio::fs::remove_dir_all(sock_paths.dir()).await
-                {
-                    warn!(id = %id, error = %e, "failed to clean stale sock dir");
-                }
+                clean_stale_sock_dir(&id, sock_paths.dir())?;
                 tx.track_sock_dir(sock_paths.dir().to_owned());
                 if let Err(e) = tokio::fs::create_dir_all(sock_paths.vsock_dir()).await {
                     return Err(SandboxError::Initialization {
@@ -405,6 +400,27 @@ fn convert_device_rate_limits(
         .map_err(|message| SandboxError::Configuration {
             message: format!("device_rate_limits: {message}"),
         })
+}
+
+fn clean_stale_workspace_dir(id: &str, target_workspace: &Path) -> sandbox::Result<()> {
+    clean_stale_create_dir(id, "target workspace", target_workspace)
+}
+
+fn clean_stale_sock_dir(id: &str, sock_dir: &Path) -> sandbox::Result<()> {
+    clean_stale_create_dir(id, "sock dir", sock_dir)
+}
+
+fn clean_stale_create_dir(id: &str, kind: &'static str, path: &Path) -> sandbox::Result<()> {
+    // Keep cleanup cancellation-safe for same-id retries. tokio::fs deletion
+    // can keep running on the blocking pool after its future is dropped.
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(SandboxError::Initialization {
+            phase: SandboxInitializationPhase::SandboxAllocation,
+            message: format!("clean stale {kind} {} for {id}: {e}", path.display()),
+        }),
+    }
 }
 
 async fn destroy_firecracker_sandbox(mut sandbox: FirecrackerSandbox, netns_pool: NetnsPoolHandle) {
@@ -615,6 +631,66 @@ mod tests {
             }
             other => panic!("expected factory invalid-state error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn clean_stale_workspace_dir_allows_absent_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("sandbox-workspace");
+
+        clean_stale_workspace_dir("sandbox", &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn clean_stale_workspace_dir_removes_existing_target_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("sandbox-workspace");
+        tokio::fs::create_dir_all(target.join("nested"))
+            .await
+            .unwrap();
+        tokio::fs::write(target.join("nested").join("stale.txt"), b"stale")
+            .await
+            .unwrap();
+
+        clean_stale_workspace_dir("sandbox", &target).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn clean_stale_workspace_dir_errors_for_unclaimed_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("sandbox-workspace");
+        tokio::fs::write(&target, b"not a directory").await.unwrap();
+
+        let err = clean_stale_workspace_dir("sandbox", &target).unwrap_err();
+
+        match err {
+            SandboxError::Initialization { phase, message } => {
+                assert_eq!(phase, SandboxInitializationPhase::SandboxAllocation);
+                assert!(message.contains("clean stale target workspace"));
+            }
+            other => panic!("expected initialization error, got {other:?}"),
+        }
+        assert!(target.exists());
+    }
+
+    #[tokio::test]
+    async fn clean_stale_sock_dir_removes_existing_target_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("sandbox-sock");
+        tokio::fs::create_dir_all(target.join("vsock"))
+            .await
+            .unwrap();
+        tokio::fs::write(target.join("vsock").join("stale.sock"), b"stale")
+            .await
+            .unwrap();
+
+        clean_stale_sock_dir("sandbox", &target).unwrap();
+
+        assert!(!target.exists());
     }
 
     #[tokio::test]

@@ -259,6 +259,18 @@ describe("GET /api/zero/connectors/:type/authorize", () => {
     ).toBeTruthy();
   });
 
+  it("returns 400 when authorizing a device authorization connector", async () => {
+    const response = await requestAuthorize("test-oauth-device", {
+      authenticated: true,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toStrictEqual({
+      error:
+        "test-oauth-device connector does not use authorization-code OAuth",
+    });
+  });
+
   it("sets Secure on OAuth cookies in production", async () => {
     mockEnv("ENV", "production");
 
@@ -760,6 +772,33 @@ describe("POST /api/zero/connectors/:type/oauth/start", () => {
         code: "BAD_REQUEST",
       },
     });
+  });
+
+  it("returns 400 when starting browser OAuth for a device authorization connector", async () => {
+    const userId = `user_${randomUUID()}`;
+    const orgId = `org_${randomUUID()}`;
+    orgIds.push(orgId);
+    mocks.clerk.session(userId, orgId);
+
+    const response = await requestOauthStart("test-oauth-device", {
+      headers: { authorization: "Bearer clerk-session" },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toStrictEqual({
+      error: {
+        message:
+          "test-oauth-device connector does not use authorization-code OAuth",
+        code: "BAD_REQUEST",
+      },
+    });
+
+    const db = store.set(writeDb$);
+    const states = await db
+      .select()
+      .from(connectorOauthStates)
+      .where(eq(connectorOauthStates.userId, userId));
+    expect(states).toHaveLength(0);
   });
 
   it("does not create server-side handoff state when OAuth is not configured", async () => {

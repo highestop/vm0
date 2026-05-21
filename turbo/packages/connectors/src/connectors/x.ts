@@ -27,7 +27,7 @@ export const x = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://twitter.com/i/oauth2/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://api.twitter.com/2/oauth2/token",
       client: {
         clientRegistration: "static",

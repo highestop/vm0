@@ -41,7 +41,7 @@ export const posthog = {
     },
     defaultAuthMethod: "api-token",
     oauth: {
-      authorizationUrl: "https://us.posthog.com/oauth/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://us.posthog.com/oauth/token",
       client: {
         clientRegistration: "static",

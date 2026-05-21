@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const ASANA_AUTHORIZATION_URL = "https://app.asana.com/-/oauth_authorize";
+
 const ASANA_USER_URL = "https://app.asana.com/api/1.0/users/me";
 
 interface AsanaTokenResult {
@@ -30,7 +32,6 @@ export function buildAsanaAuthorizationUrl(
   redirectUri: string,
   state: string,
 ): string {
-  const oauthConfig = getConnectorOAuthConfig("asana");
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -38,7 +39,7 @@ export function buildAsanaAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${ASANA_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

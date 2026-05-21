@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const ZOOM_AUTHORIZATION_URL = "https://zoom.us/oauth/authorize";
+
 const ZOOM_ME_URL = "https://api.zoom.us/v2/users/me";
 
 interface ZoomUserInfo {
@@ -41,7 +43,7 @@ export function buildZoomAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${ZOOM_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

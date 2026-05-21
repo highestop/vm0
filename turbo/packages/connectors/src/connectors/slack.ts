@@ -23,7 +23,7 @@ export const slack = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://slack.com/oauth/v2/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://slack.com/api/oauth.v2.access",
       client: {
         clientRegistration: "static",

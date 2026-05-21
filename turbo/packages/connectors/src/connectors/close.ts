@@ -29,7 +29,7 @@ export const close = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://app.close.com/oauth2/authorize/",
+      flow: "authorization-code",
       tokenUrl: "https://api.close.com/oauth2/token/",
       client: {
         clientRegistration: "static",

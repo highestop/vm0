@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const WEBFLOW_AUTHORIZATION_URL = "https://webflow.com/oauth/authorize";
+
 interface WebflowTokenResult {
   accessToken: string;
   scopes: string[];
@@ -29,7 +31,7 @@ export function buildWebflowAuthorizationUrl(
     redirect_uri: redirectUri,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${WEBFLOW_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

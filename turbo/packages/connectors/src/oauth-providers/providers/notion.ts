@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const NOTION_AUTHORIZATION_URL = "https://api.notion.com/v1/oauth/authorize";
+
 interface NotionUserInfo {
   id: string;
   username: string;
@@ -37,7 +39,6 @@ export function buildNotionAuthorizationUrl(
   redirectUri: string,
   state: string,
 ): string {
-  const oauthConfig = getConnectorOAuthConfig("notion");
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -46,7 +47,7 @@ export function buildNotionAuthorizationUrl(
     owner: "user",
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${NOTION_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

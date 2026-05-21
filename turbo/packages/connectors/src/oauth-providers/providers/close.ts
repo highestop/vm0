@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const CLOSE_AUTHORIZATION_URL = "https://app.close.com/oauth2/authorize/";
+
 interface CloseUserInfo {
   id: string;
   email: string | null;
@@ -30,7 +32,6 @@ export function buildCloseAuthorizationUrl(
   redirectUri: string,
   state: string,
 ): string {
-  const oauthConfig = getConnectorOAuthConfig("close");
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
@@ -38,7 +39,7 @@ export function buildCloseAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${CLOSE_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

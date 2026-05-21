@@ -469,6 +469,12 @@ export function getConnectorOAuthConfig(
   return CONNECTOR_TYPES[type].oauth;
 }
 
+export function getConnectorOAuthFlow(
+  type: OAuthConnectorType,
+): ConnectorOAuthConfig["flow"] {
+  return getConnectorOAuthConfig(type).flow;
+}
+
 /**
  * Check if stored OAuth scopes cover all required scopes for a connector type.
  * Returns true if no OAuth config exists (non-OAuth connector) or all required scopes are present.

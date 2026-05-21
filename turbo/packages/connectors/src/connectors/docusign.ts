@@ -29,7 +29,7 @@ export const docusign = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://account-d.docusign.com/oauth/auth",
+      flow: "authorization-code",
       tokenUrl: "https://account-d.docusign.com/oauth/token",
       client: {
         clientRegistration: "static",

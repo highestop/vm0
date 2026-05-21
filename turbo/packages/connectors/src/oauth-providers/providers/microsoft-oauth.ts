@@ -1,12 +1,15 @@
-import type { OAuthConnectorType } from "@vm0/connectors/connectors";
+import type { OAuthAuthorizationCodeConnectorType } from "@vm0/connectors/connectors";
 import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const MICROSOFT_AUTHORIZATION_URL =
+  "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+
 const MICROSOFT_USERINFO_URL = "https://graph.microsoft.com/v1.0/me";
 
 type MicrosoftOAuthConnectorType = Extract<
-  OAuthConnectorType,
+  OAuthAuthorizationCodeConnectorType,
   "outlook-calendar" | "outlook-mail"
 >;
 
@@ -50,7 +53,7 @@ export function buildMicrosoftAuthorizationUrl(
     prompt: "consent",
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${MICROSOFT_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

@@ -19,6 +19,8 @@ export {
   TEST_OAUTH_REFRESH_SECRET_NAME,
 } from "./test-oauth-constants";
 
+const TEST_OAUTH_AUTHORIZATION_URL = "/api/test/oauth-provider/authorize";
+
 interface TokenResponse {
   accessToken: string;
   refreshToken: string | null;
@@ -32,11 +34,9 @@ interface UserInfo {
   email: string | null;
 }
 
-function resolveUrl(field: string, path: string | undefined): string {
+function resolveUrl(field: string, path: string): string {
   if (!path) {
-    throw new Error(
-      `Test OAuth URL missing: CONNECTOR_TYPES_DEF["test-oauth"].oauth.${field} is not set`,
-    );
+    throw new Error(`Test OAuth URL missing: ${field} is not set`);
   }
   if (URL.canParse(path)) {
     return path;
@@ -127,10 +127,7 @@ function previewBypassHeaders(): Record<string, string> {
 }
 
 function getAuthorizationUrl(): string {
-  return resolveUrl(
-    "authorizationUrl",
-    getConnectorOAuthConfig("test-oauth").authorizationUrl,
-  );
+  return resolveUrl("authorizationUrl", TEST_OAUTH_AUTHORIZATION_URL);
 }
 
 function getTokenUrl(): string {
@@ -224,8 +221,8 @@ export async function refreshTestOAuthToken(
 export async function fetchTestOAuthUserInfo(
   accessToken: string,
 ): Promise<UserInfo> {
-  // userinfo is not part of the OAuth 2 spec's tokenUrl/authorizationUrl
-  // pair so ConnectorOAuthConfig doesn't carry it. Derive from the same app.
+  // userinfo is not part of the OAuth 2 spec's token and authorization
+  // endpoints, so ConnectorOAuthConfig doesn't carry it. Derive from the same app.
   const response = await fetch(
     `${runtimeBaseUrl()}/api/test/oauth-provider/userinfo`,
     {

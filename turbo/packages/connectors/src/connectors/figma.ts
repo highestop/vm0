@@ -40,7 +40,7 @@ export const figma = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://www.figma.com/oauth",
+      flow: "authorization-code",
       tokenUrl: "https://api.figma.com/v1/oauth/token",
       client: {
         clientRegistration: "static",

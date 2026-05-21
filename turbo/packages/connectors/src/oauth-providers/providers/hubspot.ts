@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const HUBSPOT_AUTHORIZATION_URL = "https://app.hubspot.com/oauth/authorize";
+
 const HUBSPOT_TOKEN_INFO_URL = "https://api.hubapi.com/oauth/v1/access-tokens";
 
 interface HubSpotUserInfo {
@@ -40,7 +42,7 @@ export function buildHubSpotAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${HUBSPOT_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

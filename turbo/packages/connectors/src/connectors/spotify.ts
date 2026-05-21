@@ -29,7 +29,7 @@ export const spotify = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://accounts.spotify.com/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://accounts.spotify.com/api/token",
       client: {
         clientRegistration: "static",

@@ -27,7 +27,7 @@ export const xero = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://login.xero.com/identity/connect/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://identity.xero.com/connect/token",
       client: {
         clientRegistration: "static",

@@ -2,6 +2,9 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const MAILCHIMP_AUTHORIZATION_URL =
+  "https://login.mailchimp.com/oauth2/authorize";
+
 const MAILCHIMP_METADATA_URL = "https://login.mailchimp.com/oauth2/metadata";
 
 interface MailchimpTokenResult {
@@ -24,7 +27,6 @@ export function buildMailchimpAuthorizationUrl(
   redirectUri: string,
   state: string,
 ): string {
-  const oauthConfig = getConnectorOAuthConfig("mailchimp");
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -32,7 +34,7 @@ export function buildMailchimpAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${MAILCHIMP_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

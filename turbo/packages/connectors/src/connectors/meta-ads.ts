@@ -25,7 +25,7 @@ export const metaAds = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://www.facebook.com/v22.0/dialog/oauth",
+      flow: "authorization-code",
       tokenUrl: "https://graph.facebook.com/v22.0/oauth/access_token",
       client: {
         clientRegistration: "static",

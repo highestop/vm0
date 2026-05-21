@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const INTERVALS_ICU_AUTHORIZATION_URL = "https://intervals.icu/oauth/authorize";
+
 interface IntervalsIcuTokenResult {
   accessToken: string;
   scopes: string[];
@@ -30,7 +32,7 @@ export function buildIntervalsIcuAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${INTERVALS_ICU_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

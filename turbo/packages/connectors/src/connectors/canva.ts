@@ -29,7 +29,7 @@ export const canva = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://www.canva.com/api/oauth/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://api.canva.com/rest/v1/oauth/token",
       client: {
         clientRegistration: "static",

@@ -2,6 +2,9 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const XERO_AUTHORIZATION_URL =
+  "https://login.xero.com/identity/connect/authorize";
+
 const XERO_USERINFO_URL = "https://identity.xero.com/connect/userinfo";
 
 interface XeroUserInfo {
@@ -41,7 +44,7 @@ export function buildXeroAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${XERO_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

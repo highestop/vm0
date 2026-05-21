@@ -40,7 +40,7 @@ export const dropbox = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://www.dropbox.com/oauth2/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://api.dropboxapi.com/oauth2/token",
       client: {
         clientRegistration: "static",

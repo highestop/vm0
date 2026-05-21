@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const POSTHOG_AUTHORIZATION_URL = "https://us.posthog.com/oauth/authorize";
+
 const POSTHOG_USER_INFO_URL = "https://us.posthog.com/api/users/@me/";
 
 interface PosthogUserInfo {
@@ -41,7 +43,7 @@ export function buildPosthogAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${POSTHOG_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

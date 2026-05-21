@@ -63,7 +63,7 @@ export const stripe = {
       ],
     },
     oauth: {
-      authorizationUrl: "https://connect.stripe.com/oauth/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://connect.stripe.com/oauth/token",
       client: {
         clientRegistration: "static",

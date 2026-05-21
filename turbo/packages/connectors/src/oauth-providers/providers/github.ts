@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const GITHUB_AUTHORIZATION_URL = "https://github.com/login/oauth/authorize";
+
 const GITHUB_API_BASE = "https://api.github.com";
 
 interface GitHubUserInfo {
@@ -26,7 +28,7 @@ export function buildGitHubAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${GITHUB_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

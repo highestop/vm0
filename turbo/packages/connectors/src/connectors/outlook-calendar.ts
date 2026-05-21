@@ -29,8 +29,7 @@ export const outlookCalendar = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl:
-        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       client: {
         clientRegistration: "static",

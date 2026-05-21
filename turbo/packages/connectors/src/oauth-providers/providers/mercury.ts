@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const MERCURY_AUTHORIZATION_URL = "https://oauth2.mercury.com/oauth2/auth";
+
 const MERCURY_ACCOUNTS_URL = "https://api.mercury.com/api/v1/accounts";
 
 interface MercuryUserInfo {
@@ -42,7 +44,7 @@ export function buildMercuryAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${MERCURY_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

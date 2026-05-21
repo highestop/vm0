@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const STRAVA_AUTHORIZATION_URL = "https://www.strava.com/oauth/authorize";
+
 const STRAVA_ATHLETE_URL = "https://www.strava.com/api/v3/athlete";
 
 interface StravaUserInfo {
@@ -43,7 +45,7 @@ export function buildStravaAuthorizationUrl(
     approval_prompt: "force",
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${STRAVA_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

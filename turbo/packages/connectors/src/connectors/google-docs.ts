@@ -26,7 +26,7 @@ export const googleDocs = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+      flow: "authorization-code",
       tokenUrl: "https://oauth2.googleapis.com/token",
       client: {
         clientRegistration: "static",

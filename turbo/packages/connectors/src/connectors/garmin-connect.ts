@@ -29,7 +29,7 @@ export const garminConnect = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://connect.garmin.com/oauth2Confirm",
+      flow: "authorization-code",
       tokenUrl: "https://diauth.garmin.com/di-oauth2-service/oauth/token",
       client: {
         clientRegistration: "static",

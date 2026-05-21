@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { CONNECTOR_TYPES, connectorTypeSchema } from "../connectors";
+import {
+  CONNECTOR_TYPES,
+  connectorTypeSchema,
+  type OAuthConnectorType,
+} from "../connectors";
 import {
   getApiTokenFieldStorageType,
   getAvailableConnectorAuthMethods,
@@ -16,6 +20,7 @@ import {
   getConnectorOAuthCredentials,
   getConnectorOAuthConfig,
   getConnectorOAuthConfigIfSupported,
+  getConnectorOAuthFlow,
   getRuntimeAvailableConnectorTypes,
   isStaticConfidentialConnectorOAuthCredentials,
   isStaticConnectorOAuthCredentials,
@@ -24,10 +29,77 @@ import {
 } from "../connector-utils";
 import { FeatureSwitchKey } from "../feature-switch-key";
 import {
+  buildConnectorOAuthAuthUrl,
   isOAuthConnectorType,
   CONNECTOR_OAUTH_PROVIDERS,
 } from "../oauth-providers/provider-registry";
 import { GOOGLE_OAUTH_CONNECTOR_TYPES } from "../oauth-providers/google-oauth-connectors";
+import { buildGoogleAuthorizationUrl } from "../oauth-providers/providers/google-oauth";
+
+const EXPECTED_PROVIDER_AUTHORIZATION_BASE_URLS = {
+  ahrefs: "https://app.ahrefs.com/api/auth",
+  airtable: "https://airtable.com/oauth2/v1/authorize",
+  asana: "https://app.asana.com/-/oauth_authorize",
+  canva: "https://www.canva.com/api/oauth/authorize",
+  close: "https://app.close.com/oauth2/authorize/",
+  deel: "https://app.deel.com/oauth2/authorize",
+  docusign: "https://account-d.docusign.com/oauth/auth",
+  dropbox: "https://www.dropbox.com/oauth2/authorize",
+  figma: "https://www.figma.com/oauth",
+  "garmin-connect": "https://connect.garmin.com/oauth2Confirm",
+  github: "https://github.com/login/oauth/authorize",
+  gmail: "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-ads": "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-calendar": "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-docs": "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-drive": "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-meet": "https://accounts.google.com/o/oauth2/v2/auth",
+  "google-sheets": "https://accounts.google.com/o/oauth2/v2/auth",
+  gumroad: "https://gumroad.com/oauth/authorize",
+  hubspot: "https://app.hubspot.com/oauth/authorize",
+  "intervals-icu": "https://intervals.icu/oauth/authorize",
+  linear: "https://linear.app/oauth/authorize",
+  mailchimp: "https://login.mailchimp.com/oauth2/authorize",
+  mercury: "https://oauth2.mercury.com/oauth2/auth",
+  "meta-ads": "https://www.facebook.com/v22.0/dialog/oauth",
+  monday: "https://auth.monday.com/oauth2/authorize",
+  neon: "https://oauth2.neon.tech/oauth2/auth",
+  notion: "https://api.notion.com/v1/oauth/authorize",
+  "outlook-calendar":
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  "outlook-mail":
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  posthog: "https://us.posthog.com/oauth/authorize",
+  reddit: "https://www.reddit.com/api/v1/authorize",
+  sentry: "https://sentry.io/oauth/authorize/",
+  slack: "https://slack.com/oauth/v2/authorize",
+  spotify: "https://accounts.spotify.com/authorize",
+  strava: "https://www.strava.com/oauth/authorize",
+  stripe: "https://connect.stripe.com/oauth/authorize",
+  supabase: "https://api.supabase.com/v1/oauth/authorize",
+  "test-oauth": "https://api.test/api/test/oauth-provider/authorize",
+  todoist: "https://todoist.com/oauth/authorize",
+  vercel: "https://vercel.com/integrations/test-integration/new",
+  webflow: "https://webflow.com/oauth/authorize",
+  x: "https://twitter.com/i/oauth2/authorize",
+  xero: "https://login.xero.com/identity/connect/authorize",
+  zoom: "https://zoom.us/oauth/authorize",
+} as const satisfies Record<keyof typeof CONNECTOR_OAUTH_PROVIDERS, string>;
+
+function authorizationBaseUrl(url: string): string {
+  const parsed = new URL(url);
+  return `${parsed.origin}${parsed.pathname}`;
+}
+
+function restoreEnv(values: Record<string, string | undefined>): void {
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+}
 
 describe("hasRequiredScopes", () => {
   it("returns true for non-OAuth connector type", () => {
@@ -131,6 +203,46 @@ describe("CONNECTOR_OAUTH_PROVIDERS", () => {
       expect(isOAuthConnectorType(type)).toBe(
         oauthConnectorTypes.includes(type),
       );
+    }
+  });
+
+  it("builds the expected authorization URL base for every OAuth provider", async () => {
+    const previousEnv = {
+      VM0_API_URL: process.env.VM0_API_URL,
+      VERCEL_INTEGRATION_SLUG: process.env.VERCEL_INTEGRATION_SLUG,
+    };
+
+    process.env.VM0_API_URL = "https://api.test";
+    process.env.VERCEL_INTEGRATION_SLUG = "test-integration";
+
+    try {
+      const providerTypes = Object.keys(
+        CONNECTOR_OAUTH_PROVIDERS,
+      ) as OAuthConnectorType[];
+
+      for (const type of providerTypes) {
+        const oauthConfig = getConnectorOAuthConfig(type);
+        const credentials = resolveConnectorOAuthClientCredentials(
+          oauthConfig.client,
+          () => {
+            return "test-client-credential";
+          },
+        );
+        const authResult = await buildConnectorOAuthAuthUrl({
+          type,
+          credentials,
+          redirectUri: "https://app.test/callback",
+          state: "state-123",
+        });
+        const authorizationUrl =
+          typeof authResult === "string" ? authResult : authResult.url;
+
+        expect(authorizationBaseUrl(authorizationUrl), `${type}`).toBe(
+          EXPECTED_PROVIDER_AUTHORIZATION_BASE_URLS[type],
+        );
+      }
+    } finally {
+      restoreEnv(previousEnv);
     }
   });
 });
@@ -651,6 +763,38 @@ describe("getConnectorOAuthConfigIfSupported", () => {
   });
 });
 
+describe("connector OAuth authorization-code config", () => {
+  it("declares the current OAuth connectors as authorization-code flows", () => {
+    for (const type of connectorTypeSchema.options) {
+      if (!isOAuthConnectorType(type)) {
+        continue;
+      }
+
+      expect(getConnectorOAuthFlow(type), `${type}: OAuth flow`).toBe(
+        "authorization-code",
+      );
+    }
+  });
+
+  it("keeps provider authorization URLs out of connector OAuth config", () => {
+    for (const type of connectorTypeSchema.options) {
+      const oauthConfig = getConnectorOAuthConfigIfSupported(type);
+      if (!oauthConfig) {
+        continue;
+      }
+
+      expect(
+        "authorizationEndpoint" in oauthConfig,
+        `${type}: authorization endpoint should be provider-owned`,
+      ).toBe(false);
+      expect(
+        "authorizationUrl" in oauthConfig,
+        `${type}: authorization URL should be provider-owned`,
+      ).toBe(false);
+    }
+  });
+});
+
 describe("getConnectorTypeForSecretName", () => {
   it("finds connector type for OAuth env mapping key", () => {
     expect(getConnectorTypeForSecretName("GH_TOKEN")).toBe("github");
@@ -710,48 +854,25 @@ describe("isGoogleOAuthConnector", () => {
     );
   });
 
-  it("keeps Google OAuth connector configs on the Google authorization endpoint", () => {
+  it("builds Google OAuth authorization URLs at the provider boundary", () => {
     for (const type of GOOGLE_OAUTH_CONNECTOR_TYPES) {
-      const oauthConfig = getConnectorOAuthConfig(type);
-      const authorizationUrl = oauthConfig.authorizationUrl;
-      if (!authorizationUrl) {
-        throw new Error(`${type}: Google connector must have authorizationUrl`);
-      }
-      const parsedAuthorizationUrl = new URL(authorizationUrl);
+      const authorizationUrl = new URL(
+        buildGoogleAuthorizationUrl(
+          type,
+          "client-id",
+          "https://app.test/callback",
+          "state-123",
+        ),
+      );
 
       expect(
-        parsedAuthorizationUrl.protocol,
-        `${type}: Google connector authorizationUrl must use https`,
-      ).toBe("https:");
-      expect(
-        parsedAuthorizationUrl.hostname,
-        `${type}: Google connector authorizationUrl must use accounts.google.com`,
+        authorizationUrl.hostname,
+        `${type}: Google connector authorization endpoint must use accounts.google.com`,
       ).toBe("accounts.google.com");
-    }
-  });
-
-  it("includes every connector configured with the Google authorization endpoint", () => {
-    for (const type of connectorTypeSchema.options) {
-      const oauthConfig = getConnectorOAuthConfigIfSupported(type);
-      if (!oauthConfig?.authorizationUrl) {
-        continue;
-      }
-      if (
-        oauthConfig.authorizationUrl.startsWith("/") &&
-        !oauthConfig.authorizationUrl.startsWith("//")
-      ) {
-        continue;
-      }
-
-      const hostname = new URL(oauthConfig.authorizationUrl).hostname;
-      if (hostname !== "accounts.google.com") {
-        continue;
-      }
-
-      expect(
-        GOOGLE_OAUTH_CONNECTOR_TYPES,
-        `${type} uses Google OAuth and must be listed in GOOGLE_OAUTH_CONNECTOR_TYPES`,
-      ).toContain(type);
+      expect(authorizationUrl.searchParams.get("client_id")).toBe("client-id");
+      expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
+        "https://app.test/callback",
+      );
     }
   });
 });

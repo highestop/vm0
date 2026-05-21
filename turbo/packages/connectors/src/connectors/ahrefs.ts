@@ -41,7 +41,7 @@ export const ahrefs = {
     },
     defaultAuthMethod: "api-token",
     oauth: {
-      authorizationUrl: "https://app.ahrefs.com/api/auth",
+      flow: "authorization-code",
       tokenUrl: "https://app.ahrefs.com/api/token",
       client: {
         clientRegistration: "static",

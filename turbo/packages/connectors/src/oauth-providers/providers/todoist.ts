@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const TODOIST_AUTHORIZATION_URL = "https://todoist.com/oauth/authorize";
+
 const TODOIST_USER_URL = "https://api.todoist.com/api/v1/user";
 
 interface TodoistTokenResult {
@@ -31,7 +33,7 @@ export function buildTodoistAuthorizationUrl(
     redirect_uri: redirectUri,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${TODOIST_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

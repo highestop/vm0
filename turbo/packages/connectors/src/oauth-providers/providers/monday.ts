@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const MONDAY_AUTHORIZATION_URL = "https://auth.monday.com/oauth2/authorize";
+
 interface MondayUserInfo {
   id: string;
   username: string;
@@ -41,7 +43,7 @@ export function buildMondayAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${MONDAY_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

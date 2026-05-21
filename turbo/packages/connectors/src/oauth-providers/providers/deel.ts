@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const DEEL_AUTHORIZATION_URL = "https://app.deel.com/oauth2/authorize";
+
 const DEEL_PEOPLE_ME_URL = "https://api.letsdeel.com/rest/v2/people/me";
 
 interface DeelUserInfo {
@@ -79,7 +81,7 @@ export async function buildDeelAuthorizationUrl(
     code_challenge_method: "S256",
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${DEEL_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

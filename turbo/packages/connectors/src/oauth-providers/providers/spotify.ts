@@ -2,6 +2,8 @@ import { getConnectorOAuthConfig } from "@vm0/connectors/connector-utils";
 import { z } from "zod";
 import { throwOAuthError } from "./oauth-error";
 
+const SPOTIFY_AUTHORIZATION_URL = "https://accounts.spotify.com/authorize";
+
 const SPOTIFY_ME_URL = "https://api.spotify.com/v1/me";
 
 interface SpotifyUserInfo {
@@ -41,7 +43,7 @@ export function buildSpotifyAuthorizationUrl(
     state,
   });
 
-  return `${oauthConfig.authorizationUrl}?${params.toString()}`;
+  return `${SPOTIFY_AUTHORIZATION_URL}?${params.toString()}`;
 }
 
 /**

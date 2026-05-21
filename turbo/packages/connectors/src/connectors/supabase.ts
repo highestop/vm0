@@ -41,7 +41,7 @@ export const supabase = {
     },
     defaultAuthMethod: "oauth",
     oauth: {
-      authorizationUrl: "https://api.supabase.com/v1/oauth/authorize",
+      flow: "authorization-code",
       tokenUrl: "https://api.supabase.com/v1/oauth/token",
       client: {
         clientRegistration: "static",

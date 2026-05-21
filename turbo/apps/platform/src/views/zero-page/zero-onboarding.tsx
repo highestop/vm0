@@ -12,10 +12,14 @@ import { AvatarSvgPreview } from "./avatar-svg-preview.tsx";
 import zeroAnimatedSrc from "./assets/zero-animated.webp";
 import { Button, Input } from "@vm0/ui";
 import {
+  CONNECTOR_TYPE_KEYS,
   CONNECTOR_TYPES,
   type ConnectorType,
 } from "@vm0/connectors/connectors";
-import { isGoogleOAuthConnector } from "@vm0/connectors/connector-utils";
+import {
+  getConnectorTags,
+  isGoogleOAuthConnector,
+} from "@vm0/connectors/connector-utils";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import {
   zeroWorkspaceName$,
@@ -149,17 +153,16 @@ function SelectConnectorsContent() {
   const search = useGet(connectorSearch$);
   const setSearch = useSet(setConnectorSearch$);
 
-  const connectorEntries = Object.entries(CONNECTOR_TYPES) as [
-    ConnectorType,
-    (typeof CONNECTOR_TYPES)[ConnectorType],
-  ][];
+  const connectorEntries = CONNECTOR_TYPE_KEYS.map((type) => {
+    return [type, CONNECTOR_TYPES[type]] as const;
+  });
 
   const filtered = connectorEntries.filter(([type, config]) => {
     return matchesConnectorSearch(search, {
       label: config.label,
       type,
       helpText: config.helpText,
-      tags: config.tags,
+      tags: getConnectorTags(type),
     });
   });
 
@@ -247,12 +250,9 @@ function ConnectStepContent() {
       }),
   );
 
-  const selectedEntries = (
-    Object.entries(CONNECTOR_TYPES) as [
-      ConnectorType,
-      (typeof CONNECTOR_TYPES)[ConnectorType],
-    ][]
-  ).filter(([type]) => {
+  const selectedEntries = CONNECTOR_TYPE_KEYS.map((type) => {
+    return [type, CONNECTOR_TYPES[type]] as const;
+  }).filter(([type]) => {
     return effectiveConnectors.includes(type);
   });
 
@@ -523,12 +523,9 @@ function OrbitIllustration() {
   const selectedConnectors =
     useLastResolved(onboardingEffectiveConnectors$) ?? [];
 
-  const entries = (
-    Object.entries(CONNECTOR_TYPES) as [
-      ConnectorType,
-      (typeof CONNECTOR_TYPES)[ConnectorType],
-    ][]
-  ).filter(([type]) => {
+  const entries = CONNECTOR_TYPE_KEYS.map((type) => {
+    return [type, CONNECTOR_TYPES[type]] as const;
+  }).filter(([type]) => {
     return selectedConnectors.includes(type);
   });
 

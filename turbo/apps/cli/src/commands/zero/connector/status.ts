@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import {
-  CONNECTOR_TYPES,
+  CONNECTOR_TYPE_KEYS,
   type ConnectorType,
   connectorTypeSchema,
 } from "@vm0/connectors/connectors";
@@ -157,7 +157,7 @@ export const statusCommand = new Command()
     withErrorHandler(async (type: string, options: { agent?: string }) => {
       const parseResult = connectorTypeSchema.safeParse(type);
       if (!parseResult.success) {
-        const available = Object.keys(CONNECTOR_TYPES).join(", ");
+        const available = CONNECTOR_TYPE_KEYS.join(", ");
         throw new Error(`Unknown connector type: ${type}`, {
           cause: new Error(`Available connectors: ${available}`),
         });

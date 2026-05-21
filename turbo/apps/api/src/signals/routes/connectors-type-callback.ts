@@ -3,15 +3,14 @@ import { unescape as decodeCookieComponent } from "node:querystring";
 import { command } from "ccstate";
 import { connectorsTypeCallbackContract } from "@vm0/api-contracts/contracts/connectors-type-callback";
 import {
-  getConnectorOAuthConfig,
   getConnectorOAuthCredentials,
+  getOAuthConnectorConfig,
   isStaticConfidentialConnectorOAuthCredentials,
   isStaticConnectorOAuthCredentials,
   type ConnectorOAuthCredentials,
 } from "@vm0/connectors/connector-utils";
 import {
   connectorTypeSchema,
-  type ConnectorType,
   type OAuthConnectorType,
 } from "@vm0/connectors/connectors";
 import {
@@ -19,7 +18,6 @@ import {
   CONNECTOR_OAUTH_PROVIDERS,
   type OAuthTokenResult,
 } from "@vm0/connectors/oauth-providers";
-import { connectorOauthStates } from "@vm0/db/schema/connector-oauth-state";
 import { connectorSessions } from "@vm0/db/schema/connector-session";
 import { eq } from "drizzle-orm";
 
@@ -29,6 +27,11 @@ import { pathParamsOf, queryOf } from "../context/request";
 import { writeDb$, type Db } from "../external/db";
 import { nowDate } from "../../lib/time";
 import { optionalEnv } from "../../lib/env";
+import {
+  claimConnectorOAuthState,
+  getConnectorOAuthStateStatus,
+  type StoredOAuthState,
+} from "../services/connector-oauth-state.service";
 import { upsertOAuthConnector$ } from "../services/zero-connector-data.service";
 import { settle } from "../utils";
 import type { RouteEntry } from "../route";
@@ -42,8 +45,6 @@ const SESSION_COOKIE_NAME = "connector_oauth_session";
 const PKCE_COOKIE_NAME = "connector_oauth_pkce";
 const OAUTH_CONTEXT_COOKIE_NAME = "connector_oauth_context";
 const REDIRECT_STATUS = 307;
-
-type StoredOAuthState = typeof connectorOauthStates.$inferSelect;
 
 type CallbackIdentity = {
   readonly userId: string;
@@ -88,10 +89,25 @@ type ResolvedCallbackState =
       readonly response: Response;
     };
 
-type StoredOAuthStateResolution =
-  | { readonly kind: "missing" }
-  | { readonly kind: "invalid" }
-  | { readonly kind: "usable"; readonly state: StoredOAuthState };
+type ClaimedCallbackState =
+  | {
+      readonly ok: true;
+      readonly storedState: StoredOAuthState | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly response: Response;
+    };
+
+type ResolvedOAuthConnectorType =
+  | {
+      readonly ok: true;
+      readonly connectorType: OAuthConnectorType;
+    }
+  | {
+      readonly ok: false;
+      readonly response: Response;
+    };
 
 const connectorCallbackAuth = { requireOrganization: true } as const;
 
@@ -173,6 +189,26 @@ function getProviderCredentialArgs(credentials: ConnectorOAuthCredentials): {
   return { clientId: credentials.clientId };
 }
 
+function invalidStateRedirectResponse(origin: string, type: string): Response {
+  return redirectWithError(
+    origin,
+    type,
+    "Invalid state - please try again",
+    true,
+  );
+}
+
+function missingAuthorizationCodeRedirectResponse(
+  origin: string,
+  type: string,
+): Response {
+  return redirectWithError(origin, type, "Missing authorization code", true);
+}
+
+function missingStateRedirectResponse(origin: string, type: string): Response {
+  return redirectWithError(origin, type, "Missing state parameter", true);
+}
+
 async function exchangeTokenForConnector(args: {
   readonly connectorType: OAuthConnectorType;
   readonly code: string;
@@ -200,8 +236,96 @@ async function exchangeTokenForConnector(args: {
   });
 }
 
-function getRequestedScopes(connectorType: ConnectorType): readonly string[] {
-  return getConnectorOAuthConfig(connectorType)?.scopes ?? [];
+function getRequestedScopes(
+  connectorType: OAuthConnectorType,
+): readonly string[] {
+  return getOAuthConnectorConfig(connectorType).scopes;
+}
+
+function resolveOAuthConnectorType(
+  origin: string,
+  type: string,
+): ResolvedOAuthConnectorType {
+  const typeResult = connectorTypeSchema.safeParse(type);
+  if (!typeResult.success) {
+    return {
+      ok: false,
+      response: redirectWithError(origin, type, "Unknown connector type"),
+    };
+  }
+
+  const connectorType = typeResult.data;
+  if (connectorType === "computer") {
+    return {
+      ok: false,
+      response: redirectWithError(
+        origin,
+        type,
+        "Computer connector does not use OAuth",
+      ),
+    };
+  }
+  if (!isOAuthConnectorType(connectorType)) {
+    return {
+      ok: false,
+      response: redirectWithError(
+        origin,
+        type,
+        `${type} connector does not use OAuth`,
+      ),
+    };
+  }
+
+  return { ok: true, connectorType };
+}
+
+async function claimStoredOAuthStateForCallback(args: {
+  readonly db: Db;
+  readonly state: string;
+  readonly connectorType: OAuthConnectorType;
+  readonly origin: string;
+  readonly type: string;
+  readonly signal: AbortSignal;
+}): Promise<ClaimedCallbackState> {
+  const storedStateResolution = await claimConnectorOAuthState(
+    args.db,
+    { state: args.state, connectorType: args.connectorType },
+    args.signal,
+  );
+  if (storedStateResolution.kind === "invalid") {
+    return {
+      ok: false,
+      response: invalidStateRedirectResponse(args.origin, args.type),
+    };
+  }
+
+  return {
+    ok: true,
+    storedState:
+      storedStateResolution.kind === "usable"
+        ? storedStateResolution.state
+        : undefined,
+  };
+}
+
+async function rejectInvalidStoredOAuthStateForCallback(args: {
+  readonly db: Db;
+  readonly state: string;
+  readonly connectorType: OAuthConnectorType;
+  readonly origin: string;
+  readonly type: string;
+  readonly signal: AbortSignal;
+}): Promise<Response | undefined> {
+  const status = await getConnectorOAuthStateStatus(
+    args.db,
+    { state: args.state, connectorType: args.connectorType },
+    args.signal,
+  );
+  if (status.kind !== "invalid") {
+    return undefined;
+  }
+
+  return invalidStateRedirectResponse(args.origin, args.type);
 }
 
 async function completeConnectorSession(
@@ -238,49 +362,6 @@ async function markConnectorSessionError(
       errorMessage,
     })
     .where(eq(connectorSessions.id, sessionId));
-  signal.throwIfAborted();
-}
-
-async function resolveStoredOAuthState(
-  db: Db,
-  state: string,
-  connectorType: ConnectorType,
-  signal: AbortSignal,
-): Promise<StoredOAuthStateResolution> {
-  const [storedState] = await db
-    .select()
-    .from(connectorOauthStates)
-    .where(eq(connectorOauthStates.state, state))
-    .limit(1);
-  signal.throwIfAborted();
-
-  if (!storedState) {
-    return { kind: "missing" };
-  }
-
-  if (
-    storedState.type !== connectorType ||
-    storedState.consumedAt ||
-    storedState.expiresAt <= nowDate()
-  ) {
-    return { kind: "invalid" };
-  }
-
-  return { kind: "usable", state: storedState };
-}
-
-async function consumeStoredOAuthState(
-  db: Db,
-  storedState: StoredOAuthState | undefined,
-  signal: AbortSignal,
-): Promise<void> {
-  if (!storedState) {
-    return;
-  }
-  await db
-    .update(connectorOauthStates)
-    .set({ consumedAt: nowDate() })
-    .where(eq(connectorOauthStates.id, storedState.id));
   signal.throwIfAborted();
 }
 
@@ -352,7 +433,6 @@ const resolveCallbackState$ = command(
     signal: AbortSignal,
   ): Promise<ResolvedCallbackState> => {
     if (args.storedState) {
-      await consumeStoredOAuthState(set(writeDb$), args.storedState, signal);
       return {
         ok: true,
         identity: {
@@ -427,26 +507,11 @@ const callbackConnectorInner$ = command(
     }
     const origin = getConnectorOAuthOrigin(request);
 
-    const typeResult = connectorTypeSchema.safeParse(params.type);
-    if (!typeResult.success) {
-      return redirectWithError(origin, params.type, "Unknown connector type");
+    const connectorTypeResult = resolveOAuthConnectorType(origin, params.type);
+    if (!connectorTypeResult.ok) {
+      return connectorTypeResult.response;
     }
-    const connectorType = typeResult.data;
-
-    if (connectorType === "computer") {
-      return redirectWithError(
-        origin,
-        params.type,
-        "Computer connector does not use OAuth",
-      );
-    }
-    if (!isOAuthConnectorType(connectorType)) {
-      return redirectWithError(
-        origin,
-        params.type,
-        `${params.type} connector does not use OAuth`,
-      );
-    }
+    const { connectorType } = connectorTypeResult;
 
     const writeDb = set(writeDb$);
     const savedState = getCookie(request, STATE_COOKIE_NAME);
@@ -454,24 +519,25 @@ const callbackConnectorInner$ = command(
     const codeVerifier = getCookie(request, PKCE_COOKIE_NAME);
     const oauthContext = getCookie(request, OAUTH_CONTEXT_COOKIE_NAME);
     const state = query.state;
-    const storedStateResolution = state
-      ? await resolveStoredOAuthState(writeDb, state, connectorType, signal)
-      : { kind: "missing" as const };
-    if (storedStateResolution.kind === "invalid") {
-      return redirectWithError(
-        origin,
-        params.type,
-        "Invalid state - please try again",
-        true,
-      );
-    }
-    const storedState =
-      storedStateResolution.kind === "usable"
-        ? storedStateResolution.state
-        : undefined;
+    const storedStateCallbackArgs = {
+      db: writeDb,
+      connectorType,
+      origin,
+      type: params.type,
+      signal,
+    };
 
     if (query.error) {
-      await consumeStoredOAuthState(writeDb, storedState, signal);
+      if (state) {
+        const claimedState = await claimStoredOAuthStateForCallback({
+          ...storedStateCallbackArgs,
+          state,
+        });
+        signal.throwIfAborted();
+        if (!claimedState.ok) {
+          return claimedState.response;
+        }
+      }
       return redirectWithError(
         origin,
         params.type,
@@ -482,21 +548,31 @@ const callbackConnectorInner$ = command(
 
     const code = query.code;
     if (!code) {
-      return redirectWithError(
-        origin,
-        params.type,
-        "Missing authorization code",
-        true,
-      );
+      if (state) {
+        const invalidStateResponse =
+          await rejectInvalidStoredOAuthStateForCallback({
+            ...storedStateCallbackArgs,
+            state,
+          });
+        signal.throwIfAborted();
+        if (invalidStateResponse) {
+          return invalidStateResponse;
+        }
+      }
+      return missingAuthorizationCodeRedirectResponse(origin, params.type);
     }
 
     if (!state) {
-      return redirectWithError(
-        origin,
-        params.type,
-        "Missing state parameter",
-        true,
-      );
+      return missingStateRedirectResponse(origin, params.type);
+    }
+
+    const claimedState = await claimStoredOAuthStateForCallback({
+      ...storedStateCallbackArgs,
+      state,
+    });
+    signal.throwIfAborted();
+    if (!claimedState.ok) {
+      return claimedState.response;
     }
 
     const resolvedState = await set(
@@ -509,7 +585,7 @@ const callbackConnectorInner$ = command(
         sessionId,
         codeVerifier,
         oauthContext,
-        storedState,
+        storedState: claimedState.storedState,
       },
       signal,
     );

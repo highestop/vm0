@@ -2821,6 +2821,8 @@ class TestResponseHeadersSseParser:
 
         assert "model_provider_usage" in flow.metadata
         assert isinstance(flow.metadata["model_provider_usage"], dict)
+        assert "model_sse_usage_finish" in flow.metadata
+        assert "model_json_usage_finish" not in flow.metadata
         # Feed SSE data through the callback
         callback = _response_stream(flow)
         callback(
@@ -3300,6 +3302,10 @@ class TestResponseUsageReporting:
         )
 
         mitm_addon.responseheaders(flow)
+        assert flow.metadata["model_websocket_usage_enabled"] is True
+        assert "model_json_usage_finish" not in flow.metadata
+        assert "model_sse_usage_finish" not in flow.metadata
+
         flow.websocket = SimpleNamespace(
             messages=[
                 SimpleNamespace(
@@ -3794,6 +3800,8 @@ class TestResponseUsageReporting:
         state = flow.metadata["stream_buffer_state"]
         assert len(buf) == body_utils.STREAM_BUFFER_LIMIT
         assert state["truncated"]
+        assert "model_json_usage_finish" not in flow.metadata
+        assert "model_provider_usage" not in flow.metadata
 
     def test_non_model_provider_buffer_truncated(self, real_flow, headers):
         """Non-model-provider responses should truncate at 64KB."""
@@ -3839,6 +3847,28 @@ class TestResponseUsageReporting:
         assert error is None
         assert json_state["response_data_count"] == 1
         assert json_state["response_result_count"] == 1
+
+    def test_non_billable_x_non_stream_uses_bounded_forensic_buffer_only(self, real_flow, headers):
+        """Non-billable X JSON should not attach the billable response parser."""
+        flow = real_flow(with_response=False, host="api.x.com")
+        flow.response = tutils.tresp(
+            status_code=200, headers=_header_map({"content-type": "application/json"})
+        )
+        flow.metadata["firewall_name"] = "x"
+        flow.metadata["firewall_billable"] = False
+        flow.metadata["original_url"] = "https://api.x.com/2/tweets"
+
+        mitm_addon.responseheaders(flow)
+
+        callback = _response_stream(flow)
+        callback(b"x" * (body_utils.STREAM_BUFFER_LIMIT + 1000))
+
+        buf = flow.metadata["stream_buffer"]
+        state = flow.metadata["stream_buffer_state"]
+        assert len(buf) == body_utils.STREAM_BUFFER_LIMIT
+        assert state["truncated"]
+        assert "x_ndjson_state" not in flow.metadata
+        assert "x_json_response_finish" not in flow.metadata
 
     def test_non_x_billable_connector_uses_bounded_forensic_buffer(self, real_flow, headers):
         """Future billable connectors must not get unbounded buffers by default."""
@@ -5614,6 +5644,7 @@ class TestReportConnectorUsage:
         mitm_addon.responseheaders(flow)
         callback = _response_stream(flow)
         assert "x_ndjson_state" in flow.metadata
+        assert "x_json_response_finish" not in flow.metadata
 
         # 2. Stream chunks (including keep-alives and a mid-line split)
         chunks = [

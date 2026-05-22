@@ -7,7 +7,7 @@ import {
 import { request$ } from "../context/hono";
 import { pathParamsOf, queryOf } from "../context/request";
 import type { RouteEntry } from "../route";
-import { safeJsonParse } from "../utils";
+import { safeJsonParse, safeSync } from "../utils";
 import {
   downloadFalImage,
   getMissingImagePricing,
@@ -216,6 +216,114 @@ function bytePlusPayloadBody(payload: unknown): {
     status: typeof payload.status === "string" ? payload.status : undefined,
     body: payload,
   };
+}
+
+const PROVIDER_FAILURE_DETAIL_KEYS = [
+  "reason",
+  "failure_reason",
+  "failureReason",
+  "error",
+  "error_message",
+  "errorMessage",
+  "message",
+  "detail",
+  "description",
+  "status_message",
+  "statusMessage",
+  "err_msg",
+  "code",
+  "error_code",
+  "errorCode",
+  "logs",
+] as const;
+
+function providerFailureLogKey(key: string): string {
+  switch (key) {
+    case "failure_reason": {
+      return "failureReason";
+    }
+    case "error_message": {
+      return "errorMessage";
+    }
+    case "err_msg": {
+      return "errorMessage";
+    }
+    case "status_message": {
+      return "statusMessage";
+    }
+    case "error_code": {
+      return "errorCode";
+    }
+    default: {
+      return key;
+    }
+  }
+}
+
+function truncateProviderFailureDetail(value: string): string {
+  const maxLength = 1000;
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function stringifyProviderFailureDetail(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value ? truncateProviderFailureDetail(value) : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => {
+        return stringifyProviderFailureDetail(item);
+      })
+      .filter((item): item is string => {
+        return Boolean(item);
+      })
+      .join("\n");
+    return text ? truncateProviderFailureDetail(text) : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  for (const key of PROVIDER_FAILURE_DETAIL_KEYS) {
+    const detail = stringifyProviderFailureDetail(value[key]);
+    if (detail) {
+      return detail;
+    }
+  }
+  const serialized = safeSync(() => {
+    return JSON.stringify(value);
+  });
+  return "ok" in serialized
+    ? truncateProviderFailureDetail(serialized.ok)
+    : undefined;
+}
+
+export function providerFailureDetailsForLog(
+  payload: unknown,
+): Record<string, string> {
+  if (!isRecord(payload)) {
+    return {};
+  }
+  const details: Record<string, string> = {};
+  for (const source of [
+    payload,
+    payload.payload,
+    payload.data,
+    payload.response,
+  ]) {
+    if (!isRecord(source)) {
+      continue;
+    }
+    for (const key of PROVIDER_FAILURE_DETAIL_KEYS) {
+      const value = stringifyProviderFailureDetail(source[key]);
+      if (value) {
+        details[providerFailureLogKey(key)] ??= value;
+      }
+    }
+  }
+  return details;
 }
 
 const handleFalImageCompletion$ = command(
@@ -531,11 +639,13 @@ const postFalBuiltInGenerationWebhook$ = command(
 
     const status = payload.status?.toUpperCase();
     if (status === "ERROR" || status === "FAILED") {
+      const failureDetails = providerFailureDetailsForLog(parsed);
       L.warn("Fal built-in generation webhook reported failed generation", {
         generationId: job.id,
         type: job.type,
         status: payload.status,
         visualKey: query.visualKey,
+        ...failureDetails,
       });
       await set(
         failBuiltInGenerationJob$,
@@ -640,6 +750,7 @@ const postBytePlusBuiltInGenerationWebhook$ = command(
     }
 
     if (status === "failed" || status === "expired") {
+      const failureDetails = providerFailureDetailsForLog(parsed);
       L.warn(
         "BytePlus built-in generation webhook reported failed generation",
         {
@@ -647,6 +758,7 @@ const postBytePlusBuiltInGenerationWebhook$ = command(
           type: job.type,
           status: payload.status,
           visualKey: query.visualKey,
+          ...failureDetails,
         },
       );
       await set(

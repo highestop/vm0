@@ -9,8 +9,10 @@ host runtime that page uses.
 
 When the user is signed in and the feature switch is enabled, the main process
 registers a Desktop Computer Use host through the Zero API command queue. It
-uses the Electron session for auth, polls queued commands, executes them with
-macOS Accessibility/JXA, and completes commands back to the API.
+uses the Electron session for auth, polls queued commands, executes them with a
+native macOS `computer-use-helper`, and completes commands back to the API.
+Electron still owns screenshot capture through `desktopCapturer`; the helper
+owns macOS Accessibility and targeted CGEvent input dispatch.
 
 ## Development
 
@@ -20,11 +22,33 @@ By default the app opens production:
 pnpm -F @vm0/desktop dev
 ```
 
+From the monorepo root, start the desktop app against the local proxy with:
+
+```bash
+pnpm desktop:dev
+```
+
+The desktop build compiles both Electron entrypoints and the Swift native helper:
+
+```bash
+pnpm -F @vm0/desktop build
+```
+
+Create a macOS artifact with:
+
+```bash
+pnpm desktop:make
+```
+
+The helper source lives under `apps/desktop/native/computer-use-helper`. Build
+output is copied to `apps/desktop/native/dist/native/computer-use-helper`, which
+is also the path included in packaged macOS artifacts.
+
 Point it at a local or staging platform URL with:
 
 ```bash
 VM0_DESKTOP_PLATFORM_URL=https://staging-app.vm6.ai pnpm -F @vm0/desktop dev
-VM0_DESKTOP_PLATFORM_URL=https://app.vm7.ai pnpm -F @vm0/desktop dev
+VM0_DESKTOP_PLATFORM_URL=https://app.vm7.ai:8443 pnpm -F @vm0/desktop dev
 VM0_DESKTOP_PLATFORM_URL=http://localhost:3002 pnpm -F @vm0/desktop dev
 ```
 

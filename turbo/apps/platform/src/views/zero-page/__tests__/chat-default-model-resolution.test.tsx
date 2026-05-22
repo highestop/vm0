@@ -33,6 +33,8 @@ import {
   zeroAgentsByIdContract,
   zeroAgentInstructionsContract,
 } from "@vm0/api-contracts/contracts/zero-agents";
+import { zeroClaudeCodeDeviceAuthContract } from "@vm0/api-contracts/contracts/zero-claude-code-device-auth";
+import { zeroCodexDeviceAuthContract } from "@vm0/api-contracts/contracts/zero-codex-device-auth";
 import type {
   ModelProviderResponse,
   OrgModelPolicy,
@@ -376,8 +378,11 @@ describe("chat composer — default model resolution", () => {
     await expectComposerShowsModel("Claude Opus 4.7");
   });
 
-  it("blocks agent chat submit and opens Claude Code OAuth token input from the model warning", async () => {
+  it("blocks agent chat submit and opens Claude Code device login from the model warning", async () => {
     const user = userEvent.setup();
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValue({ closed: true } as Window);
     let sendRequests = 0;
     setMockFeatureSwitches({});
     setMockOrgModelPolicies([buildMemberOauthPolicy()]);
@@ -391,6 +396,16 @@ describe("chat composer — default model resolution", () => {
           threadId: THREAD_ID,
           status: "pending",
           createdAt: "2026-03-10T00:00:00Z",
+        });
+      }),
+      mockApi(zeroClaudeCodeDeviceAuthContract.start, ({ respond }) => {
+        return respond(200, {
+          sessionToken: "mock-claude-code-device-session",
+          type: "claude-code",
+          status: "pending",
+          scope: "personal",
+          browserUrl: "https://claude.com/cai/oauth/authorize?code=true",
+          expiresIn: 30,
         });
       }),
     );
@@ -424,14 +439,10 @@ describe("chat composer — default model resolution", () => {
 
     await user.click(warning);
     await expect(
-      screen.findByText("Configure Claude Code OAuth"),
+      screen.findByTestId("claude-code-device-auth-code"),
     ).resolves.toBeInTheDocument();
-    await fill(screen.getByPlaceholderText("sk-ant-XXXXXXX"), "oauth-token");
-    await user.click(screen.getByText("Save"));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Send")).not.toBeDisabled();
-    });
+    expect(screen.getByText("Connect Claude Code")).toBeInTheDocument();
+    expect(openSpy).not.toHaveBeenCalled();
   });
 
   it("blocks agent chat submit and opens ChatGPT device login from the model warning", async () => {
@@ -460,6 +471,21 @@ describe("chat composer — default model resolution", () => {
           createdAt: "2026-03-10T00:00:00Z",
         });
       }),
+      mockApi(zeroCodexDeviceAuthContract.start, ({ respond }) => {
+        return respond(200, {
+          sessionToken: "mock-codex-device-session",
+          type: "codex",
+          status: "pending",
+          scope: "personal",
+          browserUrl: "https://auth.openai.com/codex/device",
+          verificationCode: "ABCD-EFGH",
+          expiresIn: 30,
+          interval: 1,
+        });
+      }),
+      mockApi(zeroCodexDeviceAuthContract.complete, ({ respond }) => {
+        return respond(200, { status: "pending", errorMessage: null });
+      }),
     );
 
     detachedSetupPage({ context, path: `/agents/${AGENT_ID}/chat` });
@@ -482,8 +508,8 @@ describe("chat composer — default model resolution", () => {
     await user.click(warning);
 
     await expect(
-      screen.findByTestId("codex-device-auth-start"),
-    ).resolves.toBeInTheDocument();
+      screen.findByTestId("codex-device-auth-code"),
+    ).resolves.toHaveTextContent("ABCD-EFGH");
     expect(screen.getByText("Connect Codex")).toBeInTheDocument();
     expect(openSpy).not.toHaveBeenCalled();
   });
@@ -536,6 +562,21 @@ describe("chat composer — default model resolution", () => {
           createdAt: "2026-03-10T00:00:00Z",
         });
       }),
+      mockApi(zeroCodexDeviceAuthContract.start, ({ respond }) => {
+        return respond(200, {
+          sessionToken: "mock-codex-device-session",
+          type: "codex",
+          status: "pending",
+          scope: "personal",
+          browserUrl: "https://auth.openai.com/codex/device",
+          verificationCode: "ABCD-EFGH",
+          expiresIn: 30,
+          interval: 1,
+        });
+      }),
+      mockApi(zeroCodexDeviceAuthContract.complete, ({ respond }) => {
+        return respond(200, { status: "pending", errorMessage: null });
+      }),
     );
 
     detachedSetupPage({ context, path: `/chats/${THREAD_ID}` });
@@ -557,8 +598,8 @@ describe("chat composer — default model resolution", () => {
     await user.click(warning);
 
     await expect(
-      screen.findByTestId("codex-device-auth-start"),
-    ).resolves.toBeInTheDocument();
+      screen.findByTestId("codex-device-auth-code"),
+    ).resolves.toHaveTextContent("ABCD-EFGH");
     expect(screen.getByText("Connect Codex")).toBeInTheDocument();
     expect(openSpy).not.toHaveBeenCalled();
   });

@@ -30,6 +30,12 @@ from .sse import SseUsageParser
 
 _RESPONSES_USAGE_EVENTS = frozenset(("response.completed", "response.done"))
 
+_OPENAI_RESPONSES_USAGE_CATEGORIES = (
+    MODEL_USAGE_CATEGORY_INPUT,
+    MODEL_USAGE_CATEGORY_OUTPUT,
+    MODEL_USAGE_CATEGORY_CACHE_READ,
+)
+
 _RESPONSES_RESPONSE_SCALAR_FIELDS = {
     ("id",): ScalarField("string", max_bytes=1024),
     ("model",): ScalarField("string", max_bytes=1024),
@@ -49,9 +55,19 @@ def _is_usage_quantity(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def _store_quantity(target: dict, category: str, value: object) -> None:
+def _store_quantity(target: dict, category: str, value: object) -> bool:
     if _is_usage_quantity(value) and (value > 0 or category not in target):
         target[category] = value
+        return True
+    return False
+
+
+def _has_positive_usage_quantity(values: dict) -> bool:
+    for category in _OPENAI_RESPONSES_USAGE_CATEGORIES:
+        value = values.get(category)
+        if _is_usage_quantity(value) and value > 0:
+            return True
+    return False
 
 
 def _split_input_tokens(
@@ -100,6 +116,25 @@ def _store_response_values(values: dict, target: dict, prefix: tuple[str, ...] =
         MODEL_USAGE_CATEGORY_CACHE_READ,
         cached_tokens,
     )
+
+
+def merge_openai_responses_usage_result(target: dict, source: dict) -> None:
+    target_has_positive_quantity = _has_positive_usage_quantity(target)
+    source_has_positive_quantity = _has_positive_usage_quantity(source)
+    stored_quantity = False
+    for category in _OPENAI_RESPONSES_USAGE_CATEGORIES:
+        stored_quantity = _store_quantity(target, category, source.get(category)) or stored_quantity
+
+    if not stored_quantity or (target_has_positive_quantity and not source_has_positive_quantity):
+        return
+
+    model = source.get("model")
+    if isinstance(model, str) and model:
+        target["model"] = model
+
+    message_id = source.get("message_id")
+    if isinstance(message_id, str) and message_id:
+        target["message_id"] = message_id
 
 
 def _has_response_wrapper_values(values: dict) -> bool:
@@ -179,14 +214,7 @@ class OpenAIResponsesJsonUsageExtractor:
         usage: dict = {}
         _store_response_values(result.values, usage)
 
-        if not any(
-            category in usage
-            for category in (
-                MODEL_USAGE_CATEGORY_INPUT,
-                MODEL_USAGE_CATEGORY_OUTPUT,
-                MODEL_USAGE_CATEGORY_CACHE_READ,
-            )
-        ):
+        if not any(category in usage for category in _OPENAI_RESPONSES_USAGE_CATEGORIES):
             return None, None
         return usage, None
 
@@ -241,13 +269,6 @@ def extract_openai_responses_usage_from_event_json(body: bytes) -> dict | None:
 
     usage: dict = {}
     _store_sse_result_values(result.values, usage, event_name=None)
-    if not any(
-        category in usage
-        for category in (
-            MODEL_USAGE_CATEGORY_INPUT,
-            MODEL_USAGE_CATEGORY_OUTPUT,
-            MODEL_USAGE_CATEGORY_CACHE_READ,
-        )
-    ):
+    if not any(category in usage for category in _OPENAI_RESPONSES_USAGE_CATEGORIES):
         return None
     return usage

@@ -7,6 +7,8 @@ import os
 import time
 import urllib.error
 import uuid
+from collections.abc import Callable, Iterable
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,6 +37,8 @@ from usage import (
     create_openai_responses_sse_usage_extractor,
 )
 from usage.namespaces import USAGE_EVENT_NAMESPACE_MODEL
+from usage.providers import model_provider as usage_model_provider
+from usage.providers.connectors import x as usage_x_connector
 
 
 def _request_bodies_from_calls(call_args_list):
@@ -52,6 +56,17 @@ def _model_usage_idempotency_key(run_id: str, message_id: str, category: str) ->
         f"{len(part.encode('utf-8'))}:{part}" for part in (run_id, message_id, category)
     )
     return str(uuid.uuid5(USAGE_EVENT_NAMESPACE_MODEL, encoded))
+
+
+def _header_map(values: dict[str, str]) -> http.Headers:
+    return http.Headers([(name.encode(), value.encode()) for name, value in values.items()])
+
+
+def _response_stream(flow: http.HTTPFlow) -> Callable[[bytes], bytes | Iterable[bytes]]:
+    assert flow.response is not None
+    stream = flow.response.stream
+    assert callable(stream)
+    return stream
 
 
 def _pending_state(path: Path) -> dict:
@@ -1505,12 +1520,12 @@ class TestResponseHeadersHandler:
         """All responses should be streamed via a buffer callback."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        assert callable(flow.response.stream)
+        assert callable(_response_stream(flow))
         assert "stream_buffer" in flow.metadata
         assert isinstance(flow.metadata["stream_buffer"], bytearray)
 
@@ -1518,12 +1533,12 @@ class TestResponseHeadersHandler:
         """The stream callback should accumulate chunks in the buffer."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         result1 = callback(b"hello ")
         result2 = callback(b"world")
 
@@ -1536,12 +1551,12 @@ class TestResponseHeadersHandler:
         """Buffering should stop when exceeding the size limit."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         # Fill buffer to just under limit
         chunk = b"x" * body_utils.STREAM_BUFFER_LIMIT
         result = callback(chunk)
@@ -1559,12 +1574,12 @@ class TestResponseHeadersHandler:
         """A single chunk larger than the limit should still capture the first part."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         big_chunk = b"A" * (body_utils.STREAM_BUFFER_LIMIT + 1000)
         result = callback(big_chunk)
         assert result == big_chunk  # full chunk forwarded to client
@@ -1575,12 +1590,12 @@ class TestResponseHeadersHandler:
         """Partial fill followed by an oversized chunk should capture up to the limit."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         half = body_utils.STREAM_BUFFER_LIMIT // 2
         callback(b"A" * half)
         assert flow.metadata["stream_buffer_state"]["truncated"] is False
@@ -1597,25 +1612,25 @@ class TestResponseHeadersHandler:
         """When capture_body is set, streaming should still be enabled."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["capture_body"] = True
 
         mitm_addon.responseheaders(flow)
 
-        assert callable(flow.response.stream)
+        assert callable(_response_stream(flow))
         assert "stream_buffer" in flow.metadata
 
     def test_stream_callback_empty_chunk(self, real_flow, headers):
         """Empty chunks should be forwarded without affecting the buffer."""
         flow = real_flow(with_response=False, host="api.example.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         result = callback(b"")
         assert result == b""
         assert len(flow.metadata["stream_buffer"]) == 0
@@ -1645,13 +1660,13 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_name"] = "x"
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/search/stream"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
         assert "x_ndjson_state" in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"data":{"id":"1"},"includes":{"users":[{"id":"u1"}]}}\n')
         callback(b'{"data":{"id":"2"},"includes":{"users":[{"id":"u2"}]}}\n')
         state = flow.metadata["x_ndjson_state"]
@@ -1664,12 +1679,12 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_name"] = "x"
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/search/stream"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         # First parseable line, then ~200 KB of junk.  Parser sees the first
         # line; buffer truncates at STREAM_BUFFER_LIMIT.
         callback(b'{"data":{"id":"1"}}\n' + b"x" * (200 * 1024))
@@ -1684,12 +1699,12 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_billable"] = True
         flow.metadata["original_url"] = "https://api.x.com/2/users/by?ids=1,2,3"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"data":[{"id":"1","text":"')
         callback(b"x" * (200 * 1024))
         callback(b'"}],"includes":{"users":[{"id":"u1"}]}}')
@@ -1710,7 +1725,7 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_name"] = "x"
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/search/stream/rules"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
@@ -1730,7 +1745,7 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_billable"] = True
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/search/stream"
         flow.response = tutils.tresp(
-            status_code=401, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=401, headers=_header_map({"content-type": "application/json"})
         )
 
         mitm_addon.responseheaders(flow)
@@ -1738,7 +1753,7 @@ class TestResponseHeadersHandler:
         # No NDJSON parser — error body would fail NDJSON parsing anyway.
         assert "x_ndjson_state" not in flow.metadata
         assert "x_json_response_finish" not in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         error_body = b'{"title":"Unauthorized","detail":"' + b"x" * (200 * 1024) + b'"}'
         callback(error_body)
         assert len(flow.metadata["stream_buffer"]) == body_utils.STREAM_BUFFER_LIMIT
@@ -1758,8 +1773,8 @@ class TestResponseHeadersHandler:
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/search/stream"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{
+            headers=_header_map(
+                {
                     "content-type": "application/json",
                     "content-encoding": "gzip",
                 }
@@ -1768,7 +1783,7 @@ class TestResponseHeadersHandler:
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         # Feed compressed bytes in two chunks to exercise incremental decompression.
         mid = len(compressed) // 2
         callback(compressed[:mid])
@@ -1791,14 +1806,12 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-encoding": "gzip"}
-            ),
+            headers=_header_map({"content-type": "application/json", "content-encoding": "gzip"}),
         )
 
         mitm_addon.responseheaders(flow)
 
-        flow.response.stream(gzip.compress(body))
+        _response_stream(flow)(gzip.compress(body))
         usage_result, error = flow.metadata["model_json_usage_finish"]()
         assert error is None
         assert usage_result["message_id"] == "msg_1"
@@ -1824,14 +1837,12 @@ class TestResponseHeadersHandler:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-encoding": "gzip"}
-            ),
+            headers=_header_map({"content-type": "application/json", "content-encoding": "gzip"}),
         )
 
         mitm_addon.responseheaders(flow)
 
-        flow.response.stream(gzip.compress(body))
+        _response_stream(flow)(gzip.compress(body))
         usage_result, error = flow.metadata["model_json_usage_finish"]()
         assert error is None
         assert usage_result["message_id"] == "resp_1"
@@ -1855,14 +1866,12 @@ class TestResponseHeadersHandler:
         flow.metadata["original_url"] = "https://api.x.com/2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-encoding": "gzip"}
-            ),
+            headers=_header_map({"content-type": "application/json", "content-encoding": "gzip"}),
         )
 
         mitm_addon.responseheaders(flow)
 
-        flow.response.stream(gzip.compress(body))
+        _response_stream(flow)(gzip.compress(body))
         json_state, error = flow.metadata["x_json_response_finish"]()
         assert error is None
         assert json_state["response_data_count"] == 2
@@ -1888,8 +1897,8 @@ class TestResponseHandler:
         # Add response
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{
+            headers=_header_map(
+                {
                     "content-length": "256",
                     "content-type": "application/json",
                     "content-encoding": "gzip",
@@ -1934,7 +1943,7 @@ class TestResponseHandler:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
 
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-length": "999"})
+            status_code=200, headers=_header_map({"content-length": "999"})
         )
 
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -1962,7 +1971,7 @@ class TestResponseHandler:
         flow.metadata["stream_buffer_state"] = {"truncated": True}
 
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-length": "50000"})
+            status_code=200, headers=_header_map({"content-length": "50000"})
         )
 
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -1988,12 +1997,12 @@ class TestResponseHandler:
         flow.metadata["original_url"] = "https://api.example.com/"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(body[:123])
-        flow.response.stream(body[123:])
+        _response_stream(flow)(body[:123])
+        _response_stream(flow)(body[123:])
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with mitm_ctx():
@@ -2803,7 +2812,7 @@ class TestResponseHeadersSseParser:
     def test_sets_up_sse_parser_for_model_provider(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
         flow.metadata["firewall_billable"] = True
@@ -2813,7 +2822,7 @@ class TestResponseHeadersSseParser:
         assert "model_provider_usage" in flow.metadata
         assert isinstance(flow.metadata["model_provider_usage"], dict)
         # Feed SSE data through the callback
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: message_start\n"
             b'data: {"type":"message_start","message":'
@@ -2827,7 +2836,7 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="api.openai.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "Text/Event-Stream"}),
+            headers=_header_map({"content-type": "Text/Event-Stream"}),
         )
         flow.metadata["firewall_name"] = "model-provider:openai-api-key"
         flow.metadata["cli_agent_type"] = "codex"
@@ -2836,7 +2845,7 @@ class TestResponseHeadersSseParser:
         mitm_addon.responseheaders(flow)
 
         assert "model_provider_usage" in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5",'
@@ -2849,7 +2858,7 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="api.openai.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
         flow.metadata["firewall_name"] = "model-provider:openai-api-key"
         flow.metadata["cli_agent_type"] = "codex"
@@ -2857,7 +2866,7 @@ class TestResponseHeadersSseParser:
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5",'
@@ -2874,7 +2883,7 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="api.openai.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
         flow.metadata["firewall_name"] = "model-provider:openai-api-key"
         flow.metadata["cli_agent_type"] = "codex"
@@ -2883,7 +2892,7 @@ class TestResponseHeadersSseParser:
         mitm_addon.responseheaders(flow)
 
         assert "model_provider_usage" in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5",'
@@ -2898,7 +2907,7 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="chatgpt.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
         flow.metadata["firewall_name"] = "model-provider:codex-oauth-token"
         flow.metadata["cli_agent_type"] = "codex"
@@ -2907,7 +2916,7 @@ class TestResponseHeadersSseParser:
         mitm_addon.responseheaders(flow)
 
         assert "model_provider_usage" in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5",'
@@ -2923,7 +2932,7 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="chatgpt.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
         flow.metadata["firewall_name"] = "model-provider:codex-oauth-token"
         if cli_agent_type is not None:
@@ -2932,7 +2941,7 @@ class TestResponseHeadersSseParser:
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(
             b"event: message_start\n"
             b'data: {"type":"message_start","message":'
@@ -2947,8 +2956,8 @@ class TestResponseHeadersSseParser:
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{
+            headers=_header_map(
+                {
                     "content-type": "text/event-stream; charset=utf-8",
                     "content-encoding": "gzip",
                 }
@@ -2960,7 +2969,7 @@ class TestResponseHeadersSseParser:
         mitm_addon.responseheaders(flow)
 
         assert "model_provider_usage" in flow.metadata
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         plaintext = (
             b"event: message_start\n"
             b'data: {"type":"message_start","message":'
@@ -2978,7 +2987,7 @@ class TestResponseHeadersSseParser:
     def test_no_sse_parser_for_non_model_provider(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.github.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         flow.metadata["firewall_name"] = "github"
 
@@ -2989,7 +2998,7 @@ class TestResponseHeadersSseParser:
     def test_no_sse_parser_for_non_sse_response(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
 
@@ -3000,7 +3009,7 @@ class TestResponseHeadersSseParser:
     def test_no_sse_parser_for_non_billable_model_provider(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
         flow.metadata["firewall_billable"] = False
@@ -3012,7 +3021,7 @@ class TestResponseHeadersSseParser:
     def test_no_sse_parser_without_firewall_name(self, real_flow, headers):
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         # No firewall_name set (e.g. auto-allowed VM0 API request)
 
@@ -3051,8 +3060,8 @@ class TestResponseUsageReporting:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-length": str(len(body))}
+            headers=_header_map(
+                {"content-type": "application/json", "content-length": str(len(body))}
             ),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -3103,8 +3112,8 @@ class TestResponseUsageReporting:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-length": str(len(body))}
+            headers=_header_map(
+                {"content-type": "application/json", "content-length": str(len(body))}
             ),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -3161,8 +3170,8 @@ class TestResponseUsageReporting:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-length": str(len(body))}
+            headers=_header_map(
+                {"content-type": "application/json", "content-length": str(len(body))}
             ),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -3212,7 +3221,7 @@ class TestResponseUsageReporting:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -3243,11 +3252,11 @@ class TestResponseUsageReporting:
         flow.metadata["vm_sandbox_token"] = "tok-xyz"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(
+        _response_stream(flow)(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5",'
             b'"usage":{"input_tokens":50,"output_tokens":20,'
@@ -3399,7 +3408,7 @@ class TestResponseUsageReporting:
         }
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -3433,7 +3442,7 @@ class TestResponseUsageReporting:
         flow.metadata["model_provider_usage"] = {"model": "gpt-5.5"}
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -3470,11 +3479,11 @@ class TestResponseUsageReporting:
         flow.metadata["vm_sandbox_token"] = "tok-xyz"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"text":"')
         callback(b"x" * (body_utils.STREAM_BUFFER_LIMIT + 4096))
         callback(b'"}],"usage":{"input_tokens":50,"output_tokens":200}}')
@@ -3510,11 +3519,11 @@ class TestResponseUsageReporting:
         flow.metadata["vm_sandbox_token"] = "tok-xyz"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(
+        _response_stream(flow)(
             b'{"id":"msg_1","model":"claude-sonnet-4-6",'
             b'"usage":{"input_tokens":50,"output_tokens":200}'
         )
@@ -3555,13 +3564,11 @@ class TestResponseUsageReporting:
         flow.metadata["vm_sandbox_token"] = "tok-xyz"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(
-                **{"content-type": "application/json", "content-encoding": "gzip"}
-            ),
+            headers=_header_map({"content-type": "application/json", "content-encoding": "gzip"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(raw_json)
+        _response_stream(flow)(raw_json)
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
@@ -3598,11 +3605,11 @@ class TestResponseUsageReporting:
         flow.metadata["vm_sandbox_token"] = "tok-xyz"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(body)
+        _response_stream(flow)(body)
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
@@ -3627,11 +3634,11 @@ class TestResponseUsageReporting:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"model":"claude-sonnet-4-6"}')
+        _response_stream(flow)(b'{"model":"claude-sonnet-4-6"}')
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with mitm_ctx():
@@ -3650,11 +3657,11 @@ class TestResponseUsageReporting:
         flow.metadata["original_url"] = "https://api.x.com/2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"data":[{"id":"1"}]}')
+        _response_stream(flow)(b'{"data":[{"id":"1"}]}')
         assert "x_json_response_finish" in flow.metadata
 
         mitm_addon.response(flow)
@@ -3672,11 +3679,11 @@ class TestResponseUsageReporting:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "text/event-stream"}),
+            headers=_header_map({"content-type": "text/event-stream"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(
+        _response_stream(flow)(
             b"event: response.completed\n"
             b'data: {"response":{"model":"gpt-5.5","usage":{"output_tokens":7}}}\n'
         )
@@ -3725,11 +3732,11 @@ class TestResponseUsageReporting:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        vm0_stream = flow.response.stream
+        vm0_stream = _response_stream(flow)
         vm0_stream(b'{"model":"claude-sonnet-4-6"}')
         flow.response.stream = external_stream
         mitm_addon._request_start_times[flow.id] = time.time()
@@ -3745,14 +3752,14 @@ class TestResponseUsageReporting:
         """Billable model provider JSON should parse usage without unbounded buffering."""
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
         flow.metadata["firewall_billable"] = True
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"text":"')
         callback(b"x" * (body_utils.STREAM_BUFFER_LIMIT + 1000))
         callback(b'"}],"usage":{"input_tokens":50,"output_tokens":100}}')
@@ -3772,14 +3779,14 @@ class TestResponseUsageReporting:
         """Non-billable model providers should use the normal bounded buffer."""
         flow = real_flow(with_response=False, host="api.anthropic.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["firewall_name"] = "model-provider:anthropic-api-key"
         flow.metadata["firewall_billable"] = False
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         large_chunk = b"x" * (body_utils.STREAM_BUFFER_LIMIT + 1000)
         callback(large_chunk)
 
@@ -3792,13 +3799,13 @@ class TestResponseUsageReporting:
         """Non-model-provider responses should truncate at 64KB."""
         flow = real_flow(with_response=False, host="api.github.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         # No firewall_name — not a model provider
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         large_chunk = b"x" * (body_utils.STREAM_BUFFER_LIMIT + 1000)
         callback(large_chunk)
 
@@ -3811,7 +3818,7 @@ class TestResponseUsageReporting:
         """Billable X connector responses should not buffer the full body."""
         flow = real_flow(with_response=False, host="api.x.com")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["firewall_name"] = "x"
         flow.metadata["firewall_billable"] = True
@@ -3819,7 +3826,7 @@ class TestResponseUsageReporting:
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"data":[{"id":"1","text":"')
         callback(b"x" * (body_utils.STREAM_BUFFER_LIMIT + 1000))
         callback(b'"}],"meta":{"result_count":1}}')
@@ -3837,14 +3844,14 @@ class TestResponseUsageReporting:
         """Future billable connectors must not get unbounded buffers by default."""
         flow = real_flow(with_response=False, host="api.gamma.example")
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         flow.metadata["firewall_name"] = "gamma"  # hypothetical future billable connector
         flow.metadata["firewall_billable"] = True
 
         mitm_addon.responseheaders(flow)
 
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         large_chunk = b"g" * (body_utils.STREAM_BUFFER_LIMIT + 1000)
         callback(large_chunk)
 
@@ -3869,7 +3876,7 @@ class TestResponseUsageReporting:
         flow.metadata["original_url"] = "https://api.github.com/repos"
         flow.metadata["firewall_name"] = "github"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -3907,7 +3914,7 @@ class TestResponseUsageReporting:
             "tokens.output": 500,
         }
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -4001,7 +4008,7 @@ class TestResponseUsageReporting:
             # no message_id set
         }
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -4041,7 +4048,7 @@ class TestResponseUsageReporting:
             "tokens.input": 10,
         }
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "text/event-stream"})
+            status_code=200, headers=_header_map({"content-type": "text/event-stream"})
         )
         mitm_addon._request_start_times[flow.id] = time.time()
 
@@ -4090,11 +4097,11 @@ class TestErrorHandler:
         flow.metadata["firewall_billable"] = True
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"model":"claude-sonnet-4-6","usage":')
+        _response_stream(flow)(b'{"model":"claude-sonnet-4-6","usage":')
         flow.error = Error("connection reset")
 
         with mitm_ctx():
@@ -4114,11 +4121,11 @@ class TestErrorHandler:
         flow.metadata["original_url"] = "https://api.x.com/2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"data":[{"id":"1"}')
+        _response_stream(flow)(b'{"data":[{"id":"1"}')
         assert "x_json_response_finish" in flow.metadata
         flow.error = Error("connection reset")
 
@@ -4147,11 +4154,11 @@ class TestErrorHandler:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"data":[{"id":"1"}')
+        _response_stream(flow)(b'{"data":[{"id":"1"}')
         flow.error = Error("connection reset")
 
         with (
@@ -4267,7 +4274,7 @@ class TestErrorHandler:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(status_code=200)
         # X streams return application/json with chunked transfer, not x-ndjson.
-        flow.response.headers = {"content-type": "application/json"}
+        flow.response.headers = _header_map({"content-type": "application/json"})
         flow.error = Error("connection reset by peer")
         flow.metadata["vm_sandbox_token"] = "test-token"
 
@@ -4310,12 +4317,12 @@ class TestErrorHandler:
         flow.metadata["firewall_permission"] = "tweet.read"
         flow.metadata["firewall_rule_match"] = "GET /2/tweets/search/stream"
         flow.response = tutils.tresp(
-            status_code=200, headers=http.Headers(**{"content-type": "application/json"})
+            status_code=200, headers=_header_map({"content-type": "application/json"})
         )
 
         # 1. Register parser
         mitm_addon.responseheaders(flow)
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         assert "x_ndjson_state" in flow.metadata
 
         # 2. Receive two complete tweets, then a partial third (cut off)
@@ -4364,9 +4371,7 @@ class TestReportModelProviderUsage:
         }
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -4430,9 +4435,7 @@ class TestReportModelProviderUsage:
         }
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -4444,9 +4447,7 @@ class TestReportModelProviderUsage:
 
         flow.metadata["model_provider_usage"]["model"] = "claude-sonnet-4-6"
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -4470,9 +4471,7 @@ class TestReportModelProviderUsage:
         }
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             usage.report_model_provider_usage(flow, "run-abc-123")
@@ -4494,9 +4493,7 @@ class TestReportModelProviderUsage:
         flow.metadata["model_provider_usage"] = {"tokens.input": 100}
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             usage.report_model_provider_usage(flow, "run-abc-123")
@@ -4524,9 +4521,7 @@ class TestReportModelProviderUsage:
         # No model_provider_usage in metadata
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             usage.report_model_provider_usage(flow, "run-abc-123")
@@ -4557,9 +4552,7 @@ class TestReportModelProviderUsage:
         flow.metadata["vm_proxy_log_path"] = str(proxy_log)
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             usage.report_model_provider_usage(flow, "run-abc-123")
@@ -4580,7 +4573,7 @@ class TestReportModelProviderUsage:
         flow.metadata["vm_proxy_log_path"] = str(proxy_log)
 
         with (
-            patch.object(usage.providers.model_provider, "get_api_url", return_value=""),
+            patch.object(usage_model_provider, "get_api_url", return_value=""),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             usage.report_model_provider_usage(flow, "run-abc-123")
@@ -4649,8 +4642,8 @@ class TestReportConnectorUsage:
         flow.metadata["stream_buffer_state"] = {"truncated": False}
         flow.response = tutils.tresp(
             status_code=status,
-            headers=http.Headers(
-                **{
+            headers=_header_map(
+                {
                     "content-type": "application/json",
                     "content-encoding": content_encoding,
                 }
@@ -4665,9 +4658,7 @@ class TestReportConnectorUsage:
         route submissions inline; only the urllib boundary is mocked here.
         """
         with (
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(
                 usage.webhook, "_opener"
             ) as mock_opener,  # urllib external boundary (#9991)
@@ -4751,9 +4742,7 @@ class TestReportConnectorUsage:
         )
 
         with (
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -4781,9 +4770,7 @@ class TestReportConnectorUsage:
         flow = self._make_x_flow(real_flow, tmp_path, query="expansions=future", body=body)
 
         with (
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5001,11 +4988,11 @@ class TestReportConnectorUsage:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         callback(b'{"data":[{"id":"1","text":"')
         callback(b"x" * (body_utils.STREAM_BUFFER_LIMIT + 4096))
         callback(b'"}],"includes":{"users":[{"id":"u1"}]},"meta":{"result_count":1}}')
@@ -5015,9 +5002,7 @@ class TestReportConnectorUsage:
 
         with (
             mitm_ctx(),
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5045,18 +5030,16 @@ class TestReportConnectorUsage:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets/{id}"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'{"data":{"id":"1","text":"hello"}}')
+        _response_stream(flow)(b'{"data":{"id":"1","text":"hello"}}')
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
             mitm_ctx(),
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5085,11 +5068,11 @@ class TestReportConnectorUsage:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(
+        _response_stream(flow)(
             json.dumps(
                 {
                     "errors": [
@@ -5105,9 +5088,7 @@ class TestReportConnectorUsage:
 
         with (
             mitm_ctx(),
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5133,18 +5114,16 @@ class TestReportConnectorUsage:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets"
         flow.response = tutils.tresp(
             status_code=200,
-            headers=http.Headers(**{"content-type": "application/json"}),
+            headers=_header_map({"content-type": "application/json"}),
         )
 
         mitm_addon.responseheaders(flow)
-        flow.response.stream(b'[{"id":"1"}]')
+        _response_stream(flow)(b'[{"id":"1"}]')
         mitm_addon._request_start_times[flow.id] = time.time()
 
         with (
             mitm_ctx(),
-            patch.object(
-                usage.providers.connectors.x, "get_api_url", return_value="https://app.test"
-            ),
+            patch.object(usage_x_connector, "get_api_url", return_value="https://app.test"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5627,13 +5606,13 @@ class TestReportConnectorUsage:
         flow.metadata["firewall_rule_match"] = "GET /2/tweets/search/stream"
         flow.response = tutils.tresp(status_code=200)
         # X streams return application/json with chunked transfer, not x-ndjson.
-        flow.response.headers = {"content-type": "application/json"}
+        flow.response.headers = _header_map({"content-type": "application/json"})
         flow.response.stream = False
         mitm_addon._request_start_times[flow.id] = time.time()
 
         # 1. responseheaders - registers NDJSON parser
         mitm_addon.responseheaders(flow)
-        callback = flow.response.stream
+        callback = _response_stream(flow)
         assert "x_ndjson_state" in flow.metadata
 
         # 2. Stream chunks (including keep-alives and a mid-line split)
@@ -5684,9 +5663,7 @@ class TestUsageWebhookDelivery:
         flow = self._model_flow(real_flow, tmp_path)
         flow.metadata["model_provider_usage"] = {"model": "claude-sonnet-4-6", "tokens.input": 100}
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -5715,14 +5692,12 @@ class TestUsageWebhookDelivery:
     def test_closes_http_error_response(self, tmp_path, real_flow, fresh_usage_executor):
         """HTTPError sockets must be closed to avoid leaking; retries still apply."""
         http_err = urllib.error.HTTPError(
-            "https://api.vm0.ai", 500, "Internal Server Error", {}, None
+            "https://api.vm0.ai", 500, "Internal Server Error", Message(), None
         )
         http_err.close = MagicMock()
         flow = self._model_flow(real_flow, tmp_path)
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.side_effect = http_err
@@ -5736,9 +5711,7 @@ class TestUsageWebhookDelivery:
     def test_adds_vercel_bypass_header(self, tmp_path, real_flow, fresh_usage_executor):
         flow = self._model_flow(real_flow, tmp_path)
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(auth, "VERCEL_BYPASS", "bypass-secret"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
@@ -5752,9 +5725,7 @@ class TestUsageWebhookDelivery:
     def test_retries_on_failure(self, tmp_path, real_flow, fresh_usage_executor):
         flow = self._model_flow(real_flow, tmp_path)
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.side_effect = [ConnectionError("fail"), MagicMock()]
@@ -5792,9 +5763,7 @@ class TestUsageWebhookDelivery:
         flow = self._model_flow(real_flow, tmp_path)
         proxy_log = Path(flow.metadata["vm_proxy_log_path"])
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.side_effect = ConnectionError("fail")
@@ -5828,9 +5797,7 @@ class TestUsageWebhookDelivery:
     def test_sleeps_between_retries(self, tmp_path, real_flow, fresh_usage_executor):
         flow = self._model_flow(real_flow, tmp_path)
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
             patch.object(usage.webhook.time, "sleep") as mock_sleep,
         ):
@@ -5889,9 +5856,7 @@ class TestUsageWebhookDelivery:
         usage.webhook.usage_executor.shutdown(wait=True)
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -6371,9 +6336,7 @@ class TestUsagePendingCounter:
         flow.metadata["model_provider_usage"] = {"tokens.input": 1}
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.side_effect = ConnectionError("boom")
@@ -6396,9 +6359,7 @@ class TestUsagePendingCounter:
         flow.metadata["model_provider_usage"] = {"tokens.input": 1}
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()
@@ -6458,9 +6419,7 @@ class TestUsagePendingCounter:
         flow.metadata["model_provider_usage"] = {"tokens.input": 1}
 
         with (
-            patch.object(
-                usage.providers.model_provider, "get_api_url", return_value="https://api.vm0.ai"
-            ),
+            patch.object(usage_model_provider, "get_api_url", return_value="https://api.vm0.ai"),
             patch.object(usage.webhook, "_opener") as mock_opener,
         ):
             mock_opener.open.return_value = MagicMock()

@@ -663,6 +663,8 @@ class TestHandleFirewallRequest:
         assert body["error"] == "auth_failed"
         assert "API unreachable" in body["message"]
         assert body["permission"] == "github"
+        assert body["base"] == "https://api.github.com"
+        assert "connectors" not in body
 
     async def test_no_response_set_on_success(self, real_flow, headers, mitm_ctx):
         """On success, flow.response should remain None (request continues to origin)."""
@@ -735,9 +737,88 @@ class TestHandleFirewallRequest:
         assert flow.metadata["firewall_error"] == "connector_not_configured"
         body = json.loads(flow.response.content)
         assert body["error"] == "connector_not_configured"
+        assert body["message"] == "Connector not configured"
         assert body["connectors"] == ["github"]
         assert body["permission"] == "github"
         assert body["base"] == "https://api.github.com"
+
+    async def test_insufficient_credits_returns_402(self, real_flow, headers, mitm_ctx, tmp_path):
+        """Billable firewall auth denied for credits returns 402 and blocks usage."""
+        flow = real_flow(with_response=False, host="api.github.com", path="/repos")
+        flow.metadata["vm_run_id"] = "test-run"
+        api_entry = {"base": "https://api.github.com", "auth": {"headers": {}}}
+        vm_info = {
+            "runId": "run-1",
+            "sandboxToken": "tok-xyz",
+            "encryptedSecrets": "iv:tag:data",
+            "networkLogPath": str(tmp_path / "net.jsonl"),
+            "billableFirewalls": ["github"],
+        }
+        match_info = {"name": "github"}
+
+        with (
+            patch.object(
+                auth,
+                "get_firewall_headers",
+                AsyncMock(side_effect=auth.InsufficientCreditsError("Insufficient credits")),
+            ),
+            mitm_ctx(),
+            patch.object(auth, "get_api_url", return_value="https://api.vm0.ai"),
+        ):
+            await auth.handle_firewall_request(flow, api_entry, vm_info, match_info)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 402
+        assert flow.metadata["firewall_action"] == "BLOCK"
+        assert flow.metadata["firewall_error"] == "insufficient_credits"
+        body = json.loads(flow.response.content)
+        assert body["error"] == "insufficient_credits"
+        assert body["message"] == "Insufficient credits"
+        assert body["permission"] == "github"
+        assert body["base"] == "https://api.github.com"
+        assert "connectors" not in body
+
+    async def test_connector_not_configured_without_name_omits_connectors(
+        self, real_flow, headers, mitm_ctx, tmp_path
+    ):
+        """Connector references are only returned when the firewall name is known."""
+        flow = real_flow(with_response=False, host="api.github.com", path="/repos")
+        flow.metadata["vm_run_id"] = "test-run"
+        api_entry = {"base": "https://api.github.com", "auth": {"headers": {}}}
+        vm_info = {
+            "runId": "run-1",
+            "sandboxToken": "tok-xyz",
+            "encryptedSecrets": "iv:tag:data",
+            "networkLogPath": str(tmp_path / "net.jsonl"),
+            "billableFirewalls": [],
+        }
+        match_info = {}
+
+        with (
+            patch.object(
+                auth,
+                "get_firewall_headers",
+                AsyncMock(
+                    side_effect=auth.ConnectorNotConfiguredError(
+                        "Connector not configured",
+                    )
+                ),
+            ),
+            mitm_ctx(),
+            patch.object(auth, "get_api_url", return_value="https://api.vm0.ai"),
+        ):
+            await auth.handle_firewall_request(flow, api_entry, vm_info, match_info)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 424
+        assert flow.metadata["firewall_action"] == "BLOCK"
+        assert flow.metadata["firewall_error"] == "connector_not_configured"
+        body = json.loads(flow.response.content)
+        assert body["error"] == "connector_not_configured"
+        assert body["message"] == "Connector not configured"
+        assert body["permission"] == ""
+        assert body["base"] == "https://api.github.com"
+        assert "connectors" not in body
 
     async def test_missing_vars_only_returns_424(self, real_flow, headers, mitm_ctx, tmp_path):
         """When connector not configured, return 424 with connector ref."""
@@ -773,6 +854,7 @@ class TestHandleFirewallRequest:
         body = json.loads(flow.response.content)
         assert body["error"] == "connector_not_configured"
         assert body["connectors"] == ["htmlcsstoimage"]
+        assert body["base"] == "https://hcti.io"
 
     async def test_missing_encrypted_secrets_returns_502(self, real_flow, headers, mitm_ctx):
         """When encryptedSecrets is missing from vm_info, return 502."""
@@ -796,7 +878,10 @@ class TestHandleFirewallRequest:
         assert flow.metadata["firewall_error"] == "auth_unavailable"
         body = json.loads(flow.response.content)
         assert body["error"] == "auth_unavailable"
+        assert body["message"] == "Auth secrets not configured"
         assert body["permission"] == "github"
+        assert body["base"] == "https://api.github.com"
+        assert "connectors" not in body
 
 
 # =========================================================================

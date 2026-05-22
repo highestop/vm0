@@ -1,5 +1,6 @@
 import { useGet, useSet, useLastLoadable, useLoadable } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
+import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { pageSignal$ } from "../../signals/page-signal.ts";
 import {
   IconAlertTriangle,
@@ -30,11 +31,12 @@ import {
   showUninstallDialog$,
   setShowUninstallDialog$,
 } from "../../signals/zero-page/zero-slack.ts";
-import { telegramBots$ } from "../../signals/zero-page/zero-telegram.ts";
+import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import { detach, Reason } from "../../signals/utils.ts";
 import { Link } from "../router/link.tsx";
 import { ROUTES } from "../../signals/route-paths.ts";
 import { AgentPhoneCard } from "./agentphone-card.tsx";
+import { GithubCard } from "./github-card.tsx";
 import slackIconImg from "./components/settings/icons/slack.svg";
 import telegramIconImg from "./components/settings/icons/telegram.svg";
 
@@ -277,16 +279,6 @@ function SlackCard({ displayName }: { displayName: string }) {
 }
 
 function TelegramCard() {
-  const botsLoadable = useLastLoadable(telegramBots$);
-  const bots = botsLoadable.state === "hasData" ? botsLoadable.data : [];
-  const connectedCount = bots.filter((bot) => {
-    return bot.isConnected;
-  }).length;
-  const summary =
-    botsLoadable.state === "hasData"
-      ? `${bots.length} ${bots.length === 1 ? "bot" : "bots"} - ${connectedCount} connected`
-      : "Manage Telegram bots and agent routing";
-
   return (
     <Link
       pathname={ROUTES.settingsTelegram}
@@ -304,7 +296,7 @@ function TelegramCard() {
             </div>
           </div>
           <div className="truncate text-sm text-muted-foreground">
-            {summary}
+            Route Telegram messages to agents
           </div>
         </div>
         <span className="shrink-0 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-xs font-medium text-secondary-foreground">
@@ -322,6 +314,8 @@ export function ZeroWorksPage() {
     displayNameLoadable.state === "hasData"
       ? (displayNameLoadable.data ?? "Zero")
       : "Zero";
+  const features = useGet(featureSwitch$);
+  const showGithubCard = features[FeatureSwitchKey.GitHubIntegration] ?? false;
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
@@ -339,6 +333,7 @@ export function ZeroWorksPage() {
       <main className="flex-1 overflow-auto px-4 sm:px-6 pt-3 pb-8">
         <div className="mx-auto max-w-[900px] flex flex-col gap-4">
           <SlackCard displayName={displayName} />
+          {showGithubCard ? <GithubCard /> : null}
           <TelegramCard />
           <AgentPhoneCard />
         </div>

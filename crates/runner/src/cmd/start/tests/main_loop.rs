@@ -1034,15 +1034,18 @@ async fn draining_auto_stop_preserves_concurrent_resume() {
 async fn claim_failure_rolls_back_budget() {
     // Budget for exactly 1 job (2 vcpu, 4096 MB matches the test profile).
     let (config, env) = mock_run_config(test_profiles(), 2, 4096, 1);
+    let budget = Arc::clone(&config.budget);
     let run_handle = tokio::spawn(run(config));
+
+    wait_discover_entered(&env, Duration::from_secs(2)).await;
 
     // First job: claim returns None (409 conflict)
     let run_id_1 = RunId::new_v4();
     push_job(&env, run_id_1, "vm0/default", None);
 
-    // Give main loop time to process the failed claim and release budget.
-    tokio::time::advance(Duration::from_millis(100)).await;
-    tokio::task::yield_now().await;
+    // Returning to discovery proves the failed claim was processed.
+    wait_discover_entered(&env, Duration::from_secs(5)).await;
+    assert_eq!(budget.allocated().2, 0);
 
     // Second job: claim succeeds — budget should have been freed.
     let run_id_2 = RunId::new_v4();
@@ -1060,6 +1063,58 @@ async fn claim_failure_rolls_back_budget() {
     assert!(
         completion.is_some(),
         "second job should complete (budget freed after first 409)"
+    );
+
+    shutdown(&env, run_handle).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn claim_run_id_mismatch_rolls_back_local_state() {
+    // Budget for exactly 1 job, so a leaked lease would block the follow-up job.
+    let (config, env) = mock_run_config(test_profiles(), 2, 4096, 1);
+    let budget = Arc::clone(&config.budget);
+    let run_handle = tokio::spawn(run(config));
+
+    wait_discover_entered(&env, Duration::from_secs(2)).await;
+
+    let candidate_run_id = RunId::new_v4();
+    let context_run_id = RunId::new_v4();
+    push_job(
+        &env,
+        candidate_run_id,
+        "vm0/default",
+        Some(minimal_context(context_run_id)),
+    );
+
+    wait_discover_entered(&env, Duration::from_secs(5)).await;
+    wait_cancel_token_removed(&env.cancel_tokens, candidate_run_id, Duration::from_secs(5)).await;
+    assert_eq!(budget.allocated().2, 0);
+    {
+        let completions = env.handle.completions.lock().unwrap();
+        assert!(
+            !completions
+                .iter()
+                .any(|completion| completion.run_id == candidate_run_id
+                    || completion.run_id == context_run_id),
+            "mismatched claim should not produce a completion for either run id"
+        );
+    }
+
+    let followup_run_id = RunId::new_v4();
+    push_job(
+        &env,
+        followup_run_id,
+        "vm0/default",
+        Some(minimal_context(followup_run_id)),
+    );
+
+    let completion = env
+        .handle
+        .wait_completion(followup_run_id, Duration::from_secs(5))
+        .await;
+    assert!(
+        completion.is_some(),
+        "follow-up job should complete after mismatched claim is rejected"
     );
 
     shutdown(&env, run_handle).await;

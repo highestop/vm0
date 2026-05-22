@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::ids::RunId;
-use crate::provider::JobProvider;
+use crate::provider::{CompletionAuth, JobProvider};
 use crate::resource_budget::BudgetLease;
 use crate::types::SandboxReuseResult;
 
@@ -118,6 +118,7 @@ pub(super) struct CompletionPayload {
     error: Option<String>,
     sandbox_id: SandboxId,
     reuse_result: SandboxReuseResult,
+    completion_auth: CompletionAuth,
 }
 
 impl CompletionPayload {
@@ -127,6 +128,7 @@ impl CompletionPayload {
         error: Option<String>,
         sandbox_id: SandboxId,
         reuse_result: SandboxReuseResult,
+        completion_auth: CompletionAuth,
     ) -> Self {
         Self {
             run_id,
@@ -134,6 +136,7 @@ impl CompletionPayload {
             error,
             sandbox_id,
             reuse_result,
+            completion_auth,
         }
     }
 }
@@ -163,6 +166,7 @@ impl CompletionReady {
             error,
             sandbox_id,
             reuse_result,
+            completion_auth,
         } = payload;
 
         provider
@@ -172,6 +176,7 @@ impl CompletionReady {
                 error.as_deref(),
                 Some(sandbox_id),
                 Some(reuse_result),
+                completion_auth,
             )
             .await;
         ownership
@@ -186,16 +191,16 @@ impl CompletionReady {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
     use sandbox::SandboxId;
 
     use crate::ids::RunId;
-    use crate::provider::{JobCandidate, JobProvider};
+    use crate::provider::{ClaimedJob, JobCandidate, JobProvider};
     use crate::resource_budget::{BudgetLease, ResourceBudget};
     use crate::status::StatusTracker;
-    use crate::types::{ExecutionContext, HeartbeatState, SandboxReuseResult};
+    use crate::types::{HeartbeatState, SandboxReuseResult};
 
     use super::super::ownership::OwnershipTransitions;
 
@@ -205,7 +210,14 @@ mod tests {
         (budget, lease)
     }
     fn test_completion_payload(run_id: RunId, sandbox_id: SandboxId) -> CompletionPayload {
-        CompletionPayload::new(run_id, 0, None, sandbox_id, SandboxReuseResult::PoolMiss)
+        CompletionPayload::new(
+            run_id,
+            0,
+            None,
+            sandbox_id,
+            SandboxReuseResult::PoolMiss,
+            CompletionAuth::local(),
+        )
     }
 
     async fn status_active_run_count(path: &std::path::Path) -> usize {
@@ -237,13 +249,17 @@ mod tests {
         status_path: std::path::PathBuf,
     }
 
+    struct CompletionAuthProvider {
+        auth_matches: Arc<AtomicBool>,
+    }
+
     #[async_trait]
     impl JobProvider for CompletionOrderProvider {
         async fn discover(&self) -> Option<JobCandidate> {
             None
         }
 
-        async fn claim(&self, _candidate: JobCandidate) -> Option<ExecutionContext> {
+        async fn claim(&self, _candidate: JobCandidate) -> Option<ClaimedJob> {
             None
         }
 
@@ -254,11 +270,42 @@ mod tests {
             _error: Option<&str>,
             _sandbox_id: Option<SandboxId>,
             _reuse_result: Option<SandboxReuseResult>,
+            _completion_auth: CompletionAuth,
         ) {
             self.budget_count_at_complete
                 .store(self.budget.allocated().2, Ordering::SeqCst);
             self.active_runs_at_complete.store(
                 status_active_run_count(&self.status_path).await,
+                Ordering::SeqCst,
+            );
+        }
+
+        async fn heartbeat(&self, _state: &HeartbeatState) {}
+
+        async fn shutdown(&self) {}
+    }
+
+    #[async_trait]
+    impl JobProvider for CompletionAuthProvider {
+        async fn discover(&self) -> Option<JobCandidate> {
+            None
+        }
+
+        async fn claim(&self, _candidate: JobCandidate) -> Option<ClaimedJob> {
+            None
+        }
+
+        async fn complete(
+            &self,
+            run_id: RunId,
+            _exit_code: i32,
+            _error: Option<&str>,
+            _sandbox_id: Option<SandboxId>,
+            _reuse_result: Option<SandboxReuseResult>,
+            completion_auth: CompletionAuth,
+        ) {
+            self.auth_matches.store(
+                completion_auth.matches_sandbox_token_for_test(run_id, "completion-token"),
                 Ordering::SeqCst,
             );
         }
@@ -315,6 +362,41 @@ mod tests {
             RunCleanupDisposition::StatusRemoved,
         );
         assert_eq!(budget.allocated().2, 0);
+    }
+
+    #[tokio::test]
+    async fn completion_ready_forwards_completion_auth() {
+        let (_budget, lease) = test_budget_lease();
+        let auth_matches = Arc::new(AtomicBool::new(false));
+        let dir = tempfile::tempdir().unwrap();
+        let status = StatusTracker::new(dir.path().join("status.json"), 4, None, None);
+        let ownership = OwnershipTransitions::new(&status);
+        let provider = CompletionAuthProvider {
+            auth_matches: Arc::clone(&auth_matches),
+        };
+        let cleanup_state = RunCleanupState::new();
+        let run_id = RunId::new_v4();
+        let sandbox_id = SandboxId::new_v4();
+        status.add_run(run_id, sandbox_id).await;
+
+        CompletionReady::new(
+            CompletionPayload::new(
+                run_id,
+                0,
+                None,
+                sandbox_id,
+                SandboxReuseResult::PoolMiss,
+                CompletionAuth::sandbox_token(run_id, "completion-token".to_string()),
+            ),
+            BudgetOwnership::active(ActiveBudgetLease::new(lease)),
+        )
+        .complete_and_release(&provider, &ownership, &cleanup_state)
+        .await;
+
+        assert!(
+            auth_matches.load(Ordering::SeqCst),
+            "completion payload auth must be forwarded to provider.complete"
+        );
     }
 
     #[tokio::test]

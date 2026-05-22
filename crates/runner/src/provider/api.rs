@@ -12,7 +12,7 @@ use reqwest::{RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
 use super::api_ably_supervisor::{AblySupervisor, PollOutcome, PollWakeups};
-use super::{JobCandidate, JobProvider};
+use super::{ClaimedJob, CompletionAuth, CompletionAuthError, JobCandidate, JobProvider};
 use crate::error::{RunnerError, RunnerResult};
 use crate::http::HttpClient;
 use crate::ids::RunId;
@@ -54,8 +54,6 @@ pub struct ApiProvider {
     poll_wakeups: Arc<PollWakeups>,
     /// Background Ably control-plane task.
     ably_supervisor: AblySupervisor,
-    /// Per-job sandbox tokens for completion auth.
-    tokens: tokio::sync::Mutex<HashMap<RunId, String>>,
     /// Session IDs held in the idle pool, sent in poll requests for affinity ordering.
     held_sessions: tokio::sync::Mutex<Vec<String>>,
     /// Shutdown signal.
@@ -90,7 +88,6 @@ impl ApiProvider {
             profiles,
             poll_wakeups,
             ably_supervisor,
-            tokens: tokio::sync::Mutex::new(HashMap::new()),
             held_sessions: tokio::sync::Mutex::new(Vec::new()),
             cancel,
         })
@@ -156,16 +153,20 @@ impl JobProvider for ApiProvider {
         }
     }
 
-    async fn claim(&self, candidate: JobCandidate) -> Option<ExecutionContext> {
+    async fn claim(&self, candidate: JobCandidate) -> Option<ClaimedJob> {
         let run_id = candidate.run_id();
         match self.api.claim(run_id).await {
             Ok(ctx) => {
+                if ctx.run_id != run_id {
+                    error!(
+                        run_id = %run_id,
+                        context_run_id = %ctx.run_id,
+                        "claim response run_id mismatch"
+                    );
+                    return None;
+                }
                 info!(run_id = %run_id, "job claimed");
-                self.tokens
-                    .lock()
-                    .await
-                    .insert(run_id, ctx.sandbox_token.clone());
-                Some(ctx)
+                Some(ClaimedJob::api(ctx))
             }
             Err(RunnerError::AlreadyClaimed) => {
                 info!(run_id = %run_id, "already claimed, skipping");
@@ -199,16 +200,21 @@ impl JobProvider for ApiProvider {
         error: Option<&str>,
         sandbox_id: Option<SandboxId>,
         reuse_result: Option<SandboxReuseResult>,
+        completion_auth: CompletionAuth,
     ) {
-        let token = self.tokens.lock().await.remove(&run_id);
-        let token = match token {
-            Some(t) => t,
-            None => {
+        let token = match completion_auth.into_sandbox_token(run_id) {
+            Ok(token) => token,
+            Err(CompletionAuthError::NotSandbox) => {
+                error!(run_id = %run_id, "completion auth missing sandbox token");
+                return;
+            }
+            Err(CompletionAuthError::RunIdMismatch { auth_run_id }) => {
                 error!(
                     run_id = %run_id,
-                    "no sandbox token for completion, falling back to runner token"
+                    auth_run_id = %auth_run_id,
+                    "completion auth run_id mismatch"
                 );
-                self.api.token.clone()
+                return;
             }
         };
 
@@ -417,6 +423,8 @@ mod tests {
     use httpmock::MockServer;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
 
     fn api_client_for_server(server: &MockServer) -> ApiClient {
         ApiClient::new(
@@ -446,15 +454,105 @@ mod tests {
             profiles: Vec::new(),
             poll_wakeups,
             ably_supervisor: AblySupervisor::disabled(),
-            tokens: tokio::sync::Mutex::new(HashMap::new()),
             held_sessions: tokio::sync::Mutex::new(Vec::new()),
             cancel,
         })
     }
 
     async fn read_http_request(socket: &mut tokio::net::TcpStream) {
-        let mut buf = [0_u8; 4096];
-        let _ = socket.read(&mut buf).await.unwrap();
+        let _ = read_http_request_text(socket).await;
+    }
+
+    async fn read_http_request_text(socket: &mut tokio::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        let header_end = loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break request.len();
+            }
+            request.extend_from_slice(&buf[..n]);
+            if let Some(header_end) = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            {
+                break header_end;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        let request_len = header_end + content_length;
+        loop {
+            if request.len() >= request_len {
+                break;
+            }
+            let n = socket.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    async fn write_http_status_response(socket: &mut tokio::net::TcpStream, status: u16) {
+        let reason = match status {
+            200 => "OK",
+            500 => "Internal Server Error",
+            _ => "Unknown",
+        };
+        let body = if status == 200 { "ok" } else { "failed" };
+        let response = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    async fn complete_sequence_server(
+        statuses: Vec<u16>,
+    ) -> (String, mpsc::UnboundedReceiver<String>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_url = format!("http://{}", listener.local_addr().unwrap());
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
+        let server_task = tokio::spawn(async move {
+            for status in statuses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_http_request_text(&mut socket).await;
+                request_tx.send(request).unwrap();
+                write_http_status_response(&mut socket, status).await;
+            }
+        });
+        (api_url, request_rx, server_task)
+    }
+
+    async fn next_request(requests: &mut mpsc::UnboundedReceiver<String>) -> String {
+        requests
+            .recv()
+            .await
+            .expect("complete request should reach the server")
+    }
+
+    fn assert_complete_authorization(request: &str, token: &str) {
+        let expected = format!("authorization: Bearer {token}");
+        assert!(
+            request
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case(&expected)),
+            "completion request should use sandbox auth; request was:\n{request}",
+        );
     }
 
     async fn write_poll_job_response(socket: &mut tokio::net::TcpStream, run_id: RunId) {
@@ -669,5 +767,341 @@ mod tests {
 
         assert_api_error(err, "complete 500 Internal Server Error: complete failed");
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_claim_rejects_run_id_mismatch() {
+        let server = MockServer::start_async().await;
+        let run_id = RunId::nil();
+        let context_run_id = RunId::new_v4();
+        let claim_path = format!("/api/runners/jobs/{run_id}/claim");
+        let claim_mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path(claim_path.as_str());
+                then.status(200).json_body(serde_json::json!({
+                    "runId": context_run_id,
+                    "prompt": "hello",
+                    "sandboxToken": "claim-sandbox-token",
+                    "workingDir": "/home/user",
+                    "cliAgentType": "claude_code",
+                    "billableFirewalls": []
+                }));
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        let claimed = provider
+            .claim(JobCandidate::new(
+                run_id,
+                crate::profile::DEFAULT_PROFILE.to_string(),
+            ))
+            .await;
+
+        assert!(claimed.is_none());
+        claim_mock.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_claim_carries_sandbox_token_to_completion() {
+        let server = MockServer::start_async().await;
+        let run_id = RunId::nil();
+        let claim_path = format!("/api/runners/jobs/{run_id}/claim");
+        let claim_mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path(claim_path.as_str());
+                then.status(200).json_body(serde_json::json!({
+                    "runId": run_id,
+                    "prompt": "hello",
+                    "sandboxToken": "claim-sandbox-token",
+                    "workingDir": "/home/user",
+                    "cliAgentType": "claude_code",
+                    "billableFirewalls": []
+                }));
+            })
+            .await;
+        let complete_mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path)
+                    .header("authorization", "Bearer claim-sandbox-token");
+                then.status(200);
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        let claimed = provider
+            .claim(JobCandidate::new(
+                run_id,
+                crate::profile::DEFAULT_PROFILE.to_string(),
+            ))
+            .await
+            .expect("claim should succeed");
+        let (context, completion_auth) = claimed.into_parts();
+        assert_eq!(context.sandbox_token, "claim-sandbox-token");
+
+        provider
+            .complete(run_id, 0, None, None, None, completion_auth)
+            .await;
+
+        claim_mock.assert_calls_async(1).await;
+        complete_mock.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_claimed_jobs_complete_out_of_order_with_their_own_tokens() {
+        let server = MockServer::start_async().await;
+        let run_id_a: RunId = "00000000-0000-0000-0000-000000000101".parse().unwrap();
+        let run_id_b: RunId = "00000000-0000-0000-0000-000000000102".parse().unwrap();
+        let claim_path_a = format!("/api/runners/jobs/{run_id_a}/claim");
+        let claim_path_b = format!("/api/runners/jobs/{run_id_b}/claim");
+        let claim_mock_a = server
+            .mock_async(|when, then| {
+                when.method(POST).path(claim_path_a.as_str());
+                then.status(200).json_body(serde_json::json!({
+                    "runId": run_id_a,
+                    "prompt": "first",
+                    "sandboxToken": "sandbox-token-a",
+                    "workingDir": "/home/user",
+                    "cliAgentType": "claude_code",
+                    "billableFirewalls": []
+                }));
+            })
+            .await;
+        let claim_mock_b = server
+            .mock_async(|when, then| {
+                when.method(POST).path(claim_path_b.as_str());
+                then.status(200).json_body(serde_json::json!({
+                    "runId": run_id_b,
+                    "prompt": "second",
+                    "sandboxToken": "sandbox-token-b",
+                    "workingDir": "/home/user",
+                    "cliAgentType": "claude_code",
+                    "billableFirewalls": []
+                }));
+            })
+            .await;
+        let complete_mock_a = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path)
+                    .header("authorization", "Bearer sandbox-token-a")
+                    .json_body(serde_json::json!({
+                        "runId": run_id_a,
+                        "exitCode": 0
+                    }));
+                then.status(200);
+            })
+            .await;
+        let complete_mock_b = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path)
+                    .header("authorization", "Bearer sandbox-token-b")
+                    .json_body(serde_json::json!({
+                        "runId": run_id_b,
+                        "exitCode": 0
+                    }));
+                then.status(200);
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        let claimed_a = provider
+            .claim(JobCandidate::new(
+                run_id_a,
+                crate::profile::DEFAULT_PROFILE.to_string(),
+            ))
+            .await
+            .expect("first claim should succeed");
+        let claimed_b = provider
+            .claim(JobCandidate::new(
+                run_id_b,
+                crate::profile::DEFAULT_PROFILE.to_string(),
+            ))
+            .await
+            .expect("second claim should succeed");
+        let (context_a, completion_auth_a) = claimed_a.into_parts();
+        let (context_b, completion_auth_b) = claimed_b.into_parts();
+
+        provider
+            .complete(context_b.run_id, 0, None, None, None, completion_auth_b)
+            .await;
+        provider
+            .complete(context_a.run_id, 0, None, None, None, completion_auth_a)
+            .await;
+
+        claim_mock_a.assert_calls_async(1).await;
+        claim_mock_b.assert_calls_async(1).await;
+        complete_mock_a.assert_calls_async(1).await;
+        complete_mock_b.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_complete_uses_sandbox_token_from_completion_auth() {
+        let server = MockServer::start_async().await;
+        let run_id = RunId::nil();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path)
+                    .header("authorization", "Bearer sandbox-token");
+                then.status(200);
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        provider
+            .complete(
+                run_id,
+                0,
+                None,
+                None,
+                None,
+                CompletionAuth::sandbox_token(run_id, "sandbox-token".to_string()),
+            )
+            .await;
+
+        mock.assert_calls_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_complete_with_local_auth_does_not_send_request() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path);
+                then.status(200);
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        provider
+            .complete(RunId::nil(), 0, None, None, None, CompletionAuth::local())
+            .await;
+
+        mock.assert_calls_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn api_provider_complete_with_mismatched_auth_does_not_send_request() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(routes::webhooks::agent::complete::COMPLETE.path);
+                then.status(200);
+            })
+            .await;
+        let provider = api_provider_for_test(
+            server.base_url(),
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        provider
+            .complete(
+                RunId::nil(),
+                0,
+                None,
+                None,
+                None,
+                CompletionAuth::sandbox_token(RunId::new_v4(), "sandbox-token".to_string()),
+            )
+            .await;
+
+        mock.assert_calls_async(0).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn api_provider_complete_retries_once_after_failure_and_succeeds() {
+        let (api_url, mut requests, server_task) = complete_sequence_server(vec![500, 200]).await;
+        let run_id = RunId::nil();
+        let provider = api_provider_for_test(
+            api_url,
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        let complete_task = tokio::spawn(async move {
+            provider
+                .complete(
+                    run_id,
+                    0,
+                    None,
+                    None,
+                    None,
+                    CompletionAuth::sandbox_token(run_id, "sandbox-token".to_string()),
+                )
+                .await;
+        });
+
+        let first_request = next_request(&mut requests).await;
+        assert_complete_authorization(&first_request, "sandbox-token");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        let second_request = next_request(&mut requests).await;
+        assert_complete_authorization(&second_request, "sandbox-token");
+
+        complete_task.await.unwrap();
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn api_provider_complete_stops_after_two_failures() {
+        let (api_url, mut requests, server_task) =
+            complete_sequence_server(vec![500, 500, 200]).await;
+        let run_id = RunId::nil();
+        let provider = api_provider_for_test(
+            api_url,
+            CancellationToken::new(),
+            Arc::new(PollWakeups::new(false)),
+        );
+
+        let complete_task = tokio::spawn(async move {
+            provider
+                .complete(
+                    run_id,
+                    1,
+                    Some("boom"),
+                    None,
+                    None,
+                    CompletionAuth::sandbox_token(run_id, "sandbox-token".to_string()),
+                )
+                .await;
+        });
+
+        let first_request = next_request(&mut requests).await;
+        assert_complete_authorization(&first_request, "sandbox-token");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        let second_request = next_request(&mut requests).await;
+        assert_complete_authorization(&second_request, "sandbox-token");
+
+        complete_task.await.unwrap();
+        assert!(
+            requests.try_recv().is_err(),
+            "completion should stop after the retry"
+        );
+        server_task.abort();
+        let _ = server_task.await;
     }
 }

@@ -290,6 +290,59 @@ class TestAuthBaseUrlRewrite:
             await auth.handle_firewall_request(flow, api_entry, vm_info, match_info)
         assert mock_forward.call_args[0][0] == "https://example.com/hook?token=abc&wait=true"
 
+    async def test_url_rewrite_auth_query_overrides_base_and_original_query(
+        self, real_flow, headers, mitm_ctx, tmp_path
+    ):
+        """auth.query is the highest-priority trusted query source for URL rewrites."""
+        flow = real_flow(
+            with_response=False,
+            host="firewall-placeholder.vm3.ai",
+            path="/discord-webhook/hook?api_key=agent&q=test",
+        )
+        flow.metadata["vm_run_id"] = "test-run"
+        api_entry = {
+            "base": "https://firewall-placeholder.vm3.ai/discord-webhook/hook",
+            "auth": {
+                "headers": {},
+                "base": "${{ secrets.WEBHOOK_URL }}",
+                "query": {"api_key": "${{ secrets.API_KEY }}"},
+            },
+        }
+        vm_info = {
+            "runId": "run-1",
+            "sandboxToken": "tok-xyz",
+            "encryptedSecrets": "iv:tag:data",
+            "networkLogPath": str(tmp_path / "net.jsonl"),
+            "billableFirewalls": [],
+        }
+        match_info = {
+            "name": "test",
+            "permission": "send",
+            "rule": "POST /",
+            "params": {},
+            "rel_path": "/",
+        }
+        token_meta = {
+            "headers": {},
+            "base": "https://example.com/hook?api_key=base&region=us",
+            "query": {"api_key": "trusted key"},
+            "resolved_secrets": ["WEBHOOK_URL", "API_KEY"],
+            "refreshed_connectors": [],
+            "refreshed_secrets": [],
+            "cache_hit": False,
+        }
+        mock_forward = AsyncMock(return_value=(200, b"ok", {}))
+        with (
+            patch.object(auth, "get_firewall_headers", AsyncMock(return_value=token_meta)),
+            patch.object(auth, "forward_request", mock_forward),
+            mitm_ctx(),
+        ):
+            await auth.handle_firewall_request(flow, api_entry, vm_info, match_info)
+        assert (
+            mock_forward.call_args[0][0]
+            == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+        )
+
     async def test_no_url_rewrite_when_auth_base_absent(
         self, real_flow, headers, mitm_ctx, tmp_path
     ):
@@ -373,6 +426,233 @@ class TestBuildRewriteUrl:
             "extra=1",
         )
         assert url == "https://example.com/hook/sub?token=abc&extra=1"
+
+    def test_original_duplicate_query_key_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_original_duplicate_query_key_followed_by_empty_segment_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "token=attacker&&wait=true",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_original_duplicate_query_key_preceded_by_empty_segment_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "wait=true&&token=attacker",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_all_original_duplicate_query_keys_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "token=first&token=second",
+        )
+        assert url == "https://example.com/hook?token=secret"
+
+    def test_original_encoded_duplicate_query_key_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "to%6ben=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_original_duplicate_of_encoded_trusted_base_query_key_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?to%6ben=secret",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?to%6ben=secret&wait=true"
+
+    def test_original_plus_encoded_duplicate_query_key_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api+key=secret",
+            {"rel_path": "/"},
+            "api%20key=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?api+key=secret&wait=true"
+
+    def test_original_semicolon_duplicate_query_key_dropped(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "wait=true;token=attacker",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_original_semicolon_duplicate_before_kept_pair_uses_source_separator(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "token=attacker;wait=true",
+        )
+        assert url == "https://example.com/hook?token=secret&wait=true"
+
+    def test_original_semicolon_duplicate_between_kept_pairs_uses_safe_separator(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=secret",
+            {"rel_path": "/"},
+            "keep=1;token=attacker;wait=true",
+        )
+        assert url == "https://example.com/hook?token=secret&keep=1&wait=true"
+
+    def test_duplicate_trusted_base_query_keys_preserved(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=first&token=second",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token=first&token=second&wait=true"
+
+    def test_duplicate_trusted_base_query_keys_with_semicolon_preserved(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=first;token=second",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token=first;token=second&wait=true"
+
+    def test_blank_trusted_base_query_value_is_authoritative(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token=",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token=&wait=true"
+
+    def test_valueless_trusted_base_query_key_is_authoritative(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?token",
+            {"rel_path": "/"},
+            "token=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?token&wait=true"
+
+    def test_empty_trusted_base_query_key_is_authoritative(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?=secret",
+            {"rel_path": "/"},
+            "=attacker&wait=true",
+        )
+        assert url == "https://example.com/hook?=secret&wait=true"
+
+    def test_empty_trusted_base_query_segments_do_not_block_empty_original_key(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?&&region=us",
+            {"rel_path": "/"},
+            "=agent&q=test",
+        )
+        assert url == "https://example.com/hook?&&region=us&=agent&q=test"
+
+    def test_auth_query_overrides_base_and_original_query(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api_key=base&region=us",
+            {"rel_path": "/"},
+            "api_key=agent&q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_empty_key_overrides_base_and_original_empty_keys(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?=base&region=us",
+            {"rel_path": "/"},
+            "=agent&q=test",
+            {"": "trusted"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&=trusted"
+
+    def test_auth_query_overrides_base_query_without_leading_empty_segment(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api_key=base&&region=us",
+            {"rel_path": "/"},
+            "q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_overrides_base_query_without_trailing_empty_segment(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?region=us&&api_key=base",
+            {"rel_path": "/"},
+            "q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_overrides_all_lower_priority_duplicates(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api_key=base",
+            {"rel_path": "/"},
+            "api_key=agent",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?api_key=trusted+key"
+
+    def test_auth_query_overrides_duplicate_trusted_base_query_keys(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api_key=first&api_key=second&region=us",
+            {"rel_path": "/"},
+            "api_key=agent&q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_overrides_encoded_base_and_original_query_keys(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api%5Fkey=base&region=us",
+            {"rel_path": "/"},
+            "api%5fkey=agent&q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_overrides_plus_encoded_lower_priority_keys(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api+key=base&region=us",
+            {"rel_path": "/"},
+            "api%20key=agent&q=test",
+            {"api key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api+key=trusted+key"
+
+    def test_auth_query_overrides_semicolon_base_without_prefixing_kept_pair(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?api_key=base;region=us",
+            {"rel_path": "/"},
+            "q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_overrides_semicolon_base_between_kept_pairs(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?tenant=one;api_key=base;region=us",
+            {"rel_path": "/"},
+            "q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?tenant=one&region=us&q=test&api_key=trusted+key"
+
+    def test_auth_query_filter_preserves_existing_semicolon_value(self):
+        url = url_utils.build_rewrite_url(
+            "https://example.com/hook?redirect=a;b&api_key=base&region=us",
+            {"rel_path": "/"},
+            "q=test",
+            {"api_key": "trusted key"},
+        )
+        assert url == "https://example.com/hook?redirect=a;b&region=us&q=test&api_key=trusted+key"
 
     def test_trailing_slash_on_base_deduped(self):
         url = url_utils.build_rewrite_url(

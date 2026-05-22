@@ -233,13 +233,119 @@ def get_original_url(flow: http.HTTPFlow) -> str:
     return get_trusted_authority(flow).url
 
 
-def build_rewrite_url(resolved_base: str, match_info: dict, orig_query: str) -> str:
+_QueryPair = tuple[str, str]
+
+
+def _split_query_pairs(query: str) -> list[_QueryPair]:
+    if not query:
+        return []
+    pairs: list[_QueryPair] = []
+    separator = ""
+    start = 0
+    for index, char in enumerate(query):
+        if char in ("&", ";"):
+            pairs.append((separator, query[start:index]))
+            separator = char
+            start = index + 1
+    pairs.append((separator, query[start:]))
+    return pairs
+
+
+def _query_pair_key(pair: _QueryPair) -> str:
+    _, raw_pair = pair
+    raw_key, _, _ = raw_pair.partition("=")
+    return urllib.parse.unquote_plus(raw_key)
+
+
+def _query_pair_keys(pairs: list[_QueryPair]) -> set[str]:
+    return {_query_pair_key(pair) for pair in pairs if pair[1]}
+
+
+def _filter_query_pairs(
+    pairs: list[_QueryPair],
+    blocked_keys: set[str],
+) -> list[_QueryPair]:
+    if not blocked_keys:
+        return pairs
+    filtered: list[_QueryPair] = []
+    removed_since_last_kept = False
+    for separator, raw_pair in pairs:
+        if not raw_pair:
+            if not removed_since_last_kept:
+                filtered.append((separator, raw_pair))
+            continue
+        if _query_pair_key((separator, raw_pair)) in blocked_keys:
+            while filtered and not filtered[-1][1]:
+                filtered.pop()
+            removed_since_last_kept = True
+            continue
+        if removed_since_last_kept and filtered:
+            separator = "&"
+        filtered.append((separator, raw_pair))
+        removed_since_last_kept = False
+    return filtered
+
+
+def _join_query_pairs(pairs: list[_QueryPair]) -> str:
+    query_parts: list[str] = []
+    for index, (separator, raw_pair) in enumerate(pairs):
+        if index == 0:
+            query_parts.append(raw_pair)
+            continue
+        query_parts.append(f"{separator or '&'}{raw_pair}")
+    return "".join(query_parts)
+
+
+def _drop_leading_separator(pairs: list[_QueryPair]) -> list[_QueryPair]:
+    if not pairs:
+        return []
+    _, raw_pair = pairs[0]
+    return [("", raw_pair), *pairs[1:]]
+
+
+def _join_query_sources(*sources: list[_QueryPair]) -> str:
+    source_queries = [
+        _join_query_pairs(_drop_leading_separator(source)) for source in sources if source
+    ]
+    return "&".join(query for query in source_queries if query)
+
+
+def _encode_query_pairs(query: dict[str, str] | None) -> list[_QueryPair]:
+    if not query:
+        return []
+    return _split_query_pairs(urllib.parse.urlencode(query))
+
+
+def _merge_rewrite_query(
+    base_query: str,
+    orig_query: str,
+    resolved_query: dict[str, str] | None,
+) -> str:
+    base_pairs = _split_query_pairs(base_query)
+    orig_pairs = _split_query_pairs(orig_query)
+    auth_keys = set(resolved_query or {})
+
+    filtered_base_pairs = _filter_query_pairs(base_pairs, auth_keys)
+    blocked_orig_keys = auth_keys | _query_pair_keys(filtered_base_pairs)
+    filtered_orig_pairs = _filter_query_pairs(orig_pairs, blocked_orig_keys)
+    auth_pairs = _encode_query_pairs(resolved_query)
+
+    return _join_query_sources(filtered_base_pairs, filtered_orig_pairs, auth_pairs)
+
+
+def build_rewrite_url(
+    resolved_base: str,
+    match_info: dict,
+    orig_query: str,
+    resolved_query: dict[str, str] | None = None,
+) -> str:
     """Build the final URL for auth.base URL rewriting.
 
     Combines the resolved base URL (with credentials in path), the relative
-    path from the firewall match, and query strings from both base and
-    original request. ``orig_query`` is the raw query string of the
-    incoming request (no leading ``?``).
+    path from the firewall match, and query strings from trusted auth data
+    and the original request. ``orig_query`` is the raw query string of the
+    incoming request (no leading ``?``). Query key precedence is
+    ``resolved_query`` > resolved base query > original request query.
     """
     base_parsed = urllib.parse.urlparse(resolved_base)
 
@@ -247,13 +353,7 @@ def build_rewrite_url(resolved_base: str, match_info: dict, orig_query: str) -> 
     rel_path = match_info.get("rel_path", "/")
     base_path = base_parsed.path.rstrip("/") + rel_path if rel_path != "/" else base_parsed.path
 
-    # Merge query strings: base qs + original request qs
-    qs_parts: list[str] = []
-    if base_parsed.query:
-        qs_parts.append(base_parsed.query)
-    if orig_query:
-        qs_parts.append(orig_query)
-    merged_qs = "&".join(qs_parts)
+    merged_qs = _merge_rewrite_query(base_parsed.query, orig_query, resolved_query)
 
     return urllib.parse.urlunparse(
         (base_parsed.scheme, base_parsed.netloc, base_path, "", merged_qs, "")

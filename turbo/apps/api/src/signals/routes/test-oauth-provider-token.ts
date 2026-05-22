@@ -16,11 +16,13 @@ import {
   parseScenarioFromRefreshToken,
   TEST_OAUTH_CLIENT_ID,
   TEST_OAUTH_CLIENT_SECRET,
+  TEST_OAUTH_DEVICE_CLIENT_ID,
   testEndpointNotFoundResponse,
   type TestOAuthScenario,
 } from "./test-oauth-provider-helpers";
 
 const DEFAULT_EXPIRES_IN = 3600;
+const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 function mintTokensForScenario(
   scenario: TestOAuthScenario,
@@ -87,6 +89,65 @@ function handleRefreshToken(refreshToken: string | null) {
   return { status: 200 as const, body: mintTokensForScenario(resolved) };
 }
 
+function deviceGrantErrorForDeviceCode(
+  deviceCode: string,
+): ReturnType<typeof errorResponse> | null {
+  if (deviceCode === "pending") {
+    return errorResponse(400, "authorization_pending");
+  }
+  if (deviceCode === "slow-down") {
+    return errorResponse(400, "slow_down");
+  }
+  if (deviceCode === "denied") {
+    return errorResponse(
+      400,
+      "access_denied",
+      "User denied the device authorization request",
+    );
+  }
+  if (deviceCode === "expired") {
+    return errorResponse(400, "expired_token", "Device authorization expired");
+  }
+  if (deviceCode === "error") {
+    return errorResponse(
+      400,
+      "invalid_request",
+      "Synthetic device authorization error",
+    );
+  }
+  return null;
+}
+
+function handleDeviceCode(body: URLSearchParams) {
+  const clientId = body.get("client_id");
+  if (clientId !== TEST_OAUTH_DEVICE_CLIENT_ID) {
+    return errorResponse(401, "invalid_client");
+  }
+
+  const deviceCode = body.get("device_code");
+  if (!deviceCode) {
+    return errorResponse(400, "invalid_request", "device_code required");
+  }
+
+  const error = deviceGrantErrorForDeviceCode(deviceCode);
+  if (error) {
+    return error;
+  }
+  if (!deviceCode.startsWith(`test-device:${clientId}:`)) {
+    return errorResponse(400, "invalid_grant", "unknown device_code");
+  }
+
+  return {
+    status: 200 as const,
+    body: {
+      access_token: `test-device-access:${clientId}:${deviceCode}`,
+      token_type: "Bearer" as const,
+      expires_in: DEFAULT_EXPIRES_IN,
+      scope: "read",
+    },
+  };
+}
+
 function isPreviewSyntheticRefreshRequest(body: URLSearchParams): boolean {
   if (env("ENV") !== "preview") {
     return false;
@@ -101,9 +162,14 @@ function isPreviewSyntheticRefreshRequest(body: URLSearchParams): boolean {
 
 const token$ = command(async ({ get }, signal: AbortSignal) => {
   const request = get(request$);
+  const testEndpointAllowed = isTestEndpointAllowed(request);
+  if (!testEndpointAllowed && env("ENV") !== "preview") {
+    return testEndpointNotFoundResponse();
+  }
+
   const contentType = request.header("content-type") ?? "";
   if (!contentType.includes("application/x-www-form-urlencoded")) {
-    if (!isTestEndpointAllowed(request)) {
+    if (!testEndpointAllowed) {
       return testEndpointNotFoundResponse();
     }
     return errorResponse(400, "invalid_request", "expected form body");
@@ -113,14 +179,15 @@ const token$ = command(async ({ get }, signal: AbortSignal) => {
   signal.throwIfAborted();
 
   const body = new URLSearchParams(text);
-  if (
-    !isTestEndpointAllowed(request) &&
-    !isPreviewSyntheticRefreshRequest(body)
-  ) {
+  if (!testEndpointAllowed && !isPreviewSyntheticRefreshRequest(body)) {
     return testEndpointNotFoundResponse();
   }
 
   const grantType = body.get("grant_type");
+  if (grantType === DEVICE_CODE_GRANT_TYPE) {
+    return handleDeviceCode(body);
+  }
+
   const clientId = body.get("client_id");
   const clientSecret = body.get("client_secret");
 

@@ -19,6 +19,7 @@ import {
 import {
   getConnectorTags,
   isGoogleOAuthConnector,
+  isOAuthAuthCodeConnectorType,
 } from "@vm0/connectors/connector-utils";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import {
@@ -47,9 +48,9 @@ import {
 } from "../../signals/zero-page/zero-onboarding-actions.ts";
 import {
   allConnectorTypes$,
-  connectConnector$,
+  connectConnectorOAuthAuthCode$,
   matchesConnectorSearch,
-  pollingConnectorType$,
+  pollingOAuthAuthCodeConnectorType$,
   selectedConnectorType$,
   setSelectedConnectorType$,
   setPermissionDialogType$,
@@ -225,8 +226,8 @@ function ConnectStepContent() {
   const effectiveConnectors =
     useLastResolved(onboardingEffectiveConnectors$) ?? [];
   const connectorTypesLoadable = useLastLoadable(allConnectorTypes$);
-  const pollingType = useGet(pollingConnectorType$);
-  const connect = useSet(connectConnector$);
+  const pollingType = useGet(pollingOAuthAuthCodeConnectorType$);
+  const connect = useSet(connectConnectorOAuthAuthCode$);
   const setSelectedConnector = useSet(setSelectedConnectorType$);
   const clearPermissionDialog = useSet(setPermissionDialogType$);
   const pageSignal = useGet(pageSignal$);
@@ -261,7 +262,12 @@ function ConnectStepContent() {
     if (connector?.connected) {
       return;
     }
+    const hasAvailableOAuth =
+      connector?.availableAuthMethods.includes("oauth") ?? true;
+    const canLaunchOAuthAuthCode =
+      hasAvailableOAuth && isOAuthAuthCodeConnectorType(type);
     if (
+      !canLaunchOAuthAuthCode ||
       connector?.availableAuthMethods.includes("api-token") ||
       isGoogleOAuthConnector(type)
     ) {

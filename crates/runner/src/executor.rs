@@ -38,6 +38,16 @@ use crate::ids::RunId;
 
 /// Maximum wall-clock time for a single job (2 hours).
 const JOB_TIMEOUT: Duration = Duration::from_secs(7200);
+/// Maximum time to spend writing the guest cancel frame after a user cancel.
+const PROCESS_CANCEL_WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+/// Grace period for the guest to report a terminal status after cancel is sent.
+/// This covers vsock-guest's 5s stdout/stderr drain deadline after it kills
+/// the cancelled process.
+const PROCESS_CANCEL_TERMINAL_GRACE_TIMEOUT: Duration = Duration::from_secs(6);
+const PROCESS_CANCEL_TIMEOUTS: ProcessCancelTimeouts = ProcessCancelTimeouts {
+    write: PROCESS_CANCEL_WRITE_TIMEOUT,
+    terminal_grace: PROCESS_CANCEL_TERMINAL_GRACE_TIMEOUT,
+};
 /// Exit code when a process is killed by SIGKILL (128 + 9).
 const EXIT_SIGKILL: i32 = 137;
 /// Raw SIGKILL signal number.
@@ -166,6 +176,12 @@ impl AgentStdoutStreamDiagnostics {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ProcessCancelTimeouts {
+    write: Duration,
+    terminal_grace: Duration,
+}
+
 struct AgentExecutionResult {
     failure: Option<ExecutionFailure>,
     stdout_stream_diagnostics: AgentStdoutStreamDiagnostics,
@@ -214,6 +230,12 @@ fn non_empty_failure_error(exit_code: i32, error: String) -> String {
 
 fn agent_exit_failure_message(exit_code: i32) -> String {
     format!("Agent exited with code {exit_code}")
+}
+
+fn cancelled_agent_process_exit(pid: u32, stream_overflowed: bool) -> sandbox::ProcessExit {
+    let mut exit = sandbox::ProcessExit::new(pid, EXIT_SIGKILL, Vec::new(), Vec::new());
+    exit.stream_overflowed = stream_overflowed;
+    exit
 }
 
 /// Execute a single job inside a **new** Firecracker VM.
@@ -656,6 +678,27 @@ async fn run_in_sandbox(
     telemetry: &mut JobTelemetry,
     cancel: CancellationToken,
 ) -> RunnerResult<AgentExecutionResult> {
+    run_in_sandbox_with_process_cancel_timeouts(
+        sandbox,
+        context,
+        config,
+        start,
+        telemetry,
+        cancel,
+        PROCESS_CANCEL_TIMEOUTS,
+    )
+    .await
+}
+
+async fn run_in_sandbox_with_process_cancel_timeouts(
+    sandbox: &dyn Sandbox,
+    context: &ExecutionContext,
+    config: &ExecutorConfig,
+    start: RunStart<'_>,
+    telemetry: &mut JobTelemetry,
+    cancel: CancellationToken,
+    process_cancel_timeouts: ProcessCancelTimeouts,
+) -> RunnerResult<AgentExecutionResult> {
     // 1. Fix guest clock and reseed entropy (must happen before HTTPS calls).
     //    Needed after snapshot restore (frozen clock) and after idle reuse (drifted clock).
     if start.restore_guest_state {
@@ -770,14 +813,87 @@ async fn run_in_sandbox(
         .take_stdout_receiver()
         .map(|stdout_rx| tokio::spawn(drain_stdout_to_file(stdout_rx, host_log_path)));
 
-    // 6. Wait for exit (or cancellation).
-    // On cancel we return immediately — the caller (execute_new_sandbox) will
-    // call sandbox.stop() + factory.destroy() in its cleanup path.
-    let (result, wait_cancelled) = tokio::select! {
-        result = sandbox.wait_process(handle, JOB_TIMEOUT) => (result, false),
+    // 6. Wait for exit (or cancellation). On cancel, ask the guest to cancel the
+    // supervised process and briefly wait for its terminal status so the vsock
+    // operation can be removed before sandbox cleanup closes the connection.
+    let process_pid = handle.pid;
+    let process_cancel = handle.take_cancel_handle();
+    let wait_process = sandbox.wait_process(handle, JOB_TIMEOUT);
+    tokio::pin!(wait_process);
+    let (result, wait_cancelled, abort_stdout_drain) = tokio::select! {
+        biased;
+        result = &mut wait_process => {
+            let abort_stdout_drain = result.is_err();
+            (result, false, abort_stdout_drain)
+        }
         () = cancel.cancelled() => {
-            info!(run_id = %context.run_id, "cancel received, aborting sandbox wait");
-            (Ok(sandbox::ProcessExit::new(0, EXIT_SIGKILL, Vec::new(), Vec::new())), true)
+            info!(run_id = %context.run_id, "cancel received, cancelling guest process");
+            let cancelled_exit = || -> sandbox::Result<sandbox::ProcessExit> {
+                Ok(cancelled_agent_process_exit(process_pid, false))
+            };
+            match process_cancel {
+                Some(process_cancel) => match process_cancel.cancel(process_cancel_timeouts.write).await {
+                    Ok(()) => {
+                        match tokio::time::timeout(
+                            process_cancel_timeouts.terminal_grace,
+                            &mut wait_process,
+                        )
+                        .await
+                        {
+                            Ok(Ok(exit)) => {
+                                info!(
+                                    run_id = %context.run_id,
+                                    pid = process_pid,
+                                    "cancelled guest process reached terminal status"
+                                );
+                                (
+                                    Ok(cancelled_agent_process_exit(
+                                        process_pid,
+                                        exit.stream_overflowed,
+                                    )),
+                                    true,
+                                    false,
+                                )
+                            }
+                            Ok(Err(error)) => {
+                                warn!(
+                                    run_id = %context.run_id,
+                                    pid = process_pid,
+                                    error = %error,
+                                    "guest process wait failed after cancellation"
+                                );
+                                (cancelled_exit(), true, true)
+                            }
+                            Err(_) => {
+                                warn!(
+                                    run_id = %context.run_id,
+                                    pid = process_pid,
+                                    timeout_ms = process_cancel_timeouts.terminal_grace.as_millis(),
+                                    "timed out waiting for cancelled guest process"
+                                );
+                                (cancelled_exit(), true, true)
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            run_id = %context.run_id,
+                            pid = process_pid,
+                            error = %error,
+                            "failed to send guest process cancellation"
+                        );
+                        (cancelled_exit(), true, true)
+                    }
+                },
+                None => {
+                    warn!(
+                        run_id = %context.run_id,
+                        pid = process_pid,
+                        "sandbox does not support guest process cancellation"
+                    );
+                    (cancelled_exit(), true, true)
+                }
+            }
         }
     };
 
@@ -786,7 +902,7 @@ async fn run_in_sandbox(
     // prevent blocking indefinitely on the drain task.
     let mut stdout_drain_report = StdoutDrainReport::default();
     if let Some(task) = stream_task {
-        if wait_cancelled || result.is_err() {
+        if abort_stdout_drain || result.is_err() {
             task.abort();
             let _ = task.await;
         } else {
@@ -1960,6 +2076,8 @@ mod tests {
     use async_trait::async_trait;
     use sandbox_mock::MockSandboxFactory;
     use std::sync::Arc;
+
+    const RUN_IN_SANDBOX_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn api_storage(name: &str, mount_path: &str, version: &str, archive_url: &str) -> StorageEntry {
         StorageEntry {
@@ -3848,6 +3966,63 @@ mod tests {
         Ok((outcome.exit_code(), outcome.error().map(ToOwned::to_owned)))
     }
 
+    async fn create_overridden_sandbox(
+        overrides: Arc<sandbox_mock::MockSandboxOverrides>,
+    ) -> Box<dyn Sandbox> {
+        sandbox_mock::MockSandboxFactory::with_overrides(overrides)
+            .create(SandboxConfig {
+                id: SandboxId::new_v4(),
+                resources: sandbox::ResourceLimits {
+                    cpu_count: 2,
+                    memory_mb: 2048,
+                },
+                device_rate_limits: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    fn spawn_run_in_sandbox_test(
+        sandbox: Box<dyn Sandbox>,
+        ctx: ExecutionContext,
+        config: ExecutorConfig,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<RunnerResult<AgentExecutionResult>> {
+        spawn_run_in_sandbox_test_with_timeouts(
+            sandbox,
+            ctx,
+            config,
+            cancel,
+            PROCESS_CANCEL_TIMEOUTS,
+        )
+    }
+
+    fn spawn_run_in_sandbox_test_with_timeouts(
+        sandbox: Box<dyn Sandbox>,
+        ctx: ExecutionContext,
+        config: ExecutorConfig,
+        cancel: tokio_util::sync::CancellationToken,
+        process_cancel_timeouts: ProcessCancelTimeouts,
+    ) -> tokio::task::JoinHandle<RunnerResult<AgentExecutionResult>> {
+        tokio::spawn(async move {
+            let mut telemetry = test_telemetry(&config, &ctx);
+            run_in_sandbox_with_process_cancel_timeouts(
+                &*sandbox,
+                &ctx,
+                &config,
+                RunStart {
+                    restore_guest_state: false,
+                    reuse_result: SandboxReuseResult::PoolMiss,
+                    prev_storage: None,
+                },
+                &mut telemetry,
+                cancel,
+                process_cancel_timeouts,
+            )
+            .await
+        })
+    }
+
     #[tokio::test]
     async fn run_in_sandbox_preserves_wait_result_when_cancel_arrives_after_wait() {
         let dir = tempfile::tempdir().unwrap();
@@ -3899,6 +4074,193 @@ mod tests {
                 chunk_truncated: true,
                 stream_overflowed: false,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_sandbox_cancels_guest_process_and_waits_for_terminal_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let wait_gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
+            Arc::clone(&wait_gate),
+        ));
+        overrides.push_start_process_stdout_chunks(vec![ProcessOutputChunk {
+            bytes: b"partial stdout".to_vec(),
+            truncated: true,
+        }]);
+        let mut exit = ProcessExit::new(1, 0, Vec::new(), Vec::new());
+        exit.stream_overflowed = true;
+        overrides.push_wait_process_exit(exit);
+        let sandbox = create_overridden_sandbox(Arc::clone(&overrides)).await;
+        let ctx = minimal_context();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_task = spawn_run_in_sandbox_test(sandbox, ctx, config, cancel.clone());
+        cancel.cancel();
+
+        assert!(
+            overrides
+                .wait_for_process_cancel_calls(1, RUN_IN_SANDBOX_TEST_TIMEOUT)
+                .await
+        );
+
+        let result = tokio::time::timeout(RUN_IN_SANDBOX_TEST_TIMEOUT, run_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            overrides.process_cancel_calls().as_slice(),
+            [sandbox_mock::ProcessCancelCall {
+                timeout: PROCESS_CANCEL_WRITE_TIMEOUT
+            }]
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.exit_code),
+            Some(EXIT_SIGKILL)
+        );
+        assert_eq!(
+            result.stdout_stream_diagnostics,
+            AgentStdoutStreamDiagnostics {
+                chunk_truncated: true,
+                stream_overflowed: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_sandbox_returns_cancelled_when_cancel_handle_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let wait_gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
+            wait_gate,
+        ));
+        overrides.set_process_cancel_supported(false);
+        let sandbox = create_overridden_sandbox(Arc::clone(&overrides)).await;
+        let ctx = minimal_context();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_task = spawn_run_in_sandbox_test(sandbox, ctx, config, cancel.clone());
+        cancel.cancel();
+
+        let result = tokio::time::timeout(RUN_IN_SANDBOX_TEST_TIMEOUT, run_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert!(overrides.process_cancel_calls().is_empty());
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.exit_code),
+            Some(EXIT_SIGKILL)
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_sandbox_returns_cancelled_when_process_cancel_send_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let wait_gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
+            wait_gate,
+        ));
+        overrides.push_process_cancel_error("cancel write failed");
+        let sandbox = create_overridden_sandbox(Arc::clone(&overrides)).await;
+        let ctx = minimal_context();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_task = spawn_run_in_sandbox_test(sandbox, ctx, config, cancel.clone());
+        cancel.cancel();
+
+        let result = tokio::time::timeout(RUN_IN_SANDBOX_TEST_TIMEOUT, run_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            overrides.process_cancel_calls().as_slice(),
+            [sandbox_mock::ProcessCancelCall {
+                timeout: PROCESS_CANCEL_WRITE_TIMEOUT
+            }]
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.exit_code),
+            Some(EXIT_SIGKILL)
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_sandbox_returns_cancelled_when_wait_fails_after_process_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let wait_gate = Arc::new(tokio::sync::Notify::new());
+        let mut overrides = sandbox_mock::MockSandboxOverrides::with_wait_process_gate(wait_gate);
+        overrides.set_wait_process_error("wait failed after cancel");
+        let overrides = Arc::new(overrides);
+        let sandbox = create_overridden_sandbox(Arc::clone(&overrides)).await;
+        let ctx = minimal_context();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_task = spawn_run_in_sandbox_test(sandbox, ctx, config, cancel.clone());
+        cancel.cancel();
+
+        let result = tokio::time::timeout(RUN_IN_SANDBOX_TEST_TIMEOUT, run_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            overrides.process_cancel_calls().as_slice(),
+            [sandbox_mock::ProcessCancelCall {
+                timeout: PROCESS_CANCEL_WRITE_TIMEOUT
+            }]
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.exit_code),
+            Some(EXIT_SIGKILL)
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_sandbox_returns_cancelled_when_terminal_grace_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_executor_config(dir.path()).await;
+        let wait_gate = Arc::new(tokio::sync::Notify::new());
+        let overrides = Arc::new(sandbox_mock::MockSandboxOverrides::with_wait_process_gate(
+            wait_gate,
+        ));
+        overrides.set_process_cancel_releases_wait_gate(false);
+        let sandbox = create_overridden_sandbox(Arc::clone(&overrides)).await;
+        let ctx = minimal_context();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_task = spawn_run_in_sandbox_test_with_timeouts(
+            sandbox,
+            ctx,
+            config,
+            cancel.clone(),
+            ProcessCancelTimeouts {
+                write: PROCESS_CANCEL_WRITE_TIMEOUT,
+                terminal_grace: Duration::ZERO,
+            },
+        );
+        cancel.cancel();
+
+        let result = tokio::time::timeout(RUN_IN_SANDBOX_TEST_TIMEOUT, run_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            overrides.process_cancel_calls().as_slice(),
+            [sandbox_mock::ProcessCancelCall {
+                timeout: PROCESS_CANCEL_WRITE_TIMEOUT
+            }]
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.exit_code),
+            Some(EXIT_SIGKILL)
         );
     }
 

@@ -33,6 +33,7 @@ export interface GithubLabelListenerForm {
   readonly agentId: string;
   readonly triggerMode: GithubLabelTriggerMode;
   readonly prompt: string;
+  readonly enabled: boolean;
 }
 
 interface UpdateGithubLabelListenerInput {
@@ -47,6 +48,7 @@ interface GithubIntegrationStatus {
 
 const internalReload$ = state(0);
 const internalAddListenerDialogOpen$ = state(false);
+const internalEditingListenerId$ = state<string | null>(null);
 const internalGithubIntegrationStatus$ = state<GithubIntegrationStatus | null>(
   null,
 );
@@ -55,6 +57,7 @@ const internalLabelListenerForm$ = state<GithubLabelListenerForm>({
   agentId: "",
   triggerMode: "created_by_me",
   prompt: "",
+  enabled: true,
 });
 
 const GITHUB_CHANGED_TOPIC = "github:changed";
@@ -156,9 +159,19 @@ export const githubAddListenerDialogOpen$ = computed((get) => {
   return get(internalAddListenerDialogOpen$);
 });
 
+export const githubEditingListenerId$ = computed((get) => {
+  return get(internalEditingListenerId$);
+});
+
 export const setGithubAddListenerDialogOpen$ = command(
   ({ set }, open: boolean) => {
     set(internalAddListenerDialogOpen$, open);
+  },
+);
+
+export const setGithubEditingListenerId$ = command(
+  ({ set }, listenerId: string | null) => {
+    set(internalEditingListenerId$, listenerId);
   },
 );
 
@@ -176,6 +189,7 @@ export const resetGithubLabelListenerForm$ = command(({ set }) => {
     agentId: "",
     triggerMode: "created_by_me",
     prompt: "",
+    enabled: true,
   });
 });
 

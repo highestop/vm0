@@ -2766,6 +2766,13 @@
       "when": 1779800000000,
       "tag": "0394_drop_chat_messages_goal",
       "breakpoints": true
+    },
+    {
+      "idx": 395,
+      "version": "7",
+      "when": 1779810000000,
+      "tag": "0395_pale_magneto",
+      "breakpoints": true
     }
   ]
 }

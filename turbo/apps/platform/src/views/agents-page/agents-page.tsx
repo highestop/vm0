@@ -178,11 +178,10 @@ function AgentGridView() {
   const agents =
     agentsLoadable.state === "hasData" ? agentsLoadable.data : null;
 
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {loading &&
-        (!agents || agents.length === 0) &&
-        [1, 2, 3].map((i) => {
+  if (loading && (!agents || agents.length === 0)) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {[1, 2, 3].map((i) => {
           return (
             <Card key={i} className="zero-card">
               <CardContent className="p-4">
@@ -196,19 +195,59 @@ function AgentGridView() {
             </Card>
           );
         })}
+      </div>
+    );
+  }
 
-      {agents?.map((agent) => {
-        return (
-          <Link
-            key={agent.id}
-            pathname="/agents/:agentId"
-            options={{ pathParams: { agentId: agent.id } }}
-            className="block no-underline text-inherit"
-          >
-            <AgentCard agent={agent} />
-          </Link>
-        );
-      })}
+  const teamAgents =
+    agents?.filter((a) => {
+      return a.visibility !== "private";
+    }) ?? [];
+  const privateAgents =
+    agents?.filter((a) => {
+      return a.visibility === "private";
+    }) ?? [];
+
+  return (
+    <div className="flex flex-col gap-6">
+      {teamAgents.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Team</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {teamAgents.map((agent) => {
+              return (
+                <Link
+                  key={agent.id}
+                  pathname="/agents/:agentId"
+                  options={{ pathParams: { agentId: agent.id } }}
+                  className="block no-underline text-inherit"
+                >
+                  <AgentCard agent={agent} />
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {privateAgents.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Private</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {privateAgents.map((agent) => {
+              return (
+                <Link
+                  key={agent.id}
+                  pathname="/agents/:agentId"
+                  options={{ pathParams: { agentId: agent.id } }}
+                  className="block no-underline text-inherit"
+                >
+                  <AgentCard agent={agent} />
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -219,11 +258,10 @@ function AgentListView() {
   const agents =
     agentsLoadable.state === "hasData" ? agentsLoadable.data : null;
 
-  return (
-    <div className="zero-card overflow-hidden">
-      {loading &&
-        (!agents || agents.length === 0) &&
-        [1, 2, 3].map((i, _, arr) => {
+  if (loading && (!agents || agents.length === 0)) {
+    return (
+      <div className="zero-card overflow-hidden">
+        {[1, 2, 3].map((i, _, arr) => {
           return (
             <div key={i}>
               <div className="flex items-center gap-3 px-5 py-4 animate-pulse">
@@ -239,19 +277,65 @@ function AgentListView() {
             </div>
           );
         })}
+      </div>
+    );
+  }
 
-      {agents?.map((agent, idx) => {
-        return (
-          <Link
-            key={agent.id}
-            pathname="/agents/:agentId"
-            options={{ pathParams: { agentId: agent.id } }}
-            className="block no-underline text-inherit"
-          >
-            <AgentListRow agent={agent} isLast={idx === agents.length - 1} />
-          </Link>
-        );
-      })}
+  const teamAgents =
+    agents?.filter((a) => {
+      return a.visibility !== "private";
+    }) ?? [];
+  const privateAgents =
+    agents?.filter((a) => {
+      return a.visibility === "private";
+    }) ?? [];
+
+  return (
+    <div className="flex flex-col gap-6">
+      {teamAgents.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Team</h2>
+          <div className="zero-card overflow-hidden">
+            {teamAgents.map((agent, idx) => {
+              return (
+                <Link
+                  key={agent.id}
+                  pathname="/agents/:agentId"
+                  options={{ pathParams: { agentId: agent.id } }}
+                  className="block no-underline text-inherit"
+                >
+                  <AgentListRow
+                    agent={agent}
+                    isLast={idx === teamAgents.length - 1}
+                  />
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {privateAgents.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Private</h2>
+          <div className="zero-card overflow-hidden">
+            {privateAgents.map((agent, idx) => {
+              return (
+                <Link
+                  key={agent.id}
+                  pathname="/agents/:agentId"
+                  options={{ pathParams: { agentId: agent.id } }}
+                  className="block no-underline text-inherit"
+                >
+                  <AgentListRow
+                    agent={agent}
+                    isLast={idx === privateAgents.length - 1}
+                  />
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -467,7 +551,7 @@ type AgentProps = {
     id: string;
     displayName?: string | null;
     description?: string | null;
-    visibility?: "public" | "private";
+    visibility?: "public" | "private" | null;
   };
 };
 
@@ -475,6 +559,7 @@ function AgentCard({ agent }: AgentProps) {
   const defaultAgentId = useLastResolved(defaultAgentId$);
   const lead = agent.id === defaultAgentId;
   const displayName = agent.displayName ?? agent.id;
+  const isPrivate = agent.visibility === "private";
   const description = defaultAgentId
     ? agent.description || (lead ? "Your core agent" : "Sub-agent")
     : "";
@@ -487,15 +572,16 @@ function AgentCard({ agent }: AgentProps) {
           className="h-10 w-10 shrink-0 rounded-full object-cover object-top"
         />
         <div className="flex-1 min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="text-sm font-medium text-foreground truncate block">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm font-medium text-foreground truncate">
               {displayName}
             </span>
-            {agent.visibility === "private" && (
+            {isPrivate && (
               <IconLock
                 size={12}
-                stroke={1.7}
+                stroke={1.5}
                 className="shrink-0 text-muted-foreground"
+                aria-label="Private agent"
               />
             )}
           </div>
@@ -513,6 +599,7 @@ function AgentListRow({ agent, isLast }: AgentProps & { isLast?: boolean }) {
   const lead = agent.id === defaultAgentId;
 
   const displayName = agent.displayName ?? agent.id;
+  const isPrivate = agent.visibility === "private";
   const description = defaultAgentId
     ? agent.description || (lead ? "Your core agent" : "Sub-agent")
     : "";
@@ -526,15 +613,16 @@ function AgentListRow({ agent, isLast }: AgentProps & { isLast?: boolean }) {
           className="h-10 w-10 shrink-0 rounded-full object-cover object-top"
         />
         <div className="flex-1 min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="text-sm font-medium text-foreground truncate block">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm font-medium text-foreground truncate">
               {displayName}
             </span>
-            {agent.visibility === "private" && (
+            {isPrivate && (
               <IconLock
                 size={12}
-                stroke={1.7}
+                stroke={1.5}
                 className="shrink-0 text-muted-foreground"
+                aria-label="Private agent"
               />
             )}
           </div>

@@ -29,7 +29,6 @@ import {
   providerEnvFromObject,
   isOAuthRefreshProvider,
   type OAuthTokenResult,
-  type OAuthConnectorProvider,
   type ProviderEnv,
 } from "./provider-types";
 import { ahrefsProvider } from "./providers/ahrefs-provider";
@@ -102,6 +101,17 @@ type ConnectorOAuthProviderMap = {
 type DispatchRefreshProvider = {
   refreshToken(args: OAuthRefreshArgs): Promise<OAuthRefreshResult>;
 };
+
+export type ConnectorOAuthSecretMetadata =
+  | {
+      readonly accessSecretName: string;
+      readonly isRefreshable: false;
+    }
+  | {
+      readonly accessSecretName: string;
+      readonly refreshSecretName: string;
+      readonly isRefreshable: true;
+    };
 
 function connectorProviderFor<T extends OAuthConnectorType>(
   type: T,
@@ -187,13 +197,33 @@ export function isOAuthConnectorType(type: string): type is OAuthConnectorType {
   return Object.hasOwn(CONNECTOR_OAUTH_PROVIDERS, type);
 }
 
-export function getConnectorOAuthProvider(
+export function getConnectorOAuthSecretMetadata(
+  type: OAuthConnectorType,
+): ConnectorOAuthSecretMetadata;
+export function getConnectorOAuthSecretMetadata(
   type: string,
-): OAuthConnectorProvider | undefined {
+): ConnectorOAuthSecretMetadata | undefined;
+export function getConnectorOAuthSecretMetadata(
+  type: string,
+): ConnectorOAuthSecretMetadata | undefined {
   if (!isOAuthConnectorType(type)) {
     return undefined;
   }
-  return CONNECTOR_OAUTH_PROVIDERS[type];
+
+  const provider = connectorProviderFor(type);
+  const accessSecretName = provider.getSecretName();
+  if (!isOAuthRefreshProvider(provider)) {
+    return {
+      accessSecretName,
+      isRefreshable: false,
+    };
+  }
+
+  return {
+    accessSecretName,
+    refreshSecretName: provider.getRefreshSecretName(),
+    isRefreshable: true,
+  };
 }
 
 export async function buildConnectorOAuthAuthUrl<

@@ -34,6 +34,11 @@ def _http_error(url: str, status: int, reason: str, body: bytes) -> urllib.error
     return urllib.error.HTTPError(url, status, reason, Message(), io.BytesIO(body))
 
 
+class _UnreadableHttpErrorBody(io.BytesIO):
+    def read(self, size: int = -1) -> bytes:
+        raise OSError("body read failed")
+
+
 class TestGetFirewallHeaders:
     async def test_cache_miss_fetches_and_caches(self, headers):
         mock_headers = {"Authorization": "Bearer fresh-token"}
@@ -1116,6 +1121,109 @@ class TestFetchFirewallHeaders:
         ):
             auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
 
+    @pytest.mark.parametrize(
+        "error_body",
+        [
+            b"not-json",
+            b'"plain string"',
+            b"[1, 2, 3]",
+            b"{}",
+            json.dumps({"error": "not-a-dict"}).encode(),
+            json.dumps({"error": None}).encode(),
+            json.dumps({"error": {}}).encode(),
+        ],
+    )
+    def test_malformed_http_error_envelope_reraises_http_error(self, error_body: bytes):
+        http_error = _http_error(
+            "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
+            400,
+            "Bad Request",
+            error_body,
+        )
+
+        with (
+            patch("auth.urllib.request.Request"),
+            patch("auth.urllib.request.urlopen", side_effect=http_error),
+            patch.object(auth, "VERCEL_BYPASS", ""),
+            pytest.raises(urllib.error.HTTPError) as exc_info,
+        ):
+            auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
+
+        assert exc_info.value is http_error
+
+    def test_http_error_body_read_failure_reraises_http_error(self):
+        http_error = urllib.error.HTTPError(
+            "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
+            400,
+            "Bad Request",
+            Message(),
+            _UnreadableHttpErrorBody(),
+        )
+        http_error.close = MagicMock()
+
+        with (
+            patch("auth.urllib.request.Request"),
+            patch("auth.urllib.request.urlopen", side_effect=http_error),
+            patch.object(auth, "VERCEL_BYPASS", ""),
+            pytest.raises(urllib.error.HTTPError) as exc_info,
+        ):
+            auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
+
+        assert exc_info.value is http_error
+        http_error.close.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("code", "status", "reason", "exception_type", "default_message"),
+        [
+            (
+                "CONNECTOR_NOT_CONFIGURED",
+                424,
+                "Failed Dependency",
+                auth.ConnectorNotConfiguredError,
+                "Connector not configured",
+            ),
+            (
+                "INSUFFICIENT_CREDITS",
+                402,
+                "Payment Required",
+                auth.InsufficientCreditsError,
+                "Insufficient credits",
+            ),
+        ],
+    )
+    def test_known_error_with_non_string_message_uses_default(
+        self,
+        code: str,
+        status: int,
+        reason: str,
+        exception_type: type[Exception],
+        default_message: str,
+    ):
+        error_body = json.dumps(
+            {
+                "error": {
+                    "message": None,
+                    "code": code,
+                }
+            }
+        ).encode()
+        http_error = _http_error(
+            "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
+            status,
+            reason,
+            error_body,
+        )
+
+        with (
+            patch("auth.urllib.request.Request"),
+            patch("auth.urllib.request.urlopen", side_effect=http_error),
+            patch.object(auth, "VERCEL_BYPASS", ""),
+            pytest.raises(exception_type) as exc_info,
+        ):
+            auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
+
+        assert str(exc_info.value) == default_message
+
     def test_closes_response_on_success(self):
         """Success path must close the urlopen response — FD leak guard (#10475)."""
         mock_resp = MagicMock()
@@ -1131,11 +1239,15 @@ class TestFetchFirewallHeaders:
 
         mock_resp.__exit__.assert_called_once()  # urllib external boundary (#9991)
 
-    def test_closes_http_error_response(self):
+    @pytest.mark.parametrize(
+        "error_body",
+        [
+            json.dumps({"error": {"message": "Bad request", "code": "BAD_REQUEST"}}).encode(),
+            b"{}",
+        ],
+    )
+    def test_closes_http_error_response(self, error_body: bytes):
         """HTTPError path must close the underlying socket — FD leak guard (#10475)."""
-        error_body = json.dumps(
-            {"error": {"message": "Bad request", "code": "BAD_REQUEST"}}
-        ).encode()
         http_error = _http_error(
             "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
             400,

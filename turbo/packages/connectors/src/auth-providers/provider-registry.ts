@@ -1,7 +1,19 @@
-import type { ConnectorType } from "../connectors";
-import type { ConnectorAuthProvider } from "./provider-types";
+type AuthProviderSecretAccess =
+  | {
+      readonly kind: "none";
+      getAccessSecretName(): string;
+    }
+  | {
+      readonly kind: "refresh-token";
+      getAccessSecretName(): string;
+      getRefreshSecretName(): string;
+    };
 
-export type ConnectorAuthSecretMetadata =
+type AuthProviderWithSecretMetadata = {
+  readonly access: AuthProviderSecretAccess;
+};
+
+export type AuthProviderSecretMetadata =
   | {
       readonly accessSecretName: string;
       readonly isRefreshable: false;
@@ -12,9 +24,9 @@ export type ConnectorAuthSecretMetadata =
       readonly isRefreshable: true;
     };
 
-export function getConnectorAuthSecretMetadata<T extends ConnectorType>(
-  provider: ConnectorAuthProvider<T>,
-): ConnectorAuthSecretMetadata {
+export function getAuthProviderSecretMetadata(
+  provider: AuthProviderWithSecretMetadata,
+): AuthProviderSecretMetadata {
   const access = provider.access;
 
   switch (access.kind) {

@@ -1,5 +1,4 @@
 import type {
-  ConnectorType,
   OAuthAuthCodeConnectorType,
   OAuthConnectorType,
   OAuthDeviceAuthConnectorType,
@@ -16,6 +15,7 @@ import type {
   OAuthDeviceAuthStartResult,
   OAuthRefreshResult,
   OAuthTokenResult,
+  ProviderEnv,
 } from "../oauth-providers/provider-types";
 
 interface NoneGrantProvider {
@@ -42,13 +42,6 @@ export interface DeviceAuthGrantProvider<
   ): Promise<OAuthDeviceAuthPollResult>;
 }
 
-export type ConnectorGrantProvider<T extends ConnectorType> =
-  T extends OAuthAuthCodeConnectorType
-    ? AuthCodeGrantProvider<T>
-    : T extends OAuthDeviceAuthConnectorType
-      ? DeviceAuthGrantProvider<T>
-      : NoneGrantProvider;
-
 export interface NoneAccessProvider {
   readonly kind: "none";
   getAccessSecretName(): string;
@@ -65,11 +58,6 @@ export type OAuthConnectorAccessProvider<T extends OAuthConnectorType> =
   | NoneAccessProvider
   | RefreshTokenAccessProvider<T>;
 
-export type ConnectorAccessProvider<T extends ConnectorType> =
-  T extends OAuthConnectorType
-    ? OAuthConnectorAccessProvider<T>
-    : NoneAccessProvider;
-
 interface NoneRevokeProvider {
   readonly kind: "none";
 }
@@ -82,11 +70,6 @@ interface TokenRevokeProvider<T extends OAuthConnectorType> {
 export type OAuthConnectorRevokeProvider<T extends OAuthConnectorType> =
   | NoneRevokeProvider
   | TokenRevokeProvider<T>;
-
-export type ConnectorRevokeProvider<T extends ConnectorType> =
-  T extends OAuthConnectorType
-    ? OAuthConnectorRevokeProvider<T>
-    : NoneRevokeProvider;
 
 export interface AuthProvider<TGrant, TAccess, TRevoke> {
   readonly grant: TGrant;
@@ -110,8 +93,33 @@ export type DeviceAuthConnectorAuthProvider<
   OAuthConnectorRevokeProvider<T>
 >;
 
-export type ConnectorAuthProvider<T extends ConnectorType> = AuthProvider<
-  ConnectorGrantProvider<T>,
-  ConnectorAccessProvider<T>,
-  ConnectorRevokeProvider<T>
+export type ModelProviderGrantProvider = NoneGrantProvider;
+
+interface ModelProviderOAuthRefreshArgs {
+  readonly clientId?: string;
+  readonly clientSecret?: string;
+  readonly refreshToken: string;
+}
+
+interface ModelProviderRefreshTokenAccessProvider {
+  readonly kind: "refresh-token";
+  getAccessSecretName(): string;
+  getRefreshSecretName(): string;
+  getClientId(currentEnv: ProviderEnv): string | undefined;
+  getClientSecret(currentEnv: ProviderEnv): string | undefined;
+  refreshToken(
+    args: ModelProviderOAuthRefreshArgs,
+  ): Promise<OAuthRefreshResult>;
+}
+
+export type ModelProviderAccessProvider =
+  | NoneAccessProvider
+  | ModelProviderRefreshTokenAccessProvider;
+
+export type ModelProviderRevokeProvider = NoneRevokeProvider;
+
+export type ModelProviderAuthProvider = AuthProvider<
+  ModelProviderGrantProvider,
+  ModelProviderAccessProvider,
+  ModelProviderRevokeProvider
 >;

@@ -13,8 +13,8 @@ import {
   type ConnectorOAuthCredentials,
 } from "@vm0/connectors/connector-utils";
 import {
-  getConnectorAuthSecretMetadata,
-  type ConnectorAuthSecretMetadata,
+  getAuthProviderSecretMetadata,
+  type AuthProviderSecretMetadata,
 } from "../auth-providers/provider-registry";
 import type {
   AuthCodeConnectorAuthProvider,
@@ -37,7 +37,6 @@ import {
   type OAuthRefreshArgs,
   type OAuthRefreshResult,
   providerEnvFromObject,
-  isOAuthRefreshProvider,
   type OAuthTokenResult,
   type ProviderEnv,
 } from "./provider-types";
@@ -102,7 +101,7 @@ export type {
   OAuthTokenResult,
 };
 export type { ProviderEnv };
-export { providerEnvFromObject, isOAuthRefreshProvider };
+export { providerEnvFromObject };
 
 type AuthCodeConnectorOAuthProviderMap = {
   readonly [Type in OAuthAuthCodeConnectorType]: AuthCodeConnectorAuthProvider<Type>;
@@ -112,7 +111,7 @@ type DeviceAuthConnectorOAuthProviderMap = {
   readonly [Type in OAuthDeviceAuthConnectorType]: DeviceAuthConnectorAuthProvider<Type>;
 };
 
-export type ConnectorOAuthSecretMetadata = ConnectorAuthSecretMetadata;
+export type ConnectorOAuthSecretMetadata = AuthProviderSecretMetadata;
 
 function deviceAuthConnectorProviderFor<T extends OAuthDeviceAuthConnectorType>(
   type: T,
@@ -231,12 +230,12 @@ export function getConnectorOAuthSecretMetadata(
   }
 
   if (isOAuthAuthCodeConnectorType(type)) {
-    return getConnectorAuthSecretMetadata(
+    return getAuthProviderSecretMetadata(
       AUTH_CODE_CONNECTOR_OAUTH_PROVIDERS[type],
     );
   }
 
-  return getConnectorAuthSecretMetadata(
+  return getAuthProviderSecretMetadata(
     DEVICE_AUTH_CONNECTOR_OAUTH_PROVIDERS[type],
   );
 }

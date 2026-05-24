@@ -15,13 +15,13 @@ import {
 import {
   getAuthProviderSecretMetadata,
   type AuthProviderSecretMetadata,
-} from "../auth-providers/provider-registry";
+} from "./secret-metadata";
 import type {
   AuthCodeConnectorAuthProvider,
   DeviceAuthConnectorAuthProvider,
   OAuthConnectorAccessProvider,
   OAuthConnectorRevokeProvider,
-} from "../auth-providers/provider-types";
+} from "./provider-types";
 import {
   type AuthUrlResult,
   type ConnectorOAuthAuthorizeArgs,
@@ -41,54 +41,54 @@ import {
   providerEnvFromObject,
   type OAuthTokenResult,
   type ProviderEnv,
-} from "./provider-types";
-import { ahrefsProvider } from "./providers/ahrefs-provider";
-import { airtableProvider } from "./providers/airtable-provider";
-import { asanaProvider } from "./providers/asana-provider";
-import { base44Provider } from "./providers/base44-provider";
-import { canvaProvider } from "./providers/canva-provider";
-import { closeProvider } from "./providers/close-provider";
-import { deelProvider } from "./providers/deel-provider";
-import { docusignProvider } from "./providers/docusign-provider";
-import { dropboxProvider } from "./providers/dropbox-provider";
-import { figmaProvider } from "./providers/figma-provider";
-import { garminConnectProvider } from "./providers/garmin-connect-provider";
-import { gumroadProvider } from "./providers/gumroad-provider";
-import { githubProvider } from "./providers/github-provider";
-import { gmailProvider } from "./providers/gmail-provider";
-import { hubspotProvider } from "./providers/hubspot-provider";
-import { googleAdsProvider } from "./providers/google-ads-provider";
-import { googleCalendarProvider } from "./providers/google-calendar-provider";
-import { googleDocsProvider } from "./providers/google-docs-provider";
-import { googleDriveProvider } from "./providers/google-drive-provider";
-import { googleMeetProvider } from "./providers/google-meet-provider";
-import { googleSheetsProvider } from "./providers/google-sheets-provider";
-import { linearProvider } from "./providers/linear-provider";
-import { mailchimpProvider } from "./providers/mailchimp-provider";
-import { mercuryProvider } from "./providers/mercury-provider";
-import { mondayProvider } from "./providers/monday-provider";
-import { neonProvider } from "./providers/neon-provider";
-import { notionProvider } from "./providers/notion-provider";
-import { outlookCalendarProvider } from "./providers/outlook-calendar-provider";
-import { outlookMailProvider } from "./providers/outlook-mail-provider";
-import { redditProvider } from "./providers/reddit-provider";
-import { intervalsIcuProvider } from "./providers/intervals-icu-provider";
-import { sentryProvider } from "./providers/sentry-provider";
-import { slackProvider } from "./providers/slack-provider";
-import { stravaProvider } from "./providers/strava-provider";
-import { stripeProvider } from "./providers/stripe-provider";
-import { todoistProvider } from "./providers/todoist-provider";
-import { vercelProvider } from "./providers/vercel-provider";
-import { webflowProvider } from "./providers/webflow-provider";
-import { supabaseProvider } from "./providers/supabase-provider";
-import { metaAdsProvider } from "./providers/meta-ads-provider";
-import { posthogProvider } from "./providers/posthog-provider";
-import { spotifyProvider } from "./providers/spotify-provider";
-import { xProvider } from "./providers/x-provider";
-import { xeroProvider } from "./providers/xero-provider";
-import { zoomProvider } from "./providers/zoom-provider";
-import { testOauthProvider } from "./providers/test-oauth-provider";
-import { testOauthDeviceProvider } from "./providers/test-oauth-device-provider";
+} from "../oauth-providers/provider-types";
+import { ahrefsProvider } from "../oauth-providers/providers/ahrefs-provider";
+import { airtableProvider } from "../oauth-providers/providers/airtable-provider";
+import { asanaProvider } from "../oauth-providers/providers/asana-provider";
+import { base44Provider } from "../oauth-providers/providers/base44-provider";
+import { canvaProvider } from "../oauth-providers/providers/canva-provider";
+import { closeProvider } from "../oauth-providers/providers/close-provider";
+import { deelProvider } from "../oauth-providers/providers/deel-provider";
+import { docusignProvider } from "../oauth-providers/providers/docusign-provider";
+import { dropboxProvider } from "../oauth-providers/providers/dropbox-provider";
+import { figmaProvider } from "../oauth-providers/providers/figma-provider";
+import { garminConnectProvider } from "../oauth-providers/providers/garmin-connect-provider";
+import { gumroadProvider } from "../oauth-providers/providers/gumroad-provider";
+import { githubProvider } from "../oauth-providers/providers/github-provider";
+import { gmailProvider } from "../oauth-providers/providers/gmail-provider";
+import { hubspotProvider } from "../oauth-providers/providers/hubspot-provider";
+import { googleAdsProvider } from "../oauth-providers/providers/google-ads-provider";
+import { googleCalendarProvider } from "../oauth-providers/providers/google-calendar-provider";
+import { googleDocsProvider } from "../oauth-providers/providers/google-docs-provider";
+import { googleDriveProvider } from "../oauth-providers/providers/google-drive-provider";
+import { googleMeetProvider } from "../oauth-providers/providers/google-meet-provider";
+import { googleSheetsProvider } from "../oauth-providers/providers/google-sheets-provider";
+import { linearProvider } from "../oauth-providers/providers/linear-provider";
+import { mailchimpProvider } from "../oauth-providers/providers/mailchimp-provider";
+import { mercuryProvider } from "../oauth-providers/providers/mercury-provider";
+import { mondayProvider } from "../oauth-providers/providers/monday-provider";
+import { neonProvider } from "../oauth-providers/providers/neon-provider";
+import { notionProvider } from "../oauth-providers/providers/notion-provider";
+import { outlookCalendarProvider } from "../oauth-providers/providers/outlook-calendar-provider";
+import { outlookMailProvider } from "../oauth-providers/providers/outlook-mail-provider";
+import { redditProvider } from "../oauth-providers/providers/reddit-provider";
+import { intervalsIcuProvider } from "../oauth-providers/providers/intervals-icu-provider";
+import { sentryProvider } from "../oauth-providers/providers/sentry-provider";
+import { slackProvider } from "../oauth-providers/providers/slack-provider";
+import { stravaProvider } from "../oauth-providers/providers/strava-provider";
+import { stripeProvider } from "../oauth-providers/providers/stripe-provider";
+import { todoistProvider } from "../oauth-providers/providers/todoist-provider";
+import { vercelProvider } from "../oauth-providers/providers/vercel-provider";
+import { webflowProvider } from "../oauth-providers/providers/webflow-provider";
+import { supabaseProvider } from "../oauth-providers/providers/supabase-provider";
+import { metaAdsProvider } from "../oauth-providers/providers/meta-ads-provider";
+import { posthogProvider } from "../oauth-providers/providers/posthog-provider";
+import { spotifyProvider } from "../oauth-providers/providers/spotify-provider";
+import { xProvider } from "../oauth-providers/providers/x-provider";
+import { xeroProvider } from "../oauth-providers/providers/xero-provider";
+import { zoomProvider } from "../oauth-providers/providers/zoom-provider";
+import { testOauthProvider } from "../oauth-providers/providers/test-oauth-provider";
+import { testOauthDeviceProvider } from "../oauth-providers/providers/test-oauth-device-provider";
 
 export type {
   AuthUrlResult,

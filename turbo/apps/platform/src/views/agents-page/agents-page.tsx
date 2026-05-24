@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useGet, useLastResolved, useLoadable, useSet } from "ccstate-react";
 import { useLoadableSet } from "ccstate-react/experimental";
 import { pageSignal$ } from "../../signals/page-signal.ts";
@@ -32,12 +33,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@vm0/ui";
+import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { createSubagent$ } from "../../signals/zero-page/zero-agents.ts";
 import {
   defaultAgentId$,
   defaultAgentName$,
   sortedAgents$,
 } from "../../signals/agent.ts";
+import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { onDomEventFn } from "../../signals/utils.ts";
 import { Link } from "../router/link.tsx";
@@ -61,6 +64,8 @@ import {
 import { serializeAvatarSvgConfig } from "../zero-page/avatar-svg-utils.ts";
 import { AvatarMaker } from "../zero-page/avatar-maker.tsx";
 
+const MAX_PUBLIC_AGENTS = 7;
+
 export function AgentsPage() {
   const dialogOpen = useGet(jobsDialogOpen$);
   const setDialogOpen = useSet(setJobsDialogOpen$);
@@ -75,6 +80,9 @@ export function AgentsPage() {
   const viewMode = useGet(jobsViewMode$);
   const setViewMode = useSet(setJobsViewMode$);
   const defaultAgentName = useLastResolved(defaultAgentName$);
+  const features = useLastResolved(featureSwitch$);
+  const splitSections =
+    features?.[FeatureSwitchKey.AgentsPageSplitSections] ?? false;
 
   const agentsLoadable = useLoadable(sortedAgents$);
   const publicAgentCount =
@@ -83,7 +91,13 @@ export function AgentsPage() {
           return agent.visibility !== "private";
         }).length
       : 0;
-  const atPublicLimit = publicAgentCount >= 7;
+  const atPublicLimit = publicAgentCount >= MAX_PUBLIC_AGENTS;
+  const publicRemaining = Math.max(0, MAX_PUBLIC_AGENTS - publicAgentCount);
+
+  const openCreateDialog = (target: "public" | "private") => {
+    setVisibility(target);
+    setDialogOpen(true);
+  };
 
   const handleCreateTeammate = onDomEventFn(async (avatarUrl: string) => {
     const trimmed = newName.trim();
@@ -110,50 +124,63 @@ export function AgentsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant="outline"
-              size="sm"
-              className="zero-btn-morandi h-9 gap-2 shrink-0 rounded-lg border"
-              onClick={() => {
-                setVisibility("private");
-                return setDialogOpen(true);
-              }}
-            >
-              <IconPlus size={14} stroke={2} />
-              New agent
-            </Button>
+            {!splitSections && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="zero-btn-morandi h-9 gap-2 shrink-0 rounded-lg border"
+                onClick={() => {
+                  return openCreateDialog("private");
+                }}
+              >
+                <IconPlus size={14} stroke={2} />
+                New agent
+              </Button>
+            )}
 
-            <Tabs
-              value={viewMode}
-              onValueChange={(v) => {
-                return setViewMode(v as "grid" | "list");
-              }}
-              className="shrink-0"
-            >
-              <TabsList className="zero-tabs h-9 gap-1 px-1 py-1">
-                <TabsTrigger
-                  value="grid"
-                  className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
-                >
-                  <IconLayoutGrid size={14} stroke={1.5} />
-                  Grid
-                </TabsTrigger>
-                <TabsTrigger
-                  value="list"
-                  className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
-                >
-                  <IconList size={14} stroke={1.5} />
-                  List
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
+            {!splitSections && (
+              <Tabs
+                value={viewMode}
+                onValueChange={(v) => {
+                  return setViewMode(v as "grid" | "list");
+                }}
+                className="shrink-0"
+              >
+                <TabsList className="zero-tabs h-9 gap-1 px-1 py-1">
+                  <TabsTrigger
+                    value="grid"
+                    className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
+                  >
+                    <IconLayoutGrid size={14} stroke={1.5} />
+                    Grid
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="list"
+                    className="gap-1.5 text-sm data-[state=active]:bg-background px-3"
+                  >
+                    <IconList size={14} stroke={1.5} />
+                    List
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            )}
           </div>
         </div>
       </header>
 
       <main className="flex-1 overflow-auto px-4 sm:px-6 pt-3 pb-8">
         <div className="mx-auto max-w-[900px] flex flex-col gap-4">
-          {viewMode === "grid" ? <AgentGridView /> : <AgentListView />}
+          {splitSections ? (
+            <AgentSplitView
+              atPublicLimit={atPublicLimit}
+              publicRemaining={publicRemaining}
+              onCreate={openCreateDialog}
+            />
+          ) : viewMode === "grid" ? (
+            <AgentGridView />
+          ) : (
+            <AgentListView />
+          )}
         </div>
       </main>
 
@@ -167,6 +194,7 @@ export function AgentsPage() {
         visibility={visibility}
         onVisibilityChange={setVisibility}
         publicDisabled={atPublicLimit}
+        splitSections={splitSections}
       />
     </div>
   );
@@ -340,6 +368,155 @@ function AgentListView() {
   );
 }
 
+function AgentSplitView({
+  atPublicLimit,
+  publicRemaining,
+  onCreate,
+}: {
+  atPublicLimit: boolean;
+  publicRemaining: number;
+  onCreate: (visibility: "public" | "private") => void;
+}) {
+  const agentsLoadable = useLoadable(sortedAgents$);
+  const loading = agentsLoadable.state === "loading";
+  const agents =
+    agentsLoadable.state === "hasData" ? agentsLoadable.data : null;
+  const skeleton = loading && !agents;
+
+  const publicAgents =
+    agents?.filter((a) => {
+      return a.visibility !== "private";
+    }) ?? [];
+  const privateAgents =
+    agents?.filter((a) => {
+      return a.visibility === "private";
+    }) ?? [];
+
+  return (
+    <div className="flex flex-col gap-6">
+      <AgentSplitSection
+        title="Public"
+        agents={publicAgents}
+        skeleton={skeleton}
+        headerAction={
+          <div className="flex items-center gap-3">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-xs text-muted-foreground cursor-default">
+                    {publicRemaining} remains
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p className="text-xs">
+                    max {MAX_PUBLIC_AGENTS} public agent for workspace
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <Button
+              variant="outline"
+              size="sm"
+              className="zero-btn-morandi h-8 gap-2 rounded-lg border"
+              disabled={atPublicLimit}
+              onClick={() => {
+                return onCreate("public");
+              }}
+            >
+              <IconPlus size={14} stroke={2} />
+              Create agent
+            </Button>
+          </div>
+        }
+      />
+      <AgentSplitSection
+        title="Private"
+        agents={privateAgents}
+        skeleton={skeleton}
+        headerAction={
+          <Button
+            variant="outline"
+            size="sm"
+            className="zero-btn-morandi h-8 gap-2 rounded-lg border"
+            onClick={() => {
+              return onCreate("private");
+            }}
+          >
+            <IconPlus size={14} stroke={2} />
+            Create agent
+          </Button>
+        }
+      />
+    </div>
+  );
+}
+
+function AgentSplitSection({
+  title,
+  agents,
+  skeleton,
+  headerAction,
+}: {
+  title: string;
+  agents: AgentProps["agent"][];
+  skeleton: boolean;
+  headerAction: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <header className="flex items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-foreground">{title}</h2>
+        {headerAction}
+      </header>
+      {skeleton ? (
+        <AgentSplitSkeleton />
+      ) : agents.length > 0 ? (
+        <AgentSplitBody agents={agents} />
+      ) : null}
+    </section>
+  );
+}
+
+function AgentSplitBody({ agents }: { agents: AgentProps["agent"][] }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {agents.map((agent) => {
+        return (
+          <Link
+            key={agent.id}
+            pathname="/agents/:agentId"
+            options={{ pathParams: { agentId: agent.id } }}
+            className="block no-underline text-inherit"
+          >
+            <AgentCard agent={agent} />
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgentSplitSkeleton() {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {[1, 2, 3].map((i) => {
+        return (
+          <Card key={i} className="zero-card">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3 animate-pulse">
+                <div className="h-10 w-10 rounded-full bg-muted" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="h-4 w-24 rounded bg-muted" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 function CreateTeammateDialog({
   open,
   onOpenChange,
@@ -350,6 +527,7 @@ function CreateTeammateDialog({
   visibility,
   onVisibilityChange,
   publicDisabled,
+  splitSections,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -360,6 +538,7 @@ function CreateTeammateDialog({
   visibility: "public" | "private";
   onVisibilityChange: (visibility: "public" | "private") => void;
   publicDisabled: boolean;
+  splitSections: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={creating ? undefined : onOpenChange}>
@@ -376,6 +555,7 @@ function CreateTeammateDialog({
           visibility={visibility}
           onVisibilityChange={onVisibilityChange}
           publicDisabled={publicDisabled}
+          splitSections={splitSections}
         />
       )}
     </Dialog>
@@ -391,6 +571,7 @@ function CreateTeammateDialogContent({
   visibility,
   onVisibilityChange,
   publicDisabled,
+  splitSections,
 }: {
   newName: string;
   onNameChange: (name: string) => void;
@@ -400,6 +581,7 @@ function CreateTeammateDialogContent({
   visibility: "public" | "private";
   onVisibilityChange: (visibility: "public" | "private") => void;
   publicDisabled: boolean;
+  splitSections: boolean;
 }) {
   const avatarUrl = useGet(jobsAvatarUrl$);
   const setAvatarUrl = useSet(setJobsAvatarUrl$);
@@ -454,7 +636,11 @@ function CreateTeammateDialogContent({
       {/* Content */}
       <div className="flex flex-col items-center gap-4 px-6 py-6">
         <div className="text-center">
-          <p className="text-base font-semibold">Create a new agent</p>
+          <p className="text-base font-semibold">
+            {splitSections
+              ? `Create a new ${visibility} agent`
+              : "Create a new agent"}
+          </p>
           <p className="text-sm text-muted-foreground mt-0.5">
             Name your agent to get started.
           </p>
@@ -473,11 +659,13 @@ function CreateTeammateDialogContent({
           autoFocus
           disabled={creating}
         />
-        <CreateAgentVisibilitySelect
-          visibility={visibility}
-          onVisibilityChange={onVisibilityChange}
-          publicDisabled={publicDisabled}
-        />
+        {!splitSections && (
+          <CreateAgentVisibilitySelect
+            visibility={visibility}
+            onVisibilityChange={onVisibilityChange}
+            publicDisabled={publicDisabled}
+          />
+        )}
       </div>
 
       {/* Footer */}

@@ -2343,10 +2343,12 @@ function BodyContentBlocks({
   blocks,
   openLightbox,
   hardBreaks,
+  mathEnabled,
 }: {
   blocks: BodyRenderBlock[];
   openLightbox: (url: string) => void;
   hardBreaks: boolean;
+  mathEnabled: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -2361,6 +2363,7 @@ function BodyContentBlocks({
                   : block.content
               }
               mediaPreview
+              mathEnabled={mathEnabled}
               onImageClick={openLightbox}
             />
           );
@@ -2877,6 +2880,8 @@ function PagedUserMessage({
     parseBodyRenderBlocks(strippedContent).blocks,
   );
   const pageSignal = useGet(pageSignal$);
+  const features = useLastResolved(featureSwitch$);
+  const mathEnabled = features?.[FeatureSwitchKey.ChatMarkdownMath] ?? false;
   const openImageLightbox = useSet(openAttachmentImageLightbox$);
   const openLightbox = (url: string) => {
     openImageLightbox(url);
@@ -2915,6 +2920,7 @@ function PagedUserMessage({
                   blocks={bodyBlocks}
                   openLightbox={openLightbox}
                   hardBreaks
+                  mathEnabled={mathEnabled}
                 />
               </div>
             )}
@@ -2984,6 +2990,8 @@ function PagedAssistantMessageItem({
   message: EnrichedChatMessage;
 }) {
   const openImageLightbox = useSet(openAttachmentImageLightbox$);
+  const features = useLastResolved(featureSwitch$);
+  const mathEnabled = features?.[FeatureSwitchKey.ChatMarkdownMath] ?? false;
   const openLightbox = (url: string) => {
     openImageLightbox(url);
   };
@@ -3005,6 +3013,7 @@ function PagedAssistantMessageItem({
             blocks={blocks}
             openLightbox={openLightbox}
             hardBreaks={false}
+            mathEnabled={mathEnabled}
           />
         ) : null}
       </div>

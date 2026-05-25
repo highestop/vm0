@@ -492,56 +492,6 @@ function chatMessageStatus(row: ChatMessageRow): string | undefined {
   return row.runStatus ?? undefined;
 }
 
-function toStoredMessage(
-  threadId: string,
-  userId: string,
-  row: ChatMessageRow,
-): Computed<Promise<ChatThreadDetail["chatMessages"][number]>> {
-  return computed(
-    async (get): Promise<ChatThreadDetail["chatMessages"][number]> => {
-      const isPlaceholder = row.sequenceNumber === null;
-      const rawEffectiveError = isPlaceholder
-        ? (row.error ?? row.runError ?? undefined)
-        : (row.error ?? undefined);
-      const effectiveError =
-        rawEffectiveError && isPlaceholder && !row.error && row.runId
-          ? await get(
-              formatChatRunErrorMessage({
-                chatThreadId: threadId,
-                runId: row.runId,
-                errorMessage: rawEffectiveError,
-              }),
-            )
-          : rawEffectiveError;
-      const attachFiles = await get(chatMessageAttachFiles(userId, row));
-
-      const role = messageRoleSchema.parse(row.role);
-      const message = {
-        id: row.id,
-        role,
-        content: row.content,
-        runId: row.runId ?? undefined,
-        revokesMessageId: row.revokesMessageId ?? undefined,
-        interruptsRunId: row.interruptsRunId ?? undefined,
-        error: effectiveError,
-        attachFiles: attachFiles ? [...attachFiles] : undefined,
-        createdAt: row.createdAt.toISOString(),
-      };
-      if (role !== "assistant") {
-        return {
-          ...message,
-          role: "user" as const,
-        };
-      }
-      return {
-        ...message,
-        role: "assistant" as const,
-        status: chatMessageStatus(row),
-      };
-    },
-  );
-}
-
 function toPagedMessage(
   threadId: string,
   userId: string,
@@ -589,30 +539,6 @@ function toPagedMessage(
       status: chatMessageStatus(row),
     };
   });
-}
-
-function chatThreadMessages(
-  threadId: string,
-  userId: string,
-): Computed<Promise<readonly ChatThreadDetail["chatMessages"][number][]>> {
-  return computed(
-    async (
-      get,
-    ): Promise<readonly ChatThreadDetail["chatMessages"][number][]> => {
-      const rows = await get(db$)
-        .select(messageColumns)
-        .from(chatMessages)
-        .leftJoin(agentRuns, eq(agentRuns.id, chatMessages.runId))
-        .where(eq(chatMessages.chatThreadId, threadId))
-        .orderBy(asc(chatMessages.createdAt), asc(chatMessages.sequenceNumber));
-
-      return await Promise.all(
-        rows.map((row) => {
-          return get(toStoredMessage(threadId, userId, row));
-        }),
-      );
-    },
-  );
 }
 
 // Single zero_runs JOIN agent_runs scan used to derive activeRuns,
@@ -692,8 +618,7 @@ export function zeroChatThreadDetail(args: {
       return null;
     }
 
-    const [messages, runSummaries, modelPin] = await Promise.all([
-      get(chatThreadMessages(args.threadId, args.userId)),
+    const [runSummaries, modelPin] = await Promise.all([
       get(threadRunSummaries(args.threadId)),
       get(effectiveModelFirstThreadPin({ thread, userId: args.userId })),
     ]);
@@ -705,7 +630,6 @@ export function zeroChatThreadDetail(args: {
       id: thread.id,
       title: thread.title,
       agentId: thread.agentComposeId,
-      chatMessages: [...messages],
       latestSessionId,
       lastReadMessageId: thread.lastReadMessageId,
       latestSessionProviderType: formatLatestSessionProviderType(

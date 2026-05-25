@@ -485,7 +485,7 @@ class TestRequestHandler:
             await mitm_addon.request(flow)
 
         # Dispatcher routed to the real handle_firewall_request, which writes
-        # match-info into flow.metadata at auth.py:327–333 up-front.
+        # firewall allow metadata into flow.metadata up front.
         assert flow.metadata["firewall_base"] == "https://api.github.com"
         assert flow.metadata["firewall_name"] == "github"
         assert flow.metadata["firewall_permission"] == "full-access"
@@ -639,7 +639,7 @@ class TestRequestHandler:
     async def test_firewall_permission_allows_matched(
         self, tmp_path, real_flow, mitm_ctx, fake_firewall_headers, headers
     ):
-        """Firewall with permissions and matching rule calls handler with match_info."""
+        """Firewall with permissions and matching rule calls handler with allow result."""
         reg_path = _write_registry(
             tmp_path,
             vm_info=_single_firewall_vm(
@@ -677,12 +677,62 @@ class TestRequestHandler:
             await mitm_addon.request(flow)
 
         # Dispatcher routed to the real handle_firewall_request, which writes
-        # match-info into flow.metadata at auth.py:327–333 up-front.
+        # firewall allow metadata into flow.metadata up front.
         assert flow.metadata["firewall_base"] == "https://api.github.com"
         assert flow.metadata["firewall_name"] == "github"
         assert flow.metadata["firewall_permission"] == "read-repos"
         assert flow.metadata["firewall_rule_match"] == "GET /repos/{owner}/{repo}"
         assert flow.metadata["firewall_params"] == {"owner": "octocat", "repo": "hello"}
+
+    async def test_firewall_unknown_policy_allow_writes_empty_permission_metadata(
+        self, tmp_path, real_flow, mitm_ctx, fake_firewall_headers, headers
+    ):
+        """Unknown-endpoint allow keeps legacy empty permission metadata."""
+        reg_path = _write_registry(
+            tmp_path,
+            vm_info=_single_firewall_vm(
+                tmp_path,
+                firewall_name="example",
+                api_entry={
+                    "base": "https://api-{region}.example.com/v1",
+                    "auth": {"headers": {"Authorization": "Bearer ${{ secrets.EXAMPLE_TOKEN }}"}},
+                    "permissions": [
+                        {
+                            "name": "read-items",
+                            "rules": ["GET /items/{id}"],
+                        },
+                    ],
+                },
+                network_policy={
+                    "allow": ["read-items"],
+                    "deny": [],
+                    "ask": [],
+                    "unknownPolicy": "allow",
+                },
+            ),
+        )
+
+        flow = real_flow(
+            with_response=False,
+            client_ip="10.200.0.5",
+            host="api-us.example.com",
+            path="/v1/users/octocat",
+        )
+
+        with (
+            mitm_ctx(registry_path=str(reg_path), api_url="https://api.vm0.ai"),
+            fake_firewall_headers(),
+        ):
+            await mitm_addon.request(flow)
+
+        assert flow.response is None
+        assert flow.metadata["firewall_action"] == "ALLOW"
+        assert flow.metadata["firewall_base"] == "https://api-{region}.example.com/v1"
+        assert flow.metadata["firewall_name"] == "example"
+        assert flow.metadata["firewall_permission"] == ""
+        assert flow.metadata["firewall_rule_match"] == ""
+        assert flow.metadata["firewall_params"] == {"region": "us"}
+        assert flow.request.headers["Authorization"] == "Bearer x"
 
     async def test_billable_flow_is_tracked_before_responseheaders(
         self, tmp_path, real_flow, mitm_ctx, fake_firewall_headers, headers

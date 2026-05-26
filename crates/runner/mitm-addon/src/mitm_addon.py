@@ -123,7 +123,9 @@ def _flush_usage_for_runner_request() -> None:
         try:
             usage.flush_usage_events(trigger="runner")
         except Exception as exc:
-            ctx.log.warn(f"Failed to flush usage events after runner request: {exc}")
+            ctx.log.warn(
+                f"Failed to flush usage events after runner request ({type(exc).__name__})"
+            )
         finally:
             usage.write_pending_snapshot(flush_request_id=flush_request_id)
     finally:
@@ -656,7 +658,10 @@ def done():
     ``shutdown(wait=True)`` drains already-submitted futures during graceful stop.
     """
     try:
-        usage.flush_usage_events(trigger="shutdown")
+        # A SIGUSR1 flush can already have snapshotted buffered events but not
+        # yet enqueued them; wait before closing the executor.
+        with _usage_flush_signal_lock:
+            usage.flush_usage_events(trigger="shutdown")
     finally:
         usage.webhook.usage_executor.shutdown(wait=True)
 

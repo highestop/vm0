@@ -21,7 +21,10 @@ import { zeroSecretsContract } from "@vm0/api-contracts/contracts/zero-secrets";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
-import { setSelectedConnectorType$ } from "../../../signals/zero-page/settings/connectors.ts";
+import {
+  connectorCliAuthState$,
+  setSelectedConnectorType$,
+} from "../../../signals/zero-page/settings/connectors.ts";
 import { mockConnectors } from "../../zero-page/__tests__/zero-connectors-page-test-helpers.ts";
 import { createMockApi } from "../../../mocks/msw-contract.ts";
 import {
@@ -62,13 +65,19 @@ function elementTextMatches(
 }
 
 function getButtonByText(matcher: string | RegExp): HTMLElement {
-  const button = screen.getAllByRole("button").find((element) => {
-    return elementTextMatches(element, matcher);
-  });
-  if (!button) {
-    throw new Error(`Button not found: ${String(matcher)}`);
+  // `screen.getAllByRole("button")` triggers @testing-library's ARIA-role
+  // resolution across the whole document — that single call took ~360ms in
+  // happy-dom on this page even with only 5 buttons present, which alone
+  // pushed the stripe CLI close test over the default 5s timeout under CI
+  // load. Native `querySelectorAll("button")` returns the same set without
+  // the ARIA tree walk.
+  const buttons = document.body.querySelectorAll<HTMLButtonElement>("button");
+  for (const button of buttons) {
+    if (elementTextMatches(button, matcher)) {
+      return button;
+    }
   }
-  return button;
+  throw new Error(`Button not found: ${String(matcher)}`);
 }
 
 function mockConnectorOauthStart() {
@@ -843,7 +852,7 @@ describe("connect modal - state management", () => {
     });
   });
 
-  it.skip("clears Stripe CLI auth state when the dialog closes", async () => {
+  it("clears Stripe CLI auth state when the dialog closes", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
 
     await openConnectModal("stripe", {
@@ -867,14 +876,10 @@ describe("connect modal - state management", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    context.store.set(setSelectedConnectorType$, "stripe");
-
-    await waitFor(() => {
-      expect(screen.getByText("Sign in with Stripe")).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText("stripe-code-123")).not.toBeInTheDocument();
-    expect(getButtonByText("Select a mode to continue")).toBeDisabled();
+    const cleared = context.store.get(connectorCliAuthState$);
+    expect(cleared.status).toBe("idle");
+    expect(cleared.connectorType).toBeNull();
+    expect(cleared.mode).toBeNull();
   });
 
   it("clears Stripe CLI auth state when switching connectors", async () => {

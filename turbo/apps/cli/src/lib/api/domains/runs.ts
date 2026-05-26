@@ -4,6 +4,7 @@ import {
   runEventsContract,
   runsCancelContract,
   runsQueueContract,
+  type DirectRunModelProviderType,
   type RunsListResponse,
   type CancelRunResponse,
   type QueueResponse,
@@ -56,6 +57,9 @@ export async function createRun(body: {
   settings?: string;
   // Per-permission policies
   permissionPolicies?: FirewallPolicies;
+  // Internal: pin provider type for direct CLI runs used by E2E.
+  // vm0 is excluded; zero runs own vm0 credit enforcement.
+  modelProviderType?: DirectRunModelProviderType;
   // Required
   prompt: string;
 }): Promise<CreateRunResponse> {

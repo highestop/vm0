@@ -5,6 +5,7 @@ import type {
   FirewallPolicyValue,
   RawPermissionPolicies,
 } from "@vm0/connectors/firewall-types";
+import { getConnectorFirewall } from "@vm0/connectors/firewalls";
 import {
   agentComposes,
   agentComposeVersions,
@@ -1360,6 +1361,106 @@ describe("POST /api/zero/runs", () => {
     expect(firewall?.apis[0]?.auth?.headers?.Authorization).toBe(
       ["Bearer $", "{{ secrets.BASE44_TOKEN }}"].join(""),
     );
+  });
+
+  it("injects authorized Slock OAuth secrets through the runtime firewall", async () => {
+    const fx = await fixture();
+    const db = store.set(writeDb$);
+    const agent = await seedRunnableZeroAgent({ fixture: fx });
+    await db.insert(userFeatureSwitches).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      switches: {
+        [FeatureSwitchKey.SlockConnector]: true,
+      },
+    });
+    await db.insert(userConnectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      agentId: agent.agentId,
+      connectorType: "slock",
+    });
+    await db.insert(connectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      type: "slock",
+      authMethod: "oauth",
+    });
+    await db.insert(secrets).values([
+      {
+        orgId: fx.orgId,
+        userId: fx.userId,
+        name: "SLOCK_ACCESS_TOKEN",
+        encryptedValue: encryptSecretForTests("slock-access"),
+        type: "connector",
+      },
+      {
+        orgId: fx.orgId,
+        userId: fx.userId,
+        name: "SLOCK_REFRESH_TOKEN",
+        encryptedValue: encryptSecretForTests("slock-refresh"),
+        type: "connector",
+      },
+      {
+        orgId: fx.orgId,
+        userId: fx.userId,
+        name: "SLOCK_SERVER_ID",
+        encryptedValue: encryptSecretForTests("slock-server-id"),
+        type: "connector",
+      },
+    ]);
+
+    const response = await accept(
+      zeroRunsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: { prompt: "slock connector", agentId: agent.agentId },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
+      readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+      readonly firewalls: readonly {
+        readonly name: string;
+        readonly apis: readonly {
+          readonly base: string;
+          readonly auth?: { readonly headers?: Record<string, string> };
+        }[];
+      }[];
+    };
+
+    const slockFirewall = getConnectorFirewall("slock");
+    expect(executionContext.environment.SLOCK_TOKEN).toBe(
+      slockFirewall.placeholders?.SLOCK_TOKEN,
+    );
+    expect(executionContext.environment.SLOCK_SERVER_ID).toBe(
+      slockFirewall.placeholders?.SLOCK_SERVER_ID,
+    );
+    const decrypted = decryptSecretsMap(executionContext.encryptedSecrets);
+    expect(decrypted).toMatchObject({
+      SLOCK_TOKEN: "slock-access",
+      SLOCK_SERVER_ID: "slock-server-id",
+    });
+    expect(decrypted).not.toHaveProperty("SLOCK_ACCESS_TOKEN");
+    expect(decrypted).not.toHaveProperty("SLOCK_REFRESH_TOKEN");
+    expect(executionContext.secretConnectorMap).toStrictEqual({
+      SLOCK_ACCESS_TOKEN: "slock",
+      SLOCK_TOKEN: "slock",
+    });
+    const firewall = executionContext.firewalls.find((candidate) => {
+      return candidate.name === "slock";
+    });
+    expect(firewall?.apis[0]?.base).toBe("https://api.slock.ai");
+    expect(firewall?.apis[0]?.auth?.headers).toStrictEqual({
+      Authorization: ["Bearer $", "{{ secrets.SLOCK_TOKEN }}"].join(""),
+      "X-Server-Id": ["$", "{{ secrets.SLOCK_SERVER_ID }}"].join(""),
+    });
   });
 
   it("adds the Google Ads developer token for authorized OAuth connector runs", async () => {

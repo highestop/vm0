@@ -262,49 +262,32 @@ export interface ConnectorManualGrantFieldConfig {
   storage?: "secret" | "variable";
 }
 
-/**
- * OAuth configuration for connectors that support OAuth flow.
- */
-export type ConnectorOAuthTokenEndpointAuthMethod =
-  | "none"
-  | "client_secret_basic"
-  | "client_secret_post";
-
 export type ConnectorOAuthClientConfig =
   | {
       readonly clientRegistration: "static";
       readonly clientType: "confidential";
-      readonly tokenEndpointAuthMethod:
-        | "client_secret_basic"
-        | "client_secret_post";
       readonly clientIdEnv: string;
       readonly clientSecretEnv: string;
     }
   | {
       readonly clientRegistration: "static";
       readonly clientType: "confidential";
-      readonly tokenEndpointAuthMethod:
-        | "client_secret_basic"
-        | "client_secret_post";
       readonly clientId: string;
       readonly clientSecret: string;
     }
   | {
       readonly clientRegistration: "static";
       readonly clientType: "public";
-      readonly tokenEndpointAuthMethod: "none";
       readonly clientIdEnv: string;
     }
   | {
       readonly clientRegistration: "static";
       readonly clientType: "public";
-      readonly tokenEndpointAuthMethod: "none";
       readonly clientId: string;
     }
   | {
       readonly clientRegistration: "dynamic";
       readonly clientType: "public";
-      readonly tokenEndpointAuthMethod: "none";
     };
 
 export type StaticConfidentialConnectorOAuthClientConfig = Extract<

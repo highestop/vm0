@@ -215,6 +215,8 @@ export function createHtmlArtifactAuthoringPacket(
     }),
     "",
     "## Verification",
+    "- Use `agent-browser` for browser verification when available. Start with `agent-browser skills get core` if you need command guidance.",
+    "- Prefer `agent-browser` over Playwright, Puppeteer, or installing browser automation dependencies.",
     "- Open the HTML locally and verify it is nonblank.",
     "- Check that keyboard/click interactions work when present.",
     "- Check that text does not overflow or overlap at desktop and mobile viewport sizes.",

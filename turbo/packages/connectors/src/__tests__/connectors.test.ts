@@ -16,12 +16,14 @@ import {
   type ConnectorAuthMethodId,
   type ConnectorConfig,
   type ConnectorInvalidDefaultAuthMethodType,
+  type ConnectorManualGrantFieldConfig,
+  type ConnectorType,
   type OAuthAuthCodeConnectorType,
 } from "../connectors";
 import {
   getAvailableConnectorAuthMethods,
   getConfiguredConnectorAuthMethods,
-  deriveConnectedManualCredentialMethods,
+  deriveConnectedManualGrantMethods,
   hasRequiredScopes,
   getConnectorAuthCodeGrantConfigIfSupported,
   getConnectorAuthMethod,
@@ -36,9 +38,8 @@ import {
   getConnectorOAuthGrantConfigIfSupported,
   getConnectorOAuthScopes,
   getConnectorManualGrantFields,
-  getConnectorManualCredentialAuthMethods,
-  getConnectorManualCredentialFields,
-  getConnectorManualCredentialFieldStorageType,
+  getApiTokenFieldStorageType,
+  getApiTokenFieldsByType,
   getEligibleConnectorTypes,
   getRuntimeAvailableConnectorTypes,
   getConnectorSecretNames,
@@ -62,6 +63,16 @@ import {
 import { GOOGLE_OAUTH_CONNECTOR_TYPES } from "../auth-providers/oauth/google-connectors";
 import { buildGoogleAuthorizationUrl } from "../auth-providers/oauth/google";
 import { getConnectorFirewall } from "../firewalls";
+
+function getApiTokenManualGrantFields(
+  type: ConnectorType,
+): Record<string, ConnectorManualGrantFieldConfig> | undefined {
+  const method = getConnectorAuthMethod(type, "api-token");
+  if (method?.grant.kind !== "manual") {
+    return undefined;
+  }
+  return method.grant.fields;
+}
 
 const server = setupServer();
 const SLOCK_ACCESS_TOKEN_TTL_SECONDS = 900;
@@ -327,71 +338,57 @@ describe("connector auth method config", () => {
     ]);
   });
 
-  it("returns manual credential field storage types with secret default", () => {
-    expect(
-      getConnectorManualCredentialFieldStorageType(
-        "zendesk",
-        "api-token",
-        "ZENDESK_EMAIL",
-      ),
-    ).toBe("variable");
-    expect(
-      getConnectorManualCredentialFieldStorageType(
-        "zendesk",
-        "api-token",
-        "ZENDESK_API_TOKEN",
-      ),
-    ).toBe("secret");
-    expect(
-      getConnectorManualCredentialFieldStorageType(
-        "zendesk",
-        "api-token",
-        "UNKNOWN_FIELD",
-      ),
-    ).toBe("secret");
-  });
-
-  it("groups required manual credential fields by storage", () => {
-    expect(
-      getConnectorManualCredentialFields("atlassian", "api-token"),
-    ).toStrictEqual({
-      secrets: ["ATLASSIAN_TOKEN"],
-      variables: ["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"],
-    });
-    expect(getConnectorManualCredentialFields("github", "oauth")).toBeNull();
-  });
-
-  it("lists only manual credential auth methods", () => {
-    expect(getConnectorManualCredentialAuthMethods("atlassian")).toStrictEqual([
-      {
-        type: "atlassian",
-        authMethod: "api-token",
-        fields: {
-          secrets: ["ATLASSIAN_TOKEN"],
-          variables: ["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"],
-        },
-      },
-    ]);
-    expect(getConnectorManualCredentialAuthMethods("github")).toStrictEqual([]);
-    expect(getConnectorManualCredentialAuthMethods("computer")).toStrictEqual(
-      [],
+  it("returns manual grant field storage types with secret default", () => {
+    expect(getApiTokenFieldStorageType("zendesk", "ZENDESK_EMAIL")).toBe(
+      "variable",
+    );
+    expect(getApiTokenFieldStorageType("zendesk", "ZENDESK_API_TOKEN")).toBe(
+      "secret",
+    );
+    expect(getApiTokenFieldStorageType("zendesk", "UNKNOWN_FIELD")).toBe(
+      "secret",
     );
   });
 
-  it("derives connected manual credential methods from required fields", () => {
+  it("groups required api-token credential fields by storage", () => {
+    expect(getApiTokenFieldsByType("atlassian")).toStrictEqual({
+      secrets: ["ATLASSIAN_TOKEN"],
+      variables: ["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"],
+    });
+    expect(getApiTokenFieldsByType("github")).toBeNull();
+  });
+
+  it("groups all manual grant fields by storage", () => {
+    expect(getConnectorManualGrantFields("atlassian")).toStrictEqual({
+      secrets: ["ATLASSIAN_TOKEN"],
+      variables: ["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"],
+    });
+    expect(getConnectorManualGrantFields("gitlab")).toStrictEqual({
+      secrets: ["GITLAB_TOKEN"],
+      variables: ["GITLAB_HOST"],
+    });
+    expect(getConnectorManualGrantFields("github")).toBeNull();
+    expect(getConnectorManualGrantFields("computer")).toBeNull();
+  });
+
+  it("derives connected manual grant methods from required fields", () => {
     expect(
-      deriveConnectedManualCredentialMethods(
+      deriveConnectedManualGrantMethods(
         new Set(["ATLASSIAN_TOKEN"]),
         new Set(["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"]),
       ),
-    ).toContainEqual({ type: "atlassian", authMethod: "api-token" });
+    ).toContainEqual(
+      expect.objectContaining({ type: "atlassian", authMethod: "api-token" }),
+    );
     expect(
-      deriveConnectedManualCredentialMethods(
+      deriveConnectedManualGrantMethods(
         new Set(["ATLASSIAN_TOKEN"]),
         new Set(["ATLASSIAN_EMAIL"]),
       ),
-    ).not.toContainEqual({ type: "atlassian", authMethod: "api-token" });
-    const connected = deriveConnectedManualCredentialMethods(
+    ).not.toContainEqual(
+      expect.objectContaining({ type: "atlassian", authMethod: "api-token" }),
+    );
+    const connected = deriveConnectedManualGrantMethods(
       new Set(["GITHUB_ACCESS_TOKEN", "COMPUTER_CONNECTOR_BRIDGE_TOKEN"]),
       new Set(),
     );
@@ -1611,7 +1608,7 @@ describe("getConnectorEnvironmentMapping", () => {
       );
 
       // api-token (if exists): exactly one secret XXX_TOKEN
-      const apiTokenFields = getConnectorManualGrantFields(type, "api-token");
+      const apiTokenFields = getApiTokenManualGrantFields(type);
       if (apiTokenFields) {
         expect(
           Object.keys(apiTokenFields),
@@ -1624,7 +1621,7 @@ describe("getConnectorEnvironmentMapping", () => {
   it("api-token-only connectors expose all secrets via environmentMapping with same name", () => {
     for (const type of connectorTypeSchema.options) {
       if (getConnectorOAuthGrantConfigIfSupported(type)) continue;
-      const fields = getConnectorManualGrantFields(type, "api-token");
+      const fields = getApiTokenManualGrantFields(type);
       if (!fields) continue;
 
       const fieldNames = Object.keys(fields);

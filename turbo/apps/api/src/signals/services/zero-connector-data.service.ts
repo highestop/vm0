@@ -7,19 +7,18 @@ import type {
 import type { ConnectorSearchAuthMethod } from "@vm0/api-contracts/contracts/zero-connectors";
 import {
   connectorAuthMethodHasOAuthGrant,
-  deriveConnectedManualCredentialMethod,
-  deriveConnectedManualCredentialMethods,
+  deriveConnectedManualGrantMethod,
+  deriveConnectedManualGrantMethods,
   getAvailableConnectorAuthMethods,
-  getConnectorManualCredentialAuthMethods,
+  getConnectorManualGrantFields,
   getConnectorOAuthCredentials,
   getConnectorProvidedSecretNames,
   getConnectorSecretNames,
   getRuntimeAvailableConnectorTypes,
   getScopeDiff,
   isConnectorAuthMethodAvailable,
-  type ConnectedManualCredentialMethod,
-  type ManualCredentialAuthMethod,
-  type ManualCredentialFieldNames,
+  type ConnectedManualGrantMethod,
+  type ManualGrantFieldNames,
 } from "@vm0/connectors/connector-utils";
 import {
   getConnectorOAuthSecretMetadata,
@@ -125,8 +124,8 @@ function storedConnectorTypeIsVisible(
   );
 }
 
-function manualCredentialConnectorResponse(
-  method: ConnectedManualCredentialMethod,
+function manualGrantConnectorResponse(
+  method: ConnectedManualGrantMethod,
 ): ConnectorResponse {
   return {
     id: null,
@@ -142,7 +141,7 @@ function manualCredentialConnectorResponse(
   };
 }
 
-async function loadUserManualCredentialNameSets(
+async function loadUserManualGrantFieldNameSets(
   db: Db | ReadonlyDb,
   args: {
     readonly orgId: string;
@@ -185,45 +184,16 @@ async function loadUserManualCredentialNameSets(
   };
 }
 
-function mergeManualCredentialFields(
-  methods: readonly ManualCredentialAuthMethod[],
-): ManualCredentialFieldNames | null {
-  const secretsSet = new Set<string>();
-  const variablesSet = new Set<string>();
-  for (const method of methods) {
-    for (const name of method.fields.secrets) {
-      secretsSet.add(name);
-    }
-    for (const name of method.fields.variables) {
-      variablesSet.add(name);
-    }
-  }
-  const secretsList = [...secretsSet];
-  const variablesList = [...variablesSet];
-  if (secretsList.length === 0 && variablesList.length === 0) {
-    return null;
-  }
-  return { secrets: secretsList, variables: variablesList };
-}
-
-function manualCredentialFieldsByType(
-  type: ConnectorType,
-): ManualCredentialFieldNames | null {
-  return mergeManualCredentialFields(
-    getConnectorManualCredentialAuthMethods(type),
-  );
-}
-
-function manualCredentialConnectorMethods(args: {
+function manualGrantConnectorMethods(args: {
   readonly orgId: string;
   readonly userId: string;
-}): Computed<Promise<readonly ConnectedManualCredentialMethod[]>> {
+}): Computed<Promise<readonly ConnectedManualGrantMethod[]>> {
   return computed(
-    async (get): Promise<readonly ConnectedManualCredentialMethod[]> => {
+    async (get): Promise<readonly ConnectedManualGrantMethod[]> => {
       const db = get(db$);
       const { secretNames, variableNames } =
-        await loadUserManualCredentialNameSets(db, args);
-      return deriveConnectedManualCredentialMethods(secretNames, variableNames);
+        await loadUserManualGrantFieldNameSets(db, args);
+      return deriveConnectedManualGrantMethods(secretNames, variableNames);
     },
   );
 }
@@ -255,7 +225,7 @@ export function zeroConnectorList(args: {
             eq(connectors.userId, args.userId),
           ),
         ),
-      get(manualCredentialConnectorMethods(args)),
+      get(manualGrantConnectorMethods(args)),
       get(userFeatureSwitchOverrides(args.orgId, args.userId)),
     ]);
     const featureStates = getAllFeatureStates({
@@ -295,7 +265,7 @@ export function zeroConnectorList(args: {
         );
       })
       .map((method) => {
-        return manualCredentialConnectorResponse(method);
+        return manualGrantConnectorResponse(method);
       });
 
     const connectorList = [...dbConnectors, ...derivedConnectors];
@@ -354,23 +324,21 @@ function storedConnectorByType(args: {
   });
 }
 
-function manualCredentialMethodByType(args: {
+function manualGrantMethodByType(args: {
   readonly orgId: string;
   readonly userId: string;
   readonly type: ConnectorType;
-}): Computed<Promise<ConnectedManualCredentialMethod | null>> {
-  return computed(
-    async (get): Promise<ConnectedManualCredentialMethod | null> => {
-      const db = get(db$);
-      const { secretNames, variableNames } =
-        await loadUserManualCredentialNameSets(db, args);
-      return deriveConnectedManualCredentialMethod(
-        args.type,
-        secretNames,
-        variableNames,
-      );
-    },
-  );
+}): Computed<Promise<ConnectedManualGrantMethod | null>> {
+  return computed(async (get): Promise<ConnectedManualGrantMethod | null> => {
+    const db = get(db$);
+    const { secretNames, variableNames } =
+      await loadUserManualGrantFieldNameSets(db, args);
+    return deriveConnectedManualGrantMethod(
+      args.type,
+      secretNames,
+      variableNames,
+    );
+  });
 }
 
 export function zeroConnectorByType(args: {
@@ -397,22 +365,20 @@ export function zeroConnectorByType(args: {
         return storedConnector;
       }
     }
-    const manualCredentialMethod = await get(
-      manualCredentialMethodByType(args),
-    );
-    if (!manualCredentialMethod) {
+    const manualGrantMethod = await get(manualGrantMethodByType(args));
+    if (!manualGrantMethod) {
       return null;
     }
     if (
       !isConnectorAuthMethodAvailable(
         args.type,
-        manualCredentialMethod.authMethod,
+        manualGrantMethod.authMethod,
         featureStates,
       )
     ) {
       return null;
     }
-    return manualCredentialConnectorResponse(manualCredentialMethod);
+    return manualGrantConnectorResponse(manualGrantMethod);
   });
 }
 
@@ -471,11 +437,11 @@ async function revokeExistingConnectorToken(args: {
   args.signal.throwIfAborted();
 }
 
-async function hasManualCredentialConnectorLocalState(args: {
+async function hasManualGrantConnectorLocalState(args: {
   readonly db: Db;
   readonly orgId: string;
   readonly userId: string;
-  readonly fields: ManualCredentialFieldNames | null;
+  readonly fields: ManualGrantFieldNames | null;
   readonly signal: AbortSignal;
 }): Promise<boolean> {
   if (!args.fields) {
@@ -522,11 +488,11 @@ async function hasManualCredentialConnectorLocalState(args: {
   return false;
 }
 
-async function deleteManualCredentialConnectorLocalState(args: {
+async function deleteManualGrantConnectorLocalState(args: {
   readonly db: Db;
   readonly orgId: string;
   readonly userId: string;
-  readonly fields: ManualCredentialFieldNames | null;
+  readonly fields: ManualGrantFieldNames | null;
   readonly signal: AbortSignal;
 }): Promise<boolean> {
   if (!args.fields) {
@@ -603,17 +569,17 @@ export const deleteZeroConnectorLocalState$ = command(
       .limit(1);
     signal.throwIfAborted();
 
-    const fields = manualCredentialFieldsByType(args.type);
-    const hasManualCredentialState = existing
+    const fields = getConnectorManualGrantFields(args.type);
+    const hasManualGrantState = existing
       ? false
-      : await hasManualCredentialConnectorLocalState({
+      : await hasManualGrantConnectorLocalState({
           db: writeDb,
           orgId: args.orgId,
           userId: args.userId,
           fields,
           signal,
         });
-    if (!existing && !hasManualCredentialState) {
+    if (!existing && !hasManualGrantState) {
       return false;
     }
 
@@ -663,7 +629,7 @@ export const deleteZeroConnectorLocalState$ = command(
     }
 
     deleted =
-      (await deleteManualCredentialConnectorLocalState({
+      (await deleteManualGrantConnectorLocalState({
         db: writeDb,
         orgId: args.orgId,
         userId: args.userId,
@@ -838,7 +804,7 @@ export const upsertOAuthConnector$ = command(
         ? secretMetadata.refreshSecretName
         : undefined,
     });
-    const manualCredentialFields = manualCredentialFieldsByType(args.type);
+    const manualGrantFields = getConnectorManualGrantFields(args.type);
 
     await invalidateActiveCliAuthSessionsForConnectorType({
       writeDb,
@@ -921,11 +887,11 @@ export const upsertOAuthConnector$ = command(
       throw new Error("Failed to upsert connector");
     }
 
-    await deleteManualCredentialConnectorLocalState({
+    await deleteManualGrantConnectorLocalState({
       db: writeDb,
       orgId: args.orgId,
       userId: args.userId,
-      fields: manualCredentialFields,
+      fields: manualGrantFields,
       signal,
     });
     signal.throwIfAborted();

@@ -28,6 +28,7 @@ import {
   deriveConnectedManualGrantMethods,
   hasRequiredScopes,
   getConnectorAuthCodeGrantConfig,
+  getConnectorAuthMethodEnvBindings,
   getConnectorAuthMethod,
   getConnectorDeviceAuthGrantConfig,
   getConnectorTypeForSecretName,
@@ -38,6 +39,7 @@ import {
   getConnectorManualGrantFieldNames,
   getRuntimeAvailableConnectorTypes,
   getConnectorSecretNames,
+  getConnectorVariableNames,
   hasConnectorOAuthGrant,
   hasConnectorAuthCodeGrant,
   hasConnectorDeviceAuthGrant,
@@ -1299,6 +1301,33 @@ describe("getAvailableConnectorAuthMethods", () => {
     expect(getAvailableConnectorAuthMethods("weread", {})).toStrictEqual([
       "api-token",
     ]);
+  });
+});
+
+describe("getConnectorAuthMethodEnvBindings", () => {
+  it("returns env bindings for the exact auth method", () => {
+    expect(getConnectorAuthMethodEnvBindings("ahrefs", "oauth")).toEqual({
+      AHREFS_TOKEN: "$secrets.AHREFS_ACCESS_TOKEN",
+    });
+    expect(getConnectorAuthMethodEnvBindings("ahrefs", "api-token")).toEqual({
+      AHREFS_TOKEN: "$secrets.AHREFS_TOKEN",
+    });
+  });
+
+  it("returns empty env bindings for an unknown auth method", () => {
+    expect(getConnectorAuthMethodEnvBindings("ahrefs", "missing")).toEqual({});
+  });
+});
+
+describe("getConnectorVariableNames", () => {
+  it("returns manual grant variable fields for the exact auth method", () => {
+    expect(new Set(getConnectorVariableNames("zendesk", "api-token"))).toEqual(
+      new Set(["ZENDESK_EMAIL", "ZENDESK_SUBDOMAIN"]),
+    );
+  });
+
+  it("returns no variables for an auth method without variable fields", () => {
+    expect(getConnectorVariableNames("ahrefs", "oauth")).toEqual([]);
   });
 });
 

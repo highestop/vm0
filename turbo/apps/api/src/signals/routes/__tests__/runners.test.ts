@@ -553,6 +553,98 @@ describe("POST /api/runners/*", () => {
     });
   });
 
+  it("fails invalid stored execution context and dequeues the job", async () => {
+    const fixture = await trackUsageFixture(
+      store.set(seedUsageInsightFixture$, undefined, context.signal),
+    );
+    const queued = await seedQueuedRun({
+      fixture,
+      contextOverrides: { apiStartTime: 1 },
+    });
+
+    const response = await claimRunnerJob({
+      runId: queued.runId,
+      authorization: OFFICIAL_RUNNER_TOKEN,
+      status: 400,
+    });
+
+    expect(response.body).toStrictEqual({
+      error: {
+        message: "Job missing execution context",
+        code: "BAD_REQUEST",
+      },
+    });
+
+    const db = store.set(writeDb$);
+    const remainingJobs = await db
+      .select({ runId: runnerJobQueue.runId })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, queued.runId));
+    expect(remainingJobs).toHaveLength(0);
+
+    const [run] = await db
+      .select({
+        status: agentRuns.status,
+        error: agentRuns.error,
+        completedAt: agentRuns.completedAt,
+        startedAt: agentRuns.startedAt,
+      })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, queued.runId));
+    expect(run).toMatchObject({
+      status: "failed",
+      error: "Runner job missing valid execution context",
+    });
+    expect(run?.completedAt).toBeInstanceOf(Date);
+    expect(run?.startedAt).toBeNull();
+    expect(context.mocks.ably.publish).toHaveBeenCalledWith(
+      `run:changed:${queued.runId}`,
+      { status: "failed" },
+    );
+    expect(context.mocks.ably.publish).not.toHaveBeenCalledWith(
+      `run:changed:${queued.runId}`,
+      { status: "running" },
+    );
+  });
+
+  it("removes a claimable job when the run is no longer pending", async () => {
+    const fixture = await trackUsageFixture(
+      store.set(seedUsageInsightFixture$, undefined, context.signal),
+    );
+    const queued = await seedQueuedRun({ fixture });
+    const db = store.set(writeDb$);
+    await db
+      .update(agentRuns)
+      .set({ status: "cancelled", completedAt: new Date(now()) })
+      .where(eq(agentRuns.id, queued.runId));
+
+    const response = await claimRunnerJob({
+      runId: queued.runId,
+      authorization: OFFICIAL_RUNNER_TOKEN,
+      status: 404,
+    });
+
+    expect(response.body).toStrictEqual({
+      error: { message: "Run not found", code: "NOT_FOUND" },
+    });
+
+    const remainingJobs = await db
+      .select({ runId: runnerJobQueue.runId })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, queued.runId));
+    expect(remainingJobs).toHaveLength(0);
+
+    const [run] = await db
+      .select({
+        status: agentRuns.status,
+        startedAt: agentRuns.startedAt,
+      })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, queued.runId));
+    expect(run?.status).toBe("cancelled");
+    expect(run?.startedAt).toBeNull();
+  });
+
   it("prevents official runners from claiming non-vm0 runner groups", async () => {
     const fixture = await trackUsageFixture(
       store.set(seedUsageInsightFixture$, undefined, context.signal),
@@ -751,6 +843,46 @@ describe("POST /api/runners/*", () => {
       `run:changed:${queued.runId}`,
       { status: "running" },
     );
+  });
+
+  it("allows only one concurrent runner claim for a queued job", async () => {
+    const fixture = await trackUsageFixture(
+      store.set(seedUsageInsightFixture$, undefined, context.signal),
+    );
+    const queued = await seedQueuedRun({ fixture });
+    const client = setupApp({ context })(runnersJobClaimContract);
+
+    const responses = await Promise.all(
+      [0, 1].map(() => {
+        return accept(
+          client.claim({
+            params: { id: queued.runId },
+            body: {},
+            headers: { authorization: OFFICIAL_RUNNER_TOKEN },
+          }),
+          [200, 404, 409],
+        );
+      }),
+    );
+
+    expect(
+      responses.filter((response) => {
+        return response.status === 200;
+      }),
+    ).toHaveLength(1);
+
+    const db = store.set(writeDb$);
+    const [run] = await db
+      .select({ status: agentRuns.status })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, queued.runId));
+    expect(run?.status).toBe("running");
+
+    const remainingJobs = await db
+      .select({ runId: runnerJobQueue.runId })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, queued.runId));
+    expect(remainingJobs).toHaveLength(0);
   });
 
   it("returns appendSystemPrompt in claim responses", async () => {

@@ -10,14 +10,18 @@ emitted bucket must have a dev-seed row, etc.
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import pathlib
 import re
-from typing import ClassVar
+import subprocess
+from typing import ClassVar, NamedTuple, NoReturn
 
 import pytest
 
+import matching
+from usage.providers.connectors import _HANDLERS as CONNECTOR_USAGE_HANDLERS
 from usage.providers.connectors.x_billing import (
     _INCLUDES_TO_BUCKET,
     _PATH_OVERRIDES,
@@ -27,6 +31,296 @@ from usage.providers.connectors.x_billing import (
     refine_bucket_with_body,
 )
 from usage.providers.connectors.x_tlds import IANA_TLD_VERSION, IANA_TLDS
+
+
+class _FirewallPermission(NamedTuple):
+    base: str
+    name: str
+    rules: tuple[str, ...]
+
+
+class _FirewallApiEntry(NamedTuple):
+    base: str
+    permission_count: int
+
+
+class _XFirewallExport(NamedTuple):
+    name: str
+    registered_name: str
+    billable_connectors: tuple[str, ...]
+    registered_api_entries: tuple[_FirewallApiEntry, ...]
+    api_entries: tuple[_FirewallApiEntry, ...]
+    registered_permissions: tuple[_FirewallPermission, ...]
+    permissions: tuple[_FirewallPermission, ...]
+
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
+_TURBO_DIR = _REPO_ROOT / "turbo"
+_X_FIREWALL_PATH = _TURBO_DIR / "packages" / "connectors" / "src" / "firewalls" / "x.generated.ts"
+_PATH_PARAM_RE = re.compile(r"^(?P<prefix>[^{}]*)\{(?P<name>[^{}]+)\}(?P<suffix>[^{}]*)$")
+_SIMPLE_PATH_PARAM_SEGMENT_RE = re.compile(r"^\{[^{}+*]+\}$")
+_X_FIREWALL_EXPORT_SCRIPT = """
+import { collectAndValidatePermissions } from "./packages/connectors/src/firewall-expander.ts";
+import {
+  BILLABLE_CONNECTORS,
+  getConnectorFirewall,
+} from "./packages/connectors/src/firewalls/index.ts";
+import { xFirewall } from "./packages/connectors/src/firewalls/x.generated.ts";
+
+collectAndValidatePermissions(xFirewall);
+const registeredXFirewall = getConnectorFirewall("x");
+collectAndValidatePermissions(registeredXFirewall);
+
+const flattenPermissions = (firewall) => firewall.apis.flatMap((api) =>
+  (api.permissions ?? []).map((permission) => ({ ...permission, base: api.base }))
+);
+const flattenApiEntries = (firewall) => firewall.apis.map((api) => ({
+  base: api.base,
+  permissionCount: api.permissions?.length ?? 0,
+}));
+
+console.log(JSON.stringify({
+  name: xFirewall.name,
+  registeredName: registeredXFirewall.name,
+  billableConnectors: BILLABLE_CONNECTORS,
+  registeredApiEntries: flattenApiEntries(registeredXFirewall),
+  apiEntries: flattenApiEntries(xFirewall),
+  registeredPermissions: flattenPermissions(registeredXFirewall),
+  permissions: flattenPermissions(xFirewall),
+}));
+""".strip()
+
+
+def _fail_x_firewall_load(message: str, *, stdout: str = "", stderr: str = "") -> NoReturn:
+    details = message
+    if stdout:
+        details += f"\n\nstdout:\n{stdout}"
+    if stderr:
+        details += f"\n\nstderr:\n{stderr}"
+    pytest.fail(details)
+
+
+def _parse_x_firewall_permissions(raw: object) -> tuple[_FirewallPermission, ...]:
+    if not isinstance(raw, list):
+        _fail_x_firewall_load(
+            f"Expected xFirewall permissions JSON to be a list, got {type(raw).__name__}."
+        )
+
+    permissions: list[_FirewallPermission] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            _fail_x_firewall_load(
+                "Expected each xFirewall permission entry to be an object, "
+                f"but entry {index} is {type(entry).__name__}."
+            )
+
+        base = entry.get("base")
+        if not isinstance(base, str):
+            _fail_x_firewall_load(
+                "Expected each xFirewall permission entry to have a string "
+                f"`base`, but entry {index} has {type(base).__name__}."
+            )
+
+        name = entry.get("name")
+        if not isinstance(name, str):
+            _fail_x_firewall_load(
+                "Expected each xFirewall permission entry to have a string "
+                f"`name`, but entry {index} has {type(name).__name__}."
+            )
+
+        rules = entry.get("rules")
+        if not isinstance(rules, list):
+            _fail_x_firewall_load(
+                "Expected xFirewall permission "
+                f"{name!r} to have a `rules` list, got {type(rules).__name__}."
+            )
+
+        validated_rules: list[str] = []
+        for rule_index, rule in enumerate(rules):
+            if not isinstance(rule, str):
+                _fail_x_firewall_load(
+                    "Expected every xFirewall rule to be a string, but "
+                    f"{name!r} rule {rule_index} is {type(rule).__name__}."
+                )
+            validated_rules.append(rule)
+
+        permissions.append(_FirewallPermission(base=base, name=name, rules=tuple(validated_rules)))
+
+    return tuple(permissions)
+
+
+def _parse_x_firewall_api_entries(raw: object) -> tuple[_FirewallApiEntry, ...]:
+    if not isinstance(raw, list):
+        _fail_x_firewall_load(
+            f"Expected xFirewall API entry JSON to be a list, got {type(raw).__name__}."
+        )
+
+    api_entries: list[_FirewallApiEntry] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            _fail_x_firewall_load(
+                "Expected each xFirewall API entry to be an object, "
+                f"but entry {index} is {type(entry).__name__}."
+            )
+
+        base = entry.get("base")
+        if not isinstance(base, str):
+            _fail_x_firewall_load(
+                "Expected each xFirewall API entry to have a string "
+                f"`base`, but entry {index} has {type(base).__name__}."
+            )
+
+        permission_count = entry.get("permissionCount")
+        if not isinstance(permission_count, int):
+            _fail_x_firewall_load(
+                "Expected each xFirewall API entry to have an integer "
+                f"`permissionCount`, but entry {index} has {type(permission_count).__name__}."
+            )
+
+        api_entries.append(_FirewallApiEntry(base=base, permission_count=permission_count))
+
+    return tuple(api_entries)
+
+
+def _parse_string_list(raw: object, name: str) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        _fail_x_firewall_load(f"Expected xFirewall export JSON `{name}` to be a list.")
+    values: list[str] = []
+    for index, value in enumerate(raw):
+        if not isinstance(value, str):
+            _fail_x_firewall_load(
+                f"Expected xFirewall export JSON `{name}` entry {index} to be a string, "
+                f"got {type(value).__name__}."
+            )
+        values.append(value)
+    return tuple(values)
+
+
+def _parse_x_firewall_export(raw: object) -> _XFirewallExport:
+    if not isinstance(raw, dict):
+        _fail_x_firewall_load(
+            f"Expected xFirewall export JSON to be an object, got {type(raw).__name__}."
+        )
+
+    name = raw.get("name")
+    if not isinstance(name, str):
+        _fail_x_firewall_load(
+            f"Expected xFirewall export JSON to have a string `name`, got {type(name).__name__}."
+        )
+
+    registered_name = raw.get("registeredName")
+    if not isinstance(registered_name, str):
+        _fail_x_firewall_load(
+            "Expected xFirewall export JSON to have a string "
+            f"`registeredName`, got {type(registered_name).__name__}."
+        )
+
+    billable_connectors = _parse_string_list(raw.get("billableConnectors"), "billableConnectors")
+    registered_api_entries = _parse_x_firewall_api_entries(raw.get("registeredApiEntries"))
+    api_entries = _parse_x_firewall_api_entries(raw.get("apiEntries"))
+    registered_permissions = _parse_x_firewall_permissions(raw.get("registeredPermissions"))
+    permissions = _parse_x_firewall_permissions(raw.get("permissions"))
+    return _XFirewallExport(
+        name=name,
+        registered_name=registered_name,
+        billable_connectors=billable_connectors,
+        registered_api_entries=registered_api_entries,
+        api_entries=api_entries,
+        registered_permissions=registered_permissions,
+        permissions=permissions,
+    )
+
+
+@functools.cache
+def _load_x_firewall_export() -> _XFirewallExport:
+    if not _X_FIREWALL_PATH.exists():
+        pytest.fail(
+            f"x.generated.ts not found at {_X_FIREWALL_PATH}.\n"
+            "This file is generated by the firewall generator's postinstall "
+            "hook and is gitignored — run `cd turbo && pnpm install` to "
+            "produce it before running these tests.  If the file still "
+            "isn't created after install, the generator output path has "
+            "likely moved; update this test's path computation."
+        )
+
+    command = ["pnpm", "exec", "tsx", "-e", _X_FIREWALL_EXPORT_SCRIPT]
+    # Trusted workspace tooling with constant argv; no user-controlled shell input.
+    completed = subprocess.run(  # noqa: S603
+        command,
+        cwd=_TURBO_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        _fail_x_firewall_load(
+            "Failed to load xFirewall from x.generated.ts with "
+            f"`{' '.join(command[:3])} -e <script>` "
+            f"(exit code {completed.returncode}).",
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+    try:
+        raw: object = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        _fail_x_firewall_load(
+            "Failed to parse xFirewall permissions JSON emitted by tsx.",
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+    return _parse_x_firewall_export(raw)
+
+
+def _load_x_firewall_permissions() -> tuple[_FirewallPermission, ...]:
+    return _load_x_firewall_export().permissions
+
+
+@functools.cache
+def _compile_generated_x_firewall() -> matching.CompiledFirewallSet:
+    export = _load_x_firewall_export()
+    permissions_by_base: dict[str, list[dict[str, object]]] = {}
+    for permission in export.permissions:
+        permissions_by_base.setdefault(permission.base, []).append(
+            {"name": permission.name, "rules": list(permission.rules)}
+        )
+    compiled = matching.compile_firewalls(
+        [
+            {
+                "name": export.name,
+                "apis": [
+                    {
+                        "base": entry.base,
+                        "permissions": permissions_by_base.get(entry.base, []),
+                    }
+                    for entry in export.api_entries
+                ],
+            }
+        ]
+    )
+    if compiled is None:
+        pytest.fail("Generated X firewall failed to compile with the production matcher.")
+    return compiled
+
+
+def _sample_path_for_pattern(pattern: str) -> str:
+    segments: list[str] = []
+    for segment in pattern.split("/"):
+        if not segment:
+            continue
+        match = _PATH_PARAM_RE.match(segment)
+        if match is None:
+            segments.append(segment)
+            continue
+
+        name = match.group("name")
+        if name.endswith(("+", "*")):
+            segments.append("sample")
+        else:
+            segments.append(f"{match.group('prefix')}sample{match.group('suffix')}")
+
+    return "/" + "/".join(segments)
 
 
 class TestTldSnapshot:
@@ -60,71 +354,177 @@ class TestFirewallConsistency:
     # matching these scopes do not emit ``usage_event`` rows.
     _INTENTIONALLY_UNMAPPED: frozenset[str] = frozenset({"app-only"})
 
-    def _firewall_block(self) -> str:
-        fw_path = (
-            pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
-            / "turbo"
-            / "packages"
-            / "connectors"
-            / "src"
-            / "firewalls"
-            / "x.generated.ts"
+    def test_generated_firewall_name_matches_billing_handler(self):
+        assert _load_x_firewall_export().name == "x", (
+            "Connector usage dispatch is keyed by firewall_name.  If the "
+            "generated X firewall is renamed, update the billing dispatcher "
+            "handler key and billable connector config before trusting these "
+            "scope/path drift checks."
         )
-        if not fw_path.exists():
-            pytest.fail(
-                f"x.generated.ts not found at {fw_path}.\n"
-                "This file is generated by the firewall generator's postinstall "
-                "hook and is gitignored — run `cd turbo && pnpm install` to "
-                "produce it before running these tests.  If the file still "
-                "isn't created after install, the generator output path has "
-                "likely moved; update this test's path computation."
-            )
-        text = fw_path.read_text()
-        try:
-            start = text.index("permissions: [")
-        except ValueError:
-            pytest.fail(
-                "Could not locate the `permissions: [...]` block in "
-                f"{fw_path}.  The firewall generator's output shape changed "
-                "— update this test."
-            )
-        pos = start + len("permissions: [")
-        depth = 1
-        while pos < len(text) and depth > 0:
-            c = text[pos]
-            if c == "[":
-                depth += 1
-            elif c == "]":
-                depth -= 1
-            pos += 1
-        if depth != 0:
-            pytest.fail(f"Unbalanced `permissions: [...]` brackets in {fw_path}.")
-        return text[start:pos]
+
+    def test_generated_firewall_name_is_billable_and_dispatchable(self):
+        export = _load_x_firewall_export()
+        assert export.registered_name == export.name, (
+            "The connector firewall registry does not return the generated X "
+            "firewall, so API run contexts may not attach X firewall rules."
+        )
+        assert export.name in CONNECTOR_USAGE_HANDLERS, (
+            "The generated X firewall name is not registered in the mitm-addon "
+            "connector usage dispatcher, so billable X flows would be dropped."
+        )
+        assert export.name in export.billable_connectors, (
+            "The generated X firewall name is not listed in BILLABLE_CONNECTORS, "
+            "so API run contexts would not mark X flows as billable."
+        )
+
+    def test_registered_firewall_shape_matches_generated_file(self):
+        export = _load_x_firewall_export()
+        assert export.registered_api_entries == export.api_entries, (
+            "The X connector firewall registry does not expose the same API "
+            "entry shape and order as x.generated.ts. Runtime firewall matching "
+            "uses the registry and first-match semantics make order meaningful, "
+            "so generated-file drift checks must not silently ignore registry-only "
+            "or reordered API entries."
+        )
+        assert export.registered_permissions == export.permissions, (
+            "The X connector firewall registry does not expose the same "
+            "permission/rule set and order as x.generated.ts. Runtime firewall "
+            "matching uses the registry and first-match semantics make order "
+            "meaningful, so classifier drift checks must not silently validate "
+            "a different or reordered generated object."
+        )
 
     def _load_firewall_permissions(self) -> set[str]:
-        # Pick permission-level `name: "..."` entries, not the outer
-        # firewall name or any future sibling structures.
-        return set(re.findall(r'name:\s*"([^"]+)"', self._firewall_block()))
+        return {permission.name for permission in _load_x_firewall_permissions()}
 
     def _load_firewall_rules(self) -> dict[str, set[tuple[str, str]]]:
         """Return ``{scope: {(method, pattern), ...}}`` from the generated
         firewall.  Used to verify that every classifier path override
         actually exists as a rule under its claimed scope."""
-        block = self._firewall_block()
-        group_re = re.compile(
-            r'name:\s*"(?P<name>[^"]+)"\s*,'
-            r'(?:\s*description:\s*"[^"]*"\s*,)?'
-            r"\s*rules:\s*\[(?P<rules>.*?)\]",
-            re.DOTALL,
-        )
-        rule_re = re.compile(r'"(?P<method>[A-Z]+)\s+(?P<pattern>[^"]+)"')
         result: dict[str, set[tuple[str, str]]] = {}
-        for m in group_re.finditer(block):
-            rules = {
-                (r.group("method"), r.group("pattern")) for r in rule_re.finditer(m.group("rules"))
-            }
-            result[m.group("name")] = rules
+        for permission in _load_x_firewall_permissions():
+            rules: set[tuple[str, str]] = set()
+            for rule in permission.rules:
+                parts = rule.split(" ", 1)
+                if len(parts) != 2:
+                    pytest.fail(
+                        "Expected xFirewall rule to be shaped like "
+                        f"`METHOD /path`, got {rule!r} for permission {permission.name!r}."
+                    )
+                method, pattern = parts
+                if matching.compile_path_pattern(pattern) is None:
+                    pytest.fail(
+                        "Expected xFirewall rule path to compile with the "
+                        f"production matcher, got {rule!r} for permission {permission.name!r}."
+                    )
+                rules.add((method, pattern))
+            result.setdefault(permission.name, set()).update(rules)
         return result
+
+    def test_generated_firewall_rules_are_uniquely_owned(self):
+        owners: dict[tuple[str, str, str], list[str]] = {}
+        for permission in _load_x_firewall_permissions():
+            for rule in permission.rules:
+                method, pattern = rule.split(" ", 1)
+                owners.setdefault((permission.base, method, pattern), []).append(permission.name)
+
+        duplicates = [
+            (base, method, pattern, permission_names)
+            for (base, method, pattern), permission_names in owners.items()
+            if len(permission_names) > 1
+        ]
+        assert not duplicates, (
+            "Generated xFirewall has duplicate base/method/path rules: "
+            f"{duplicates}. Runtime firewall matching returns the first "
+            "matching permission, so duplicate endpoint ownership can make "
+            "X billing classify a different scope than these drift checks expect."
+        )
+
+    def test_generated_firewall_rules_do_not_use_any_method(self):
+        wildcard_rules: list[tuple[str, str, str]] = []
+        for permission in _load_x_firewall_permissions():
+            for rule in permission.rules:
+                method, pattern = rule.split(" ", 1)
+                if method == "ANY":
+                    wildcard_rules.append((permission.name, method, pattern))
+
+        assert not wildcard_rules, (
+            "Generated xFirewall has wildcard HTTP method rules: "
+            f"{wildcard_rules}. Production firewall matching supports ANY, "
+            "but X billing override classification is indexed by the concrete "
+            "request method and would not apply ANY-specific overrides without "
+            "additional classifier logic."
+        )
+
+    def test_generated_firewall_rules_use_simple_parameter_segments(self):
+        complex_patterns: list[tuple[str, str, str, str]] = []
+        for permission in _load_x_firewall_permissions():
+            for rule in permission.rules:
+                method, pattern = rule.split(" ", 1)
+                for segment in pattern.split("/"):
+                    if "{" not in segment and "}" not in segment:
+                        continue
+                    if _SIMPLE_PATH_PARAM_SEGMENT_RE.fullmatch(segment) is None:
+                        complex_patterns.append((permission.name, method, pattern, segment))
+                        break
+
+        assert not complex_patterns, (
+            "Generated xFirewall rules use mixed or greedy parameter segments: "
+            f"{complex_patterns}. The X billing drift tests use representative "
+            "sample paths to prove runtime first-match bucket preservation; "
+            "upgrade those overlap checks before accepting generated paths "
+            "beyond literal segments and whole-segment `{param}` placeholders."
+        )
+
+    def test_generated_firewall_api_entries_use_supported_base(self):
+        export = _load_x_firewall_export()
+        assert export.api_entries == (
+            _FirewallApiEntry(
+                base="https://api.x.com",
+                permission_count=len(export.permissions),
+            ),
+        ), (
+            "X billing classification and the runtime drift tests assume a single "
+            "generated xFirewall API entry at https://api.x.com containing every "
+            f"permission.  Generated entries are now {export.api_entries}; review "
+            "whether billing classification needs to include API base or preserve "
+            "multi-entry firewall ordering before trusting path-level drift checks."
+        )
+
+    def test_generated_firewall_api_entries_have_permissions(self):
+        empty_entries = [
+            entry.base
+            for entry in _load_x_firewall_export().api_entries
+            if entry.permission_count == 0
+        ]
+        assert not empty_entries, (
+            "Generated xFirewall has API entries without permissions: "
+            f"{empty_entries}. X billing is keyed by matched permission, so "
+            "permissionless entries would be treated as unknown endpoints and "
+            "skip usage_event emission."
+        )
+
+    def test_generated_firewall_payload_has_expected_stable_scopes(self):
+        firewall_scopes = self._load_firewall_permissions()
+        expected = {"tweet.read", "users.read"}
+        missing = expected - firewall_scopes
+        assert not missing, (
+            "Loaded xFirewall permissions payload is missing stable known "
+            f"scopes: {sorted(missing)}.  Check the generated firewall export "
+            "and the JSON loader before trusting classifier drift assertions."
+        )
+
+    def test_generated_firewall_permissions_have_rules(self):
+        empty: list[str] = []
+        for permission in _load_x_firewall_permissions():
+            if not permission.rules:
+                empty.append(permission.name)
+
+        assert not empty, (
+            "Generated xFirewall permissions contain empty rule groups: "
+            f"{empty}.  Empty groups can make classifier scope checks pass "
+            "while no firewall paths actually exercise that scope."
+        )
 
     def test_every_firewall_scope_is_mapped_or_intentionally_skipped(self):
         firewall_scopes = self._load_firewall_permissions()
@@ -151,6 +551,14 @@ class TestFirewallConsistency:
             "typos."
         )
 
+    def test_no_acknowledged_default_scope_is_stale(self):
+        stale = set(self._ACKNOWLEDGED_DEFAULT_PATHS) - set(_PERMISSION_TO_BUCKET)
+        assert not stale, (
+            "The acknowledged-default path table has entries for scopes that "
+            f"the classifier no longer maps: {sorted(stale)}.  Remove the "
+            "stale default-path entries or restore the classifier mapping."
+        )
+
     def test_overrides_never_reference_intentionally_unmapped(self):
         """`classify_bucket` consults ``_PATH_OVERRIDES`` before
         ``_PERMISSION_TO_BUCKET``, so an override under an
@@ -168,19 +576,98 @@ class TestFirewallConsistency:
 
     def test_every_override_path_exists_in_firewall(self):
         """Each `_PATH_OVERRIDES` entry must point at a real rule in the
-        firewall generator output.  Catches typos in the method or path
-        pattern that would otherwise silently fail to match at runtime."""
+        firewall generator output, or at a literal generated path that
+        runtime first-match semantics routes through a broader rule under
+        the claimed permission.  Catches typos in the method or path pattern
+        that would otherwise silently fail to match at runtime."""
         firewall = self._load_firewall_rules()
+        all_generated_rules = {
+            (generated_method, generated_pattern)
+            for rules in firewall.values()
+            for generated_method, generated_pattern in rules
+        }
+        generated_rule_buckets: dict[tuple[str, str], set[str | None]] = {}
+        for permission in _load_x_firewall_permissions():
+            for rule in permission.rules:
+                generated_method, generated_pattern = rule.split(" ", 1)
+                sample_path = _sample_path_for_pattern(generated_pattern)
+                bucket = classify_bucket(permission.name, generated_method, sample_path)
+                generated_rule_buckets.setdefault((generated_method, generated_pattern), set()).add(
+                    bucket
+                )
+        compiled_firewall = _compile_generated_x_firewall()
         missing: list[tuple[str, str, str]] = []
-        for scope, method, pattern, _bucket in _PATH_OVERRIDES:
+        for scope, method, pattern, bucket in _PATH_OVERRIDES:
             rules = firewall.get(scope, set())
-            if (method, pattern) not in rules:
+            if (method, pattern) in rules:
+                continue
+            if (method, pattern) not in all_generated_rules:
+                missing.append((scope, method, pattern))
+                continue
+            sample_path = _sample_path_for_pattern(pattern)
+            if bucket not in generated_rule_buckets.get((method, pattern), set()):
+                missing.append((scope, method, pattern))
+                continue
+            runtime_match = matching.match_compiled_firewall_request(
+                f"https://api.x.com{sample_path}",
+                method,
+                compiled_firewall,
+            )
+            if not isinstance(runtime_match, matching.FirewallAllow):
+                missing.append((scope, method, pattern))
+                continue
+            if runtime_match.permission != scope:
                 missing.append((scope, method, pattern))
         assert not missing, (
             "Classifier overrides reference (scope, method, path) tuples "
-            f"that are not in the firewall generator output: {missing}.  "
-            "Either the firewall rule was renamed/removed upstream, or "
-            "the override has a typo."
+            f"that are not reachable through the firewall generator output: {missing}.  "
+            "Either the firewall rule was renamed/removed upstream, the "
+            "runtime first-match permission changed, or the override has a typo."
+        )
+
+    def test_runtime_firewall_shadowing_is_limited_to_acknowledged_paths(self):
+        """Static drift checks read generated rule ownership, but runtime
+        firewall matching is first-match-wins.  A broader earlier generated
+        rule can capture a later literal path under a different permission.
+
+        Keep the known overlap explicit while the matcher/generator
+        specificity fix is tracked separately in #15117.  New shadowing
+        would affect authorization metadata, network policies, and billing
+        attribution, so it should not appear silently.
+        """
+        compiled_firewall = _compile_generated_x_firewall()
+        shadows: list[tuple[str, str, str, str, str]] = []
+        for permission in _load_x_firewall_permissions():
+            for rule in permission.rules:
+                method, pattern = rule.split(" ", 1)
+                sample_path = _sample_path_for_pattern(pattern)
+                runtime_match = matching.match_compiled_firewall_request(
+                    f"{permission.base}{sample_path}",
+                    method,
+                    compiled_firewall,
+                )
+                if not isinstance(runtime_match, matching.FirewallAllow):
+                    continue
+
+                runtime_permission = runtime_match.permission or ""
+                if runtime_permission != permission.name:
+                    shadows.append(
+                        (permission.name, runtime_permission, method, pattern, sample_path)
+                    )
+
+        assert shadows == [
+            (
+                "users.read",
+                "list.read",
+                "GET",
+                "/2/communities/search",
+                "/2/communities/search",
+            )
+        ], (
+            "Generated X firewall rules have unexpected runtime first-match "
+            f"shadowing: {shadows}.  Literal-vs-parameter overlap is a known "
+            "problem only for `/2/communities/search`; see #15117 before "
+            "expanding this acknowledgement."
         )
 
     # Firewall paths that deliberately take their scope's default bucket.
@@ -334,6 +821,100 @@ class TestFirewallConsistency:
 
 
 class TestOverrideClassification:
+    def test_path_overrides_use_simple_parameter_segments(self):
+        """The representative-path overlap tests below are intentionally
+        simple.  Keep manual X billing overrides to literal segments and
+        whole-segment ``{param}`` placeholders unless the overlap checker
+        is upgraded to reason about mixed prefix/suffix parameter forms.
+        """
+        complex_patterns: list[tuple[str, str, str, str]] = []
+        for scope, method, pattern, bucket in _PATH_OVERRIDES:
+            for segment in pattern.split("/"):
+                if "{" not in segment and "}" not in segment:
+                    continue
+                if _SIMPLE_PATH_PARAM_SEGMENT_RE.fullmatch(segment) is None:
+                    complex_patterns.append((scope, method, pattern, bucket))
+                    break
+
+        assert not complex_patterns, (
+            "X billing path overrides use mixed or greedy parameter segments: "
+            f"{complex_patterns}. The current representative-path shadowing "
+            "tests only prove non-shadowing for literal segments and "
+            "whole-segment `{param}` placeholders; upgrade the overlap check "
+            "before adding more complex override patterns."
+        )
+
+    def test_every_path_override_classifies_sample_to_configured_bucket(self):
+        mismatches: list[tuple[str, str, str, str, str, str | None]] = []
+        for scope, method, pattern, bucket in _PATH_OVERRIDES:
+            sample_path = _sample_path_for_pattern(pattern)
+            actual = classify_bucket(scope, method, sample_path)
+            if actual != bucket:
+                mismatches.append((scope, method, pattern, sample_path, bucket, actual))
+
+        assert not mismatches, (
+            "X billing path overrides do not classify representative sample "
+            f"paths to their configured buckets: {mismatches}."
+        )
+
+    def test_path_override_order_does_not_shadow_different_bucket_overrides(self):
+        compiled_overrides: list[tuple[str, str, str, str, matching.CompiledPathPattern, str]] = []
+        for scope, method, pattern, bucket in _PATH_OVERRIDES:
+            compiled_pattern = matching.compile_path_pattern(pattern)
+            if compiled_pattern is None:
+                pytest.fail(f"invalid X billing override path pattern: {scope} {method} {pattern}")
+
+            sample_path = _sample_path_for_pattern(pattern)
+            if matching.match_compiled_path(sample_path, compiled_pattern) is None:
+                pytest.fail(
+                    "The X billing override shadowing check generated a non-matching "
+                    f"sample path {sample_path!r} for pattern {pattern!r}."
+                )
+            compiled_overrides.append(
+                (scope, method, pattern, bucket, compiled_pattern, sample_path)
+            )
+
+        shadowed: list[tuple[str, str, str, str, str, str, str]] = []
+        for index, current in enumerate(compiled_overrides):
+            scope, method, pattern, bucket, compiled_pattern, sample_path = current
+            for other in compiled_overrides[index + 1 :]:
+                (
+                    other_scope,
+                    other_method,
+                    other_pattern,
+                    other_bucket,
+                    _other_compiled,
+                    other_sample,
+                ) = other
+                if scope != other_scope or method != other_method or bucket == other_bucket:
+                    continue
+                if matching.match_compiled_path(other_sample, compiled_pattern) is not None:
+                    shadowed.append(
+                        (scope, method, pattern, bucket, other_pattern, other_bucket, other_sample)
+                    )
+
+        assert not shadowed, (
+            "Earlier X billing path overrides shadow later overrides with "
+            f"different buckets: {shadowed}. classify_bucket uses "
+            "first-match-wins, so put the more specific override before the "
+            "broader pattern or split the patterns so they do not overlap."
+        )
+
+    def test_no_duplicate_path_overrides(self):
+        seen: dict[tuple[str, str, str], str] = {}
+        duplicates: list[tuple[str, str, str, str, str]] = []
+        for scope, method, pattern, bucket in _PATH_OVERRIDES:
+            key = (scope, method, pattern)
+            previous = seen.get(key)
+            if previous is not None:
+                duplicates.append((scope, method, pattern, previous, bucket))
+            seen[key] = bucket
+
+        assert not duplicates, (
+            "Duplicate X billing path overrides would be hidden by "
+            f"first-match-wins classification: {duplicates}."
+        )
+
     def test_path_overrides_match_compiled_patterns(self):
         assert classify_bucket("tweet.read", "GET", "/2/tweets/123/retweeted_by") == "user.read"
         assert classify_bucket("tweet.read", "GET", "/2/tweets/123") == "posts.read"
@@ -355,7 +936,7 @@ class TestSeedConsistency:
     charge $0 for legitimate requests.
     """
 
-    def _load_seed_categories(self) -> set[str]:
+    def _load_seed_category_entries(self) -> tuple[str, ...]:
         seed_path = (
             pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
             / "turbo"
@@ -389,7 +970,10 @@ class TestSeedConsistency:
         block = text[start:end]
         # Entries are tuples: `["<category>", usd(<price>), <quantity>]`. The
         # category is the first string in each tuple.
-        return set(re.findall(r'\[\s*"([^"]+)"\s*,', block))
+        return tuple(re.findall(r'\[\s*"([^"]+)"\s*,', block))
+
+    def _load_seed_categories(self) -> set[str]:
+        return set(self._load_seed_category_entries())
 
     def _emitted_buckets(self) -> set[str]:
         emitted = set(_PERMISSION_TO_BUCKET.values())
@@ -416,6 +1000,20 @@ class TestSeedConsistency:
         emitted = self._emitted_buckets()
         missing = emitted - seed
         assert not missing, f"classifier emits buckets not present in dev-seed: {sorted(missing)}"
+
+    def test_seed_categories_are_unique(self):
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for category in self._load_seed_category_entries():
+            if category in seen:
+                duplicates.append(category)
+            seen.add(category)
+
+        assert not duplicates, (
+            "dev-seed.ts has duplicate X connector usage categories: "
+            f"{duplicates}. usage_pricing is keyed by kind/provider/category, "
+            "so duplicate seed rows make the intended price ambiguous."
+        )
 
     def test_fallback_row_is_seeded(self):
         """Unknown ``includes.<key>`` categories rely on the

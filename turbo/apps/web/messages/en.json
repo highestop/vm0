@@ -106,21 +106,9 @@
   },
   "pricing": {
     "title": "Choose Your Plan",
-    "subtitle": "Start free and scale as you grow. No credit card required.",
+    "subtitle": "Pick the plan that fits your team. Scale up anytime.",
     "heroTitle": "Pay for what you use, nothing more",
-    "heroDescription": "Start free with your AI teammate. Scale when you're ready, no credit card required.",
-    "free": {
-      "description": "Get started with your AI teammate for free.",
-      "features": {
-        "starterCredits": "10,000 starter credits",
-        "concurrentRun": "1 concurrent run",
-        "unlimitedAgents": "Unlimited total agents",
-        "bringOwnLLM": "Bring your own LLM keys",
-        "voiceInput": "Voice input (10/month)",
-        "communitySupport": "Community support"
-      },
-      "buttonText": "Get started"
-    },
+    "heroDescription": "Pick a plan that fits your team. Scale up anytime.",
     "pro": {
       "description": "More power and seamless collaboration for your team.",
       "features": {
@@ -174,8 +162,12 @@
       "creditTopUpDesc": "Purchase additional credits anytime at $1 per 1,000 credits",
       "autoRecharge": "Auto-recharge",
       "autoRechargeDesc": "Automatically purchase credits when balance falls below a threshold",
+      "scheduledRuns": "Scheduled runs",
+      "scheduledRunsDesc": "Run agents on a recurring schedule for daily briefs, monitoring, and digests",
       "connectors": "Connectors",
       "connectorsDesc": "Connect your tools like Slack, GitHub, Notion, and more",
+      "multiChannel": "Slack, web & CLI access",
+      "multiChannelDesc": "Talk to your agents from Slack, the web app, or the Zero CLI",
       "bringOwnLLM": "Bring your own LLM",
       "bringOwnLLMDesc": "Use your own model provider API keys",
       "voiceInput": "Voice input",
@@ -188,6 +180,8 @@
       "noCredentialExposureDesc": "Secrets injected at network layer, never visible to agent code",
       "teamMembers": "Team members",
       "teamMembersDesc": "Number of people in your workspace",
+      "memberUsage": "Member usage dashboard",
+      "memberUsageDesc": "Admins see each member's credit usage rolled up by agent",
       "communitySupport": "Community support",
       "communitySupportDesc": "Access to Discord community and documentation",
       "emailSupport": "Email support",
@@ -196,24 +190,24 @@
       "prioritySupportDesc": "Dedicated support with faster response times"
     },
     "tableValues": {
-      "starter": "10,000 starter",
       "20k": "20,000",
       "120k": "120,000",
       "unlimited": "Unlimited",
       "oneMonth": "1 month",
-      "allConnectors": "All connectors",
-      "tenPerMonth": "10/month"
+      "allConnectors": "All connectors"
     },
     "faq": {
       "title": "Frequently asked questions",
       "whatAreCredits": "What are credits?",
       "whatAreCreditsAnswer": "Credits are consumed when your agents use AI models. Different models consume credits at different rates. For example, a simple task might use a few credits, while a complex multi-step workflow uses more.",
+      "freeTrial": "Is there a free trial?",
+      "freeTrialAnswer": "Yes — Pro includes a 7-day free trial. You'll add a payment method through Stripe Checkout to start, but you won't be charged during the trial. Cancel before day 7 and you won't be billed; otherwise the subscription continues at $20/month.",
       "changePlans": "Can I change plans at any time?",
       "changePlansAnswer": "Yes! You can upgrade or downgrade your plan at any time. Changes take effect immediately, and we'll prorate charges accordingly.",
       "runOutOfCredits": "What happens when I run out of credits?",
       "runOutOfCreditsAnswer": "When your credits are depleted, your agents will stop running. You can purchase additional credits via auto-recharge, or upgrade to a higher plan for more monthly credits.",
       "doCreditsRollOver": "Do unused credits roll over?",
-      "doCreditsRollOverAnswer": "Free starter credits (10,000) expire 1 month after signup and aren't replenished. Pro and Team monthly credits expire after the end of the billing cycle in which they were granted. Each grant is usable for the current billing cycle. Auto-recharge and top-up credits never expire. The soonest-expiring credits are always consumed first.",
+      "doCreditsRollOverAnswer": "Pro and Team monthly credits expire after the end of the billing cycle in which they were granted. Each grant is usable for the current billing cycle. Auto-recharge and top-up credits never expire. The soonest-expiring credits are always consumed first.",
       "bringOwnModel": "Can I bring my own model provider?",
       "bringOwnModelAnswer": "Yes! All plans support bringing your own LLM API keys (Anthropic, etc.). When using your own keys, no VM0 credits are consumed for model usage.",
       "howSecure": "How secure is VM0?",
@@ -225,9 +219,9 @@
     },
     "perMonth": "/month",
     "pageTitle": "Pricing",
-    "pageDescription": "Start free with VM0. Pay only for what you use — 10,000 starter credits, no credit card required. Upgrade to Pro or Team as you scale.",
+    "pageDescription": "VM0 pricing. Pay only for what you use — Pro at $20/month or Team at $200/month. Top up anytime at $1 per 1,000 credits.",
     "ogTitle": "VM0 Pricing — Pay for What You Use",
-    "ogDescription": "Start free with VM0. Pay only for what you use — 10,000 starter credits, no credit card required. Upgrade to Pro or Team as you scale.",
+    "ogDescription": "VM0 pricing. Pay only for what you use — Pro at $20/month or Team at $200/month. Top up anytime at $1 per 1,000 credits.",
     "breadcrumbHome": "Home",
     "breadcrumbPricing": "Pricing"
   },

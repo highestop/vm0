@@ -106,21 +106,9 @@
   },
   "pricing": {
     "title": "Wählen Sie Ihren Plan",
-    "subtitle": "Starten Sie kostenlos und skalieren Sie nach Bedarf. Keine Kreditkarte erforderlich.",
+    "subtitle": "Wählen Sie den Plan, der zu Ihrem Team passt. Jederzeit skalierbar.",
     "heroTitle": "Zahlen Sie nur, was Sie nutzen, nicht mehr",
-    "heroDescription": "Starten Sie kostenlos mit Ihrem KI-Teamkollegen. Skalieren Sie, wenn Sie bereit sind, keine Kreditkarte erforderlich.",
-    "free": {
-      "description": "Starten Sie kostenlos mit Ihrem KI-Teamkollegen.",
-      "features": {
-        "starterCredits": "10.000 Starter-Credits",
-        "concurrentRun": "1 gleichzeitige Ausführung",
-        "unlimitedAgents": "Unbegrenzte Agenten insgesamt",
-        "bringOwnLLM": "Eigene LLM-Schlüssel verwenden",
-        "voiceInput": "Spracheingabe (10/Monat)",
-        "communitySupport": "Community-Support"
-      },
-      "buttonText": "Jetzt starten"
-    },
+    "heroDescription": "Wählen Sie den Plan, der zu Ihrem Team passt. Jederzeit skalierbar.",
     "pro": {
       "description": "Mehr Leistung und nahtlose Zusammenarbeit für Ihr Team.",
       "features": {
@@ -174,8 +162,12 @@
       "creditTopUpDesc": "Zusätzliche Credits jederzeit kaufen für 1 $ pro 1.000 Credits",
       "autoRecharge": "Automatisches Aufladen",
       "autoRechargeDesc": "Automatischer Credit-Kauf, wenn das Guthaben unter einen Schwellenwert fällt",
+      "scheduledRuns": "Geplante Ausführungen",
+      "scheduledRunsDesc": "Agenten nach Zeitplan ausführen – für tägliche Briefings, Monitoring und Digests",
       "connectors": "Konnektoren",
       "connectorsDesc": "Verbinden Sie Ihre Tools wie Slack, GitHub, Notion und mehr",
+      "multiChannel": "Slack-, Web- & CLI-Zugriff",
+      "multiChannelDesc": "Sprechen Sie mit Ihren Agenten über Slack, die Web-App oder die Zero-CLI",
       "bringOwnLLM": "Eigenes LLM mitbringen",
       "bringOwnLLMDesc": "Verwenden Sie Ihre eigenen Modellanbieter-API-Schlüssel",
       "voiceInput": "Spracheingabe",
@@ -188,6 +180,8 @@
       "noCredentialExposureDesc": "Secrets werden auf Netzwerkebene injiziert, nie für Agenten-Code sichtbar",
       "teamMembers": "Teammitglieder",
       "teamMembersDesc": "Anzahl der Personen in Ihrem Workspace",
+      "memberUsage": "Nutzungs-Dashboard pro Mitglied",
+      "memberUsageDesc": "Admins sehen die Credit-Nutzung jedes Mitglieds aggregiert nach Agent",
       "communitySupport": "Community-Support",
       "communitySupportDesc": "Zugang zur Discord-Community und Dokumentation",
       "emailSupport": "E-Mail-Support",
@@ -196,24 +190,24 @@
       "prioritySupportDesc": "Dedizierter Support mit schnelleren Reaktionszeiten"
     },
     "tableValues": {
-      "starter": "10.000 Starter",
       "20k": "20.000",
       "120k": "120.000",
       "unlimited": "Unbegrenzt",
       "oneMonth": "1 Monat",
-      "allConnectors": "Alle Konnektoren",
-      "tenPerMonth": "10/Monat"
+      "allConnectors": "Alle Konnektoren"
     },
     "faq": {
       "title": "Häufig gestellte Fragen",
       "whatAreCredits": "Was sind Credits?",
       "whatAreCreditsAnswer": "Credits werden verbraucht, wenn Ihre Agenten KI-Modelle nutzen. Verschiedene Modelle verbrauchen Credits mit unterschiedlichen Raten. Zum Beispiel verbraucht eine einfache Aufgabe wenige Credits, während ein komplexer mehrstufiger Workflow mehr benötigt.",
+      "freeTrial": "Gibt es eine kostenlose Testversion?",
+      "freeTrialAnswer": "Ja – Pro beinhaltet eine 7-tägige kostenlose Testphase. Sie hinterlegen beim Start über Stripe Checkout eine Zahlungsmethode, werden während der Testphase aber nicht belastet. Wenn Sie vor Ablauf des 7. Tages kündigen, entstehen keine Kosten; andernfalls läuft das Abo zu 20 $/Monat weiter.",
       "changePlans": "Kann ich den Plan jederzeit wechseln?",
       "changePlansAnswer": "Ja! Sie können Ihren Plan jederzeit upgraden oder downgraden. Änderungen werden sofort wirksam, und wir berechnen die Kosten anteilig.",
       "runOutOfCredits": "Was passiert, wenn meine Credits aufgebraucht sind?",
       "runOutOfCreditsAnswer": "Wenn Ihre Credits aufgebraucht sind, stoppen Ihre Agenten. Sie können zusätzliche Credits per automatischem Aufladen kaufen oder auf einen höheren Plan upgraden.",
       "doCreditsRollOver": "Werden ungenutzte Credits übertragen?",
-      "doCreditsRollOverAnswer": "Free-Starter-Credits (10.000) verfallen 1 Monat nach der Registrierung und werden nicht aufgefüllt. Monatliche Pro- und Team-Credits verfallen nach dem Ende des Abrechnungszeitraums, in dem sie gewährt wurden. Jede Zuweisung kann nur im laufenden Abrechnungszeitraum genutzt werden. Auto-Recharge- und Top-up-Credits verfallen nie. Es werden stets die zuerst verfallenden Credits zuerst verbraucht.",
+      "doCreditsRollOverAnswer": "Monatliche Pro- und Team-Credits verfallen nach dem Ende des Abrechnungszeitraums, in dem sie gewährt wurden. Jede Zuweisung kann nur im laufenden Abrechnungszeitraum genutzt werden. Auto-Recharge- und Top-up-Credits verfallen nie. Es werden stets die zuerst verfallenden Credits zuerst verbraucht.",
       "bringOwnModel": "Kann ich meinen eigenen Modellanbieter verwenden?",
       "bringOwnModelAnswer": "Ja! Alle Pläne unterstützen eigene LLM-API-Schlüssel (Anthropic usw.). Bei Verwendung eigener Schlüssel werden keine VM0-Credits für die Modellnutzung verbraucht.",
       "howSecure": "Wie sicher ist VM0?",
@@ -225,9 +219,9 @@
     },
     "perMonth": "/Monat",
     "pageTitle": "Pricing",
-    "pageDescription": "Start free with VM0. Pay only for what you use — 10,000 starter credits, no credit card required. Upgrade to Pro or Team as you scale.",
+    "pageDescription": "VM0 pricing. Pay only for what you use — Pro at $20/month or Team at $200/month. Top up anytime at $1 per 1,000 credits.",
     "ogTitle": "VM0 Pricing — Pay for What You Use",
-    "ogDescription": "Start free with VM0. Pay only for what you use — 10,000 starter credits, no credit card required. Upgrade to Pro or Team as you scale.",
+    "ogDescription": "VM0 pricing. Pay only for what you use — Pro at $20/month or Team at $200/month. Top up anytime at $1 per 1,000 credits.",
     "breadcrumbHome": "Home",
     "breadcrumbPricing": "Pricing"
   },

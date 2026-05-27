@@ -182,9 +182,20 @@ class TestGetFirewallHeaders:
         assert headers["cache_hit"] is True
         mock_fetch.assert_not_called()
 
-    @pytest.mark.parametrize("expiry", [None, True, "123", float("inf"), float("nan")])
-    def test_expiry_validation_rejects_invalid_values(self, expiry):
-        assert auth._has_valid_expiry(expiry, now=time.time()) is False
+    @pytest.mark.parametrize(
+        ("expiry", "now"),
+        [
+            pytest.param(None, 100.0, id="none"),
+            pytest.param(True, 0.0, id="bool-true"),
+            pytest.param(False, -1.0, id="bool-false"),
+            pytest.param("123", 100.0, id="string"),
+            pytest.param(float("inf"), 100.0, id="infinity"),
+            pytest.param(float("nan"), 100.0, id="nan"),
+            pytest.param(100.0, 100.0, id="exact-now"),
+        ],
+    )
+    def test_expiry_validation_rejects_invalid_values(self, expiry, now):
+        assert auth._has_valid_expiry(expiry, now=now) is False
 
     @pytest.mark.parametrize("expiry", [True, "123", float("inf"), float("nan")])
     async def test_cache_with_invalid_expiry_refetches(self, headers, expiry):
@@ -214,7 +225,7 @@ class TestGetFirewallHeaders:
             expires_at=None,
         )
         fresh_headers = {"Authorization": "Bearer fresh-token"}
-        expires_at = time.time() + 30
+        expires_at = int(time.time()) + 30
         mock_fetch = AsyncMock(
             return_value={
                 "headers": fresh_headers,
@@ -267,17 +278,43 @@ class TestGetFirewallHeaders:
         assert headers["cache_hit"] is False
         mock_fetch.assert_called_once()
 
-    async def test_billable_fetch_without_expiry_fails_closed(self, headers):
-        mock_fetch = AsyncMock(
-            return_value={
-                "headers": {"Authorization": "Bearer token"},
-                "expiresAt": None,
-            }
-        )
+    @pytest.mark.parametrize(
+        "fetch_result",
+        [
+            pytest.param({"headers": {"Authorization": "Bearer token"}}, id="missing"),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": None},
+                id="none",
+            ),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": True},
+                id="bool",
+            ),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": "123"},
+                id="string",
+            ),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": float("inf")},
+                id="infinity",
+            ),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": float("nan")},
+                id="nan",
+            ),
+            pytest.param(
+                {"headers": {"Authorization": "Bearer token"}, "expiresAt": 0},
+                id="expired",
+            ),
+        ],
+    )
+    async def test_billable_fetch_with_invalid_expiry_fails_closed(self, fetch_result):
+        cache_key = ("run-1", "api-1")
+        mock_fetch = AsyncMock(return_value=fetch_result)
 
         with (
             patch.object(auth, "fetch_firewall_headers", mock_fetch),
-            pytest.raises(auth.MissingAuthExpiryError),
+            pytest.raises(auth.InvalidBillableAuthExpiryError),
         ):
             await auth.get_firewall_headers(
                 "run-1",
@@ -287,6 +324,7 @@ class TestGetFirewallHeaders:
                 "tok-xyz",
                 firewall_billable=True,
             )
+        assert cached_headers(cache_key) is None
 
     async def test_cache_hit_includes_base_when_present(self, headers):
         """Cached entry with 'base' returns it on cache hit."""
@@ -679,6 +717,57 @@ class TestHandleFirewallRequest:
         assert body["permission"] == "github"
         assert body["base"] == "https://api.github.com"
         assert "connectors" not in body
+
+    async def test_invalid_billable_auth_expiry_returns_502(self, real_flow, mitm_ctx, tmp_path):
+        flow = real_flow(with_response=False, host="api.github.com", path="/repos")
+        flow.metadata["vm_run_id"] = "test-run"
+        proxy_log_path = tmp_path / "proxy.jsonl"
+        flow.metadata["vm_proxy_log_path"] = str(proxy_log_path)
+        api_entry = {"base": "https://api.github.com", "auth": {"headers": {}}}
+        vm_info = {
+            "runId": "run-1",
+            "sandboxToken": "tok-xyz",
+            "encryptedSecrets": "iv:tag:data",
+            "networkLogPath": str(tmp_path / "net.jsonl"),
+            "billableFirewalls": ["github"],
+        }
+        allow = _allow(api_entry)
+
+        with (
+            patch.object(
+                auth,
+                "fetch_firewall_headers",
+                AsyncMock(
+                    return_value={
+                        "headers": {"Authorization": "Bearer token"},
+                        "base": "https://forward.example/secret",
+                        "query": {"api_key": "secret"},
+                        "expiresAt": None,
+                    }
+                ),
+            ),
+            mitm_ctx(),
+        ):
+            await auth.handle_firewall_request(flow, allow, vm_info)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 502
+        assert flow.metadata["firewall_action"] == "ALLOW"
+        assert flow.metadata["firewall_error"] == "invalid_auth_expiry"
+        assert "Authorization" not in flow.request.headers
+        assert "auth_url_rewrite" not in flow.metadata
+        assert "api_key" not in flow.request.query
+        assert cached_headers(("test-run", "https://api.github.com")) is None
+        body = json.loads(flow.response.content)
+        assert body["error"] == "invalid_auth_expiry"
+        assert "valid cache expiry" in body["message"]
+        assert body["permission"] == "github"
+        assert body["base"] == "https://api.github.com"
+        assert "connectors" not in body
+        log_text = await asyncio.to_thread(
+            lambda: proxy_log_path.read_text() if proxy_log_path.exists() else ""
+        )
+        assert "invalid expiresAt" in log_text
 
     async def test_no_response_set_on_success(self, real_flow, headers, mitm_ctx):
         """On success, flow.response should remain None (request continues to origin)."""

@@ -592,6 +592,58 @@ describe("POST /api/agent/runs", () => {
     });
   });
 
+  it("does not load unreferenced persisted secrets into runner secrets", async () => {
+    const fx = await fixture();
+    const db = store.set(writeDb$);
+    await db.insert(secretsTable).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      name: "API_KEY",
+      encryptedValue: encryptSecretForTests("persisted-secret-value"),
+      type: "user",
+    });
+    await db.insert(secretsTable).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      name: "UNREFERENCED_SECRET",
+      encryptedValue: encryptSecretForTests("should-not-load"),
+      type: "user",
+    });
+    const compose = await createCompose({
+      fixture: fx,
+      overrides: {
+        environment: {
+          ANTHROPIC_API_KEY: "test-key",
+          API_KEY: vm0Template("{{ secrets.API_KEY }}"),
+        },
+      },
+    });
+
+    const response = await accept(
+      runsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: {
+          agentComposeId: compose.composeId,
+          prompt: "Use persisted secret",
+        },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
+      readonly encryptedSecrets: string | null;
+    };
+    expect(executionContext.environment.API_KEY).toBe("persisted-secret-value");
+    expect(decryptSecretsMap(executionContext.encryptedSecrets)).toStrictEqual({
+      API_KEY: "persisted-secret-value",
+    });
+  });
+
   it("stores the user timezone in the runner context", async () => {
     const fx = await fixture();
     const db = store.set(writeDb$);
@@ -764,6 +816,59 @@ describe("POST /api/agent/runs", () => {
     expect(zendesk?.apis[0]?.base).toBe("https://acme.zendesk.com");
   });
 
+  it("does not enable a manual connector from run-provided env values alone", async () => {
+    const fx = await fixture();
+    const db = store.set(writeDb$);
+    const compose = await createCompose({
+      fixture: fx,
+      overrides: {
+        environment: {
+          ANTHROPIC_API_KEY: "test-key",
+          ZENDESK_API_TOKEN: vm0Template("{{ secrets.ZENDESK_API_TOKEN }}"),
+          ZENDESK_EMAIL: vm0Template("{{ vars.ZENDESK_EMAIL }}"),
+          ZENDESK_SUBDOMAIN: vm0Template("{{ vars.ZENDESK_SUBDOMAIN }}"),
+        },
+      },
+    });
+
+    const response = await accept(
+      runsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: {
+          agentComposeId: compose.composeId,
+          prompt: "Use provided zendesk values",
+          vars: {
+            ZENDESK_EMAIL: "run@example.com",
+            ZENDESK_SUBDOMAIN: "run-subdomain",
+          },
+          secrets: { ZENDESK_API_TOKEN: "run-zendesk-token" },
+        },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
+      readonly firewalls?: readonly { readonly name: string }[];
+    };
+    expect(executionContext.environment.ZENDESK_API_TOKEN).toBe(
+      "run-zendesk-token",
+    );
+    expect(executionContext.environment.ZENDESK_EMAIL).toBe("run@example.com");
+    expect(executionContext.environment.ZENDESK_SUBDOMAIN).toBe(
+      "run-subdomain",
+    );
+    expect(
+      executionContext.firewalls?.some((firewall) => {
+        return firewall.name === "zendesk";
+      }),
+    ).toBeFalsy();
+  });
+
   it("loads an api-token connector secret used only by the firewall, not the compose environment", async () => {
     const fx = await fixture();
     const db = store.set(writeDb$);
@@ -820,6 +925,60 @@ describe("POST /api/agent/runs", () => {
       WEREAD_TOKEN: "weread-real-token",
       DECLARED_SECRET: "declared-value",
     });
+  });
+
+  it("loads a firewall-only api-token connector secret without compose secret refs", async () => {
+    const fx = await fixture();
+    const db = store.set(writeDb$);
+    await db.insert(secretsTable).values([
+      {
+        orgId: fx.orgId,
+        userId: fx.userId,
+        name: "WEREAD_TOKEN",
+        encryptedValue: encryptSecretForTests("weread-real-token"),
+        type: "user",
+      },
+      {
+        orgId: fx.orgId,
+        userId: fx.userId,
+        name: "UNREFERENCED_SECRET",
+        encryptedValue: encryptSecretForTests("should-not-load"),
+        type: "user",
+      },
+    ]);
+    const compose = await createCompose({ fixture: fx });
+
+    const response = await accept(
+      runsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: {
+          agentComposeId: compose.composeId,
+          prompt: "Read my books",
+        },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
+      readonly encryptedSecrets: string | null;
+      readonly firewalls: readonly { readonly name: string }[];
+    };
+    expect(executionContext.environment.WEREAD_TOKEN).toBe(
+      "wrk-CoffeeSafeLocalCoffeeSafeLocalCoffee",
+    );
+    expect(decryptSecretsMap(executionContext.encryptedSecrets)).toStrictEqual({
+      WEREAD_TOKEN: "weread-real-token",
+    });
+    expect(
+      executionContext.firewalls.some((firewall) => {
+        return firewall.name === "weread";
+      }),
+    ).toBeTruthy();
   });
 
   it("accepts OAuth connector-provided env secrets during compose validation", async () => {

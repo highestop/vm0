@@ -1,6 +1,12 @@
 // TODO(#8609): split large components to comply with max-lines-per-function (128)
 // oxlint-disable max-lines-per-function
-import { useGet, useLoadable, useLastResolved, useSet } from "ccstate-react";
+import {
+  useGet,
+  useLoadable,
+  useLastLoadable,
+  useLastResolved,
+  useSet,
+} from "ccstate-react";
 import {
   IconLogout,
   IconPlus,
@@ -9,6 +15,7 @@ import {
   IconSwitchHorizontal,
   IconDatabaseExport,
   IconFlask,
+  IconCoins,
 } from "@tabler/icons-react";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import {
@@ -35,6 +42,8 @@ import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
 import { openSettingsDialogAt$ } from "../../signals/zero-page/settings/settings-dialog.ts";
 import { pageSignal$ } from "../../signals/page-signal.ts";
 import { apiBaseForNavigation$ } from "../../signals/fetch.ts";
+import { isOrgAdmin$ } from "../../signals/org.ts";
+import { billingStatusAsync$ } from "../../signals/zero-page/billing.ts";
 
 interface SessionAccount {
   sessionId: string;
@@ -184,6 +193,63 @@ function CurrentAccountHeader({
           </div>
         </div>
       </div>
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
+function AdminCreditBalanceItem({
+  onOpenCreditBalance,
+}: {
+  onOpenCreditBalance: () => void;
+}) {
+  const isAdminLoadable = useLastLoadable(isOrgAdmin$);
+  const isAdmin =
+    isAdminLoadable.state === "hasData" && isAdminLoadable.data === true;
+
+  if (!isAdmin) {
+    return null;
+  }
+
+  return (
+    <AdminCreditBalanceItemContent onOpenCreditBalance={onOpenCreditBalance} />
+  );
+}
+
+function AdminCreditBalanceItemContent({
+  onOpenCreditBalance,
+}: {
+  onOpenCreditBalance: () => void;
+}) {
+  const billingLoadable = useLastLoadable(billingStatusAsync$);
+
+  const credits =
+    billingLoadable.state === "hasData" ? billingLoadable.data.credits : null;
+  const loading = billingLoadable.state === "loading" && credits === null;
+  const creditLabel =
+    credits !== null
+      ? `${credits.toLocaleString("en-US")} ${credits === 1 ? "credit" : "credits"}`
+      : null;
+
+  if (!loading && creditLabel === null) {
+    return null;
+  }
+
+  return (
+    <>
+      <DropdownMenuItem
+        onClick={onOpenCreditBalance}
+        className="gap-3 px-3 py-2.5 rounded-lg"
+      >
+        <IconCoins size={18} stroke={1.5} className="text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-sm tabular-nums">
+          {loading ? (
+            <span className="block h-4 w-24 rounded bg-muted/60" />
+          ) : (
+            creditLabel
+          )}
+        </span>
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
     </>
   );
@@ -416,6 +482,11 @@ export function AccountDropdown({
     detach(openSettings("preference", pageSignal), Reason.DomCallback);
   };
 
+  const handleOpenCreditBalance = () => {
+    setSidebarExpanded(false);
+    detach(openSettings("usage", pageSignal), Reason.DomCallback);
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -432,6 +503,11 @@ export function AccountDropdown({
           display={accountDisplay}
           visible={current !== undefined || user !== undefined}
         />
+        {!hidePreferences && (
+          <AdminCreditBalanceItem
+            onOpenCreditBalance={handleOpenCreditBalance}
+          />
+        )}
         {!hidePreferences && (
           <UnifiedSettingsGroup
             labEnabled={labEnabled}

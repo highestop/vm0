@@ -9,11 +9,8 @@ import {
   type ConnectorConfig,
   type ConnectorDeviceAuthGrantConfig,
   type ConnectorGenerationType,
-  type DynamicPublicConnectorOAuthClientConfig,
   type ConnectorOAuthClientConfig,
   type ConnectorManualGrantFieldConfig,
-  type StaticConfidentialConnectorOAuthClientConfig,
-  type StaticPublicConnectorOAuthClientConfig,
   type ConnectorType,
   type OAuthAuthCodeConnectorType,
   type OAuthDeviceAuthConnectorType,
@@ -438,57 +435,44 @@ export function getAvailableConnectorAuthMethods(
 
 export type ConnectorEnvReader = (name: string) => string | undefined;
 
-export interface ConnectorOAuthEnvKeys {
-  readonly clientId: string;
-  readonly clientSecret?: string;
-}
-
-export type UnconfiguredConnectorOAuthCredentials = {
-  readonly configured: false;
-  readonly client: ConnectorOAuthClientConfig;
-};
-
-export type StaticConfidentialConnectorOAuthCredentials = {
-  readonly configured: true;
-  readonly client: StaticConfidentialConnectorOAuthClientConfig;
+export type StaticConfidentialConnectorOAuthClient = {
+  readonly clientRegistration: "static";
+  readonly clientType: "confidential";
   readonly clientId: string;
   readonly clientSecret: string;
 };
 
-export type StaticPublicConnectorOAuthCredentials = {
-  readonly configured: true;
-  readonly client: StaticPublicConnectorOAuthClientConfig;
+export type StaticPublicConnectorOAuthClient = {
+  readonly clientRegistration: "static";
+  readonly clientType: "public";
   readonly clientId: string;
 };
 
-export type DynamicPublicConnectorOAuthCredentials = {
-  readonly configured: true;
-  readonly client: DynamicPublicConnectorOAuthClientConfig;
+export type DynamicPublicConnectorOAuthClient = {
+  readonly clientRegistration: "dynamic";
+  readonly clientType: "public";
 };
 
-export type StaticConnectorOAuthCredentials =
-  | StaticConfidentialConnectorOAuthCredentials
-  | StaticPublicConnectorOAuthCredentials;
+export type StaticConnectorOAuthClient =
+  | StaticConfidentialConnectorOAuthClient
+  | StaticPublicConnectorOAuthClient;
 
-export type ConnectorOAuthCredentials =
-  | UnconfiguredConnectorOAuthCredentials
-  | StaticConnectorOAuthCredentials
-  | DynamicPublicConnectorOAuthCredentials;
+export type ConnectorOAuthClient =
+  | StaticConnectorOAuthClient
+  | DynamicPublicConnectorOAuthClient;
 
-export function isStaticConnectorOAuthCredentials(
-  credentials: ConnectorOAuthCredentials,
-): credentials is StaticConnectorOAuthCredentials {
-  return (
-    credentials.configured && credentials.client.clientRegistration === "static"
-  );
+export function isStaticConnectorOAuthClient(
+  oauthClient: ConnectorOAuthClient,
+): oauthClient is StaticConnectorOAuthClient {
+  return oauthClient.clientRegistration === "static";
 }
 
-export function isStaticConfidentialConnectorOAuthCredentials(
-  credentials: ConnectorOAuthCredentials,
-): credentials is StaticConfidentialConnectorOAuthCredentials {
+export function isStaticConfidentialConnectorOAuthClient(
+  oauthClient: ConnectorOAuthClient,
+): oauthClient is StaticConfidentialConnectorOAuthClient {
   return (
-    isStaticConnectorOAuthCredentials(credentials) &&
-    credentials.client.clientType === "confidential"
+    isStaticConnectorOAuthClient(oauthClient) &&
+    oauthClient.clientType === "confidential"
   );
 }
 
@@ -498,77 +482,68 @@ export function getConnectorOAuthClientConfig(
   return getConnectorOAuthGrantConfigIfSupported(type)?.client;
 }
 
-export function resolveConnectorOAuthClientCredentials(
+export function resolveConnectorOAuthClient(
   client: ConnectorOAuthClientConfig,
   readEnv: ConnectorEnvReader,
-): ConnectorOAuthCredentials {
+): ConnectorOAuthClient | undefined {
   if (client.clientRegistration === "dynamic") {
-    return { configured: true, client };
+    return { clientRegistration: "dynamic", clientType: "public" };
   }
 
   if ("clientId" in client) {
     if (client.clientType === "confidential") {
       return {
-        configured: true,
-        client,
+        clientRegistration: "static",
+        clientType: "confidential",
         clientId: client.clientId,
         clientSecret: client.clientSecret,
       };
     }
-    return { configured: true, client, clientId: client.clientId };
+    return {
+      clientRegistration: "static",
+      clientType: "public",
+      clientId: client.clientId,
+    };
   }
 
   const clientId = readEnv(client.clientIdEnv);
   if (!clientId) {
-    return { configured: false, client };
+    return undefined;
   }
 
   if (client.clientType === "public") {
-    return { configured: true, client, clientId };
+    return { clientRegistration: "static", clientType: "public", clientId };
   }
 
   const clientSecret = readEnv(client.clientSecretEnv);
   if (!clientSecret) {
-    return { configured: false, client };
+    return undefined;
   }
 
-  return { configured: true, client, clientId, clientSecret };
+  return {
+    clientRegistration: "static",
+    clientType: "confidential",
+    clientId,
+    clientSecret,
+  };
 }
 
-export function getConnectorOAuthCredentials(
+export function getConnectorOAuthClient(
   type: ConnectorType,
   readEnv: ConnectorEnvReader,
-): ConnectorOAuthCredentials | undefined {
+): ConnectorOAuthClient | undefined {
   const client = getConnectorOAuthClientConfig(type);
   if (!client) {
     return undefined;
   }
-  return resolveConnectorOAuthClientCredentials(client, readEnv);
+  return resolveConnectorOAuthClient(client, readEnv);
 }
 
 function hasConfiguredOAuth(
   readEnv: ConnectorEnvReader,
   type: ConnectorType,
 ): boolean {
-  return getConnectorOAuthCredentials(type, readEnv)?.configured ?? false;
-}
-
-export function getConnectorOAuthEnvKeys(
-  type: ConnectorType,
-): ConnectorOAuthEnvKeys | undefined {
-  const client = getConnectorOAuthClientConfig(type);
-  if (
-    !client ||
-    client.clientRegistration !== "static" ||
-    !("clientIdEnv" in client)
-  ) {
-    return undefined;
-  }
-  return {
-    clientId: client.clientIdEnv,
-    clientSecret:
-      client.clientType === "confidential" ? client.clientSecretEnv : undefined,
-  };
+  return getConnectorOAuthClient(type, readEnv) !== undefined;
 }
 
 /**
@@ -576,8 +551,8 @@ export function getConnectorOAuthEnvKeys(
  *
  * This is not user connected state and it does not evaluate feature switches.
  * It includes connectors with user-entered manual grant methods because they
- * do not require server credentials, while OAuth connectors require their
- * runtime OAuth env to exist unless their client config is static inline.
+ * do not require a server OAuth client, while OAuth connectors require their
+ * runtime OAuth client env to exist unless their client config is static inline.
  */
 export function getRuntimeAvailableConnectorTypes(
   readEnv: ConnectorEnvReader,

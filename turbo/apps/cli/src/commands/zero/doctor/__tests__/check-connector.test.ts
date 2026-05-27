@@ -123,8 +123,8 @@ describe("zero doctor check-connector command", () => {
     return mockConsoleLog.mock.calls.flat().join("\n");
   }
 
-  describe("step 1: sandbox environment variable check", () => {
-    it("should report env var present when it exists", async () => {
+  describe("step 1: sandbox environment name check", () => {
+    it("should report environment name present when it exists", async () => {
       vi.stubEnv("VM0_API_URL", "https://app.vm0.ai");
       vi.stubEnv("VM0_TOKEN", "test-token");
       vi.stubEnv("ZERO_AGENT_ID", "agent-abc-123");
@@ -157,7 +157,7 @@ describe("zero doctor check-connector command", () => {
       expect(output).toContain("placeholder value");
     });
 
-    it("should report env var not present when it is missing", async () => {
+    it("should report environment name not present when it is missing", async () => {
       vi.stubEnv("VM0_API_URL", "https://app.vm0.ai");
       vi.stubEnv("VM0_TOKEN", "test-token");
       vi.stubEnv("ZERO_AGENT_ID", "agent-abc-123");
@@ -633,8 +633,8 @@ describe("zero doctor check-connector command", () => {
     });
   });
 
-  describe("unknown env var", () => {
-    it("should exit with error for unrecognized env var", async () => {
+  describe("unknown environment name", () => {
+    it("should exit with error for unrecognized environment name", async () => {
       await expect(async () => {
         await checkConnectorCommand.parseAsync([
           "node",
@@ -645,9 +645,7 @@ describe("zero doctor check-connector command", () => {
       }).rejects.toThrow("process.exit called");
 
       expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Unknown environment variable: UNKNOWN_FOO_TOKEN",
-        ),
+        expect.stringContaining("Unknown environment name: UNKNOWN_FOO_TOKEN"),
       );
       expect(mockExit).toHaveBeenCalledWith(1);
     });
@@ -755,7 +753,7 @@ describe("zero doctor check-connector command", () => {
       expect(output).toContain("matches the GitHub connector");
       expect(output).toContain("Matched base URL: https://api.github.com");
       expect(output).toContain("Relative path:    /repos/owner/repo");
-      expect(output).toContain("Step 1: Sandbox environment variable");
+      expect(output).toContain("Step 1: Sandbox environment name");
       expect(output).toContain("Step 2: Connector configuration");
       expect(output).toContain(
         "Step 3: Permission policy check (auto-detected from URL)",

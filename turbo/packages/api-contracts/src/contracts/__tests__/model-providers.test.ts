@@ -5,7 +5,7 @@ import {
   hasModelSelection,
   getModels,
   getDefaultModel,
-  getEnvironmentMapping,
+  getModelProviderEnvBindings,
   getFrameworkForType,
   getVm0VisibleModels,
   normalizeVm0ModelId,
@@ -291,18 +291,18 @@ describe("model selection for Anthropic-native providers", () => {
     },
   );
 
-  it("anthropic-api-key maps ANTHROPIC_MODEL via environment mapping", () => {
-    const mapping = getEnvironmentMapping("anthropic-api-key");
-    expect(mapping).toBeDefined();
-    expect(mapping!["ANTHROPIC_API_KEY"]).toBe("$secret");
-    expect(mapping!["ANTHROPIC_MODEL"]).toBe("$model");
+  it("anthropic-api-key maps ANTHROPIC_MODEL via env bindings", () => {
+    const envBindings = getModelProviderEnvBindings("anthropic-api-key");
+    expect(envBindings).toBeDefined();
+    expect(envBindings!["ANTHROPIC_API_KEY"]).toBe("$secret");
+    expect(envBindings!["ANTHROPIC_MODEL"]).toBe("$model");
   });
 
-  it("claude-code-oauth-token maps ANTHROPIC_MODEL via environment mapping", () => {
-    const mapping = getEnvironmentMapping("claude-code-oauth-token");
-    expect(mapping).toBeDefined();
-    expect(mapping!["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("$secret");
-    expect(mapping!["ANTHROPIC_MODEL"]).toBe("$model");
+  it("claude-code-oauth-token maps ANTHROPIC_MODEL via env bindings", () => {
+    const envBindings = getModelProviderEnvBindings("claude-code-oauth-token");
+    expect(envBindings).toBeDefined();
+    expect(envBindings!["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("$secret");
+    expect(envBindings!["ANTHROPIC_MODEL"]).toBe("$model");
   });
 
   it("Anthropic-native providers have no ANTHROPIC_BASE_URL (use default)", () => {
@@ -373,11 +373,11 @@ describe("openai-api-key codex provider", () => {
     expect(getFrameworkForType("openai-api-key")).toBe("codex");
   });
 
-  it("maps OPENAI_API_KEY and OPENAI_MODEL via environment mapping", () => {
-    const mapping = getEnvironmentMapping("openai-api-key");
-    expect(mapping).toBeDefined();
-    expect(mapping!["OPENAI_API_KEY"]).toBe("$secret");
-    expect(mapping!["OPENAI_MODEL"]).toBe("$model");
+  it("maps OPENAI_API_KEY and OPENAI_MODEL via env bindings", () => {
+    const envBindings = getModelProviderEnvBindings("openai-api-key");
+    expect(envBindings).toBeDefined();
+    expect(envBindings!["OPENAI_API_KEY"]).toBe("$secret");
+    expect(envBindings!["OPENAI_MODEL"]).toBe("$model");
   });
 
   it("offers codex-compatible models with gpt-5.5 default", () => {
@@ -548,18 +548,20 @@ describe("codex-oauth-token codex provider", () => {
     expect(secrets.CODEX_AUTH_JSON!.required).toBe(false);
   });
 
-  it("environmentMapping does NOT reference refresh or id tokens", () => {
-    const mapping = getEnvironmentMapping("codex-oauth-token")!;
-    const values = Object.values(mapping).join(" ");
+  it("envBindings does NOT reference refresh or id tokens", () => {
+    const envBindings = getModelProviderEnvBindings("codex-oauth-token")!;
+    const values = Object.values(envBindings).join(" ");
     expect(values).not.toContain("CHATGPT_REFRESH_TOKEN");
     expect(values).not.toContain("CHATGPT_ID_TOKEN");
   });
 
-  it("environmentMapping injects access token, account id, and model", () => {
-    const mapping = getEnvironmentMapping("codex-oauth-token")!;
-    expect(mapping.CHATGPT_ACCESS_TOKEN).toBe("$secrets.CHATGPT_ACCESS_TOKEN");
-    expect(mapping.CHATGPT_ACCOUNT_ID).toBe("$secrets.CHATGPT_ACCOUNT_ID");
-    expect(mapping.OPENAI_MODEL).toBe("$model");
+  it("envBindings injects access token, account id, and model", () => {
+    const envBindings = getModelProviderEnvBindings("codex-oauth-token")!;
+    expect(envBindings.CHATGPT_ACCESS_TOKEN).toBe(
+      "$secrets.CHATGPT_ACCESS_TOKEN",
+    );
+    expect(envBindings.CHATGPT_ACCOUNT_ID).toBe("$secrets.CHATGPT_ACCOUNT_ID");
+    expect(envBindings.OPENAI_MODEL).toBe("$model");
   });
 
   it("offers gpt-5.x models with gpt-5.5 default", () => {
@@ -664,7 +666,7 @@ describe("codex-oauth-token codex provider", () => {
   );
 
   it("CHATGPT_ACCESS_TOKEN placeholder is an opaque marker (not a JWT)", () => {
-    // Codex doesn't read this env var in ChatGPT mode — it reads the real
+    // Codex doesn't read this environment name in ChatGPT mode — it reads the real
     // JWT from ~/.codex/auth.json (written by guest-agent #11877). The
     // firewall only needs a stable, non-empty marker to match-and-substitute
     // at egress. A JWT-shaped placeholder triggers Semgrep's
@@ -731,11 +733,11 @@ describe("codex-framework gateway providers (openrouter-codex, vercel-ai-gateway
   it.each(["openrouter-codex", "vercel-ai-gateway-codex"] as const)(
     "%s maps OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL",
     (type) => {
-      const mapping = getEnvironmentMapping(type);
-      expect(mapping).toBeDefined();
-      expect(mapping!["OPENAI_API_KEY"]).toBe("$secret");
-      expect(mapping!["OPENAI_BASE_URL"]).toMatch(/^https:\/\//);
-      expect(mapping!["OPENAI_MODEL"]).toBe("$model");
+      const envBindings = getModelProviderEnvBindings(type);
+      expect(envBindings).toBeDefined();
+      expect(envBindings!["OPENAI_API_KEY"]).toBe("$secret");
+      expect(envBindings!["OPENAI_BASE_URL"]).toMatch(/^https:\/\//);
+      expect(envBindings!["OPENAI_MODEL"]).toBe("$model");
     },
   );
 
@@ -771,7 +773,7 @@ describe("codex-framework gateway providers (openrouter-codex, vercel-ai-gateway
 
   it("share the secretName with their claude-code twin gateway", () => {
     // Same API key powers both protocols on the same upstream gateway.
-    // The codex twin must not invent a separate secret env var.
+    // The codex twin must not invent a separate secret environment name.
     const openrouterCodex = MODEL_PROVIDER_TYPES["openrouter-codex"];
     const openrouterClaudeCode = MODEL_PROVIDER_TYPES["openrouter-api-key"];
     expect(openrouterCodex.secretName).toBe(openrouterClaudeCode.secretName);

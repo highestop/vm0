@@ -8,6 +8,7 @@ import {
   type ConnectorAuthCodeGrantConfig,
   type ConnectorConfig,
   type ConnectorDeviceAuthGrantConfig,
+  type ConnectorEnvBindings,
   type ConnectorGenerationType,
   type ConnectorOAuthClientConfig,
   type ConnectorManualGrantFieldConfig,
@@ -52,7 +53,7 @@ export function getConfiguredConnectorAuthMethods(
  *   environment can offer as connection candidates.
  * - User connected connector types come from persisted rows or inferred manual
  *   credential state from user secrets and variables.
- * - Runtime injection happens later when a run receives env vars, secrets,
+ * - Runtime injection happens later when a run receives environment entries, secrets,
  *   variables, and firewall context.
  */
 
@@ -239,13 +240,13 @@ export function deriveConnectedManualGrantMethods(
   return connected;
 }
 
-function connectorAccessOutputs(
+function connectorAccessEnvBindings(
   access: ConnectorAccessConfig,
-): Record<string, string> {
+): ConnectorEnvBindings {
   switch (access.kind) {
     case "static":
     case "refresh-token":
-      return access.outputs;
+      return access.envBindings;
     case "none":
       return {};
   }
@@ -595,7 +596,9 @@ function connectorMethodSecretNames(
     }
   }
 
-  for (const valueRef of Object.values(connectorAccessOutputs(method.access))) {
+  for (const valueRef of Object.values(
+    connectorAccessEnvBindings(method.access),
+  )) {
     if (valueRef.startsWith("$secrets.")) {
       names.add(valueRef.slice("$secrets.".length));
     }
@@ -610,19 +613,19 @@ function connectorMethodSecretNames(
 }
 
 /**
- * Get environment mapping for a connector type.
+ * Get runtime environment bindings for a connector type.
  */
-export function getConnectorEnvironmentMapping(
+export function getConnectorEnvBindings(
   type: ConnectorType,
-): Record<string, string> {
+): ConnectorEnvBindings {
   const methods = connectorAuthMethodValues(type).sort((a, b) => {
     return authMethodAccessPriority(a) - authMethodAccessPriority(b);
   });
-  const mapping: Record<string, string> = {};
+  const envBindings: ConnectorEnvBindings = {};
   for (const method of methods) {
-    Object.assign(mapping, connectorAccessOutputs(method.access));
+    Object.assign(envBindings, connectorAccessEnvBindings(method.access));
   }
-  return mapping;
+  return envBindings;
 }
 
 /**
@@ -639,16 +642,16 @@ export function getEligibleConnectorTypes(): string[] {
 }
 
 /**
- * Get connector label and derived env var names for a connector secret.
+ * Get connector label and derived environment names for a connector secret.
  * Performs a reverse lookup from secret name to the connector type and
- * environment mapping that references it.
+ * env bindings that reference it.
  *
- * Example: getConnectorDerivedNames("GITHUB_ACCESS_TOKEN")
- * → { connectorLabel: "GitHub", envVarNames: ["GH_TOKEN", "GITHUB_TOKEN"] }
+ * Example: getConnectorEnvNamesForSecret("GITHUB_ACCESS_TOKEN")
+ * → { connectorLabel: "GitHub", envNames: ["GH_TOKEN", "GITHUB_TOKEN"] }
  */
-export function getConnectorDerivedNames(
+export function getConnectorEnvNamesForSecret(
   secretName: string,
-): { connectorLabel: string; envVarNames: string[] } | null {
+): { connectorLabel: string; envNames: string[] } | null {
   const allTypes = CONNECTOR_TYPE_KEYS;
 
   for (const type of allTypes) {
@@ -661,18 +664,18 @@ export function getConnectorDerivedNames(
       continue;
     }
 
-    // Find all env var names that reference this secret
-    const mapping = getConnectorEnvironmentMapping(type);
-    const envVarNames = Object.entries(mapping)
+    // Find all environment names that reference this secret.
+    const envBindings = getConnectorEnvBindings(type);
+    const envNames = Object.entries(envBindings)
       .filter(([, valueRef]) => {
         return valueRef === `$secrets.${secretName}`;
       })
-      .map(([envVar]) => {
-        return envVar;
+      .map(([envName]) => {
+        return envName;
       });
 
-    if (envVarNames.length > 0) {
-      return { connectorLabel: config.label, envVarNames };
+    if (envNames.length > 0) {
+      return { connectorLabel: config.label, envNames };
     }
   }
 
@@ -680,13 +683,13 @@ export function getConnectorDerivedNames(
 }
 
 /**
- * Get the set of environment variable names that connected connectors can provide.
+ * Get the set of environment names that connected connectors can provide.
  * Used by pre-run checks to exclude connector-provided secrets from "missing" lists.
  *
- * Example: getConnectorProvidedSecretNames(["github"])
+ * Example: getConnectorProvidedEnvNames(["github"])
  * → Set { "GH_TOKEN", "GITHUB_TOKEN" }
  */
-export function getConnectorProvidedSecretNames(
+export function getConnectorProvidedEnvNames(
   connectedTypes: string[],
 ): Set<string> {
   const provided = new Set<string>();
@@ -696,9 +699,9 @@ export function getConnectorProvidedSecretNames(
     if (!parsed.success) {
       continue;
     }
-    const mapping = getConnectorEnvironmentMapping(parsed.data);
-    for (const envVar of Object.keys(mapping)) {
-      provided.add(envVar);
+    const envBindings = getConnectorEnvBindings(parsed.data);
+    for (const envName of Object.keys(envBindings)) {
+      provided.add(envName);
     }
   }
 
@@ -771,7 +774,7 @@ export function getScopeDiff(
 
 /**
  * Get all secret/variable names managed by connectors across ALL auth methods.
- * Unlike `getConnectorProvidedSecretNames` (which only reads environmentMapping),
+ * Unlike `getConnectorProvidedEnvNames` (which only reads envBindings),
  * this function also includes api-token auth method secrets.
  *
  * Used to hide connector-managed secrets from the secrets & variables list.
@@ -792,18 +795,18 @@ export function getConnectorManagedSecretNames(
         managed.add(name);
       }
     }
-    // Also include environmentMapping keys (OAuth-derived env vars like GH_TOKEN)
-    const mapping = getConnectorEnvironmentMapping(type);
-    for (const envVar of Object.keys(mapping)) {
-      managed.add(envVar);
+    // Also include envBindings names (OAuth-derived environment names like GH_TOKEN)
+    const envBindings = getConnectorEnvBindings(type);
+    for (const envName of Object.keys(envBindings)) {
+      managed.add(envName);
     }
   }
   return managed;
 }
 
 /**
- * Reverse lookup: given a secret/env-var name, find which connector type manages it.
- * Checks manual grant fields, access storage names, and environment mapping keys.
+ * Reverse lookup: given a secret/environment name, find which connector type manages it.
+ * Checks manual grant fields, access storage names, and env binding names.
  * Returns null if no connector manages this name.
  */
 export function getConnectorTypeForSecretName(
@@ -822,9 +825,9 @@ export function getConnectorTypeForSecretName(
         return type;
       }
     }
-    // Check environmentMapping keys
-    const mapping = getConnectorEnvironmentMapping(type);
-    if (name in mapping) {
+    // Check envBindings names
+    const envBindings = getConnectorEnvBindings(type);
+    if (name in envBindings) {
       return type;
     }
   }
@@ -908,7 +911,7 @@ function listSecretNames(config: ConnectorConfig): string[] {
       names.push(name);
     }
     for (const valueRef of Object.values(
-      connectorAccessOutputs(method.access),
+      connectorAccessEnvBindings(method.access),
     )) {
       if (valueRef.startsWith("$secrets.")) {
         names.push(valueRef.slice("$secrets.".length));
@@ -928,9 +931,9 @@ function findExactMatch(
   if (type.toLowerCase() === keywordLower) {
     return { score: 100, matchedField: "type" };
   }
-  for (const envVar of Object.keys(getConnectorEnvironmentMapping(type))) {
-    if (envVar.toLowerCase() === keywordLower) {
-      return { score: 90, matchedField: `env:${envVar}` };
+  for (const envName of Object.keys(getConnectorEnvBindings(type))) {
+    if (envName.toLowerCase() === keywordLower) {
+      return { score: 90, matchedField: `env:${envName}` };
     }
   }
   if (config.label.toLowerCase() === keywordLower) {
@@ -956,9 +959,9 @@ function findSubstringMatch(
   if (config.label.toLowerCase().includes(keywordLower)) {
     return { score: 50, matchedField: "label" };
   }
-  for (const envVar of Object.keys(getConnectorEnvironmentMapping(type))) {
-    if (envVar.toLowerCase().includes(keywordLower)) {
-      return { score: 40, matchedField: `env:${envVar}` };
+  for (const envName of Object.keys(getConnectorEnvBindings(type))) {
+    if (envName.toLowerCase().includes(keywordLower)) {
+      return { score: 40, matchedField: `env:${envName}` };
     }
   }
   for (const name of listSecretNames(config)) {
@@ -983,7 +986,7 @@ function collectCandidateTokens(
   const sources = [
     type,
     config.label,
-    ...Object.keys(getConnectorEnvironmentMapping(type)),
+    ...Object.keys(getConnectorEnvBindings(type)),
     ...listSecretNames(config),
     ...(config.tags ?? []),
   ];
@@ -1039,7 +1042,7 @@ function scoreConnector(
 /**
  * Search the connector catalog by weighted multi-field ranking.
  *
- * Matches the keyword against type keys, labels, env var names, secret names,
+ * Matches the keyword against type keys, labels, environment names, secret names,
  * and `tags`. Score is the max over matched rules (never a sum). Results with
  * score below the minimum threshold are dropped. Sort order: score desc, then
  * type asc.

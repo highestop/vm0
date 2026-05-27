@@ -208,14 +208,16 @@ async function checkAndPromptMissingItems(
     }),
   );
 
-  // Connector-provided secrets (e.g., GH_TOKEN from GitHub connector)
+  // Connector-provided environment names (e.g., GH_TOKEN from GitHub connector)
   // Use server-computed list to avoid CLI/server version skew issues
-  const connectorProvided = new Set(
-    connectorsResponse.connectorProvidedSecretNames,
+  const connectorProvidedEnvNames = new Set(
+    connectorsResponse.connectorProvidedEnvNames,
   );
 
   const missingSecrets = [...requiredSecrets].filter((name) => {
-    return !existingSecretNames.has(name) && !connectorProvided.has(name);
+    return (
+      !existingSecretNames.has(name) && !connectorProvidedEnvNames.has(name)
+    );
   });
   const missingVars = [...requiredVars].filter((name) => {
     return !existingVarNames.has(name);

@@ -24,7 +24,7 @@ Examples:
 
 Notes:
   - Use zero doctor credit when a run or generation fails because the org has insufficient credits, when a user asks how to recharge, or before trying to buy credits
-  - Use this when your task fails due to a missing environment variable or permission denial
+  - Use this when your task fails due to a missing connector environment name or permission denial
   - Use zero generate <type> (no --prompt) to see every provider available for a given generation type
   - The doctor will identify the issue and give the user a link to resolve it`,
   );

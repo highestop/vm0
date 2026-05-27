@@ -5,7 +5,7 @@ import {
   type ConnectorType,
 } from "@vm0/connectors/connectors";
 import {
-  getConnectorEnvironmentMapping,
+  getConnectorEnvBindings,
   getConnectorTypeForSecretName,
 } from "@vm0/connectors/connector-utils";
 import { findMatchingPermissions } from "@vm0/connectors/firewall-rule-matcher";
@@ -101,11 +101,11 @@ function resolveConnectorFromUrl(url: string): UrlLookupResult | null {
 
   if (!bestMatch) return null;
 
-  // Derive the env var name from the connector's environment mapping
-  const mapping = getConnectorEnvironmentMapping(
+  // Derive the environment name from the connector's env bindings.
+  const envBindings = getConnectorEnvBindings(
     bestMatch.connectorType as ConnectorType,
   );
-  const envName = Object.keys(mapping)[0];
+  const envName = Object.keys(envBindings)[0];
   if (!envName) return null;
 
   const relativePath =
@@ -121,8 +121,8 @@ function resolveConnectorFromUrl(url: string): UrlLookupResult | null {
   };
 }
 
-function checkEnvVariable(ctx: DiagContext): boolean {
-  console.log("## Step 1: Sandbox environment variable");
+function checkEnvName(ctx: DiagContext): boolean {
+  console.log("## Step 1: Sandbox environment name");
   console.log("");
   const envPresent = Boolean(process.env[ctx.envName]);
   console.log(
@@ -134,7 +134,7 @@ function checkEnvVariable(ctx: DiagContext): boolean {
     );
   } else {
     console.log(
-      "No value found for this environment variable. Note: credential replacement at the network boundary is independent of this variable — the proxy injects auth headers based on the destination URL, not the presence of this env var.",
+      "No value found for this environment name. Note: credential replacement at the network boundary is independent of this name — the proxy injects auth headers based on the destination URL.",
     );
   }
   console.log("");
@@ -453,18 +453,18 @@ function resolvePermissionFromUrl(
 export const checkConnectorCommand = new Command()
   .name("check-connector")
   .description(
-    "Diagnose connector health: environment variable, connector configuration, and permission policies",
+    "Diagnose connector health: environment name, connector configuration, and permission policies",
   )
   .addOption(
     new Option(
       "--env-name <ENV_NAME>",
-      "The environment variable name to check (e.g. GITHUB_TOKEN)",
+      "The connector environment name to check (e.g. GITHUB_TOKEN)",
     ),
   )
   .addOption(
     new Option(
       "--url <URL>",
-      "A full URL to diagnose — auto-detects the connector, env var, and permission (e.g. https://api.github.com/repos/owner/repo)",
+      "A full URL to diagnose — auto-detects the connector, environment name, and permission (e.g. https://api.github.com/repos/owner/repo)",
     ),
   )
   .addOption(
@@ -522,14 +522,14 @@ How connectors work:
         );
         console.log(`  Matched base URL: ${urlLookup.matchedBase}`);
         console.log(`  Relative path:    ${urlLookup.relativePath}`);
-        console.log(`  Environment var:  ${envName}`);
+        console.log(`  Environment name:  ${envName}`);
       } else {
         connectorType = getConnectorTypeForSecretName(
           (envName = opts.envName!),
         )!;
         if (!connectorType) {
           throw new Error(
-            `Unknown environment variable: ${envName} — not managed by any connector`,
+            `Unknown environment name: ${envName} — not managed by any connector`,
           );
         }
         console.log(
@@ -554,7 +554,7 @@ How connectors work:
         agentId: process.env.ZERO_AGENT_ID || undefined,
       };
 
-      checkEnvVariable(ctx);
+      checkEnvName(ctx);
       const { isConnected, isExpired, hasPermission } =
         await checkConnectorStatus(ctx);
       const networkPolicies = await checkConnectorDomains(ctx);

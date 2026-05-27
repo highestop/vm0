@@ -89,6 +89,7 @@ import {
   publicAttachmentUrl,
   TextPreviewLoader,
 } from "./zero-attachment-chips.tsx";
+import { ArtifactSidebarSlot } from "./zero-artifact-sidebar.tsx";
 import {
   classifyChatAttachment,
   contentTypeForBodyPreviewKind,
@@ -106,12 +107,14 @@ import { AttachmentPreview } from "./zero-attachment-preview.tsx";
 import { FilePreviewIcon } from "./zero-file-preview-icon.tsx";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { ConnectModal } from "./components/settings/add-connection-dialog.tsx";
+import { lightboxUrl$ as attachmentLightboxUrl$ } from "../../signals/zero-page/zero-attachment-chips.ts";
 import {
-  lightboxUrl$ as attachmentLightboxUrl$,
-  openDocumentLightbox$ as openAttachmentDocumentLightbox$,
-  openImageLightbox$ as openAttachmentImageLightbox$,
-  openVideoLightbox$ as openAttachmentVideoLightbox$,
-} from "../../signals/zero-page/zero-attachment-chips.ts";
+  chatArtifactSidebarEnabled$,
+  currentArtifactRef$,
+  openDocumentLightboxOrArtifact$ as openAttachmentDocumentLightbox$,
+  openImageLightboxOrArtifact$ as openAttachmentImageLightbox$,
+  openVideoLightboxOrArtifact$ as openAttachmentVideoLightbox$,
+} from "../../signals/zero-page/zero-artifact-sidebar.ts";
 import {
   writeToClipboard,
   type ChatClipboardAttachment,
@@ -1666,6 +1669,9 @@ export function ZeroChatThreadPage() {
   const rightThread = useGet(currentRightThread$);
   const lightboxUrl = useGet(attachmentLightboxUrl$);
   const setKeyboardScrollRoot = useSet(setChatKeyboardScrollRoot$);
+  const sidebarEnabled = useGet(chatArtifactSidebarEnabled$);
+  const artifactRef = useGet(currentArtifactRef$);
+  const artifactSidebarOpen = sidebarEnabled && artifactRef !== null;
   // Lifted from ChatThread so the keyboard handler's sidebarChatThreads$
   // snapshot survives keyed ChatThread remounts during thread navigation.
   // Otherwise a second mod+shift+arrow press lands on a freshly mounted
@@ -1673,32 +1679,60 @@ export function ZeroChatThreadPage() {
   // empty threads list and a silently dropped keypress.
   const makeChatThreadKeyDown = useChatThreadKeyDownFactory();
 
+  const threadArea = (
+    <div
+      ref={setKeyboardScrollRoot}
+      className="flex flex-1 min-h-0 bg-transparent"
+    >
+      {leftThread && (
+        <ChatThread
+          key={leftThread.threadId}
+          thread={leftThread}
+          onKeyDown={makeChatThreadKeyDown(leftThread)}
+        />
+      )}
+      {rightThread && (
+        <>
+          <div className="w-px shrink-0 bg-border/60" aria-hidden="true" />
+          <ChatThread
+            key={rightThread.threadId}
+            thread={rightThread}
+            onKeyDown={makeChatThreadKeyDown(rightThread)}
+          />
+        </>
+      )}
+    </div>
+  );
+
   return (
     <>
-      <div
-        ref={setKeyboardScrollRoot}
-        className="flex flex-1 min-h-0 bg-transparent"
-      >
-        {leftThread && (
-          <ChatThread
-            key={leftThread.threadId}
-            thread={leftThread}
-            onKeyDown={makeChatThreadKeyDown(leftThread)}
-          />
-        )}
-        {rightThread && (
-          <>
-            <div className="w-px shrink-0 bg-border/60" aria-hidden="true" />
-            <ChatThread
-              key={rightThread.threadId}
-              thread={rightThread}
-              onKeyDown={makeChatThreadKeyDown(rightThread)}
-            />
-          </>
+      {/* Keep the wrapper structure stable across artifact open/close so the
+          thread area's React subtree (and its scroll/keyboard state) never
+          unmounts when the sidebar appears. Only the wrapper className and
+          the optional sidebar sibling change with state. Below xl: the
+          thread half hides so the sidebar fills the pane (no toggle, the
+          50/50 split needs each half ~640px to clear the composer's sm:
+          breakpoint, below which the model picker collapses to icons). */}
+      <div className="flex flex-1 min-h-0 bg-transparent">
+        <div
+          className={
+            artifactSidebarOpen
+              ? "hidden xl:flex flex-1 basis-0 min-w-0 min-h-0"
+              : "flex flex-1 min-w-0 min-h-0"
+          }
+        >
+          {threadArea}
+        </div>
+        {artifactSidebarOpen && (
+          <div className="flex flex-1 basis-0 min-w-0 min-h-0">
+            <ArtifactSidebarSlot />
+          </div>
         )}
       </div>
-      {leftThread && <ChatArtifactsDrawer thread={leftThread} />}
-      {rightThread && (
+      {!sidebarEnabled && leftThread && (
+        <ChatArtifactsDrawer thread={leftThread} />
+      )}
+      {!sidebarEnabled && rightThread && (
         <ChatArtifactsDrawer key={rightThread.threadId} thread={rightThread} />
       )}
       {lightboxUrl && <AttachmentLightbox />}
@@ -2480,7 +2514,6 @@ function BodyContentBlocks({
               }
               mediaPreview
               mathEnabled
-              onImageClick={openLightbox}
             />
           );
         }

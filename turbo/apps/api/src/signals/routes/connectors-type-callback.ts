@@ -3,19 +3,19 @@ import { unescape as decodeCookieComponent } from "node:querystring";
 import { command } from "ccstate";
 import { connectorsTypeCallbackContract } from "@vm0/api-contracts/contracts/connectors-type-callback";
 import {
-  isOAuthAuthCodeConnectorType,
+  hasConnectorAuthCodeGrant,
   getConnectorOAuthClient,
   getConnectorOAuthScopes,
 } from "@vm0/connectors/connector-utils";
 import {
   connectorTypeSchema,
-  type OAuthAuthCodeConnectorType,
-  type OAuthConnectorType,
+  type AuthCodeGrantConnectorType,
+  type OAuthGrantConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   exchangeConnectorOAuthCode,
   getConnectorOAuthSecretMetadata,
-  isOAuthConnectorType,
+  hasConnectorOAuthProvider,
   type OAuthTokenResult,
 } from "@vm0/connectors/auth-providers";
 import { connectorSessions } from "@vm0/db/schema/connector-session";
@@ -59,7 +59,7 @@ type CallbackIdentity = {
 };
 
 type CompleteOAuthCallbackInput = {
-  readonly connectorType: OAuthAuthCodeConnectorType;
+  readonly connectorType: AuthCodeGrantConnectorType;
   readonly code: string;
   readonly redirectUri: string;
   readonly state: string;
@@ -109,7 +109,7 @@ type ClaimedCallbackState =
 type ResolvedOAuthConnectorType =
   | {
       readonly ok: true;
-      readonly connectorType: OAuthAuthCodeConnectorType;
+      readonly connectorType: AuthCodeGrantConnectorType;
     }
   | {
       readonly ok: false;
@@ -171,7 +171,7 @@ function missingStateRedirectResponse(origin: string, type: string): Response {
 }
 
 async function exchangeTokenForConnector(args: {
-  readonly connectorType: OAuthAuthCodeConnectorType;
+  readonly connectorType: AuthCodeGrantConnectorType;
   readonly code: string;
   readonly redirectUri: string;
   readonly state: string | undefined;
@@ -195,7 +195,7 @@ async function exchangeTokenForConnector(args: {
 }
 
 function getRequestedScopes(
-  connectorType: OAuthAuthCodeConnectorType,
+  connectorType: AuthCodeGrantConnectorType,
 ): readonly string[] {
   return getConnectorOAuthScopes(connectorType);
 }
@@ -213,7 +213,7 @@ function resolveOAuthConnectorType(
   }
 
   const connectorType = typeResult.data;
-  if (!isOAuthConnectorType(connectorType)) {
+  if (!hasConnectorOAuthProvider(connectorType)) {
     return {
       ok: false,
       response: redirectWithError(
@@ -223,7 +223,7 @@ function resolveOAuthConnectorType(
       ),
     };
   }
-  if (!isOAuthAuthCodeConnectorType(connectorType)) {
+  if (!hasConnectorAuthCodeGrant(connectorType)) {
     return {
       ok: false,
       response: redirectWithError(
@@ -240,7 +240,7 @@ function resolveOAuthConnectorType(
 async function claimStoredOAuthStateForCallback(args: {
   readonly db: Db;
   readonly state: string;
-  readonly connectorType: OAuthAuthCodeConnectorType;
+  readonly connectorType: AuthCodeGrantConnectorType;
   readonly origin: string;
   readonly type: string;
   readonly signal: AbortSignal;
@@ -269,7 +269,7 @@ async function claimStoredOAuthStateForCallback(args: {
 async function rejectInvalidStoredOAuthStateForCallback(args: {
   readonly db: Db;
   readonly state: string;
-  readonly connectorType: OAuthAuthCodeConnectorType;
+  readonly connectorType: AuthCodeGrantConnectorType;
   readonly origin: string;
   readonly type: string;
   readonly signal: AbortSignal;
@@ -325,7 +325,7 @@ async function markConnectorSessionError(
 
 async function linkGithubIntegrationAfterConnectorConnect(args: {
   readonly db: Db;
-  readonly connectorType: OAuthConnectorType;
+  readonly connectorType: OAuthGrantConnectorType;
   readonly identity: CallbackIdentity;
   readonly token: OAuthTokenResult;
   readonly signal: AbortSignal;

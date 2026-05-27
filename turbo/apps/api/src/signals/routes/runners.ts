@@ -1,4 +1,4 @@
-import { command } from "ccstate";
+import { command, type Setter } from "ccstate";
 import {
   elapsedSinceApiStartMs,
   runnersHeartbeatContract,
@@ -17,6 +17,7 @@ import { and, eq, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { runnerAuth$, type RunnerAuthContext } from "../auth/runner-auth";
 import { authorization$ } from "../context/hono";
 import { bodyResultOf, pathParamsOf } from "../context/request";
+import { waitUntil } from "../context/wait-until";
 import { writeDb$, type Db } from "../external/db";
 import {
   createRunnerGroupRealtimeToken,
@@ -28,12 +29,16 @@ import { badRequestMessage, conflict, notFound } from "../../lib/error";
 import { logger } from "../../lib/log";
 import { generateSandboxToken } from "../auth/tokens";
 import { decryptPersistentSecretsMap } from "../services/crypto.utils";
+import { dispatchCompleteSideEffects$ } from "../services/agent-webhook-complete.service";
 import { loadUserFeatureSwitchContext } from "../services/feature-switches.service";
 import type { RouteEntry } from "../route";
+import { tapError } from "../utils";
 
 const L = logger("Runners");
 
 const STALE_RUNNER_THRESHOLD_MS = 5 * 60 * 1000;
+const INVALID_EXECUTION_CONTEXT_ERROR =
+  "Runner job missing valid execution context";
 
 const unauthorizedNotAuthenticated = Object.freeze({
   status: 401 as const,
@@ -229,7 +234,7 @@ const claimBody$ = bodyResultOf(runnersJobClaimContract.claim);
 
 interface ClaimableJob {
   readonly job: typeof runnerJobQueue.$inferSelect;
-  readonly runUserId: string;
+  readonly run: ClaimedRun;
 }
 
 interface ClaimedRun {
@@ -260,7 +265,16 @@ async function getClaimableJob(
   const [jobWithRun] = await db
     .select({
       job: runnerJobQueue,
-      runUserId: agentRuns.userId,
+      run: {
+        id: agentRuns.id,
+        userId: agentRuns.userId,
+        orgId: agentRuns.orgId,
+        prompt: agentRuns.prompt,
+        appendSystemPrompt: agentRuns.appendSystemPrompt,
+        agentComposeVersionId: agentRuns.agentComposeVersionId,
+        vars: agentRuns.vars,
+        resumedFromCheckpointId: agentRuns.resumedFromCheckpointId,
+      },
     })
     .from(runnerJobQueue)
     .innerJoin(agentRuns, eq(runnerJobQueue.runId, agentRuns.id))
@@ -296,7 +310,7 @@ function claimAuthorizationError(
       : forbidden("Official runners can only claim jobs from vm0/* groups");
   }
 
-  if (jobWithRun.runUserId !== auth.userId) {
+  if (jobWithRun.run.userId !== auth.userId) {
     return forbidden("Job does not belong to user");
   }
   return isOfficialRunnerGroup(jobWithRun.job.runnerGroup)
@@ -304,49 +318,99 @@ function claimAuthorizationError(
     : forbidden("Only vm0/* runner groups are supported");
 }
 
-async function markJobClaimed(
+type ClaimTransitionResult =
+  | { readonly status: "claimed" }
+  | { readonly status: "conflict" }
+  | { readonly status: "not-found" };
+
+async function transitionClaimedJobToRunning(
   db: Db,
   runId: string,
   claimedAt: Date,
   signal: AbortSignal,
-) {
-  const [claimedJob] = await db
-    .update(runnerJobQueue)
-    .set({ claimedAt })
-    .where(
-      and(eq(runnerJobQueue.runId, runId), isNull(runnerJobQueue.claimedAt)),
-    )
-    .returning();
-  signal.throwIfAborted();
-  return claimedJob ?? null;
+): Promise<ClaimTransitionResult> {
+  return await db.transaction(async (tx) => {
+    const [claimedJob] = await tx
+      .update(runnerJobQueue)
+      .set({ claimedAt })
+      .where(
+        and(eq(runnerJobQueue.runId, runId), isNull(runnerJobQueue.claimedAt)),
+      )
+      .returning({ runId: runnerJobQueue.runId });
+    signal.throwIfAborted();
+    if (!claimedJob) {
+      return { status: "conflict" as const };
+    }
+
+    const [run] = await tx
+      .update(agentRuns)
+      .set({
+        status: "running",
+        startedAt: claimedAt,
+        lastHeartbeatAt: claimedAt,
+      })
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "pending")))
+      .returning({ id: agentRuns.id });
+    signal.throwIfAborted();
+    if (!run) {
+      await tx.delete(runnerJobQueue).where(eq(runnerJobQueue.runId, runId));
+      signal.throwIfAborted();
+      return { status: "not-found" };
+    }
+
+    await tx.delete(runnerJobQueue).where(eq(runnerJobQueue.runId, runId));
+    signal.throwIfAborted();
+
+    return { status: "claimed" as const };
+  });
 }
 
-async function markRunRunning(
+type PoisonJobResult =
+  | { readonly status: "failed" }
+  | { readonly status: "conflict" }
+  | { readonly status: "not-found" };
+
+async function failPoisonQueuedJob(
   db: Db,
   runId: string,
   claimedAt: Date,
+  errorMessage: string,
   signal: AbortSignal,
-): Promise<ClaimedRun | null> {
-  const [run] = await db
-    .update(agentRuns)
-    .set({
-      status: "running",
-      startedAt: claimedAt,
-      lastHeartbeatAt: claimedAt,
-    })
-    .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "pending")))
-    .returning({
-      id: agentRuns.id,
-      userId: agentRuns.userId,
-      orgId: agentRuns.orgId,
-      prompt: agentRuns.prompt,
-      appendSystemPrompt: agentRuns.appendSystemPrompt,
-      agentComposeVersionId: agentRuns.agentComposeVersionId,
-      vars: agentRuns.vars,
-      resumedFromCheckpointId: agentRuns.resumedFromCheckpointId,
-    });
-  signal.throwIfAborted();
-  return run ?? null;
+): Promise<PoisonJobResult> {
+  return await db.transaction(async (tx) => {
+    const [claimedJob] = await tx
+      .update(runnerJobQueue)
+      .set({ claimedAt })
+      .where(
+        and(eq(runnerJobQueue.runId, runId), isNull(runnerJobQueue.claimedAt)),
+      )
+      .returning({ runId: runnerJobQueue.runId });
+    signal.throwIfAborted();
+    if (!claimedJob) {
+      return { status: "conflict" as const };
+    }
+
+    const [run] = await tx
+      .update(agentRuns)
+      .set({
+        status: "failed",
+        completedAt: nowDate(),
+        error: errorMessage,
+      })
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "pending")))
+      .returning({ id: agentRuns.id });
+    signal.throwIfAborted();
+    if (!run) {
+      await tx.delete(runnerJobQueue).where(eq(runnerJobQueue.runId, runId));
+      signal.throwIfAborted();
+      return { status: "not-found" };
+    }
+
+    await tx.delete(runnerJobQueue).where(eq(runnerJobQueue.runId, runId));
+    signal.throwIfAborted();
+
+    return { status: "failed" as const };
+  });
 }
 
 async function secretValuesForRunner(
@@ -367,6 +431,83 @@ async function secretValuesForRunner(
   return Object.values(secretsMap).filter((value) => {
     return envValues.has(value);
   });
+}
+
+function scheduleClaimSucceededSideEffects(args: {
+  readonly runId: string;
+  readonly userId: string;
+  readonly apiToClaimMs: number | undefined;
+}): void {
+  waitUntil(
+    publishRunChangedForUserSafely(args.userId, args.runId, {
+      status: "running",
+    }),
+  );
+  const apiToClaimMs = args.apiToClaimMs;
+  if (apiToClaimMs === undefined) {
+    return;
+  }
+
+  waitUntil(
+    tapError(
+      recordClaimApiToClaimMetric({
+        runId: args.runId,
+        durationMs: apiToClaimMs,
+      }),
+      (error) => {
+        L.warn("recordSandboxOperation failed", { runId: args.runId, error });
+      },
+    ),
+  );
+}
+
+async function recordClaimApiToClaimMetric(args: {
+  readonly runId: string;
+  readonly durationMs: number;
+}): Promise<void> {
+  await Promise.resolve();
+  recordSandboxOperation({
+    sandboxType: "runner",
+    actionType: "api_to_claim",
+    durationMs: args.durationMs,
+    success: true,
+    runId: args.runId,
+  });
+}
+
+function scheduleClaimFailedSideEffects(args: {
+  readonly set: Setter;
+  readonly runId: string;
+  readonly userId: string;
+  readonly orgId: string;
+  readonly error: string;
+}): void {
+  const backgroundSignal = new AbortController().signal;
+  waitUntil(
+    publishRunChangedForUserSafely(args.userId, args.runId, {
+      status: "failed",
+    }),
+  );
+  waitUntil(
+    tapError(
+      args.set(
+        dispatchCompleteSideEffects$,
+        {
+          runId: args.runId,
+          orgId: args.orgId,
+          status: "failed",
+          error: args.error,
+        },
+        backgroundSignal,
+      ),
+      (error) => {
+        L.error("dispatchCompleteSideEffects failed", {
+          runId: args.runId,
+          error,
+        });
+      },
+    ),
+  );
 }
 
 const claimInner$ = command(async ({ get, set }, signal: AbortSignal) => {
@@ -397,65 +538,88 @@ const claimInner$ = command(async ({ get, set }, signal: AbortSignal) => {
 
   const currentTime = now();
   const claimedAt = new Date(currentTime);
-  const claimedJob = await markJobClaimed(db, runId, claimedAt, signal);
-  if (!claimedJob) {
-    return conflict("Job was claimed by another runner");
-  }
-
-  const run = await markRunRunning(db, runId, claimedAt, signal);
-  if (!run) {
-    return notFound("Run not found");
-  }
-
-  await publishRunChangedForUserSafely(run.userId, runId, {
-    status: "running",
-  });
-  signal.throwIfAborted();
+  const run = jobWithRun.run;
 
   const storedContextResult = storedExecutionContextSchema.safeParse(
-    claimedJob.executionContext,
+    jobWithRun.job.executionContext,
   );
   if (!storedContextResult.success) {
-    L.warn("Runner job missing valid execution context", { runId });
+    L.warn(INVALID_EXECUTION_CONTEXT_ERROR, { runId });
+    const poisonResult = await failPoisonQueuedJob(
+      db,
+      runId,
+      claimedAt,
+      INVALID_EXECUTION_CONTEXT_ERROR,
+      signal,
+    );
+    if (poisonResult.status === "conflict") {
+      return conflict("Job was claimed by another runner");
+    }
+    if (poisonResult.status === "not-found") {
+      return notFound("Run not found");
+    }
+
+    scheduleClaimFailedSideEffects({
+      set,
+      runId,
+      userId: run.userId,
+      orgId: run.orgId,
+      error: INVALID_EXECUTION_CONTEXT_ERROR,
+    });
     return badRequestMessage("Job missing execution context");
   }
   const storedContext = storedContextResult.data;
 
+  const featureSwitchContext = await loadUserFeatureSwitchContext(
+    db,
+    run.orgId,
+    run.userId,
+  );
+  signal.throwIfAborted();
+  const secretValues = await secretValuesForRunner(
+    storedContext,
+    featureSwitchContext,
+  );
+  signal.throwIfAborted();
   const sandboxToken = generateSandboxToken(run.userId, run.id, run.orgId);
-
   const apiToClaimMs = elapsedSinceApiStartMs(
     storedContext.apiStartTime,
     currentTime,
   );
-  if (apiToClaimMs !== undefined) {
-    recordSandboxOperation({
-      sandboxType: "runner",
-      actionType: "api_to_claim",
-      durationMs: apiToClaimMs,
-      success: true,
-      runId,
-    });
+  const responseBody = {
+    ...storedContext,
+    runId: run.id,
+    prompt: run.prompt,
+    appendSystemPrompt: run.appendSystemPrompt,
+    agentComposeVersionId: run.agentComposeVersionId,
+    vars: (run.vars as Record<string, string>) ?? null,
+    checkpointId: run.resumedFromCheckpointId ?? null,
+    sandboxToken,
+    secretValues,
+  };
+
+  const claimResult = await transitionClaimedJobToRunning(
+    db,
+    runId,
+    claimedAt,
+    signal,
+  );
+  if (claimResult.status === "conflict") {
+    return conflict("Job was claimed by another runner");
+  }
+  if (claimResult.status === "not-found") {
+    return notFound("Run not found");
   }
 
-  await db.delete(runnerJobQueue).where(eq(runnerJobQueue.runId, runId));
-  signal.throwIfAborted();
+  scheduleClaimSucceededSideEffects({
+    runId,
+    userId: run.userId,
+    apiToClaimMs,
+  });
 
   return {
     status: 200 as const,
-    body: {
-      ...storedContext,
-      runId: run.id,
-      prompt: run.prompt,
-      appendSystemPrompt: run.appendSystemPrompt,
-      agentComposeVersionId: run.agentComposeVersionId,
-      vars: (run.vars as Record<string, string>) ?? null,
-      checkpointId: run.resumedFromCheckpointId ?? null,
-      sandboxToken,
-      secretValues: await secretValuesForRunner(
-        storedContext,
-        await loadUserFeatureSwitchContext(db, run.orgId, run.userId),
-      ),
-    },
+    body: responseBody,
   };
 });
 

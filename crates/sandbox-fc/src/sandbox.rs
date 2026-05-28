@@ -1898,7 +1898,7 @@ impl Sandbox for FirecrackerSandbox {
     }
 
     async fn read_file(&self, path: &str, max_bytes: u64) -> sandbox::Result<Option<Vec<u8>>> {
-        let operation = SandboxOperation::Exec;
+        let operation = SandboxOperation::ReadFile;
 
         self.run_bounded_guest_operation(operation, |guest| async move {
             guest.read_file(path, max_bytes, 5000).await
@@ -1912,7 +1912,7 @@ impl Sandbox for FirecrackerSandbox {
         host_path: &Path,
         options: CopyFileOptions,
     ) -> sandbox::Result<CopyFileResult> {
-        let operation = SandboxOperation::Exec;
+        let operation = SandboxOperation::CopyFile;
         let timeout_ms = options.timeout_ms();
 
         self.run_bounded_guest_operation(operation, |guest| async move {
@@ -2956,6 +2956,51 @@ mod tests {
         exec_seq: u32,
     }
 
+    fn test_sandbox_with_state(state: SandboxState) -> FirecrackerSandbox {
+        let id = sandbox::SandboxId::new_v4();
+        let base_dir = std::env::temp_dir().join("sandbox-fc-operation-entrypoint-test");
+        let (state_tx, _) = watch::channel(state);
+
+        FirecrackerSandbox {
+            config: sandbox::SandboxConfig {
+                id,
+                resources: test_resources(),
+                device_rate_limits: None,
+            },
+            factory_config: FirecrackerConfig {
+                binary_path: base_dir.join("firecracker"),
+                kernel_path: base_dir.join("vmlinux"),
+                rootfs_path: base_dir.join("rootfs.ext4"),
+                base_dir: base_dir.clone(),
+                profile: "test".into(),
+                proxy_port: None,
+                dns_port: None,
+                snapshot: None,
+            },
+            id: id.to_string(),
+            sandbox_paths: SandboxPaths::new(base_dir.join("workspace")),
+            sock_paths: SockPaths::new(base_dir.join("sock")),
+            network: SandboxNetwork {
+                info: NetnsLease::new_for_test("test-ns").into_info_for_test(),
+                lease: None,
+            },
+            cow_device: None,
+            device_rate_limits: None,
+            runtime: SandboxRuntimeHandles::default(),
+            process_group_pid: None,
+            state: Arc::new(AtomicU8::new(state as u8)),
+            state_publish_lock: Arc::new(Mutex::new(())),
+            state_tx,
+            guest: Arc::new(tokio::sync::Mutex::new(None::<Arc<VsockHost>>)),
+            park_coordinator: ParkCoordinator::new(),
+            leak_tx: None,
+            delete_workspace_on_leak_cleanup: true,
+            destroyed: true,
+            is_parked: false,
+            park_fence: None,
+        }
+    }
+
     async fn connect_mock_guest(vsock_path: &str) -> UnixStream {
         let listener_path = format!("{vsock_path}_{}", vsock_proto::VSOCK_PORT);
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -3479,11 +3524,62 @@ mod tests {
         }
     }
 
-    fn assert_operation_reason(error: SandboxError, expected: SandboxOperationReason) {
+    fn assert_operation_error(
+        error: SandboxError,
+        expected_operation: SandboxOperation,
+        expected_reason: SandboxOperationReason,
+    ) {
         match error {
-            SandboxError::Operation { reason, .. } => assert_eq!(reason, expected),
+            SandboxError::Operation {
+                operation, reason, ..
+            } => {
+                assert_eq!(operation, expected_operation);
+                assert_eq!(reason, expected_reason);
+            }
             other => panic!("expected operation error, got {other:?}"),
         }
+    }
+
+    fn assert_invalid_state_operation(
+        error: SandboxError,
+        expected_operation: SandboxOperation,
+        expected_state: &str,
+    ) {
+        match error {
+            SandboxError::InvalidState { context, state, .. } => {
+                assert_eq!(
+                    context,
+                    SandboxInvalidStateContext::Operation(expected_operation)
+                );
+                assert_eq!(state, expected_state);
+            }
+            other => panic!("expected invalid state error, got {other:?}"),
+        }
+    }
+
+    async fn assert_file_entrypoints_invalid_state(
+        sandbox: &FirecrackerSandbox,
+        expected_state: &str,
+    ) {
+        let read_err = sandbox
+            .read_file("/tmp/system.log", 1024)
+            .await
+            .unwrap_err();
+        assert_invalid_state_operation(read_err, SandboxOperation::ReadFile, expected_state);
+
+        let copy_err = sandbox
+            .copy_file(
+                "/tmp/system.log",
+                Path::new("unused-copy-target"),
+                CopyFileOptions {
+                    max_bytes: 1024,
+                    timeout: Duration::from_secs(5),
+                    missing_ok: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_invalid_state_operation(copy_err, SandboxOperation::CopyFile, expected_state);
     }
 
     fn mark_coordinator_parked(coordinator: &ParkCoordinator) {
@@ -4526,7 +4622,11 @@ mod tests {
             false,
         );
 
-        assert_operation_reason(err, SandboxOperationReason::Timeout);
+        assert_operation_error(
+            err,
+            SandboxOperation::WaitProcess,
+            SandboxOperationReason::Timeout,
+        );
     }
 
     #[test]
@@ -4537,7 +4637,26 @@ mod tests {
             false,
         );
 
-        assert_operation_reason(err, SandboxOperationReason::Guest);
+        assert_operation_error(err, SandboxOperation::Exec, SandboxOperationReason::Guest);
+    }
+
+    #[test]
+    fn operation_error_preserves_file_operation_context_for_guest_failures() {
+        for operation in [SandboxOperation::ReadFile, SandboxOperation::CopyFile] {
+            let timeout = FirecrackerSandbox::operation_error(
+                operation,
+                io::Error::new(io::ErrorKind::TimedOut, "operation timed out"),
+                false,
+            );
+            let guest = FirecrackerSandbox::operation_error(
+                operation,
+                io::Error::new(io::ErrorKind::BrokenPipe, "connection closed"),
+                false,
+            );
+
+            assert_operation_error(timeout, operation, SandboxOperationReason::Timeout);
+            assert_operation_error(guest, operation, SandboxOperationReason::Guest);
+        }
     }
 
     #[test]
@@ -4822,6 +4941,8 @@ mod tests {
     fn operation_error_classifies_observed_backend_crash_for_all_operations() {
         for operation in [
             SandboxOperation::Exec,
+            SandboxOperation::ReadFile,
+            SandboxOperation::CopyFile,
             SandboxOperation::WriteFile,
             SandboxOperation::StartProcess,
             SandboxOperation::ProcessControl,
@@ -4833,7 +4954,7 @@ mod tests {
                 true,
             );
 
-            assert_operation_reason(err, SandboxOperationReason::BackendCrashed);
+            assert_operation_error(err, operation, SandboxOperationReason::BackendCrashed);
         }
     }
 
@@ -4841,6 +4962,8 @@ mod tests {
     fn unavailable_guest_classifies_observed_backend_crash_for_all_operations() {
         for operation in [
             SandboxOperation::Exec,
+            SandboxOperation::ReadFile,
+            SandboxOperation::CopyFile,
             SandboxOperation::WriteFile,
             SandboxOperation::StartProcess,
             SandboxOperation::ProcessControl,
@@ -4849,8 +4972,76 @@ mod tests {
             let err =
                 FirecrackerSandbox::operation_unavailable_error(operation, SandboxState::Crashed);
 
-            assert_operation_reason(err, SandboxOperationReason::BackendCrashed);
+            assert_operation_error(err, operation, SandboxOperationReason::BackendCrashed);
         }
+    }
+
+    #[test]
+    fn unavailable_guest_preserves_file_operation_context_for_non_crashed_states() {
+        for operation in [SandboxOperation::ReadFile, SandboxOperation::CopyFile] {
+            for (state, expected_state) in [
+                (SandboxState::Created, "created"),
+                (SandboxState::Running, "running"),
+                (SandboxState::Stopping, "stopping"),
+                (SandboxState::Stopped, "stopped"),
+            ] {
+                let err = FirecrackerSandbox::operation_unavailable_error(operation, state);
+
+                assert_invalid_state_operation(err, operation, expected_state);
+            }
+        }
+    }
+
+    #[test]
+    fn operation_gate_closed_preserves_file_operation_context() {
+        let coordinator = ParkCoordinator::new();
+        let attempt = coordinator
+            .begin_prepare_park()
+            .expect("begin prepare park");
+        let gate_state = coordinator.state();
+
+        for operation in [SandboxOperation::ReadFile, SandboxOperation::CopyFile] {
+            let err =
+                FirecrackerSandbox::operation_gate_closed_error(operation, gate_state.clone());
+
+            assert_invalid_state_operation(
+                err,
+                operation,
+                "ClosingForPark { attempt_id: ParkAttemptId(1) }",
+            );
+        }
+        coordinator
+            .abort_prepare_park(&attempt)
+            .expect("abort prepare park");
+    }
+
+    #[tokio::test]
+    async fn file_operation_entrypoints_preserve_operation_context_for_start_rejections() {
+        for (state, expected_state) in [
+            (SandboxState::Created, "created"),
+            (SandboxState::Running, "running"),
+        ] {
+            let sandbox = test_sandbox_with_state(state);
+
+            assert_file_entrypoints_invalid_state(&sandbox, expected_state).await;
+        }
+
+        let sandbox = test_sandbox_with_state(SandboxState::Running);
+        let attempt = sandbox
+            .park_coordinator
+            .begin_prepare_park()
+            .expect("begin prepare park");
+
+        assert_file_entrypoints_invalid_state(
+            &sandbox,
+            "ClosingForPark { attempt_id: ParkAttemptId(1) }",
+        )
+        .await;
+
+        sandbox
+            .park_coordinator
+            .abort_prepare_park(&attempt)
+            .expect("abort prepare park");
     }
 
     #[tokio::test]

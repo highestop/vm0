@@ -816,11 +816,20 @@ async fn spawn_mitmdump_child_with_retry(
     cmd: &mut tokio::process::Command,
     bin: &Path,
     retry_delay: Duration,
-    mut on_text_busy: impl FnMut(usize, &std::io::Error),
+    on_text_busy: impl FnMut(usize, &std::io::Error),
 ) -> RunnerResult<tokio::process::Child> {
+    retry_text_busy_spawn(bin, retry_delay, || cmd.spawn(), on_text_busy).await
+}
+
+async fn retry_text_busy_spawn<T>(
+    bin: &Path,
+    retry_delay: Duration,
+    mut spawn: impl FnMut() -> std::io::Result<T>,
+    mut on_text_busy: impl FnMut(usize, &std::io::Error),
+) -> RunnerResult<T> {
     let mut attempt = 0usize;
     loop {
-        match cmd.spawn() {
+        match spawn() {
             Ok(child) => return Ok(child),
             Err(error) if is_text_file_busy(&error) && attempt < TEXT_BUSY_SPAWN_MAX_RETRIES => {
                 attempt += 1;
@@ -1064,54 +1073,84 @@ PY
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn spawn_mitmdump_child_retries_text_busy_binary() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake_mitmdump = dir.path().join("fake-mitmdump");
-        std::fs::write(
-            &fake_mitmdump,
-            r#"#!/usr/bin/env bash
-exit 0
-"#,
-        )
-        .unwrap();
-        let mut perms = std::fs::metadata(&fake_mitmdump).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&fake_mitmdump, perms).unwrap();
-
-        let busy_handle = Arc::new(std::sync::Mutex::new(Some(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&fake_mitmdump)
-                .unwrap(),
-        )));
-        let retry_count = Arc::new(std::sync::Mutex::new(0usize));
-
-        let mut cmd = tokio::process::Command::new(&fake_mitmdump);
-        cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-
-        let retry_busy_handle = Arc::clone(&busy_handle);
-        let retry_count_for_hook = Arc::clone(&retry_count);
-        let mut child = spawn_mitmdump_child_with_retry(
-            &mut cmd,
-            &fake_mitmdump,
+    async fn retry_text_busy_spawn_retries_text_busy_errors() {
+        let spawn_calls = std::cell::Cell::new(0usize);
+        let retry_count = std::cell::Cell::new(0usize);
+        let spawned = retry_text_busy_spawn(
+            Path::new("fake-mitmdump"),
             Duration::ZERO,
-            move |_attempt, error| {
+            || {
+                let calls = spawn_calls.get() + 1;
+                spawn_calls.set(calls);
+                if calls == 1 {
+                    Err(std::io::Error::from_raw_os_error(nix::libc::ETXTBSY))
+                } else {
+                    Ok("spawned")
+                }
+            },
+            |attempt, error| {
                 assert!(is_text_file_busy(error), "unexpected retry error: {error}");
-                *retry_count_for_hook.lock().unwrap() += 1;
-                retry_busy_handle.lock().unwrap().take();
+                retry_count.set(attempt);
             },
         )
         .await
         .unwrap();
 
-        let status = child.wait().await.unwrap();
-        assert!(status.success(), "fake mitmdump exited with {status}");
+        assert_eq!(spawned, "spawned");
+        assert_eq!(spawn_calls.get(), 2);
+        assert_eq!(retry_count.get(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn retry_text_busy_spawn_does_not_retry_other_errors() {
+        let spawn_calls = std::cell::Cell::new(0usize);
+        let retry_count = std::cell::Cell::new(0usize);
+        let error = retry_text_busy_spawn::<()>(
+            Path::new("fake-mitmdump"),
+            Duration::ZERO,
+            || {
+                spawn_calls.set(spawn_calls.get() + 1);
+                Err(std::io::Error::from_raw_os_error(nix::libc::ENOENT))
+            },
+            |_attempt, _error| retry_count.set(retry_count.get() + 1),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(spawn_calls.get(), 1);
+        assert_eq!(retry_count.get(), 0);
         assert!(
-            *retry_count.lock().unwrap() >= 1,
-            "test did not exercise text-busy retry path",
+            error.to_string().contains("spawn mitmdump fake-mitmdump"),
+            "unexpected error: {error}",
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn retry_text_busy_spawn_stops_after_retry_limit() {
+        let spawn_calls = std::cell::Cell::new(0usize);
+        let last_retry_attempt = std::cell::Cell::new(0usize);
+        let error = retry_text_busy_spawn::<()>(
+            Path::new("fake-mitmdump"),
+            Duration::ZERO,
+            || {
+                spawn_calls.set(spawn_calls.get() + 1);
+                Err(std::io::Error::from_raw_os_error(nix::libc::ETXTBSY))
+            },
+            |attempt, error| {
+                assert!(is_text_file_busy(error), "unexpected retry error: {error}");
+                last_retry_attempt.set(attempt);
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(spawn_calls.get(), TEXT_BUSY_SPAWN_MAX_RETRIES + 1);
+        assert_eq!(last_retry_attempt.get(), TEXT_BUSY_SPAWN_MAX_RETRIES);
+        assert!(
+            error.to_string().contains("spawn mitmdump fake-mitmdump"),
+            "unexpected error: {error}",
         );
     }
 

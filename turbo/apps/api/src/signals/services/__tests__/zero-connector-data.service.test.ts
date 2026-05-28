@@ -4,6 +4,7 @@ import { createStore } from "ccstate";
 import { connectors } from "@vm0/db/schema/connector";
 import { secrets } from "@vm0/db/schema/secret";
 import { userFeatureSwitches } from "@vm0/db/schema/user-feature-switches";
+import { variables } from "@vm0/db/schema/variable";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { mockOptionalEnv } from "../../../lib/env";
 import { writeDb$ } from "../../external/db";
@@ -17,11 +18,10 @@ const store = createStore();
 const writeDb = store.set(writeDb$);
 
 describe("zeroConnectorList", () => {
-  it("assigns fixed sentinel timestamps to derived api-token connectors", async () => {
+  it("does not derive api-token connectors from user-owned secrets", async () => {
     const orgId = `org_${randomUUID()}`;
     const userId = `user_${randomUUID()}`;
 
-    // Seed OPENAI_TOKEN so openai is derived as a connected api-token connector
     await writeDb.insert(secrets).values({
       orgId,
       userId,
@@ -35,11 +35,114 @@ describe("zeroConnectorList", () => {
       return c.type === "openai";
     });
 
-    expect(openai).toBeDefined();
-    if (openai) {
-      expect(openai.createdAt).toBe("1970-01-01T00:00:00.000Z");
-      expect(openai.updatedAt).toBe("1970-01-01T00:00:00.000Z");
-    }
+    expect(openai).toBeUndefined();
+  });
+
+  it("returns connector-provided env names only for stored connector credentials", async () => {
+    const orgId = `org_${randomUUID()}`;
+    const userId = `user_${randomUUID()}`;
+
+    await writeDb.insert(connectors).values([
+      {
+        orgId,
+        userId,
+        type: "gitlab",
+        authMethod: "api-token",
+      },
+      {
+        orgId,
+        userId,
+        type: "openai",
+        authMethod: "api-token",
+      },
+    ]);
+    await writeDb.insert(secrets).values({
+      orgId,
+      userId,
+      name: "GITLAB_TOKEN",
+      encryptedValue: "encrypted_gitlab_token",
+      type: "connector",
+    });
+
+    const list = await store.get(zeroConnectorList({ orgId, userId }));
+
+    expect(list.connectorProvidedEnvNames).toContain("GITLAB_TOKEN");
+    expect(list.connectorProvidedEnvNames).not.toContain("GITLAB_HOST");
+    expect(list.connectorProvidedEnvNames).not.toContain("OPENAI_TOKEN");
+  });
+
+  it("returns OAuth connector env names only when the access secret exists", async () => {
+    const orgId = `org_${randomUUID()}`;
+    const userWithoutSecret = `user_${randomUUID()}`;
+    const userWithSecret = `user_${randomUUID()}`;
+
+    await writeDb.insert(connectors).values([
+      {
+        orgId,
+        userId: userWithoutSecret,
+        type: "github",
+        authMethod: "oauth",
+      },
+      {
+        orgId,
+        userId: userWithSecret,
+        type: "github",
+        authMethod: "oauth",
+      },
+    ]);
+    await writeDb.insert(secrets).values({
+      orgId,
+      userId: userWithSecret,
+      name: "GITHUB_ACCESS_TOKEN",
+      encryptedValue: "encrypted_github_access_token",
+      type: "connector",
+    });
+
+    const withoutSecret = await store.get(
+      zeroConnectorList({ orgId, userId: userWithoutSecret }),
+    );
+    const withSecret = await store.get(
+      zeroConnectorList({ orgId, userId: userWithSecret }),
+    );
+
+    expect(withoutSecret.connectorProvidedEnvNames).not.toContain("GH_TOKEN");
+    expect(withoutSecret.connectorProvidedEnvNames).not.toContain(
+      "GITHUB_TOKEN",
+    );
+    expect(withSecret.connectorProvidedEnvNames).toStrictEqual(
+      expect.arrayContaining(["GH_TOKEN", "GITHUB_TOKEN"]),
+    );
+  });
+
+  it("does not report variable-backed connector env names as provided secrets", async () => {
+    const orgId = `org_${randomUUID()}`;
+    const userId = `user_${randomUUID()}`;
+
+    await writeDb.insert(connectors).values({
+      orgId,
+      userId,
+      type: "gitlab",
+      authMethod: "api-token",
+    });
+    await writeDb.insert(secrets).values({
+      orgId,
+      userId,
+      name: "GITLAB_TOKEN",
+      encryptedValue: "encrypted_gitlab_token",
+      type: "connector",
+    });
+    await writeDb.insert(variables).values({
+      orgId,
+      userId,
+      name: "GITLAB_HOST",
+      value: "gitlab.example.com",
+      type: "connector",
+    });
+
+    const list = await store.get(zeroConnectorList({ orgId, userId }));
+
+    expect(list.connectorProvidedEnvNames).toContain("GITLAB_TOKEN");
+    expect(list.connectorProvidedEnvNames).not.toContain("GITLAB_HOST");
   });
 
   it("returns configuredTypes in sorted order", async () => {

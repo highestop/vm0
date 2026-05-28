@@ -11,6 +11,8 @@ import {
   it,
 } from "vitest";
 import {
+  CONNECTOR_TYPES,
+  CONNECTOR_TYPE_KEYS,
   connectorTypeSchema,
   type ConnectorAuthMethodConfig,
   type ConnectorAuthMethodId,
@@ -25,7 +27,6 @@ import {
 import {
   getAvailableConnectorAuthMethods,
   getConfiguredConnectorAuthMethods,
-  deriveConnectedManualGrantMethods,
   hasRequiredScopes,
   getConnectorAuthCodeGrantConfig,
   getConnectorAuthMethodEnvBindings,
@@ -33,7 +34,6 @@ import {
   getConnectorDeviceAuthGrantConfig,
   getConnectorTypeForSecretName,
   getConnectorEnvBindings,
-  getConnectorProvidedEnvNames,
   getConnectorOAuthClient,
   getConnectorOAuthScopes,
   getConnectorManualGrantFieldNames,
@@ -310,28 +310,36 @@ describe("connector auth method config", () => {
     expect(getConnectorManualGrantFieldNames("github")).toBeNull();
   });
 
-  it("derives connected manual grant methods from required fields", () => {
-    expect(
-      deriveConnectedManualGrantMethods(
-        new Set(["ATLASSIAN_TOKEN"]),
-        new Set(["ATLASSIAN_EMAIL", "ATLASSIAN_DOMAIN"]),
-      ),
-    ).toContainEqual({ type: "atlassian", authMethod: "api-token" });
-    expect(
-      deriveConnectedManualGrantMethods(
-        new Set(["ATLASSIAN_TOKEN"]),
-        new Set(["ATLASSIAN_EMAIL"]),
-      ),
-    ).not.toContainEqual({ type: "atlassian", authMethod: "api-token" });
-    const connected = deriveConnectedManualGrantMethods(
-      new Set(["GITHUB_ACCESS_TOKEN"]),
-      new Set(),
-    );
-    expect(
-      connected.some((method) => {
-        return method.type === "github";
-      }),
-    ).toBe(false);
+  it("keeps connector-scoped secret and variable names globally unique", () => {
+    const secretOwners = new Map<string, string[]>();
+    const variableOwners = new Map<string, string[]>();
+
+    for (const type of CONNECTOR_TYPE_KEYS) {
+      for (const authMethod of Object.keys(CONNECTOR_TYPES[type].authMethods)) {
+        for (const name of getConnectorSecretNames(type, authMethod)) {
+          secretOwners.set(name, [
+            ...(secretOwners.get(name) ?? []),
+            `${type}:${authMethod}`,
+          ]);
+        }
+        for (const name of getConnectorVariableNames(type, authMethod)) {
+          variableOwners.set(name, [
+            ...(variableOwners.get(name) ?? []),
+            `${type}:${authMethod}`,
+          ]);
+        }
+      }
+    }
+
+    const duplicateSecrets = [...secretOwners].filter(([, owners]) => {
+      return owners.length > 1;
+    });
+    const duplicateVariables = [...variableOwners].filter(([, owners]) => {
+      return owners.length > 1;
+    });
+
+    expect(duplicateSecrets).toStrictEqual([]);
+    expect(duplicateVariables).toStrictEqual([]);
   });
 });
 
@@ -1721,19 +1729,6 @@ describe("getRuntimeAvailableConnectorTypes", () => {
     expect(runtimeAvailableTypes).toStrictEqual(
       [...runtimeAvailableTypes].sort(),
     );
-  });
-});
-
-describe("getConnectorProvidedEnvNames", () => {
-  it("returns environment names for API-token-only connector", () => {
-    const names = getConnectorProvidedEnvNames(["axiom"]);
-    expect(names.has("AXIOM_TOKEN")).toBe(true);
-  });
-
-  it("returns environment names for OAuth connector", () => {
-    const names = getConnectorProvidedEnvNames(["github"]);
-    expect(names.has("GH_TOKEN")).toBe(true);
-    expect(names.has("GITHUB_TOKEN")).toBe(true);
   });
 });
 

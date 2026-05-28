@@ -85,6 +85,17 @@ function modelProviderSecretPlaceholder(
   return placeholder;
 }
 
+function connectorSecretPlaceholder(
+  type: Parameters<typeof getConnectorFirewall>[0],
+  secretName: string,
+): string {
+  const placeholder = getConnectorFirewall(type)?.placeholders?.[secretName];
+  if (!placeholder) {
+    throw new Error(`Missing connector placeholder for ${secretName}`);
+  }
+  return placeholder;
+}
+
 interface ZeroAgentSeed {
   readonly fixture: UsageInsightFixture;
   readonly owner?: string;
@@ -1207,7 +1218,7 @@ describe("POST /api/zero/runs", () => {
     });
   });
 
-  it("does not forward unapproved API-token connector secrets", async () => {
+  it("treats connector-named user secrets as ordinary explicit secrets", async () => {
     const fx = await fixture();
     const agent = await seedRunnableZeroAgent({
       fixture: fx,
@@ -1221,7 +1232,7 @@ describe("POST /api/zero/runs", () => {
       orgId: fx.orgId,
       userId: fx.userId,
       name: "AXIOM_TOKEN",
-      encryptedValue: encryptSecretForTests("xaat-unapproved"),
+      encryptedValue: encryptSecretForTests("xaat-user-secret"),
       type: "user",
     });
 
@@ -1229,7 +1240,7 @@ describe("POST /api/zero/runs", () => {
       zeroRunsClient().create({
         headers: { authorization: "Bearer clerk-session" },
         body: {
-          prompt: "do not leak connector token",
+          prompt: "use explicit user secret",
           agentId: agent.agentId,
         },
       }),
@@ -1243,13 +1254,64 @@ describe("POST /api/zero/runs", () => {
     const executionContext = job?.executionContext as {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
+      readonly firewalls?: readonly { readonly name: string }[];
     };
-    expect(executionContext.environment.AXIOM_TOKEN).toBe(
-      ["${{", " secrets.AXIOM_TOKEN }}"].join(""),
+    expect(executionContext.environment.AXIOM_TOKEN).toBe("xaat-user-secret");
+    expect(decryptSecretsMap(executionContext.encryptedSecrets)).toMatchObject({
+      AXIOM_TOKEN: "xaat-user-secret",
+    });
+    expect(
+      executionContext.firewalls?.some((firewall) => {
+        return firewall.name === "axiom";
+      }),
+    ).toBeFalsy();
+  });
+
+  it("does not infer API-token connector runtime from legacy user secrets", async () => {
+    const fx = await fixture();
+    const agent = await seedRunnableZeroAgent({ fixture: fx });
+    const db = store.set(writeDb$);
+    await db.insert(userConnectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      agentId: agent.agentId,
+      connectorType: "axiom",
+    });
+    await db.insert(secrets).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      name: "AXIOM_TOKEN",
+      encryptedValue: encryptSecretForTests("xaat-legacy"),
+      type: "user",
+    });
+
+    const response = await accept(
+      zeroRunsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: {
+          prompt: "ignore legacy connector secret",
+          agentId: agent.agentId,
+        },
+      }),
+      [201],
     );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly encryptedSecrets: string | null;
+      readonly firewalls?: readonly { readonly name: string }[];
+    };
     expect(
       decryptSecretsMap(executionContext.encryptedSecrets)?.AXIOM_TOKEN,
     ).toBeUndefined();
+    expect(
+      executionContext.firewalls?.some((firewall) => {
+        return firewall.name === "axiom";
+      }),
+    ).toBeFalsy();
   });
 
   it("masks approved API-token connector env secrets with placeholders", async () => {
@@ -1268,12 +1330,18 @@ describe("POST /api/zero/runs", () => {
       agentId: agent.agentId,
       connectorType: "axiom",
     });
+    await db.insert(connectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      type: "axiom",
+      authMethod: "api-token",
+    });
     await db.insert(secrets).values({
       orgId: fx.orgId,
       userId: fx.userId,
       name: "AXIOM_TOKEN",
       encryptedValue: encryptSecretForTests("xaat-approved"),
-      type: "user",
+      type: "connector",
     });
 
     const response = await accept(
@@ -1300,6 +1368,58 @@ describe("POST /api/zero/runs", () => {
     );
     expect(decryptSecretsMap(executionContext.encryptedSecrets)).toMatchObject({
       AXIOM_TOKEN: "xaat-approved",
+    });
+  });
+
+  it("omits missing optional API-token connector env fields", async () => {
+    const fx = await fixture();
+    const agent = await seedRunnableZeroAgent({ fixture: fx });
+    const db = store.set(writeDb$);
+    await db.insert(userConnectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      agentId: agent.agentId,
+      connectorType: "gitlab",
+    });
+    await db.insert(connectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      type: "gitlab",
+      authMethod: "api-token",
+    });
+    await db.insert(secrets).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      name: "GITLAB_TOKEN",
+      encryptedValue: encryptSecretForTests("glpat-token"),
+      type: "connector",
+    });
+
+    const response = await accept(
+      zeroRunsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: {
+          prompt: "use gitlab without optional host",
+          agentId: agent.agentId,
+        },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
+      readonly encryptedSecrets: string | null;
+    };
+    expect(executionContext.environment.GITLAB_TOKEN).toBe(
+      connectorSecretPlaceholder("gitlab", "GITLAB_TOKEN"),
+    );
+    expect(executionContext.environment.GITLAB_HOST).toBeUndefined();
+    expect(decryptSecretsMap(executionContext.encryptedSecrets)).toMatchObject({
+      GITLAB_TOKEN: "glpat-token",
     });
   });
 
@@ -1356,12 +1476,16 @@ describe("POST /api/zero/runs", () => {
       .from(runnerJobQueue)
       .where(eq(runnerJobQueue.runId, response.body.runId));
     const executionContext = job?.executionContext as {
+      readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
       readonly secretConnectorMap: Record<string, string> | null;
       readonly firewalls: readonly { readonly name: string }[];
       readonly billableFirewalls: readonly string[];
     };
     const decrypted = decryptSecretsMap(executionContext.encryptedSecrets);
+    expect(executionContext.environment.X_TOKEN).toBe(
+      connectorSecretPlaceholder("x", "X_TOKEN"),
+    );
     expect(decrypted).toMatchObject({ X_TOKEN: "x-access" });
     expect(decrypted).not.toHaveProperty("X_REFRESH_TOKEN");
     expect(executionContext.secretConnectorMap).toMatchObject({

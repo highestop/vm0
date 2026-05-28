@@ -1299,10 +1299,26 @@ fn exec_control_roundtrip_and_rejects_malformed_payloads() {
     let empty_payload = encode_exec_control(7, NONCE, "message", b"", 5000).unwrap();
     assert_eq!(decode_exec_control(&empty_payload).unwrap().payload, b"");
 
+    let max_payload = vec![0xAB; EXEC_CONTROL_MAX_PAYLOAD_BYTES];
+    let max_payload_message = encode_exec_control(7, NONCE, "message", &max_payload, 5000).unwrap();
+    assert_eq!(
+        decode_exec_control(&max_payload_message).unwrap().payload,
+        max_payload
+    );
+
     let err = encode_exec_control(0, NONCE, "message", b"body", 5000).unwrap_err();
     assert!(matches!(
         err,
         ProtocolError::InvalidPayload("exec_control target_seq must be non-zero")
+    ));
+
+    let mut zero_target_seq = payload.clone();
+    zero_target_seq[..4].copy_from_slice(&0u32.to_be_bytes());
+    assert!(matches!(
+        decode_exec_control(&zero_target_seq),
+        Err(ProtocolError::InvalidPayload(
+            "exec_control target_seq must be non-zero"
+        ))
     ));
 
     let err = encode_exec_control(7, NONCE, "", b"body", 5000).unwrap_err();
@@ -1348,6 +1364,62 @@ fn exec_control_roundtrip_and_rejects_malformed_payloads() {
         decode_exec_control(&trailing),
         Err(ProtocolError::InvalidPayload("exec_control trailing bytes"))
     ));
+}
+
+#[test]
+fn exec_control_rejects_too_long_message_id() {
+    let message_id = "x".repeat(u16::MAX as usize + 1);
+
+    let err = encode_exec_control(7, NONCE, &message_id, b"body", 5000).unwrap_err();
+    assert!(matches!(
+        err,
+        ProtocolError::PayloadTooLarge("message_id", size) if size == message_id.len()
+    ));
+
+    let err = encode_exec_control_result(7, NONCE, &message_id, ExecControlStatus::Delivered, "")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        ProtocolError::PayloadTooLarge("message_id", size) if size == message_id.len()
+    ));
+
+    let diagnostic = "x".repeat(u16::MAX as usize + 1);
+    let err = encode_exec_control_result(
+        7,
+        NONCE,
+        "message",
+        ExecControlStatus::Delivered,
+        &diagnostic,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ProtocolError::PayloadTooLarge("diagnostic", size) if size == diagnostic.len()
+    ));
+}
+
+#[test]
+fn exec_control_accepts_max_len_message_id_and_diagnostic() {
+    let max_message_id = "m".repeat(u16::MAX as usize);
+
+    let payload = encode_exec_control(7, NONCE, &max_message_id, b"body", 5000).unwrap();
+    assert_eq!(
+        decode_exec_control(&payload).unwrap().message_id,
+        max_message_id
+    );
+
+    let max_diagnostic = "d".repeat(u16::MAX as usize);
+    let result_payload = encode_exec_control_result(
+        7,
+        NONCE,
+        &max_message_id,
+        ExecControlStatus::Delivered,
+        &max_diagnostic,
+    )
+    .unwrap();
+    let decoded = decode_exec_control_result(&result_payload).unwrap();
+    assert_eq!(decoded.message_id, max_message_id);
+    assert_eq!(decoded.diagnostic, max_diagnostic);
 }
 
 #[test]
@@ -1402,11 +1474,29 @@ fn exec_control_result_roundtrip_and_rejects_malformed_payloads() {
     assert_eq!(decoded.status, ExecControlStatus::Delivered);
     assert_eq!(decoded.diagnostic, "ok");
 
+    let empty_diagnostic =
+        encode_exec_control_result(7, NONCE, "message", ExecControlStatus::Delivered, "").unwrap();
+    assert_eq!(
+        decode_exec_control_result(&empty_diagnostic)
+            .unwrap()
+            .diagnostic,
+        ""
+    );
+
     let err = encode_exec_control_result(0, NONCE, "message", ExecControlStatus::Delivered, "")
         .unwrap_err();
     assert!(matches!(
         err,
         ProtocolError::InvalidPayload("exec_control_result target_seq must be non-zero")
+    ));
+
+    let mut zero_target_seq = payload.clone();
+    zero_target_seq[..4].copy_from_slice(&0u32.to_be_bytes());
+    assert!(matches!(
+        decode_exec_control_result(&zero_target_seq),
+        Err(ProtocolError::InvalidPayload(
+            "exec_control_result target_seq must be non-zero"
+        ))
     ));
 
     let err =

@@ -77,11 +77,21 @@ export type { DraftSignals } from "../zero-page/chat-draft.ts";
 
 const L = logger("ChatThread");
 
+const QUEUED_RUN_ASSISTANT_MESSAGE = "Waiting in queue...";
+
 function isRecallControlMessage(msg: PagedChatMessage): boolean {
   return (
-    msg.role === "user" &&
-    msg.runId === undefined &&
+    ((msg.role === "user" && msg.runId === undefined) ||
+      (msg.role === "assistant" && msg.content === null)) &&
     msg.revokesMessageId !== undefined
+  );
+}
+
+function isQueueMarkerMessage(msg: PagedChatMessage): boolean {
+  return (
+    msg.role === "assistant" &&
+    msg.content === QUEUED_RUN_ASSISTANT_MESSAGE &&
+    msg.runId !== undefined
   );
 }
 
@@ -99,6 +109,18 @@ function isCancelledAssistantMessage(msg: PagedChatMessage): boolean {
     msg.runId !== undefined &&
     (msg.runLifecycleEvent === "cancelled" ||
       msg.error?.trim().toLowerCase() === "run cancelled")
+  );
+}
+
+function isUnterminatedAssistantRunMessage(
+  message: PagedChatMessage,
+  terminatedRunIds: Set<string>,
+): boolean {
+  return (
+    message.role === "assistant" &&
+    message.runId !== undefined &&
+    message.runLifecycleEvent === undefined &&
+    !terminatedRunIds.has(message.runId)
   );
 }
 
@@ -217,7 +239,14 @@ function deriveRunIndicatorState(
   messages: readonly EnrichedChatMessage[],
 ): string | null {
   const terminatedRunIds = new Set<string>();
+  const revokedMessageIds = new Set<string>();
   for (const message of messages) {
+    if (message.revokesMessageId !== undefined) {
+      revokedMessageIds.add(message.revokesMessageId);
+    }
+    if (message.interruptsRunId !== undefined) {
+      terminatedRunIds.add(message.interruptsRunId);
+    }
     if (
       message.role === "assistant" &&
       message.runId !== undefined &&
@@ -229,7 +258,17 @@ function deriveRunIndicatorState(
 
   let hasQueued = false;
   for (const message of messages) {
+    if (revokedMessageIds.has(message.id)) {
+      continue;
+    }
     if (message.role === "assistant") {
+      if (isQueueMarkerMessage(message)) {
+        hasQueued = true;
+        continue;
+      }
+      if (isUnterminatedAssistantRunMessage(message, terminatedRunIds)) {
+        return "running";
+      }
       hasQueued = false;
       continue;
     }
@@ -251,11 +290,37 @@ function deriveRunIndicatorState(
   return hasQueued ? "queued" : null;
 }
 
+function hasActiveQueueMarker(
+  raw: readonly ChatMessageProjectionEntry[],
+): boolean {
+  const queueMarkerIds = new Set(
+    raw.flatMap((entry) => {
+      return isQueueMarkerMessage(entry.message) ? [entry.message.id] : [];
+    }),
+  );
+  const revokedIds = new Set(
+    raw.flatMap((entry) => {
+      return entry.message.revokesMessageId
+        ? [entry.message.revokesMessageId]
+        : [];
+    }),
+  );
+  for (const markerId of queueMarkerIds) {
+    if (!revokedIds.has(markerId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function terminatedRunIdsFromMessages(
   messages: readonly EnrichedChatMessage[],
 ): Set<string> {
   const terminatedRunIds = new Set<string>();
   for (const message of messages) {
+    if (message.interruptsRunId !== undefined) {
+      terminatedRunIds.add(message.interruptsRunId);
+    }
     if (
       message.role === "assistant" &&
       message.runId !== undefined &&
@@ -893,6 +958,7 @@ function createAllMessagesComputed(
       .filter((entry) => {
         return (
           !isRecallControlMessage(entry.message) &&
+          !isQueueMarkerMessage(entry.message) &&
           !isInterruptedAssistantCancellation(
             entry.message,
             interruptedRunIds,
@@ -1037,6 +1103,7 @@ function createPagedMessages(
     optimisticMessages$,
   });
   const allMessages$ = createAllMessagesComputed(rawMessages$);
+  const latestRunStatus$ = createLatestRunStatus(allMessages$, rawMessages$);
 
   const groupedChatMessages$ = computed(
     async (get): Promise<GroupedChatMessageGroup[]> => {
@@ -1110,6 +1177,7 @@ function createPagedMessages(
     allMessages$,
     groupedChatMessages$,
     hasOlderHistory$,
+    latestRunStatus$,
     fetchNextPage$,
     backfillHistoryBoundary$,
     refreshLatestMessages$,
@@ -1284,7 +1352,7 @@ function createInputRef() {
 
 function createLatestRunStatus(
   allMessages$: Computed<Promise<EnrichedChatMessage[]>>,
-  threadData$: Computed<Promise<ChatThread | null>>,
+  rawMessages$: Computed<Promise<ChatMessageProjectionEntry[]>>,
 ) {
   return computed(async (get): Promise<string | null> => {
     const messages = await get(allMessages$);
@@ -1292,8 +1360,7 @@ function createLatestRunStatus(
     if (stateFromMessages !== null) {
       return stateFromMessages;
     }
-    const thread = await get(threadData$);
-    return thread?.activeRuns[0]?.status ?? null;
+    return hasActiveQueueMarker(await get(rawMessages$)) ? "queued" : null;
   });
 }
 
@@ -1387,11 +1454,17 @@ function createRunTracking({
 
   const allFinished$ = computed(async (get) => {
     const messages = await get(allMessages$);
-    if (deriveRunIndicatorState(messages) !== null) {
+    const state = deriveRunIndicatorState(messages);
+    if (state !== null) {
       return false;
     }
     const thread = await get(threadData$);
-    return (thread?.activeRunIds.length ?? 0) === 0;
+    const terminatedRunIds = terminatedRunIdsFromMessages(messages);
+    return (
+      thread?.activeRunIds.every((runId) => {
+        return terminatedRunIds.has(runId);
+      }) ?? true
+    );
   });
 
   const markThreadReadIfNeeded$ = createMarkThreadReadIfNeeded({
@@ -1973,12 +2046,7 @@ export function createChatThreadSignals(
     createComposerFileInput();
   const { agentId$, agentDisplayName$, defaultModelSelection$, agentPinned$ } =
     createAgentInfoSignals(threadId, threadData$);
-  const {
-    timelineExpandedIds$,
-    toggleTimelineExpanded$,
-    copiedMessageId$,
-    copyMessage$,
-  } = createThreadUIState();
+  const threadUi = createThreadUIState();
   const {
     initialPage$,
     earliestChatMessageId$,
@@ -1986,6 +2054,7 @@ export function createChatThreadSignals(
     allMessages$,
     groupedChatMessages$,
     hasOlderHistory$,
+    latestRunStatus$,
     fetchNextPage$,
     backfillHistoryBoundary$,
     refreshLatestMessages$,
@@ -2063,10 +2132,10 @@ export function createChatThreadSignals(
     agentDisplayName$,
     defaultModelSelection$,
     agentPinned$,
-    timelineExpandedIds$,
-    toggleTimelineExpanded$,
-    copiedMessageId$,
-    copyMessage$,
+    timelineExpandedIds$: threadUi.timelineExpandedIds$,
+    toggleTimelineExpanded$: threadUi.toggleTimelineExpanded$,
+    copiedMessageId$: threadUi.copiedMessageId$,
+    copyMessage$: threadUi.copyMessage$,
     setInputRef$,
     focusInput$,
     scheduleDraftSync$,
@@ -2074,7 +2143,7 @@ export function createChatThreadSignals(
     latestChatMessageId$,
     groupedChatMessages$,
     hasOlderHistory$,
-    latestRunStatus$: createLatestRunStatus(allMessages$, threadData$),
+    latestRunStatus$,
     allFinished$: runTracking.allFinished$,
     fetchNextPage$,
     loadHistory$,

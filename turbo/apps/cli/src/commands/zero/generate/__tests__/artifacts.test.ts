@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import chalk from "chalk";
 import { generateCommand } from "../index";
+import { reportCommand } from "../artifacts";
 import { selectResourceCandidates } from "../../shared/resource-registry";
 
 describe("zero generate source-backed artifact commands", () => {
@@ -87,33 +88,26 @@ describe("zero generate source-backed artifact commands", () => {
     },
   );
 
-  it("prints JSON metadata for mobile-app-design", async () => {
-    await generateCommand.parseAsync([
-      "node",
-      "cli",
-      "mobile-app-design",
-      "--prompt",
-      "A mobile review screen",
-      "--site-slug",
-      "mobile-review",
-      "--json",
-    ]);
-
-    const parsed = JSON.parse(output()) as Record<string, unknown>;
-    expect(parsed).toMatchObject({
-      type: "generation-source-selection",
-      kind: "mobile-app-design",
-      prompt: "A mobile review screen",
-      outputDir: "./generated/mockups/mobile-review",
-      site: "mobile-review",
-      artifact: {
-        outputMode: "primary-artifact-with-supporting-assets",
-        primaryArtifact: {
-          kind: "mobile-app-design",
-          path: "./generated/mockups/mobile-review/index.html",
-        },
+  it("exposes the shared HTML artifact flags in report help", () => {
+    let helpOutput = "";
+    reportCommand.configureOutput({
+      writeOut: (str: string) => {
+        helpOutput += str;
       },
     });
+
+    reportCommand.outputHelp();
+
+    expect(helpOutput).toContain("--prompt <text>");
+    expect(helpOutput).toContain("--site-slug <slug>");
+    expect(helpOutput).toContain("--title <text>");
+    expect(helpOutput).toContain("--design-system <id>");
+    expect(helpOutput).toContain("--template <id>");
+    expect(helpOutput).not.toContain("--json");
+    expect(helpOutput).not.toContain("--provider");
+    expect(helpOutput).not.toContain("--all");
+    expect(helpOutput).not.toContain("--audience");
+    expect(helpOutput).not.toContain("--site <slug>");
   });
 
   it("returns every registered skill grouped by kind", () => {

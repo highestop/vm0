@@ -260,6 +260,7 @@ interface RefreshState {
   readonly accessToken: string | null;
   readonly refreshToken: string | null;
   readonly tokenExpiresAt: Date | null;
+  readonly needsReconnect: boolean;
   readonly updatedAtMicros: bigint;
 }
 
@@ -824,6 +825,9 @@ function shouldUseLockedCurrentAccess(args: {
   if (tokenExpiresAtNeedsRefresh(args.state.tokenExpiresAt)) {
     return false;
   }
+  if (args.state.needsReconnect) {
+    return false;
+  }
   if (!args.refreshArgs.forceRefresh) {
     return true;
   }
@@ -875,6 +879,26 @@ function shouldUseLockedCurrentAccess(args: {
   );
 }
 
+function didLockedRefreshFailDuringRequest(args: {
+  readonly initialState: RefreshState | null;
+  readonly requestStartedAtMicros: bigint | null;
+  readonly state: RefreshState;
+}): boolean {
+  if (!args.state.needsReconnect) {
+    return false;
+  }
+  if (args.initialState) {
+    return (
+      !args.initialState.needsReconnect ||
+      args.initialState.updatedAtMicros !== args.state.updatedAtMicros
+    );
+  }
+  return (
+    args.requestStartedAtMicros !== null &&
+    args.state.updatedAtMicros > args.requestStartedAtMicros
+  );
+}
+
 async function loadRefreshState(
   db: Db,
   args: RefreshAccessTokenArgs,
@@ -885,6 +909,7 @@ async function loadRefreshState(
       ? await db
           .select({
             tokenExpiresAt: modelProviders.tokenExpiresAt,
+            needsReconnect: modelProviders.needsReconnect,
             updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${modelProviders.updatedAt}) * 1000000)::bigint`,
           })
           .from(modelProviders)
@@ -899,6 +924,7 @@ async function loadRefreshState(
       : await db
           .select({
             tokenExpiresAt: connectors.tokenExpiresAt,
+            needsReconnect: connectors.needsReconnect,
             updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${connectors.updatedAt}) * 1000000)::bigint`,
           })
           .from(connectors)
@@ -938,6 +964,7 @@ async function loadRefreshState(
     accessToken,
     refreshToken,
     tokenExpiresAt: row.tokenExpiresAt,
+    needsReconnect: row.needsReconnect,
     updatedAtMicros: BigInt(row.updatedAtMicros),
   };
 }
@@ -1089,6 +1116,16 @@ async function refreshAccessTokenForSource(
     }
 
     const currentAccessToken = lockedState.accessToken;
+    if (
+      didLockedRefreshFailDuringRequest({
+        initialState,
+        requestStartedAtMicros,
+        state: lockedState,
+      })
+    ) {
+      return { ok: false, reason: "refresh-failed" };
+    }
+
     if (
       currentAccessToken &&
       shouldUseLockedCurrentAccess({

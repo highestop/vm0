@@ -883,6 +883,13 @@ describe("POST /api/zero/runs", () => {
     const executionContext = job?.executionContext as {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<
+        string,
+        {
+          readonly sourceType: string;
+        }
+      > | null;
     };
     expect(executionContext.environment).toMatchObject({
       ANTHROPIC_AUTH_TOKEN: modelProviderSecretPlaceholder(
@@ -1223,6 +1230,8 @@ describe("POST /api/zero/runs", () => {
     const executionContext = job?.executionContext as {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<string, unknown> | null;
     };
     expect(executionContext.environment.EXTERNAL_TOKEN).toBe("user-secret");
     expect(
@@ -1378,6 +1387,8 @@ describe("POST /api/zero/runs", () => {
     const executionContext = job?.executionContext as {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<string, unknown> | null;
     };
     expect(executionContext.environment.AXIOM_TOKEN).toBe(
       "xaat-c0ffee5a-fe10-ca1c-0ffe-e5afe10ca1c0",
@@ -1387,6 +1398,10 @@ describe("POST /api/zero/runs", () => {
     ).toMatchObject({
       AXIOM_TOKEN: "xaat-approved",
     });
+    expect(executionContext.secretConnectorMap).toStrictEqual({
+      AXIOM_TOKEN: "axiom",
+    });
+    expect(executionContext.secretConnectorMetadataMap).toBeNull();
   });
 
   it("omits missing optional API-token connector env fields", async () => {
@@ -1431,6 +1446,8 @@ describe("POST /api/zero/runs", () => {
     const executionContext = job?.executionContext as {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<string, unknown> | null;
     };
     expect(executionContext.environment.GITLAB_TOKEN).toBe(
       connectorSecretPlaceholder("gitlab", "GITLAB_TOKEN"),
@@ -1441,6 +1458,10 @@ describe("POST /api/zero/runs", () => {
     ).toMatchObject({
       GITLAB_TOKEN: "glpat-token",
     });
+    expect(executionContext.secretConnectorMap).toStrictEqual({
+      GITLAB_TOKEN: "gitlab",
+    });
+    expect(executionContext.secretConnectorMetadataMap).toBeNull();
   });
 
   it("injects authorized OAuth connector secrets and refresh metadata", async () => {
@@ -1499,6 +1520,12 @@ describe("POST /api/zero/runs", () => {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
       readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<
+        string,
+        {
+          readonly sourceType: string;
+        }
+      > | null;
       readonly firewalls: readonly { readonly name: string }[];
       readonly billableFirewalls: readonly string[];
     };
@@ -1510,16 +1537,68 @@ describe("POST /api/zero/runs", () => {
     );
     expect(decrypted).toMatchObject({ X_TOKEN: "x-access" });
     expect(decrypted).not.toHaveProperty("X_REFRESH_TOKEN");
-    expect(executionContext.secretConnectorMap).toMatchObject({
-      X_ACCESS_TOKEN: "x",
+    expect(executionContext.secretConnectorMap).toStrictEqual({
       X_TOKEN: "x",
     });
+    expect(executionContext.secretConnectorMetadataMap).toBeNull();
     expect(
       executionContext.firewalls.map((firewall) => {
         return firewall.name;
       }),
     ).toContain("x");
     expect(executionContext.billableFirewalls).toContain("x");
+  });
+
+  it("maps static OAuth connector env aliases", async () => {
+    const fx = await fixture();
+    const db = store.set(writeDb$);
+    const agent = await seedRunnableZeroAgent({ fixture: fx });
+    await db.insert(userConnectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      agentId: agent.agentId,
+      connectorType: "github",
+    });
+    await db.insert(connectors).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      type: "github",
+      authMethod: "oauth",
+    });
+    await db.insert(secrets).values({
+      orgId: fx.orgId,
+      userId: fx.userId,
+      name: "GITHUB_ACCESS_TOKEN",
+      encryptedValue: encryptSecretForTests("gho-access"),
+      type: "connector",
+    });
+
+    const response = await accept(
+      zeroRunsClient().create({
+        headers: { authorization: "Bearer clerk-session" },
+        body: { prompt: "github connector", agentId: agent.agentId },
+      }),
+      [201],
+    );
+
+    const [job] = await db
+      .select({ executionContext: runnerJobQueue.executionContext })
+      .from(runnerJobQueue)
+      .where(eq(runnerJobQueue.runId, response.body.runId));
+    const executionContext = job?.executionContext as {
+      readonly encryptedSecrets: string | null;
+      readonly secretConnectorMap: Record<string, string> | null;
+    };
+    expect(
+      decryptSecretsMapForTests(executionContext.encryptedSecrets),
+    ).toMatchObject({
+      GH_TOKEN: "gho-access",
+      GITHUB_TOKEN: "gho-access",
+    });
+    expect(executionContext.secretConnectorMap).toStrictEqual({
+      GH_TOKEN: "github",
+      GITHUB_TOKEN: "github",
+    });
   });
 
   it("ignores orphaned connector secrets for removed connector types", async () => {
@@ -1644,6 +1723,12 @@ describe("POST /api/zero/runs", () => {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
       readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<
+        string,
+        {
+          readonly sourceType: string;
+        }
+      > | null;
       readonly firewalls: readonly {
         readonly name: string;
         readonly apis: readonly {
@@ -1665,10 +1750,10 @@ describe("POST /api/zero/runs", () => {
     );
     expect(decrypted).toMatchObject({ BASE44_TOKEN: "base44-access" });
     expect(decrypted).not.toHaveProperty("BASE44_REFRESH_TOKEN");
-    expect(executionContext.secretConnectorMap).toMatchObject({
-      BASE44_ACCESS_TOKEN: "base44",
+    expect(executionContext.secretConnectorMap).toStrictEqual({
       BASE44_TOKEN: "base44",
     });
+    expect(executionContext.secretConnectorMetadataMap).toBeNull();
     const firewall = executionContext.firewalls.find((candidate) => {
       return candidate.name === "base44";
     });
@@ -1734,6 +1819,12 @@ describe("POST /api/zero/runs", () => {
       readonly environment: Record<string, string>;
       readonly encryptedSecrets: string | null;
       readonly secretConnectorMap: Record<string, string> | null;
+      readonly secretConnectorMetadataMap: Record<
+        string,
+        {
+          readonly sourceType: string;
+        }
+      > | null;
       readonly firewalls: readonly {
         readonly name: string;
         readonly apis: readonly {
@@ -1760,9 +1851,9 @@ describe("POST /api/zero/runs", () => {
     expect(decrypted).not.toHaveProperty("SLOCK_ACCESS_TOKEN");
     expect(decrypted).not.toHaveProperty("SLOCK_REFRESH_TOKEN");
     expect(executionContext.secretConnectorMap).toStrictEqual({
-      SLOCK_ACCESS_TOKEN: "slock",
       SLOCK_TOKEN: "slock",
     });
+    expect(executionContext.secretConnectorMetadataMap).toBeNull();
     const firewall = executionContext.firewalls.find((candidate) => {
       return candidate.name === "slock";
     });
@@ -1821,8 +1912,7 @@ describe("POST /api/zero/runs", () => {
       GOOGLE_ADS_TOKEN: "google-ads-access",
       GOOGLE_ADS_DEVELOPER_TOKEN: "developer-token",
     });
-    expect(executionContext.secretConnectorMap).toMatchObject({
-      GOOGLE_ADS_ACCESS_TOKEN: "google-ads",
+    expect(executionContext.secretConnectorMap).toStrictEqual({
       GOOGLE_ADS_TOKEN: "google-ads",
     });
     expect(

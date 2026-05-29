@@ -51,6 +51,7 @@ import {
   decryptStoredSecretValue,
   encryptStoredSecretValue,
 } from "./crypto.utils";
+import { lockConnectorState } from "./auth-state-lock.service";
 import {
   userFeatureSwitchContext,
   userFeatureSwitchOverrides,
@@ -124,19 +125,6 @@ interface PendingConnectorTokenRevoke {
   readonly authMethod: string;
   readonly encryptedAccessToken: string;
   readonly featureSwitchContext: FeatureSwitchContext;
-}
-
-async function lockConnectorState(
-  db: Db,
-  args: {
-    readonly orgId: string;
-    readonly userId: string;
-    readonly type: ConnectorType;
-  },
-): Promise<void> {
-  await db.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtext('connector_state:' || ${args.orgId} || ':' || ${args.userId} || ':' || ${args.type}))`,
-  );
 }
 
 function parseOauthScopes(value: string | null): string[] | null {
@@ -792,7 +780,6 @@ async function upsertApiTokenConnectorRow(
     readonly type: ConnectorType;
   },
 ): Promise<StoredConnectorRow> {
-  const updatedAt = nowDate();
   const [row] = await db
     .insert(connectors)
     .values({
@@ -817,7 +804,7 @@ async function upsertApiTokenConnectorRow(
         oauthScopes: null,
         tokenExpiresAt: null,
         needsReconnect: false,
-        updatedAt,
+        updatedAt: sql`clock_timestamp()`,
       },
     })
     .returning({
@@ -1383,7 +1370,7 @@ async function upsertOAuthConnectorRow(
         oauthScopes: JSON.stringify(args.oauthScopes),
         tokenExpiresAt: args.tokenExpiresAt,
         needsReconnect: false,
-        updatedAt: nowDate(),
+        updatedAt: sql`clock_timestamp()`,
       },
     })
     .returning({

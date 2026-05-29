@@ -40,7 +40,7 @@ import { agentRuns } from "@vm0/db/schema/agent-run";
 import { connectors } from "@vm0/db/schema/connector";
 import { modelProviders } from "@vm0/db/schema/model-provider";
 import { secrets as secretsTable } from "@vm0/db/schema/secret";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { optionalEnv } from "../../lib/env";
 import { badRequestMessage, insufficientCredits } from "../../lib/error";
@@ -54,6 +54,10 @@ import {
   decryptStoredSecretValue,
   encryptStoredSecretValue,
 } from "./crypto.utils";
+import {
+  lockConnectorState,
+  lockModelProviderState,
+} from "./auth-state-lock.service";
 import { loadUserFeatureSwitchContext } from "./feature-switches.service";
 import { resolveOrgCreditAvailability } from "./zero-run-admission.service";
 
@@ -84,7 +88,7 @@ interface RefreshResult {
 
 interface RefreshExecutionResult {
   readonly connectorType: string;
-  readonly status: "refreshed" | "failed";
+  readonly status: "current" | "refreshed" | "failed";
 }
 
 interface ReferencedAuthKeys {
@@ -241,13 +245,22 @@ interface SecretTokenLookupArgs {
 
 interface RefreshAccessTokenArgs extends SecretTokenLookupArgs {
   readonly connectorSecrets: Record<string, string>;
+  readonly accessEnvVars: readonly string[];
+  readonly forceRefresh: boolean;
+  readonly forceRefreshStartedAtMicros: bigint | null;
 }
 
 interface RefreshTokenContext {
   readonly refreshTokenSecret: string;
-  readonly currentRefreshToken: string;
   readonly accessTokenSecret: string;
   readonly secretUserId: string;
+}
+
+interface RefreshState {
+  readonly accessToken: string | null;
+  readonly refreshToken: string | null;
+  readonly tokenExpiresAt: Date | null;
+  readonly updatedAtMicros: bigint;
 }
 
 type PreparedRefreshTokenContext =
@@ -280,6 +293,7 @@ type PrepareRefreshTokenContextResult =
 type RefreshAccessTokenResult =
   | {
       readonly ok: true;
+      readonly status: "current" | "refreshed";
       readonly accessToken: string;
     }
   | {
@@ -290,17 +304,6 @@ type RefreshAccessTokenResult =
         | "refresh-failed"
         | "refresh-token-missing";
     };
-
-interface SyncRefreshTokensArgs {
-  readonly db: Db;
-  readonly connectorTypes: readonly string[];
-  readonly orgId: string;
-  readonly userId: string;
-  readonly secrets: Record<string, string>;
-  readonly metadataByConnector: Map<string, SecretConnectorMetadata>;
-  readonly connectorAccessByType: ReadonlyMap<string, ConnectorAccessState>;
-  readonly featureSwitchContext: FeatureSwitchContext;
-}
 
 interface RefreshExpiredTokensArgs {
   readonly db: Db;
@@ -315,6 +318,7 @@ interface RefreshExpiredTokensArgs {
   readonly referencedKeys: Set<string>;
   readonly connectorAccessByType: ReadonlyMap<string, ConnectorAccessState>;
   readonly forceRefresh: boolean;
+  readonly forceRefreshStartedAtMicros: bigint | null;
 }
 
 interface RefreshBatchContext {
@@ -323,6 +327,8 @@ interface RefreshBatchContext {
   readonly orgId: string;
   readonly userId: string;
   readonly secrets: Record<string, string>;
+  readonly forceRefresh: boolean;
+  readonly forceRefreshStartedAtMicros: bigint | null;
   readonly metadataByConnector: Map<string, SecretConnectorMetadata>;
   readonly connectorAccessByType: ReadonlyMap<string, ConnectorAccessState>;
   readonly envVarsByConnector: Map<string, readonly string[]>;
@@ -507,29 +513,6 @@ function getAccessSecretNameForSource(args: {
     : undefined;
 }
 
-async function getConnectorRefreshToken(
-  args: SecretTokenLookupArgs,
-): Promise<{ readonly secretName: string; readonly token: string } | null> {
-  const secretName = getRefreshSecretNameForSource(args);
-  if (!secretName) {
-    return null;
-  }
-
-  const token = await getSecretValue({
-    db: args.db,
-    orgId: args.orgId,
-    userId: resolveSecretUserId(
-      args.sourceType,
-      args.userId,
-      args.sourceUserId,
-    ),
-    name: secretName,
-    type: args.sourceType,
-    featureSwitchContext: args.featureSwitchContext,
-  });
-  return token ? { secretName, token } : null;
-}
-
 async function getConnectorAccessToken(
   args: SecretTokenLookupArgs,
 ): Promise<string | null> {
@@ -550,36 +533,6 @@ async function getConnectorAccessToken(
     type: args.sourceType,
     featureSwitchContext: args.featureSwitchContext,
   });
-}
-
-async function syncRefreshTokensFromDb(
-  args: SyncRefreshTokensArgs,
-): Promise<void> {
-  const results = await Promise.all(
-    args.connectorTypes.map((connectorType) => {
-      const metadata = resolveRefreshMetadata(
-        connectorType,
-        args.metadataByConnector.get(connectorType),
-      );
-      return getConnectorRefreshToken({
-        db: args.db,
-        connectorType,
-        orgId: args.orgId,
-        userId: args.userId,
-        sourceType: metadata.sourceType,
-        sourceUserId: metadata.sourceUserId,
-        metadataKey: metadata.metadataKey,
-        connectorAccessByType: args.connectorAccessByType,
-        featureSwitchContext: args.featureSwitchContext,
-      });
-    }),
-  );
-
-  for (const result of results) {
-    if (result) {
-      args.secrets[result.secretName] = result.token;
-    }
-  }
 }
 
 async function loadConnectorAccessStates(
@@ -751,13 +704,6 @@ function prepareRefreshTokenContext(
       );
     }
 
-    const refreshTokenSecret = secretMetadata.refreshSecretName;
-    const currentRefreshToken = args.connectorSecrets[refreshTokenSecret];
-    if (!currentRefreshToken) {
-      L.debug(`No ${args.connectorType} refresh token available, skipping`);
-      return { ok: false, reason: "refresh-token-missing" };
-    }
-
     const env = currentProviderEnv();
     if (
       !isModelProviderOAuthRefreshConfigured({
@@ -772,8 +718,7 @@ function prepareRefreshTokenContext(
     }
 
     const context: RefreshTokenContext = {
-      refreshTokenSecret,
-      currentRefreshToken,
+      refreshTokenSecret: secretMetadata.refreshSecretName,
       accessTokenSecret: secretMetadata.accessSecretName,
       secretUserId: resolveSecretUserId(
         args.sourceType,
@@ -822,16 +767,8 @@ function prepareRefreshTokenContext(
     return { ok: false, reason: "client-unconfigured" };
   }
 
-  const refreshTokenSecret = accessMetadata.refreshToken;
-  const currentRefreshToken = args.connectorSecrets[refreshTokenSecret];
-  if (!currentRefreshToken) {
-    L.debug(`No ${args.connectorType} refresh token available, skipping`);
-    return { ok: false, reason: "refresh-token-missing" };
-  }
-
   const context: RefreshTokenContext = {
-    refreshTokenSecret,
-    currentRefreshToken,
+    refreshTokenSecret: accessMetadata.refreshToken,
     accessTokenSecret: accessMetadata.accessToken,
     secretUserId: resolveSecretUserId(
       args.sourceType,
@@ -848,6 +785,160 @@ function prepareRefreshTokenContext(
       clientArgs: getConnectorAuthProviderClientArgs(authClient),
       context,
     },
+  };
+}
+
+function tokenExpiresAtNeedsRefresh(tokenExpiresAt: Date | null): boolean {
+  if (tokenExpiresAt === null) {
+    return true;
+  }
+  const expiresAtSeconds = Math.floor(tokenExpiresAt.getTime() / 1000);
+  return expiresAtSeconds <= currentSecond() + REFRESH_BUFFER_SECS;
+}
+
+function currentSecond(): number {
+  return Math.floor(nowDate().getTime() / 1000);
+}
+
+async function currentDatabaseTimestampMicros(db: Db): Promise<bigint> {
+  const result = await db.execute<{ now: bigint | number | string }>(
+    sql`SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000000)::bigint AS now`,
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Failed to read database timestamp");
+  }
+  return BigInt(row.now);
+}
+
+function shouldUseLockedCurrentAccess(args: {
+  readonly refreshArgs: RefreshAccessTokenArgs;
+  readonly context: RefreshTokenContext;
+  readonly initialState: RefreshState | null;
+  readonly requestStartedAtMicros: bigint | null;
+  readonly state: RefreshState;
+}): boolean {
+  if (!args.state.accessToken) {
+    return false;
+  }
+  if (tokenExpiresAtNeedsRefresh(args.state.tokenExpiresAt)) {
+    return false;
+  }
+  if (!args.refreshArgs.forceRefresh) {
+    return true;
+  }
+
+  const snapshotAccessTokens = [
+    args.refreshArgs.connectorSecrets[args.context.accessTokenSecret],
+    ...args.refreshArgs.accessEnvVars.map((envVar) => {
+      return args.refreshArgs.connectorSecrets[envVar];
+    }),
+  ];
+  if (
+    snapshotAccessTokens.some((accessToken) => {
+      return (
+        accessToken !== undefined && accessToken !== args.state.accessToken
+      );
+    })
+  ) {
+    return true;
+  }
+
+  if (
+    args.requestStartedAtMicros !== null &&
+    args.state.updatedAtMicros > args.requestStartedAtMicros
+  ) {
+    return true;
+  }
+
+  if (!args.initialState) {
+    return true;
+  }
+
+  if (args.initialState.accessToken !== args.state.accessToken) {
+    return true;
+  }
+
+  if (args.initialState.refreshToken !== args.state.refreshToken) {
+    return true;
+  }
+
+  const initialExpiresAt = args.initialState.tokenExpiresAt
+    ? Math.floor(args.initialState.tokenExpiresAt.getTime() / 1000)
+    : null;
+  const lockedExpiresAt = args.state.tokenExpiresAt
+    ? Math.floor(args.state.tokenExpiresAt.getTime() / 1000)
+    : null;
+  return (
+    initialExpiresAt !== lockedExpiresAt ||
+    args.initialState.updatedAtMicros !== args.state.updatedAtMicros
+  );
+}
+
+async function loadRefreshState(
+  db: Db,
+  args: RefreshAccessTokenArgs,
+  context: RefreshTokenContext,
+): Promise<RefreshState | null> {
+  const [row] =
+    args.sourceType === "model-provider"
+      ? await db
+          .select({
+            tokenExpiresAt: modelProviders.tokenExpiresAt,
+            updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${modelProviders.updatedAt}) * 1000000)::bigint`,
+          })
+          .from(modelProviders)
+          .where(
+            and(
+              eq(modelProviders.orgId, args.orgId),
+              eq(modelProviders.userId, context.secretUserId),
+              eq(modelProviders.type, args.metadataKey ?? ""),
+            ),
+          )
+          .limit(1)
+      : await db
+          .select({
+            tokenExpiresAt: connectors.tokenExpiresAt,
+            updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${connectors.updatedAt}) * 1000000)::bigint`,
+          })
+          .from(connectors)
+          .where(
+            and(
+              eq(connectors.orgId, args.orgId),
+              eq(connectors.userId, args.userId),
+              eq(connectors.type, args.connectorType),
+            ),
+          )
+          .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const [accessToken, refreshToken] = await Promise.all([
+    getSecretValue({
+      db,
+      orgId: args.orgId,
+      userId: context.secretUserId,
+      name: context.accessTokenSecret,
+      type: args.sourceType,
+      featureSwitchContext: args.featureSwitchContext,
+    }),
+    getSecretValue({
+      db,
+      orgId: args.orgId,
+      userId: context.secretUserId,
+      name: context.refreshTokenSecret,
+      type: args.sourceType,
+      featureSwitchContext: args.featureSwitchContext,
+    }),
+  ]);
+
+  return {
+    accessToken,
+    refreshToken,
+    tokenExpiresAt: row.tokenExpiresAt,
+    updatedAtMicros: BigInt(row.updatedAtMicros),
   };
 }
 
@@ -890,7 +981,7 @@ async function markRefreshSuccess(
         tokenExpiresAt: expiresAt,
         needsReconnect: false,
         lastRefreshErrorCode: null,
-        updatedAt: nowDate(),
+        updatedAt: sql`clock_timestamp()`,
       })
       .where(
         and(
@@ -906,7 +997,8 @@ async function markRefreshSuccess(
     .update(connectors)
     .set({
       tokenExpiresAt: expiresAt,
-      updatedAt: nowDate(),
+      needsReconnect: false,
+      updatedAt: sql`clock_timestamp()`,
     })
     .where(
       and(
@@ -928,7 +1020,7 @@ async function markRefreshFailure(
       .set({
         needsReconnect: true,
         lastRefreshErrorCode: errorCode,
-        updatedAt: nowDate(),
+        updatedAt: sql`clock_timestamp()`,
       })
       .where(
         and(
@@ -944,7 +1036,7 @@ async function markRefreshFailure(
     .update(connectors)
     .set({
       needsReconnect: true,
-      updatedAt: nowDate(),
+      updatedAt: sql`clock_timestamp()`,
     })
     .where(
       and(
@@ -963,46 +1055,110 @@ async function refreshAccessTokenForSource(
     return { ok: false, reason: preparation.reason };
   }
   const { prepared } = preparation;
+  const requestStartedAtMicros = args.forceRefresh
+    ? args.forceRefreshStartedAtMicros
+    : null;
+  const initialState = args.forceRefresh
+    ? await loadRefreshState(args.db, args, prepared.context)
+    : null;
 
-  const refreshPromise =
-    prepared.sourceType === "connector"
-      ? refreshConnectorAuthProviderAccessToken({
-          type: prepared.connectorType,
-          clientArgs: prepared.clientArgs,
-          refreshToken: prepared.context.currentRefreshToken,
-        })
-      : refreshModelProviderOAuthToken({
-          providerKey: prepared.providerKey,
-          currentEnv: prepared.currentEnv,
-          refreshToken: prepared.context.currentRefreshToken,
-        });
-  const refreshResult = await settle(refreshPromise);
+  return await args.db.transaction(async (tx) => {
+    if (prepared.sourceType === "connector") {
+      await lockConnectorState(tx, {
+        orgId: args.orgId,
+        userId: args.userId,
+        type: prepared.connectorType,
+      });
+    } else {
+      await lockModelProviderState(tx, {
+        orgId: args.orgId,
+        userId: prepared.context.secretUserId,
+        type: args.metadataKey ?? prepared.providerKey,
+      });
+    }
 
-  if (!refreshResult.ok) {
-    const error = refreshResult.error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    const errorCode = isChatgptRefreshError(error) ? error.code : null;
-    L.warn(`${args.connectorType} token refresh failed: ${message}`, {
-      connectorType: args.connectorType,
-      orgId: args.orgId,
-      userId: args.userId,
-      errorCode,
-    });
+    const lockedState = await loadRefreshState(tx, args, prepared.context);
+    if (!lockedState) {
+      L.warn(`${args.connectorType} token refresh source missing`, {
+        connectorType: args.connectorType,
+        orgId: args.orgId,
+        userId: args.userId,
+        sourceType: args.sourceType,
+      });
+      return { ok: false, reason: "refresh-token-missing" };
+    }
 
-    await markRefreshFailure(args, prepared.context, errorCode);
-    return { ok: false, reason: "refresh-failed" };
-  }
+    const currentAccessToken = lockedState.accessToken;
+    if (
+      currentAccessToken &&
+      shouldUseLockedCurrentAccess({
+        refreshArgs: args,
+        context: prepared.context,
+        initialState,
+        requestStartedAtMicros,
+        state: lockedState,
+      })
+    ) {
+      return {
+        ok: true,
+        status: "current",
+        accessToken: currentAccessToken,
+      };
+    }
 
-  const result = refreshResult.value;
-  await markRefreshSuccess(args, prepared.context, result);
-  args.connectorSecrets[prepared.context.accessTokenSecret] =
-    result.accessToken;
-  if (result.refreshToken) {
-    args.connectorSecrets[prepared.context.refreshTokenSecret] =
-      result.refreshToken;
-  }
-  L.debug(`${args.connectorType} access token refreshed successfully`);
-  return { ok: true, accessToken: result.accessToken };
+    if (!lockedState.refreshToken) {
+      L.debug(`No ${args.connectorType} refresh token available, skipping`);
+      return { ok: false, reason: "refresh-token-missing" };
+    }
+
+    const refreshPromise =
+      prepared.sourceType === "connector"
+        ? refreshConnectorAuthProviderAccessToken({
+            type: prepared.connectorType,
+            clientArgs: prepared.clientArgs,
+            refreshToken: lockedState.refreshToken,
+          })
+        : refreshModelProviderOAuthToken({
+            providerKey: prepared.providerKey,
+            currentEnv: prepared.currentEnv,
+            refreshToken: lockedState.refreshToken,
+          });
+    const refreshResult = await settle(refreshPromise);
+
+    if (!refreshResult.ok) {
+      const error = refreshResult.error;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const errorCode = isChatgptRefreshError(error) ? error.code : null;
+      L.warn(`${args.connectorType} token refresh failed: ${message}`, {
+        connectorType: args.connectorType,
+        orgId: args.orgId,
+        userId: args.userId,
+        errorCode,
+      });
+
+      await markRefreshFailure(
+        { ...args, db: tx },
+        prepared.context,
+        errorCode,
+      );
+      return { ok: false, reason: "refresh-failed" };
+    }
+
+    const result = refreshResult.value;
+    await markRefreshSuccess({ ...args, db: tx }, prepared.context, result);
+    args.connectorSecrets[prepared.context.accessTokenSecret] =
+      result.accessToken;
+    if (result.refreshToken) {
+      args.connectorSecrets[prepared.context.refreshTokenSecret] =
+        result.refreshToken;
+    }
+    L.debug(`${args.connectorType} access token refreshed successfully`);
+    return {
+      ok: true,
+      status: "refreshed",
+      accessToken: result.accessToken,
+    };
+  });
 }
 
 function buildMetadataByConnector(
@@ -1558,6 +1714,9 @@ async function refreshSelectedTokens(
         sourceUserId: metadata.sourceUserId,
         metadataKey: metadata.metadataKey,
         connectorSecrets: context.secrets,
+        accessEnvVars: context.envVarsByConnector.get(connectorType) ?? [],
+        forceRefresh: context.forceRefresh,
+        forceRefreshStartedAtMicros: context.forceRefreshStartedAtMicros,
         connectorAccessByType: context.connectorAccessByType,
         featureSwitchContext: context.featureSwitchContext,
       });
@@ -1578,7 +1737,7 @@ async function refreshSelectedTokens(
         []) {
         context.secrets[envVar] = refreshResult.accessToken;
       }
-      return { connectorType, status: "refreshed" };
+      return { connectorType, status: refreshResult.status };
     }),
   );
 }
@@ -1708,23 +1867,14 @@ async function refreshExpiredTokens(
   });
   const envVarsByConnector = buildEnvVarsByConnector(refreshable);
 
-  await syncRefreshTokensFromDb({
-    db: args.db,
-    connectorTypes: toRefresh,
-    orgId: args.orgId,
-    userId: args.auth.userId,
-    secrets: args.secrets,
-    metadataByConnector,
-    connectorAccessByType: args.connectorAccessByType,
-    featureSwitchContext: args.featureSwitchContext,
-  });
-
   const context = {
     db: args.db,
     auth: args.auth,
     orgId: args.orgId,
     userId: args.auth.userId,
     secrets: args.secrets,
+    forceRefresh: args.forceRefresh,
+    forceRefreshStartedAtMicros: args.forceRefreshStartedAtMicros,
     metadataByConnector,
     connectorAccessByType: args.connectorAccessByType,
     envVarsByConnector,
@@ -1737,29 +1887,30 @@ async function refreshExpiredTokens(
   await syncSkippedTokens(context, skippedTypes);
 
   const summary = summarizeRefreshResults(refreshResults, envVarsByConnector);
-  const finalConnectorAccessByType =
-    summary.refreshedConnectors.length > 0
-      ? new Map([
-          ...args.connectorAccessByType,
-          ...(await loadConnectorAccessStates(
-            args.db,
-            args.orgId,
-            args.auth.userId,
-            connectorTypes,
-          )),
-        ])
-      : args.connectorAccessByType;
-  const finalExpiryMap =
-    summary.refreshedConnectors.length > 0
-      ? await getExpiryByProviderKey({
-          db: args.db,
-          orgId: args.orgId,
-          userId: args.auth.userId,
+  const hasCurrentOrRefreshed = refreshResults.some((result) => {
+    return result.status === "current" || result.status === "refreshed";
+  });
+  const finalConnectorAccessByType = hasCurrentOrRefreshed
+    ? new Map([
+        ...args.connectorAccessByType,
+        ...(await loadConnectorAccessStates(
+          args.db,
+          args.orgId,
+          args.auth.userId,
           connectorTypes,
-          metadataByConnector,
-          connectorAccessByType: finalConnectorAccessByType,
-        })
-      : expiryMap;
+        )),
+      ])
+    : args.connectorAccessByType;
+  const finalExpiryMap = hasCurrentOrRefreshed
+    ? await getExpiryByProviderKey({
+        db: args.db,
+        orgId: args.orgId,
+        userId: args.auth.userId,
+        connectorTypes,
+        metadataByConnector,
+        connectorAccessByType: finalConnectorAccessByType,
+      })
+    : expiryMap;
 
   return {
     expiresAt: earliestConnectorExpiry(connectorTypes, finalExpiryMap),
@@ -1943,6 +2094,10 @@ export async function resolveFirewallAuth(
   auth: SandboxAuth,
   body: FirewallAuthBody,
 ): Promise<ResolveFirewallAuthResult> {
+  const forceRefreshStartedAtMicros =
+    body.forceRefresh === true
+      ? await currentDatabaseTimestampMicros(db)
+      : null;
   const decrypted = await decryptFirewallAuthSecrets(
     db,
     auth,
@@ -2008,6 +2163,7 @@ export async function resolveFirewallAuth(
       orgId: decrypted.orgId,
       featureSwitchContext: decrypted.featureSwitchContext,
       forceRefresh: body.forceRefresh ?? false,
+      forceRefreshStartedAtMicros,
     });
     expiresAt = result.expiresAt;
     refreshedConnectors = result.refreshedConnectors;

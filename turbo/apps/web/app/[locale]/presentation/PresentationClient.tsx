@@ -6,14 +6,23 @@ import { CopyablePrompt } from "../../components/CopyablePrompt";
 import { Footer } from "../../components/Footer";
 import { Particles } from "../../components/Particles";
 import { getAppUrl } from "../../../src/lib/zero/url";
-import { GALLERY_ITEMS, buildGalleryRemixHref, type GalleryItem } from "./data";
+import {
+  PRESENTATION_ITEMS,
+  buildPresentationRemixHref,
+  type PresentationItem,
+} from "./data";
 
 const MAX_WIDTH = 880;
 const PAGE_PADDING = 24;
 
-function GalleryCard({ item, appUrl }: { item: GalleryItem; appUrl: string }) {
-  const remixHref = buildGalleryRemixHref(item, appUrl);
-  const viewHref = item.artifactUrl;
+function PresentationCard({
+  item,
+  appUrl,
+}: {
+  item: PresentationItem;
+  appUrl: string;
+}) {
+  const remixHref = buildPresentationRemixHref(item, appUrl);
 
   return (
     <article
@@ -21,23 +30,21 @@ function GalleryCard({ item, appUrl }: { item: GalleryItem; appUrl: string }) {
       className="overflow-hidden rounded-[14px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)] transition-all duration-300 hover:shadow-[0_16px_36px_rgba(0,0,0,0.12)]"
     >
       <a
-        href={viewHref}
+        href={item.embedUrl}
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`View ${item.title} in a new tab`}
         className="group block"
         style={{ textDecoration: "none" }}
       >
-        <div className="relative aspect-[16/10] overflow-hidden bg-[hsl(var(--gray-1))]">
-          <div className="absolute inset-y-0 left-0 w-[calc(100%+18px)] transition-transform duration-300 group-hover:scale-[1.03]">
-            <Image
-              src={item.previewImage}
-              alt={item.title}
-              fill
-              sizes="(min-width: 880px) 832px, calc(100vw - 48px)"
-              className="object-cover object-top"
-            />
-          </div>
+        <div className="relative aspect-[1280/633] overflow-hidden bg-[hsl(var(--gray-1))]">
+          <Image
+            src={item.previewImage}
+            alt={item.title}
+            fill
+            sizes="(min-width: 880px) 832px, calc(100vw - 48px)"
+            className="object-contain transition-transform duration-300 group-hover:scale-[1.03]"
+          />
           <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/35 group-hover:opacity-100">
             <div className="inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-2 text-[13px] font-medium text-[hsl(var(--foreground))] shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
               <IconExternalLink size={16} stroke={2} />
@@ -60,7 +67,7 @@ function GalleryCard({ item, appUrl }: { item: GalleryItem; appUrl: string }) {
   );
 }
 
-export function WebDesignClient() {
+export function PresentationClient() {
   const appUrl = getAppUrl();
 
   return (
@@ -75,10 +82,10 @@ export function WebDesignClient() {
             padding: `0 ${PAGE_PADDING}px`,
           }}
         >
-          <h1 className="hero-title">Website Design</h1>
+          <h1 className="hero-title">Presentation</h1>
           <p className="hero-description">
-            Get your creative website from a single, short prompt. We promise it
-            works with no extra setup in VM0.
+            Get a polished deck from a single, short prompt. Focus on your
+            content and leave the design and creative work to VM0.
           </p>
         </div>
       </section>
@@ -92,8 +99,10 @@ export function WebDesignClient() {
           }}
           className="flex flex-col items-stretch gap-6"
         >
-          {GALLERY_ITEMS.map((item) => {
-            return <GalleryCard key={item.slug} item={item} appUrl={appUrl} />;
+          {PRESENTATION_ITEMS.map((item) => {
+            return (
+              <PresentationCard key={item.slug} item={item} appUrl={appUrl} />
+            );
           })}
         </div>
       </section>

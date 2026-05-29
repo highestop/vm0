@@ -41,7 +41,7 @@ import {
 } from "./crypto.utils";
 import { userConnectorAvailability } from "./connector-availability.service";
 import {
-  upsertOAuthConnector$,
+  upsertConnectorTokenConnection$,
   zeroConnectorByType,
 } from "./zero-connector-data.service";
 
@@ -910,7 +910,7 @@ export const pollConnectorOauthDeviceAuthSession$ = command(
       signal,
       persistConnector: async ({ result }) => {
         const connectorResult = await set(
-          upsertOAuthConnector$,
+          upsertConnectorTokenConnection$,
           {
             orgId: args.orgId,
             userId: args.userId,

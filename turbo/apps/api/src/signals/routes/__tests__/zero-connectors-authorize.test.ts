@@ -683,7 +683,7 @@ describe("GET /api/zero/connectors/:type/authorize", () => {
     expect(revokeBody).toContain('"access_token":"gh-access-token"');
   });
 
-  it("skips provider revoke for OAuth connectors without revoke support", async () => {
+  it("skips provider revoke for connectors without revoke support", async () => {
     const userId = `user_${randomUUID()}`;
     const orgId = `org_${randomUUID()}`;
     orgIds.push(orgId);

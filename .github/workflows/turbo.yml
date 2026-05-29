@@ -224,6 +224,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           WEB_CHANGED: ${{ steps.detect.outputs.web-changed }}
+          API_CHANGED: ${{ steps.detect.outputs.api-changed }}
           CLI_CHANGED: ${{ steps.detect.outputs.cli-changed }}
           CRATES_CHANGED: ${{ steps.detect.outputs.crates-changed }}
           CI_CHANGED: ${{ steps.detect.outputs.ci-changed }}
@@ -1348,6 +1349,7 @@ jobs:
       (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release')) &&
       needs.prepare.outputs.job-ref != '' && (
         needs.prepare.outputs.web-changed == 'true' ||
+        needs.prepare.outputs.api-changed == 'true' ||
         needs.prepare.outputs.cli-changed == 'true' ||
         needs.prepare.outputs.crates-changed == 'true' ||
         needs.prepare.outputs.ci-changed == 'true' ||

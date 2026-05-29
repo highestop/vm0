@@ -12,7 +12,7 @@ import {
 } from "@vm0/connectors/connector-utils";
 import {
   connectorTypeSchema,
-  type ConnectorAuthProviderType,
+  type RefreshTokenAccessConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   parseBasicAuthTemplates,
@@ -23,7 +23,7 @@ import {
 import type { FeatureSwitchContext } from "@vm0/core/feature-switch";
 import {
   getConnectorAuthProviderClientArgs,
-  hasConnectorAuthProvider,
+  hasConnectorRefreshTokenAccessProvider,
   refreshConnectorAuthProviderAccessToken,
   type ConnectorAuthProviderClientArgs,
   type ProviderEnv,
@@ -267,7 +267,8 @@ interface RefreshState {
 type PreparedRefreshTokenContext =
   | {
       readonly sourceType: "connector";
-      readonly connectorType: ConnectorAuthProviderType;
+      readonly connectorType: RefreshTokenAccessConnectorType;
+      readonly authMethod: string;
       readonly clientArgs: ConnectorAuthProviderClientArgs;
       readonly context: RefreshTokenContext;
     }
@@ -751,7 +752,12 @@ function prepareRefreshTokenContext(
   if (!parsedConnectorType.success) {
     return { ok: false, reason: "not-refreshable" };
   }
-  if (!hasConnectorAuthProvider(parsedConnectorType.data)) {
+  if (
+    !hasConnectorRefreshTokenAccessProvider(
+      parsedConnectorType.data,
+      connectorAccess.authMethod,
+    )
+  ) {
     return { ok: false, reason: "not-refreshable" };
   }
   const authClient = resolveConnectorAuthClientForMethod(
@@ -783,6 +789,7 @@ function prepareRefreshTokenContext(
     prepared: {
       sourceType: "connector",
       connectorType: parsedConnectorType.data,
+      authMethod: connectorAccess.authMethod,
       clientArgs: getConnectorAuthProviderClientArgs(authClient),
       context,
     },
@@ -1152,6 +1159,7 @@ async function refreshAccessTokenForSource(
       prepared.sourceType === "connector"
         ? refreshConnectorAuthProviderAccessToken({
             type: prepared.connectorType,
+            authMethod: prepared.authMethod,
             clientArgs: prepared.clientArgs,
             refreshToken: lockedState.refreshToken,
           })

@@ -23,8 +23,10 @@ import {
   type ConnectorManualGrantFieldConfig,
   type ConnectorType,
   type AuthCodeGrantConnectorType,
+  type RefreshTokenAccessConnectorType,
 } from "../connectors";
 import {
+  connectorAuthMethodSupportsRefreshTokenAccess,
   connectorAuthMethodSupportsTokenRevoke,
   connectorAuthMethodHasGrantKind,
   getAvailableConnectorAuthMethods,
@@ -60,6 +62,7 @@ import {
   getConnectorAuthProviderClientArgs,
   hasConnectorAuthCodeGrantProvider,
   hasConnectorDeviceAuthGrantProvider,
+  hasConnectorRefreshTokenAccessProvider,
   getConnectorAuthProviderSecretMetadata,
   pollConnectorDeviceAuthorization,
   refreshConnectorAuthProviderAccessToken,
@@ -425,7 +428,7 @@ describe("connector auth method config", () => {
   });
 });
 
-describe("connector grant provider capability checks", () => {
+describe("connector provider capability checks", () => {
   it("matches exactly the connector types that declare auth-code and device-auth grants", () => {
     const authCodeGrantTypes = new Set<ConnectorType>(
       connectorTypeSchema.options.filter(hasConnectorAuthCodeGrant),
@@ -441,6 +444,40 @@ describe("connector grant provider capability checks", () => {
       expect(hasConnectorDeviceAuthGrantProvider(type)).toBe(
         deviceAuthGrantTypes.has(type),
       );
+    }
+  });
+
+  it("matches exactly the connector types that declare refresh-token access", () => {
+    expectTypeOf<"base44">().toMatchTypeOf<RefreshTokenAccessConnectorType>();
+    expectTypeOf<"notion">().toMatchTypeOf<RefreshTokenAccessConnectorType>();
+    expectTypeOf<"github">().not.toMatchTypeOf<RefreshTokenAccessConnectorType>();
+
+    const refreshTokenAccessTypes = new Set<ConnectorType>(
+      connectorTypeSchema.options.filter((type) => {
+        return getConfiguredConnectorAuthMethods(type).some((authMethod) => {
+          return (
+            getConnectorAuthMethodAccessMetadata(type, authMethod)?.kind ===
+            "refresh-token"
+          );
+        });
+      }),
+    );
+
+    for (const type of connectorTypeSchema.options) {
+      expect(hasConnectorRefreshTokenAccessProvider(type)).toBe(
+        refreshTokenAccessTypes.has(type),
+      );
+      for (const authMethod of getConfiguredConnectorAuthMethods(type)) {
+        const hasRefreshTokenAccess =
+          getConnectorAuthMethodAccessMetadata(type, authMethod)?.kind ===
+          "refresh-token";
+        expect(hasConnectorRefreshTokenAccessProvider(type, authMethod)).toBe(
+          hasRefreshTokenAccess,
+        );
+        expect(
+          connectorAuthMethodSupportsRefreshTokenAccess(type, authMethod),
+        ).toBe(hasRefreshTokenAccess);
+      }
     }
   });
 
@@ -468,29 +505,24 @@ describe("connector grant provider capability checks", () => {
     });
   });
 
-  it("rejects refresh for OAuth connectors without refresh-token access", async () => {
-    const oauthClient = getOauthAuthClient("github", (name) => {
-      if (name === "GH_OAUTH_CLIENT_ID") {
-        return "test-github-client";
-      }
-      if (name === "GH_OAUTH_CLIENT_SECRET") {
-        return "test-github-secret";
-      }
-      return undefined;
-    });
-    expect(oauthClient).toBeDefined();
+  it("does not expose refresh-token access providers for non-refreshable OAuth connectors", () => {
+    expect(hasConnectorRefreshTokenAccessProvider("github")).toBe(false);
+    expect(
+      getConnectorAuthMethodAccessMetadata("github", "oauth")?.kind,
+    ).not.toBe("refresh-token");
+  });
 
-    if (!oauthClient) {
-      throw new Error("Expected github OAuth client");
-    }
-
+  it("rejects refresh when the selected auth method is not refreshable", async () => {
     await expect(
       refreshConnectorAuthProviderAccessToken({
-        type: "github",
-        clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
-        refreshToken: "refresh-token",
+        type: "stripe",
+        authMethod: "api-token",
+        clientArgs: {},
+        refreshToken: "stripe-refresh-token",
       }),
-    ).rejects.toThrow("github connector does not support token refresh");
+    ).rejects.toThrow(
+      "stripe connector auth method api-token does not support token refresh",
+    );
   });
 
   it("revokes OAuth tokens through the provider registry", async () => {
@@ -981,6 +1013,7 @@ describe("connector grant provider capability checks", () => {
     await expect(
       refreshConnectorAuthProviderAccessToken({
         type: "base44",
+        authMethod: "oauth",
         clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
         refreshToken: "base44-refresh-rotation",
       }),
@@ -992,6 +1025,7 @@ describe("connector grant provider capability checks", () => {
     await expect(
       refreshConnectorAuthProviderAccessToken({
         type: "base44",
+        authMethod: "oauth",
         clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
         refreshToken: "base44-refresh-without-rotation",
       }),
@@ -1313,6 +1347,7 @@ describe("connector grant provider capability checks", () => {
 
     const refreshResult = await refreshConnectorAuthProviderAccessToken({
       type: "slock",
+      authMethod: "oauth",
       clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
       refreshToken: "slock-refresh-token",
     });
@@ -1332,6 +1367,7 @@ describe("connector grant provider capability checks", () => {
     await expect(
       refreshConnectorAuthProviderAccessToken({
         type: "slock",
+        authMethod: "oauth",
         clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
         refreshToken: "slock-refresh-malformed",
       }),

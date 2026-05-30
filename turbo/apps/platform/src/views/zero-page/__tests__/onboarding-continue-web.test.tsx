@@ -11,6 +11,7 @@ import {
   onboardingStatusContract,
   onboardingSetupContract,
 } from "@vm0/api-contracts/contracts/onboarding";
+import { zeroAttributionContract } from "@vm0/api-contracts/contracts/zero-attribution";
 import { zeroBillingCheckoutContract } from "@vm0/api-contracts/contracts/zero-billing";
 import { createMockApi } from "../../../mocks/msw-contract.ts";
 
@@ -93,7 +94,12 @@ describe("onboarding Pro trial checkout", () => {
   it("preserves ad attribution params through Stripe checkout URLs", async () => {
     mockAdminOnboarding();
     let checkoutBody: Record<string, unknown> | null = null;
+    let signupAttributionBody: Record<string, unknown> | null = null;
     server.use(
+      mockApi(zeroAttributionContract.recordSignup, ({ body, respond }) => {
+        signupAttributionBody = body as Record<string, unknown>;
+        return respond(200, { recorded: true });
+      }),
       mockApi(zeroBillingCheckoutContract.create, ({ body, respond }) => {
         checkoutBody = body as Record<string, unknown>;
         return respond(200, {
@@ -104,7 +110,7 @@ describe("onboarding Pro trial checkout", () => {
 
     detachedSetupPage({
       context,
-      path: "/onboarding?vm0_source=presentation&gclid=test-click&utm_source=google&utm_medium=cpc&utm_campaign=presentation_search_en",
+      path: "/onboarding?vm0_source=presentation&gclid=test-click&utm_source=google&utm_medium=cpc&utm_campaign=presentation_search_en&vm0_experiment=presentation_lp&vm0_variant=a",
     });
     await walkAdminToContinue();
 
@@ -131,7 +137,24 @@ describe("onboarding Pro trial checkout", () => {
       expect(url.searchParams.get("utm_campaign")).toBe(
         "presentation_search_en",
       );
+      expect(url.searchParams.get("vm0_experiment")).toBe("presentation_lp");
+      expect(url.searchParams.get("vm0_variant")).toBe("a");
     }
+
+    expect(checkoutBody!.adAttribution).toStrictEqual({
+      vm0_source: "presentation",
+      utm_source: "google",
+      utm_medium: "cpc",
+      utm_campaign: "presentation_search_en",
+      vm0_experiment: "presentation_lp",
+      vm0_variant: "a",
+      gclid_present: "true",
+    });
+    await waitFor(() => {
+      expect(signupAttributionBody).toStrictEqual({
+        attribution: checkoutBody!.adAttribution,
+      });
+    });
   });
 });
 

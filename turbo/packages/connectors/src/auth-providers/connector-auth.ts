@@ -1,23 +1,26 @@
-import type {
-  ConnectorType,
-  AuthCodeGrantConnectorType,
-  ConnectorAuthProviderType,
-  DeviceAuthGrantConnectorType,
-  ConnectorAuthMethodIdsByAccessKind,
-  RefreshTokenAccessConnectorType,
+import {
+  connectorTypeSchema,
+  type ConnectorType,
+  type AuthCodeGrantConnectorType,
+  type ConnectorAuthProviderType,
+  type DeviceAuthGrantConnectorType,
+  type ConnectorAuthMethodIdsByAccessKind,
+  type RefreshTokenAccessConnectorType,
+  type TokenRevokeConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   connectorAuthMethodSupportsRefreshTokenAccess,
-  getRuntimeAvailableConnectorTypes as getRuntimeAvailableConnectorTypesFromEnv,
-  hasConnectorAuthCodeGrant,
+  connectorAuthMethodSupportsTokenRevoke,
+  getConfiguredConnectorAuthMethods,
   isStaticConfidentialConnectorAuthClient,
   isStaticConnectorAuthClient,
+  resolveConnectorAuthClientForMethod,
   type ConnectorAuthClient,
+  type ConnectorEnvReader,
 } from "@vm0/connectors/connector-utils";
 import type {
   AuthCodeConnectorAuthProvider,
   DeviceAuthConnectorAuthProvider,
-  ConnectorAuthProviderRevoke,
   RefreshTokenAccessProvider,
 } from "./types";
 import {
@@ -27,7 +30,6 @@ import {
   type ConnectorDeviceAuthorizationStartArgs,
   type ConnectorAuthCodeExchangeArgs,
   type ConnectorAuthProviderRefreshArgs,
-  type ConnectorAuthProviderRevokeArgs,
   type OAuthAuthorizeArgs,
   type OAuthDeviceAuthPollArgs,
   type OAuthDeviceAuthPollResult,
@@ -134,12 +136,6 @@ export interface ConnectorAuthProviderClientArgs {
   readonly clientSecret?: string;
 }
 
-function deviceAuthConnectorProviderFor<T extends DeviceAuthGrantConnectorType>(
-  type: T,
-): DeviceAuthConnectorAuthProviderMap[T] {
-  return DEVICE_AUTH_CONNECTOR_AUTH_PROVIDERS[type];
-}
-
 function connectorRefreshTokenAccessProviderFor<
   T extends RefreshTokenAccessConnectorType,
 >(type: T, authMethod: string): RefreshTokenAccessProvider<T> | undefined {
@@ -147,18 +143,6 @@ function connectorRefreshTokenAccessProviderFor<
     Record<string, RefreshTokenAccessProvider<T>>
   >;
   return providers[authMethod];
-}
-
-function connectorRevokeProviderFor<T extends ConnectorAuthProviderType>(
-  type: T,
-): ConnectorAuthProviderRevoke<T> {
-  if (hasConnectorAuthCodeGrant(type)) {
-    return AUTH_CODE_CONNECTOR_AUTH_PROVIDERS[type]
-      .revoke as ConnectorAuthProviderRevoke<T>;
-  }
-
-  return deviceAuthConnectorProviderFor(type)
-    .revoke as ConnectorAuthProviderRevoke<T>;
 }
 
 function connectorAuthProviderClientArgs(
@@ -180,6 +164,65 @@ export function getConnectorAuthProviderClientArgs(
   authClient: ConnectorAuthClient,
 ): ConnectorAuthProviderClientArgs {
   return connectorAuthProviderClientArgs(authClient);
+}
+
+async function revokeTokenRevokeConnectorAccessToken(args: {
+  readonly type: TokenRevokeConnectorType;
+  readonly readEnv: ConnectorEnvReader;
+  readonly loadAccessToken: () => string | Promise<string>;
+}): Promise<ConnectorAuthProviderAccessTokenRevokeResult> {
+  switch (args.type) {
+    case "github": {
+      const authClient = resolveConnectorAuthClientForMethod(
+        "github",
+        "oauth",
+        args.readEnv,
+      );
+      if (!authClient) {
+        return { status: "unsupported" };
+      }
+      await githubProvider.revoke.revokeToken({
+        clientId: authClient.clientId,
+        clientSecret: authClient.clientSecret,
+        accessToken: await args.loadAccessToken(),
+      });
+      return { status: "revoked" };
+    }
+    case "linear": {
+      const authClient = resolveConnectorAuthClientForMethod(
+        "linear",
+        "oauth",
+        args.readEnv,
+      );
+      if (!authClient) {
+        return { status: "unsupported" };
+      }
+      await linearProvider.revoke.revokeToken({
+        clientId: authClient.clientId,
+        clientSecret: authClient.clientSecret,
+        accessToken: await args.loadAccessToken(),
+      });
+      return { status: "revoked" };
+    }
+    case "slack": {
+      const authClient = resolveConnectorAuthClientForMethod(
+        "slack",
+        "oauth",
+        args.readEnv,
+      );
+      if (!authClient) {
+        return { status: "unsupported" };
+      }
+      await slackProvider.revoke.revokeToken({
+        clientId: authClient.clientId,
+        clientSecret: authClient.clientSecret,
+        accessToken: await args.loadAccessToken(),
+      });
+      return { status: "revoked" };
+    }
+  }
+  const exhaustive: never = args.type;
+  return exhaustive;
 }
 
 const AUTH_CODE_CONNECTOR_AUTH_PROVIDERS: AuthCodeConnectorAuthProviderMap = {
@@ -317,6 +360,27 @@ export function hasConnectorRefreshTokenAccessProvider(
   return Object.hasOwn(providers, authMethod);
 }
 
+export function hasConnectorTokenRevokeProvider(
+  type: string,
+  authMethod?: string,
+): type is TokenRevokeConnectorType {
+  const connectorType = connectorTypeSchema.safeParse(type);
+  if (!connectorType.success) {
+    return false;
+  }
+  if (authMethod === undefined) {
+    return getConfiguredConnectorAuthMethods(connectorType.data).some(
+      (configuredAuthMethod) => {
+        return hasConnectorTokenRevokeProvider(
+          connectorType.data,
+          configuredAuthMethod,
+        );
+      },
+    );
+  }
+  return connectorAuthMethodSupportsTokenRevoke(connectorType.data, authMethod);
+}
+
 export async function buildConnectorAuthCodeAuthorizationUrl<
   T extends AuthCodeGrantConnectorType,
 >(args: {
@@ -417,37 +481,21 @@ export async function refreshConnectorAuthProviderAccessToken<
   } as ConnectorAuthProviderRefreshArgs<T>);
 }
 
-export async function revokeConnectorAuthProviderAccessToken<
-  T extends ConnectorAuthProviderType,
+export async function revokeConnectorAuthMethodAccessToken<
+  T extends ConnectorType,
 >(args: {
   readonly type: T;
-  readonly authClient: ConnectorAuthClient;
+  readonly authMethod: string;
+  readonly readEnv: ConnectorEnvReader;
   readonly loadAccessToken: () => string | Promise<string>;
 }): Promise<ConnectorAuthProviderAccessTokenRevokeResult> {
-  const revoke = connectorRevokeProviderFor(args.type);
-
-  switch (revoke.kind) {
-    case "none":
-      return { status: "unsupported" };
-
-    case "token-revoke":
-      await revoke.revokeToken({
-        ...connectorAuthProviderClientArgs(args.authClient),
-        accessToken: await args.loadAccessToken(),
-      } as ConnectorAuthProviderRevokeArgs<T>);
-      return { status: "revoked" };
+  if (!connectorAuthMethodSupportsTokenRevoke(args.type, args.authMethod)) {
+    return { status: "unsupported" };
   }
-}
 
-/**
- * Returns connector types the current runtime environment can offer as
- * connection candidates.
- */
-export function getRuntimeAvailableConnectorTypes(
-  currentEnv: ProviderEnv,
-): ConnectorType[] {
-  return getRuntimeAvailableConnectorTypesFromEnv((name) => {
-    const value = currentEnv[name];
-    return typeof value === "string" ? value : undefined;
+  return await revokeTokenRevokeConnectorAccessToken({
+    type: args.type,
+    readEnv: args.readEnv,
+    loadAccessToken: args.loadAccessToken,
   });
 }

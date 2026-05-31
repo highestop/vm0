@@ -423,7 +423,9 @@ export type ConnectorAuthMethodConfig =
  * These values describe user-selectable connection choices. Behavior must be
  * derived from the auth method lifecycle config, not from the id itself.
  */
-export type ConnectorAuthMethodId = "oauth" | "api-token" | "api";
+export const CONNECTOR_AUTH_METHOD_IDS = ["oauth", "api-token", "api"] as const;
+export const connectorAuthMethodIdSchema = z.enum(CONNECTOR_AUTH_METHOD_IDS);
+export type ConnectorAuthMethodId = z.infer<typeof connectorAuthMethodIdSchema>;
 
 type AssertNever<T extends never> = T;
 
@@ -979,6 +981,9 @@ export type ConnectorAuthCodeGrantMethodsAreSingle = AssertNever<
 >;
 export type ConnectorDeviceAuthGrantMethodsAreSingle = AssertNever<
   ConnectorTypeWithMultipleAuthMethodsForGrantKind<"device-auth">
+>;
+export type ConnectorManualGrantMethodsAreSingle = AssertNever<
+  ConnectorTypeWithMultipleAuthMethodsForGrantKind<"manual">
 >;
 
 export type ConnectorTypesByGrantKind<Kind extends ConnectorGrantKind> = {

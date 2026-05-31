@@ -40,8 +40,37 @@ class InvalidBillableAuthExpiryError(Exception):
     """Raised when billable firewall auth succeeds with an invalid cache expiry."""
 
 
+class FirewallAuthApiError(Exception):
+    """Raised when /firewall/auth returns a structured error envelope."""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        code: str,
+        message: str,
+        connectors: list[str] | None = None,
+        failure_reason: str | None = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.connectors = connectors
+        self.failure_reason = failure_reason
+
+
 # Vercel bypass secret (still from environment as it's a secret)
 VERCEL_BYPASS = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "")
+_HTTP_STATUS_CLIENT_ERROR_MIN = 400
+_HTTP_STATUS_SERVER_ERROR_MIN = 500
+_STRUCTURED_FIREWALL_AUTH_ERROR_CODES = frozenset(
+    {
+        "FORBIDDEN",
+        "TOKEN_REFRESH_FAILED",
+        "TOKEN_ACCESS_RESOLUTION_FAILED",
+    }
+)
+_FIREWALL_AUTH_FAILURE_REASONS = frozenset({"upstream_provider", "reconnect_required"})
 
 
 @dataclass
@@ -121,6 +150,7 @@ def _set_matched_firewall_failure_response(
     message: str,
     permission: str,
     connectors: list[str] | None = None,
+    failure_reason: str | None = None,
 ) -> None:
     """Set the common matched-firewall auth/forward failure response."""
     # `firewall_action` records the firewall permission decision
@@ -139,6 +169,8 @@ def _set_matched_firewall_failure_response(
     }
     if connectors:
         body["connectors"] = connectors
+    if failure_reason:
+        body["failureReason"] = failure_reason
     flow.response = http.Response.make(
         status,
         json.dumps(body).encode(),
@@ -220,6 +252,36 @@ def make_api_request(url: str, data: bytes, sandbox_token: str) -> urllib.reques
     return req
 
 
+def _firewall_auth_api_error_from_envelope(
+    status: int,
+    error_info: dict,
+) -> FirewallAuthApiError | None:
+    code = error_info.get("code")
+    message = error_info.get("message")
+    if not isinstance(code, str) or not isinstance(message, str):
+        return None
+    if code not in _STRUCTURED_FIREWALL_AUTH_ERROR_CODES:
+        return None
+    connectors = error_info.get("connectors")
+    if isinstance(connectors, list) and all(isinstance(item, str) for item in connectors):
+        parsed_connectors = connectors
+    else:
+        parsed_connectors = None
+    failure_reason = error_info.get("failureReason")
+    parsed_failure_reason = (
+        failure_reason
+        if isinstance(failure_reason, str) and failure_reason in _FIREWALL_AUTH_FAILURE_REASONS
+        else None
+    )
+    return FirewallAuthApiError(
+        status=status,
+        code=code,
+        message=message,
+        connectors=parsed_connectors,
+        failure_reason=parsed_failure_reason,
+    )
+
+
 def _fetch_firewall_headers_sync(
     encrypted_secrets: str,
     auth_headers: dict,
@@ -289,7 +351,10 @@ def _fetch_firewall_headers_sync(
                 raise InsufficientCreditsError(
                     error_message if isinstance(error_message, str) else "Insufficient credits",
                 ) from None
-            raise
+            api_error = _firewall_auth_api_error_from_envelope(e.code, error_info)
+            if api_error is None:
+                raise e from None
+            raise api_error from None
 
 
 async def fetch_firewall_headers(
@@ -710,6 +775,30 @@ async def handle_firewall_request(
             error_code="invalid_auth_expiry",
             message=str(e),
             permission=allow.name,
+        )
+        return
+    except FirewallAuthApiError as e:
+        log_proxy_entry(
+            proxy_log_path,
+            "error",
+            f"Firewall auth API failed for {firewall_base}: {e.code}",
+            type="firewall",
+            firewall_base=firewall_base,
+            error_code=e.code,
+        )
+        _set_matched_firewall_failure_response(
+            flow,
+            status=e.status,
+            action=(
+                "BLOCK"
+                if _HTTP_STATUS_CLIENT_ERROR_MIN <= e.status < _HTTP_STATUS_SERVER_ERROR_MIN
+                else "ALLOW"
+            ),
+            error_code=e.code,
+            message=str(e),
+            permission=allow.name,
+            connectors=e.connectors,
+            failure_reason=e.failure_reason,
         )
         return
     except Exception as e:

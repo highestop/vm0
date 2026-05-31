@@ -28,6 +28,7 @@ import {
   type ConnectorAuthProviderClientArgs,
   type ProviderEnv,
 } from "@vm0/connectors/auth-providers";
+import { isOAuthProviderHttpError } from "@vm0/connectors/auth-providers/oauth/error";
 import {
   getModelProviderOAuthSecretMetadata,
   isModelProviderOAuthRefreshConfigured,
@@ -62,6 +63,7 @@ import { loadUserFeatureSwitchContext } from "./feature-switches.service";
 import { resolveOrgCreditAvailability } from "./zero-run-admission.service";
 
 type AccessSecretSource = "connector" | "model-provider";
+type FirewallAuthFailureReason = "upstream_provider" | "reconnect_required";
 type SecretType = AccessSecretSource;
 const NORMAL_BILLABLE_FIREWALL_LEASE_SECONDS = 30;
 const LOW_BILLABLE_FIREWALL_LEASE_SECONDS = 5;
@@ -84,11 +86,13 @@ interface RefreshResult {
   readonly refreshedConnectors: readonly string[];
   readonly refreshedSecrets: readonly string[];
   readonly failedConnectors: readonly string[];
+  readonly failureReason?: FirewallAuthFailureReason;
 }
 
 interface RefreshExecutionResult {
   readonly connectorType: string;
   readonly status: "current" | "refreshed" | "failed";
+  readonly failureReason?: FirewallAuthFailureReason;
 }
 
 interface ReferencedAuthKeys {
@@ -125,6 +129,7 @@ type ResolveFirewallAuthResult =
           readonly message: string;
           readonly code: string;
           readonly connectors?: readonly string[];
+          readonly failureReason?: FirewallAuthFailureReason;
         };
       };
     };
@@ -155,15 +160,23 @@ function forbiddenModelProviderOwner(): ResolveFirewallAuthResult {
 
 function tokenRefreshFailed(
   failedConnectors: readonly string[],
+  failureReason?: FirewallAuthFailureReason,
 ): ResolveFirewallAuthResult {
+  const connectorList = failedConnectors.join(", ");
+  const message =
+    failureReason === "upstream_provider"
+      ? `Access token refresh failed for: ${connectorList}. The upstream provider may be temporarily unavailable.`
+      : `Access token expired and refresh failed for: ${connectorList}. The connector may need to be reconnected.`;
+  const error = {
+    message,
+    code: "TOKEN_REFRESH_FAILED",
+    connectors: failedConnectors,
+    ...(failureReason ? { failureReason } : {}),
+  };
   return {
     status: 502,
     body: {
-      error: {
-        message: `Access token expired and refresh failed for: ${failedConnectors.join(", ")}. The connector may need to be reconnected.`,
-        code: "TOKEN_REFRESH_FAILED",
-        connectors: failedConnectors,
-      },
+      error,
     },
   };
 }
@@ -261,6 +274,7 @@ interface RefreshState {
   readonly refreshToken: string | null;
   readonly tokenExpiresAt: Date | null;
   readonly needsReconnect: boolean;
+  readonly lastRefreshErrorCode: string | null;
   readonly updatedAtMicros: bigint;
 }
 
@@ -305,7 +319,26 @@ type RefreshAccessTokenResult =
         | "not-refreshable"
         | "refresh-failed"
         | "refresh-token-missing";
+      readonly failureReason?: FirewallAuthFailureReason;
     };
+
+function refreshTokenMissingResult(): RefreshAccessTokenResult {
+  return {
+    ok: false,
+    reason: "refresh-token-missing",
+    failureReason: "reconnect_required",
+  };
+}
+
+function refreshFailedResult(
+  failureReason?: FirewallAuthFailureReason,
+): RefreshAccessTokenResult {
+  return {
+    ok: false,
+    reason: "refresh-failed",
+    ...(failureReason ? { failureReason } : {}),
+  };
+}
 
 interface RefreshExpiredTokensArgs {
   readonly db: Db;
@@ -407,6 +440,63 @@ function currentProviderEnv(): ProviderEnv {
       },
     },
   ) as ProviderEnv;
+}
+
+function refreshFailureReasonFromError(
+  error: unknown,
+): FirewallAuthFailureReason | undefined {
+  if (isChatgptRefreshError(error)) {
+    return isReconnectRequiredRefreshErrorCode(error.code)
+      ? "reconnect_required"
+      : undefined;
+  }
+  if (isOAuthProviderHttpError(error)) {
+    if (error.oauthError === "invalid_grant") {
+      return "reconnect_required";
+    }
+    if (
+      error.oauthError === "server_error" ||
+      error.oauthError === "temporarily_unavailable" ||
+      error.status >= 500 ||
+      error.status === 429
+    ) {
+      return "upstream_provider";
+    }
+  }
+  if (isFetchNetworkError(error)) {
+    return "upstream_provider";
+  }
+  return undefined;
+}
+
+function refreshErrorCodeFromError(error: unknown): string | null {
+  if (isChatgptRefreshError(error)) {
+    return error.code;
+  }
+  if (
+    isOAuthProviderHttpError(error) &&
+    isReconnectRequiredRefreshErrorCode(error.oauthError)
+  ) {
+    return error.oauthError ?? null;
+  }
+  return null;
+}
+
+function isFetchNetworkError(error: unknown): boolean {
+  return (
+    error instanceof TypeError && error.message.toLowerCase().includes("fetch")
+  );
+}
+
+function isReconnectRequiredRefreshErrorCode(
+  errorCode: string | null | undefined,
+): boolean {
+  return (
+    errorCode === "refresh_token_expired" ||
+    errorCode === "refresh_token_reused" ||
+    errorCode === "refresh_token_invalidated" ||
+    errorCode === "invalid_grant"
+  );
 }
 
 async function getSecretValue(args: {
@@ -892,7 +982,7 @@ function didLockedRefreshFailDuringRequest(args: {
   readonly state: RefreshState;
 }): boolean {
   if (!args.state.needsReconnect) {
-    return false;
+    return lockedRefreshFailureReasonDuringRequest(args) !== undefined;
   }
   if (args.initialState) {
     return (
@@ -906,6 +996,63 @@ function didLockedRefreshFailDuringRequest(args: {
   );
 }
 
+function lockedRefreshFailureReasonDuringRequest(args: {
+  readonly initialState: RefreshState | null;
+  readonly requestStartedAtMicros: bigint | null;
+  readonly state: RefreshState;
+}): FirewallAuthFailureReason | undefined {
+  if (
+    args.requestStartedAtMicros === null ||
+    args.state.updatedAtMicros <= args.requestStartedAtMicros
+  ) {
+    return undefined;
+  }
+  if (
+    args.initialState &&
+    args.initialState.updatedAtMicros === args.state.updatedAtMicros
+  ) {
+    return undefined;
+  }
+
+  if (args.state.needsReconnect) {
+    return !args.state.refreshToken ||
+      isReconnectRequiredRefreshErrorCode(args.state.lastRefreshErrorCode)
+      ? "reconnect_required"
+      : undefined;
+  }
+
+  const tokenStateUnchanged = sameRefreshTokenState(
+    args.initialState,
+    args.state,
+  );
+  if (tokenExpiresAtNeedsRefresh(args.state.tokenExpiresAt)) {
+    return !args.initialState || tokenStateUnchanged
+      ? "upstream_provider"
+      : undefined;
+  }
+
+  if (tokenStateUnchanged) {
+    return "upstream_provider";
+  }
+  return undefined;
+}
+
+function sameRefreshTokenState(
+  initialState: RefreshState | null,
+  state: RefreshState,
+): boolean {
+  return (
+    initialState !== null &&
+    initialState.accessToken === state.accessToken &&
+    initialState.refreshToken === state.refreshToken &&
+    sameTokenExpiresAt(initialState.tokenExpiresAt, state.tokenExpiresAt)
+  );
+}
+
+function sameTokenExpiresAt(left: Date | null, right: Date | null): boolean {
+  return (left?.getTime() ?? null) === (right?.getTime() ?? null);
+}
+
 async function loadRefreshState(
   db: Db,
   args: RefreshAccessTokenArgs,
@@ -917,6 +1064,7 @@ async function loadRefreshState(
           .select({
             tokenExpiresAt: modelProviders.tokenExpiresAt,
             needsReconnect: modelProviders.needsReconnect,
+            lastRefreshErrorCode: modelProviders.lastRefreshErrorCode,
             updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${modelProviders.updatedAt}) * 1000000)::bigint`,
           })
           .from(modelProviders)
@@ -932,6 +1080,7 @@ async function loadRefreshState(
           .select({
             tokenExpiresAt: connectors.tokenExpiresAt,
             needsReconnect: connectors.needsReconnect,
+            lastRefreshErrorCode: sql<string | null>`NULL`,
             updatedAtMicros: sql<string>`(EXTRACT(EPOCH FROM ${connectors.updatedAt}) * 1000000)::bigint`,
           })
           .from(connectors)
@@ -972,6 +1121,7 @@ async function loadRefreshState(
     refreshToken,
     tokenExpiresAt: row.tokenExpiresAt,
     needsReconnect: row.needsReconnect,
+    lastRefreshErrorCode: row.lastRefreshErrorCode,
     updatedAtMicros: BigInt(row.updatedAtMicros),
   };
 }
@@ -1047,15 +1197,20 @@ async function markRefreshFailure(
   args: RefreshAccessTokenArgs,
   context: RefreshTokenContext,
   errorCode: string | null,
+  failureReason: FirewallAuthFailureReason | undefined,
 ): Promise<void> {
   if (args.sourceType === "model-provider") {
     await args.db
       .update(modelProviders)
-      .set({
-        needsReconnect: true,
-        lastRefreshErrorCode: errorCode,
-        updatedAt: sql`clock_timestamp()`,
-      })
+      .set(
+        failureReason === "upstream_provider"
+          ? { updatedAt: sql`clock_timestamp()` }
+          : {
+              needsReconnect: true,
+              lastRefreshErrorCode: errorCode,
+              updatedAt: sql`clock_timestamp()`,
+            },
+      )
       .where(
         and(
           eq(modelProviders.orgId, args.orgId),
@@ -1068,10 +1223,14 @@ async function markRefreshFailure(
 
   await args.db
     .update(connectors)
-    .set({
-      needsReconnect: true,
-      updatedAt: sql`clock_timestamp()`,
-    })
+    .set(
+      failureReason === "upstream_provider"
+        ? { updatedAt: sql`clock_timestamp()` }
+        : {
+            needsReconnect: true,
+            updatedAt: sql`clock_timestamp()`,
+          },
+    )
     .where(
       and(
         eq(connectors.orgId, args.orgId),
@@ -1081,20 +1240,28 @@ async function markRefreshFailure(
     );
 }
 
+async function markRefreshTokenMissing(
+  args: RefreshAccessTokenArgs,
+  context: RefreshTokenContext,
+): Promise<RefreshAccessTokenResult> {
+  await markRefreshFailure(args, context, null, "reconnect_required");
+  return refreshTokenMissingResult();
+}
+
 async function refreshAccessTokenForSource(
   args: RefreshAccessTokenArgs,
 ): Promise<RefreshAccessTokenResult> {
   const preparation = prepareRefreshTokenContext(args);
   if (!preparation.ok) {
-    return { ok: false, reason: preparation.reason };
+    return preparation.reason === "refresh-token-missing"
+      ? refreshTokenMissingResult()
+      : { ok: false, reason: preparation.reason };
   }
   const { prepared } = preparation;
   const requestStartedAtMicros = args.forceRefresh
     ? args.forceRefreshStartedAtMicros
-    : null;
-  const initialState = args.forceRefresh
-    ? await loadRefreshState(args.db, args, prepared.context)
-    : null;
+    : await currentDatabaseTimestampMicros(args.db);
+  const initialState = await loadRefreshState(args.db, args, prepared.context);
 
   return await args.db.transaction(async (tx) => {
     if (prepared.sourceType === "connector") {
@@ -1119,7 +1286,7 @@ async function refreshAccessTokenForSource(
         userId: args.userId,
         sourceType: args.sourceType,
       });
-      return { ok: false, reason: "refresh-token-missing" };
+      return markRefreshTokenMissing({ ...args, db: tx }, prepared.context);
     }
 
     const currentAccessToken = lockedState.accessToken;
@@ -1130,7 +1297,13 @@ async function refreshAccessTokenForSource(
         state: lockedState,
       })
     ) {
-      return { ok: false, reason: "refresh-failed" };
+      return refreshFailedResult(
+        lockedRefreshFailureReasonDuringRequest({
+          initialState,
+          requestStartedAtMicros,
+          state: lockedState,
+        }),
+      );
     }
 
     if (
@@ -1152,7 +1325,7 @@ async function refreshAccessTokenForSource(
 
     if (!lockedState.refreshToken) {
       L.debug(`No ${args.connectorType} refresh token available, skipping`);
-      return { ok: false, reason: "refresh-token-missing" };
+      return markRefreshTokenMissing({ ...args, db: tx }, prepared.context);
     }
 
     const refreshPromise =
@@ -1173,20 +1346,23 @@ async function refreshAccessTokenForSource(
     if (!refreshResult.ok) {
       const error = refreshResult.error;
       const message = error instanceof Error ? error.message : "Unknown error";
-      const errorCode = isChatgptRefreshError(error) ? error.code : null;
+      const errorCode = refreshErrorCodeFromError(error);
+      const failureReason = refreshFailureReasonFromError(error);
       L.warn(`${args.connectorType} token refresh failed: ${message}`, {
         connectorType: args.connectorType,
         orgId: args.orgId,
         userId: args.userId,
         errorCode,
+        failureReason,
       });
 
       await markRefreshFailure(
         { ...args, db: tx },
         prepared.context,
         errorCode,
+        failureReason,
       );
-      return { ok: false, reason: "refresh-failed" };
+      return refreshFailedResult(failureReason);
     }
 
     const result = refreshResult.value;
@@ -1775,7 +1951,13 @@ async function refreshSelectedTokens(
             reason: refreshResult.reason,
           },
         );
-        return { connectorType, status: "failed" };
+        return {
+          connectorType,
+          status: "failed",
+          ...(refreshResult.failureReason
+            ? { failureReason: refreshResult.failureReason }
+            : {}),
+        };
       }
 
       for (const envVar of context.envVarsByConnector.get(connectorType) ??
@@ -1835,7 +2017,10 @@ function summarizeRefreshResults(
   envVarsByConnector: Map<string, readonly string[]>,
 ): Pick<
   RefreshResult,
-  "failedConnectors" | "refreshedConnectors" | "refreshedSecrets"
+  | "failedConnectors"
+  | "refreshedConnectors"
+  | "refreshedSecrets"
+  | "failureReason"
 > {
   const refreshedConnectors = refreshResults
     .filter((result) => {
@@ -1856,11 +2041,22 @@ function summarizeRefreshResults(
     .map((result) => {
       return result.connectorType;
     });
+  const failedResults = refreshResults.filter((result) => {
+    return result.status === "failed";
+  });
+  const failureReasons = new Set(
+    failedResults.map((result) => {
+      return result.failureReason;
+    }),
+  );
+  const failureReason =
+    failureReasons.size === 1 ? [...failureReasons][0] : undefined;
 
   return {
     refreshedConnectors,
     refreshedSecrets,
     failedConnectors,
+    ...(failureReason ? { failureReason } : {}),
   };
 }
 
@@ -2195,6 +2391,7 @@ export async function resolveFirewallAuth(
   let refreshedConnectors: readonly string[] = [];
   let refreshedSecrets: readonly string[] = [];
   let failedConnectors: readonly string[] = [];
+  let failureReason: FirewallAuthFailureReason | undefined;
 
   if (body.secretConnectorMap) {
     const result = await refreshExpiredTokens({
@@ -2214,10 +2411,11 @@ export async function resolveFirewallAuth(
     refreshedConnectors = result.refreshedConnectors;
     refreshedSecrets = result.refreshedSecrets;
     failedConnectors = result.failedConnectors;
+    failureReason = result.failureReason;
   }
 
   if (failedConnectors.length > 0) {
-    return tokenRefreshFailed(failedConnectors);
+    return tokenRefreshFailed(failedConnectors, failureReason);
   }
 
   if (hasMissingResolvedSecrets(decryptedSecrets, referenced.secrets)) {

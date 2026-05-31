@@ -531,7 +531,10 @@ async function seedCodexModelProvider(
   });
 }
 
-async function notionConnectorState(fixture: FirewallFixture): Promise<{
+async function connectorState(
+  fixture: FirewallFixture,
+  connectorType: string,
+): Promise<{
   readonly needsReconnect: boolean;
   readonly tokenExpiresAt: Date | null;
 }> {
@@ -546,14 +549,21 @@ async function notionConnectorState(fixture: FirewallFixture): Promise<{
       and(
         eq(connectors.orgId, fixture.orgId),
         eq(connectors.userId, fixture.userId),
-        eq(connectors.type, "notion"),
+        eq(connectors.type, connectorType),
       ),
     )
     .limit(1);
   if (!row) {
-    throw new Error("notion connector state not found");
+    throw new Error(`${connectorType} connector state not found`);
   }
   return row;
+}
+
+function notionConnectorState(fixture: FirewallFixture): Promise<{
+  readonly needsReconnect: boolean;
+  readonly tokenExpiresAt: Date | null;
+}> {
+  return connectorState(fixture, "notion");
 }
 
 async function codexProviderState(fixture: FirewallFixture): Promise<{
@@ -1417,6 +1427,151 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     });
   });
 
+  it("does not treat concurrent short-lived connector refresh success as upstream failure", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+
+    let refreshCallCount = 0;
+    const firstRefreshStarted = deferred();
+    const firstRefreshRelease = deferred();
+
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", async () => {
+        refreshCallCount += 1;
+        const call = refreshCallCount;
+        if (call === 1) {
+          firstRefreshStarted.resolve();
+          await firstRefreshRelease.promise;
+        }
+        return HttpResponse.json({
+          access_token: `short-lived-notion-token-${call}`,
+          refresh_token: `short-lived-notion-refresh-token-${call}`,
+          expires_in: 30,
+        });
+      }),
+    );
+
+    const refreshRequest = () => {
+      return accept(
+        firewallClient().resolve({
+          body: {
+            encryptedSecrets: encryptedSecrets({
+              NOTION_TOKEN: "stale-notion-token",
+            }),
+            authHeaders: {
+              Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+            },
+            secretConnectorMap: {
+              NOTION_TOKEN: "notion",
+            },
+          },
+          headers: authHeaders(fixture),
+        }),
+        [200],
+      );
+    };
+
+    const firstResponsePromise = refreshRequest();
+    await firstRefreshStarted.promise;
+    const secondResponsePromise = refreshRequest();
+    await waitForConnectorStateLockWaiter({
+      orgId: fixture.orgId,
+      userId: fixture.userId,
+      connectorType: "notion",
+    });
+    firstRefreshRelease.resolve();
+
+    const responses = await Promise.all([
+      firstResponsePromise,
+      secondResponsePromise,
+    ]);
+
+    expect(refreshCallCount).toBe(2);
+    expect(
+      responses.map((response) => {
+        return response.body.headers.Authorization;
+      }),
+    ).toStrictEqual([
+      "Bearer short-lived-notion-token-1",
+      "Bearer short-lived-notion-token-2",
+    ]);
+    expect(
+      responses.map((response) => {
+        return response.body.refreshedConnectors;
+      }),
+    ).toStrictEqual([["notion"], ["notion"]]);
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "NOTION_ACCESS_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("short-lived-notion-token-2");
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
+  it("does not treat an already-observed short-lived connector refresh state as upstream failure", async () => {
+    const fixture = await track(seedFixture());
+    await seedNotionConnector(fixture, {
+      accessToken: "short-lived-observed-notion-token",
+      refreshToken: "short-lived-observed-notion-refresh-token",
+      tokenExpiresAt: new Date(now() + 30_000),
+    });
+    const db = store.set(writeDb$);
+    await db
+      .update(connectors)
+      .set({ updatedAt: sql`clock_timestamp() + interval '5 seconds'` })
+      .where(
+        and(
+          eq(connectors.orgId, fixture.orgId),
+          eq(connectors.userId, fixture.userId),
+          eq(connectors.type, "notion"),
+        ),
+      );
+
+    let refreshCallCount = 0;
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", () => {
+        refreshCallCount += 1;
+        return HttpResponse.json({
+          access_token: "fresh-observed-notion-token",
+          refresh_token: "fresh-observed-notion-refresh-token",
+          expires_in: 3600,
+        });
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            NOTION_TOKEN: "short-lived-observed-notion-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            NOTION_TOKEN: "notion",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [200],
+    );
+
+    expect(refreshCallCount).toBe(1);
+    expect(response.body.headers.Authorization).toBe(
+      "Bearer fresh-observed-notion-token",
+    );
+    expect(response.body.refreshedConnectors).toStrictEqual(["notion"]);
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
   it("serializes concurrent forced connector OAuth refreshes", async () => {
     const fixture = await track(seedFixture());
     await seedNotionConnector(fixture, {
@@ -1945,8 +2100,12 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     expect(response.body.error).toMatchObject({
       code: "TOKEN_REFRESH_FAILED",
       connectors: ["test-oauth"],
+      failureReason: "reconnect_required",
     });
     expect(dynamicOAuth.refreshes).toStrictEqual([]);
+    await expect(connectorState(fixture, "test-oauth")).resolves.toMatchObject({
+      needsReconnect: true,
+    });
   });
 
   it("keeps missing static connector access secrets as missing configuration", async () => {
@@ -2291,7 +2450,7 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     expect(response.body.expiresAt).toBeLessThanOrEqual(after + 30);
   });
 
-  it("returns token-refresh-failed and marks connector reconnect when refresh fails", async () => {
+  it("classifies connector invalid_grant refresh failures as reconnect required", async () => {
     const fixture = await track(seedFixture());
     await seedExpiredNotionConnector(fixture);
     server.use(
@@ -2324,7 +2483,334 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     expect(response.body.error).toMatchObject({
       code: "TOKEN_REFRESH_FAILED",
       connectors: ["notion"],
+      failureReason: "reconnect_required",
     });
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: true,
+    });
+  });
+
+  it("classifies upstream connector refresh failures without marking reconnect", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", () => {
+        return HttpResponse.json(
+          { error: "temporarily_unavailable" },
+          { status: 502 },
+        );
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            NOTION_TOKEN: "stale-notion-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            NOTION_TOKEN: "notion",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion"],
+      message:
+        "Access token refresh failed for: notion. The upstream provider may be temporarily unavailable.",
+      failureReason: "upstream_provider",
+    });
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
+  it("classifies connector network refresh failures as upstream", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", () => {
+        return HttpResponse.error();
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            NOTION_TOKEN: "stale-notion-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            NOTION_TOKEN: "notion",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion"],
+      failureReason: "upstream_provider",
+    });
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
+  it.each(["temporarily_unavailable", "server_error"] as const)(
+    "classifies standard OAuth %s refresh failures as upstream",
+    async (oauthError) => {
+      const fixture = await track(seedFixture());
+      await seedExpiredNotionConnector(fixture);
+      server.use(
+        http.post("https://api.notion.com/v1/oauth/token", () => {
+          return HttpResponse.json({ error: oauthError }, { status: 400 });
+        }),
+      );
+
+      const response = await accept(
+        firewallClient().resolve({
+          body: {
+            encryptedSecrets: encryptedSecrets({
+              NOTION_TOKEN: "stale-notion-token",
+            }),
+            authHeaders: {
+              Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+            },
+            secretConnectorMap: {
+              NOTION_TOKEN: "notion",
+            },
+          },
+          headers: authHeaders(fixture),
+        }),
+        [502],
+      );
+
+      expect(response.body.error).toMatchObject({
+        code: "TOKEN_REFRESH_FAILED",
+        connectors: ["notion"],
+        failureReason: "upstream_provider",
+      });
+      await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+        needsReconnect: false,
+      });
+    },
+  );
+
+  it("serializes concurrent upstream connector refresh failures", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+
+    let refreshCallCount = 0;
+    const firstRefreshStarted = deferred();
+    const firstRefreshRelease = deferred();
+
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", async () => {
+        refreshCallCount += 1;
+        firstRefreshStarted.resolve();
+        await firstRefreshRelease.promise;
+        return HttpResponse.json(
+          { error: "temporarily_unavailable" },
+          { status: 502 },
+        );
+      }),
+    );
+
+    const refreshRequest = () => {
+      return accept(
+        firewallClient().resolve({
+          body: {
+            encryptedSecrets: encryptedSecrets({
+              NOTION_TOKEN: "stale-notion-token",
+            }),
+            authHeaders: {
+              Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+            },
+            secretConnectorMap: {
+              NOTION_TOKEN: "notion",
+            },
+          },
+          headers: authHeaders(fixture),
+        }),
+        [502],
+      );
+    };
+
+    const firstResponsePromise = refreshRequest();
+    await firstRefreshStarted.promise;
+    const secondResponsePromise = refreshRequest();
+    await waitForConnectorStateLockWaiter({
+      orgId: fixture.orgId,
+      userId: fixture.userId,
+      connectorType: "notion",
+    });
+    firstRefreshRelease.resolve();
+
+    const responses = await Promise.all([
+      firstResponsePromise,
+      secondResponsePromise,
+    ]);
+
+    expect(refreshCallCount).toBe(1);
+    for (const response of responses) {
+      expect(response.body.error).toMatchObject({
+        code: "TOKEN_REFRESH_FAILED",
+        connectors: ["notion"],
+        failureReason: "upstream_provider",
+      });
+    }
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
+  it("serializes concurrent connector invalid_grant refresh failures", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+
+    let refreshCallCount = 0;
+    const firstRefreshStarted = deferred();
+    const firstRefreshRelease = deferred();
+
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", async () => {
+        refreshCallCount += 1;
+        firstRefreshStarted.resolve();
+        await firstRefreshRelease.promise;
+        return HttpResponse.json(
+          { error: "invalid_grant", error_description: "revoked" },
+          { status: 400 },
+        );
+      }),
+    );
+
+    const refreshRequest = () => {
+      return accept(
+        firewallClient().resolve({
+          body: {
+            encryptedSecrets: encryptedSecrets({
+              NOTION_TOKEN: "stale-notion-token",
+            }),
+            authHeaders: {
+              Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+            },
+            secretConnectorMap: {
+              NOTION_TOKEN: "notion",
+            },
+          },
+          headers: authHeaders(fixture),
+        }),
+        [502],
+      );
+    };
+
+    const firstResponsePromise = refreshRequest();
+    await firstRefreshStarted.promise;
+    const secondResponsePromise = refreshRequest();
+    await waitForConnectorStateLockWaiter({
+      orgId: fixture.orgId,
+      userId: fixture.userId,
+      connectorType: "notion",
+    });
+    firstRefreshRelease.resolve();
+
+    const responses = await Promise.all([
+      firstResponsePromise,
+      secondResponsePromise,
+    ]);
+
+    expect(refreshCallCount).toBe(1);
+    expect(responses[0].body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion"],
+      failureReason: "reconnect_required",
+    });
+    expect(responses[1].body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion"],
+    });
+    expect(responses[1].body.error).not.toHaveProperty("failureReason");
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: true,
+    });
+  });
+
+  it("does not invent failureReason for concurrent unknown connector refresh failures", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+
+    let refreshCallCount = 0;
+    const firstRefreshStarted = deferred();
+    const firstRefreshRelease = deferred();
+
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", async () => {
+        refreshCallCount += 1;
+        firstRefreshStarted.resolve();
+        await firstRefreshRelease.promise;
+        return HttpResponse.json(
+          { error: "invalid_request", error_description: "bad request" },
+          { status: 400 },
+        );
+      }),
+    );
+
+    const refreshRequest = () => {
+      return accept(
+        firewallClient().resolve({
+          body: {
+            encryptedSecrets: encryptedSecrets({
+              NOTION_TOKEN: "stale-notion-token",
+            }),
+            authHeaders: {
+              Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+            },
+            secretConnectorMap: {
+              NOTION_TOKEN: "notion",
+            },
+          },
+          headers: authHeaders(fixture),
+        }),
+        [502],
+      );
+    };
+
+    const firstResponsePromise = refreshRequest();
+    await firstRefreshStarted.promise;
+    const secondResponsePromise = refreshRequest();
+    await waitForConnectorStateLockWaiter({
+      orgId: fixture.orgId,
+      userId: fixture.userId,
+      connectorType: "notion",
+    });
+    firstRefreshRelease.resolve();
+
+    const responses = await Promise.all([
+      firstResponsePromise,
+      secondResponsePromise,
+    ]);
+
+    expect(refreshCallCount).toBe(1);
+    for (const response of responses) {
+      expect(response.body.error).toMatchObject({
+        code: "TOKEN_REFRESH_FAILED",
+        connectors: ["notion"],
+      });
+      expect(response.body.error).not.toHaveProperty("failureReason");
+    }
     await expect(notionConnectorState(fixture)).resolves.toMatchObject({
       needsReconnect: true,
     });
@@ -2727,6 +3213,7 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
       expect(response.body.error).toMatchObject({
         code: "TOKEN_REFRESH_FAILED",
         connectors: ["codex-oauth-token"],
+        failureReason: "reconnect_required",
       });
     }
     await expect(codexProviderState(fixture)).resolves.toMatchObject({
@@ -3089,10 +3576,169 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     expect(response.body.error).toMatchObject({
       code: "TOKEN_REFRESH_FAILED",
       connectors: ["codex-oauth-token"],
+      failureReason: "reconnect_required",
     });
     await expect(codexProviderState(fixture)).resolves.toMatchObject({
       needsReconnect: true,
       lastRefreshErrorCode: "refresh_token_expired",
     });
+  });
+
+  it("preserves standard OAuth reconnect error codes on model-provider refresh failure", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredCodexModelProvider(fixture);
+    server.use(
+      http.post("https://auth.openai.com/oauth/token", () => {
+        return HttpResponse.json(
+          { error: "invalid_grant", error_description: "revoked" },
+          { status: 400 },
+        );
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            CHATGPT_ACCESS_TOKEN: "stale-chatgpt-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("CHATGPT_ACCESS_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            CHATGPT_ACCESS_TOKEN: "codex-oauth-token",
+          },
+          secretConnectorMetadataMap: {
+            CHATGPT_ACCESS_TOKEN: {
+              sourceType: "model-provider",
+              sourceUserId: ORG_SENTINEL_USER_ID,
+              metadataKey: "codex-oauth-token",
+            },
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["codex-oauth-token"],
+      failureReason: "reconnect_required",
+    });
+    await expect(codexProviderState(fixture)).resolves.toMatchObject({
+      needsReconnect: true,
+      lastRefreshErrorCode: "invalid_grant",
+    });
+  });
+
+  it("classifies upstream ChatGPT refresh failures without marking reconnect", async () => {
+    const fixture = await track(seedFixture());
+    await seedCodexModelProvider(fixture, {
+      accessToken: "stale-chatgpt-token",
+      refreshToken: "chatgpt-refresh-token",
+      tokenExpiresAt: new Date(now() - 60_000),
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+    });
+    server.use(
+      http.post("https://auth.openai.com/oauth/token", () => {
+        return HttpResponse.json(
+          { error: "temporarily_unavailable" },
+          { status: 502 },
+        );
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            CHATGPT_ACCESS_TOKEN: "stale-chatgpt-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("CHATGPT_ACCESS_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            CHATGPT_ACCESS_TOKEN: "codex-oauth-token",
+          },
+          secretConnectorMetadataMap: {
+            CHATGPT_ACCESS_TOKEN: {
+              sourceType: "model-provider",
+              sourceUserId: ORG_SENTINEL_USER_ID,
+              metadataKey: "codex-oauth-token",
+            },
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["codex-oauth-token"],
+      failureReason: "upstream_provider",
+    });
+    await expect(codexProviderState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+    });
+  });
+
+  it("omits failureReason when failed connectors have mixed known and unknown reasons", async () => {
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+    await seedExpiredCodexModelProvider(fixture);
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", () => {
+        return HttpResponse.json(
+          { error: "invalid_request", error_description: "bad request" },
+          { status: 400 },
+        );
+      }),
+      http.post("https://auth.openai.com/oauth/token", () => {
+        return HttpResponse.json(
+          { error: "temporarily_unavailable" },
+          { status: 502 },
+        );
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            NOTION_TOKEN: "stale-notion-token",
+            CHATGPT_ACCESS_TOKEN: "stale-chatgpt-token",
+          }),
+          authHeaders: {
+            Authorization: [
+              `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+              secretTemplate("CHATGPT_ACCESS_TOKEN"),
+            ].join(" "),
+          },
+          secretConnectorMap: {
+            NOTION_TOKEN: "notion",
+            CHATGPT_ACCESS_TOKEN: "codex-oauth-token",
+          },
+          secretConnectorMetadataMap: {
+            CHATGPT_ACCESS_TOKEN: {
+              sourceType: "model-provider",
+              sourceUserId: ORG_SENTINEL_USER_ID,
+              metadataKey: "codex-oauth-token",
+            },
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion", "codex-oauth-token"],
+    });
+    expect(response.body.error).not.toHaveProperty("failureReason");
   });
 });

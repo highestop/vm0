@@ -718,6 +718,48 @@ class TestHandleFirewallRequest:
         assert body["base"] == "https://api.github.com"
         assert "connectors" not in body
 
+    async def test_structured_api_error_is_preserved(self, real_flow, mitm_ctx, tmp_path):
+        flow = real_flow(with_response=False, host="api.github.com", path="/repos")
+        flow.metadata["vm_run_id"] = "test-run"
+        api_entry = {"base": "https://api.github.com", "auth": {"headers": {}}}
+        vm_info = {
+            "runId": "run-1",
+            "sandboxToken": "tok-xyz",
+            "encryptedSecrets": "iv:tag:data",
+            "networkLogPath": str(tmp_path / "net.jsonl"),
+            "billableFirewalls": [],
+        }
+        allow = _allow(api_entry)
+        api_error = auth.FirewallAuthApiError(
+            status=502,
+            code="TOKEN_REFRESH_FAILED",
+            message="Access token expired and refresh failed for: codex-oauth-token.",
+            connectors=["codex-oauth-token"],
+            failure_reason="upstream_provider",
+        )
+
+        with (
+            patch.object(
+                auth,
+                "get_firewall_headers",
+                AsyncMock(side_effect=api_error),
+            ),
+            mitm_ctx(),
+            patch.object(auth, "get_api_url", return_value="https://api.vm0.ai"),
+        ):
+            await auth.handle_firewall_request(flow, allow, vm_info)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 502
+        assert flow.metadata["firewall_action"] == "ALLOW"
+        assert flow.metadata["firewall_error"] == "TOKEN_REFRESH_FAILED"
+        body = json.loads(flow.response.content)
+        assert body["error"] == "TOKEN_REFRESH_FAILED"
+        assert body["message"] == "Access token expired and refresh failed for: codex-oauth-token."
+        assert body["permission"] == "github"
+        assert body["connectors"] == ["codex-oauth-token"]
+        assert body["failureReason"] == "upstream_provider"
+
     async def test_invalid_billable_auth_expiry_returns_502(self, real_flow, mitm_ctx, tmp_path):
         flow = real_flow(with_response=False, host="api.github.com", path="/repos")
         flow.metadata["vm_run_id"] = "test-run"
@@ -1199,15 +1241,85 @@ class TestFetchFirewallHeaders:
                 )
             assert "Insufficient credits" in str(exc_info.value)
 
-    def test_non_connector_not_configured_error_reraised(self):
-        """Non-CONNECTOR_NOT_CONFIGURED HTTP errors should be re-raised as HTTPError."""
-        error_body = json.dumps(
-            {"error": {"message": "Bad request", "code": "BAD_REQUEST"}}
-        ).encode()
+    @pytest.mark.parametrize(
+        (
+            "status",
+            "reason",
+            "code",
+            "message",
+            "connectors",
+            "failure_reason",
+            "expected_failure_reason",
+        ),
+        [
+            (
+                424,
+                "Failed Dependency",
+                "TOKEN_ACCESS_RESOLUTION_FAILED",
+                "Token access resolution failed for: notion.",
+                ["notion"],
+                None,
+                None,
+            ),
+            (
+                403,
+                "Forbidden",
+                "FORBIDDEN",
+                "Invalid model-provider secret owner",
+                None,
+                None,
+                None,
+            ),
+            (
+                502,
+                "Bad Gateway",
+                "TOKEN_REFRESH_FAILED",
+                "Access token expired and refresh failed for: codex-oauth-token.",
+                ["codex-oauth-token"],
+                "upstream_provider",
+                "upstream_provider",
+            ),
+            (
+                502,
+                "Bad Gateway",
+                "TOKEN_REFRESH_FAILED",
+                "Access token expired and refresh failed for: notion.",
+                ["notion"],
+                "provider_rate_limited",
+                None,
+            ),
+        ],
+        ids=[
+            "token-access-resolution",
+            "forbidden",
+            "token-refresh",
+            "unknown-failure-reason",
+        ],
+    )
+    def test_current_structured_error_raises_custom_error(
+        self,
+        status: int,
+        reason: str,
+        code: str,
+        message: str,
+        connectors: list[str] | None,
+        failure_reason: str | None,
+        expected_failure_reason: str | None,
+    ):
+        """Current auth endpoint errors should preserve their code and connectors."""
+        error_info: dict[str, object] = {
+            "message": message,
+            "code": code,
+        }
+        if connectors is not None:
+            error_info["connectors"] = connectors
+        if failure_reason is not None:
+            error_info["failureReason"] = failure_reason
+        error_body = json.dumps({"error": error_info}).encode()
         http_error = _http_error(
             "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
-            400,
-            "Bad Request",
+            status,
+            reason,
             error_body,
         )
 
@@ -1215,9 +1327,15 @@ class TestFetchFirewallHeaders:
             patch("auth.urllib.request.Request"),
             patch("auth.urllib.request.urlopen", side_effect=http_error),
             patch.object(auth, "VERCEL_BYPASS", ""),
-            pytest.raises(urllib.error.HTTPError),
+            pytest.raises(auth.FirewallAuthApiError) as exc_info,
         ):
             auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
+
+        assert exc_info.value.status == status
+        assert exc_info.value.code == code
+        assert str(exc_info.value) == message
+        assert exc_info.value.connectors == connectors
+        assert exc_info.value.failure_reason == expected_failure_reason
 
     @pytest.mark.parametrize(
         "error_body",
@@ -1232,6 +1350,27 @@ class TestFetchFirewallHeaders:
         ],
     )
     def test_malformed_http_error_envelope_reraises_http_error(self, error_body: bytes):
+        http_error = _http_error(
+            "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
+            400,
+            "Bad Request",
+            error_body,
+        )
+
+        with (
+            patch("auth.urllib.request.Request"),
+            patch("auth.urllib.request.urlopen", side_effect=http_error),
+            patch.object(auth, "VERCEL_BYPASS", ""),
+            pytest.raises(urllib.error.HTTPError) as exc_info,
+        ):
+            auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
+
+        assert exc_info.value is http_error
+
+    def test_unrecognized_error_envelope_reraises_http_error(self):
+        error_body = json.dumps(
+            {"error": {"message": "Bad Request", "code": "BAD_REQUEST"}}
+        ).encode()
         http_error = _http_error(
             "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
             400,
@@ -1338,13 +1477,25 @@ class TestFetchFirewallHeaders:
         mock_resp.__exit__.assert_called_once()  # urllib external boundary (#9991)
 
     @pytest.mark.parametrize(
-        "error_body",
+        ("error_body", "expected_exception"),
         [
-            json.dumps({"error": {"message": "Bad request", "code": "BAD_REQUEST"}}).encode(),
-            b"{}",
+            (
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Access token expired and refresh failed for: notion.",
+                            "code": "TOKEN_REFRESH_FAILED",
+                        }
+                    }
+                ).encode(),
+                auth.FirewallAuthApiError,
+            ),
+            (b"{}", urllib.error.HTTPError),
         ],
     )
-    def test_closes_http_error_response(self, error_body: bytes):
+    def test_closes_http_error_response(
+        self, error_body: bytes, expected_exception: type[Exception]
+    ):
         """HTTPError path must close the underlying socket — FD leak guard (#10475)."""
         http_error = _http_error(
             "https://api.vm0.ai/api/webhooks/agent/firewall/auth",
@@ -1358,7 +1509,7 @@ class TestFetchFirewallHeaders:
             patch("auth.urllib.request.Request"),
             patch("auth.urllib.request.urlopen", side_effect=http_error),
             patch.object(auth, "VERCEL_BYPASS", ""),
-            pytest.raises(urllib.error.HTTPError),
+            pytest.raises(expected_exception),
         ):
             auth._fetch_firewall_headers_sync("iv:tag:data", {}, "tok-xyz", "https://api.vm0.ai")
 

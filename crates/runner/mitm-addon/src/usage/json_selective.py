@@ -14,12 +14,17 @@ for keys such as ``includes.users`` and ``includes.tweets``.
 """
 
 import json
+import json.decoder
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 Path = tuple[str, ...]
 WildcardPath = tuple[str, ...]
 ScalarKind = Literal["string", "int"]
+_JsonStringScanner = Callable[[str, int, bool], tuple[str, int]]
+# `scanstring` is the stdlib JSON string scanner, but typeshed does not expose it.
+_SCAN_JSON_STRING = cast(_JsonStringScanner, vars(json.decoder)["scanstring"])
 _UNKNOWN_KEY = "\0__vm0_json_unknown_key__"
 _ARRAY_ELEMENT = "\0__vm0_json_array_element__"
 _INTERNAL_PATH_MARKERS = frozenset((_UNKNOWN_KEY, _ARRAY_ELEMENT))
@@ -105,6 +110,7 @@ class _StringState:
     max_bytes: int
     raw: bytearray | None
     escape: bool = False
+    has_escape: bool = False
     unicode_remaining: int = 0
     utf8_remaining: int = 0
     utf8_codepoint: int = 0
@@ -555,6 +561,7 @@ class JsonSelectiveExtractor:
                 self._accept_string_byte(state, b)
                 if self._error:
                     return i
+                state.has_escape = True
                 state.escape = True
                 continue
 
@@ -625,9 +632,11 @@ class JsonSelectiveExtractor:
             return
         try:
             value = (
-                _UNKNOWN_KEY if state.raw is None else json.loads(b'"' + bytes(state.raw) + b'"')
+                _UNKNOWN_KEY
+                if state.raw is None
+                else _decode_json_string(state.raw, has_escape=state.has_escape)
             )
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self._error = "invalid string"
             return
         if state.role == "key":
@@ -787,6 +796,18 @@ class JsonSelectiveExtractor:
 
 def _is_hex_byte(b: int) -> bool:
     return ord("0") <= b <= ord("9") or ord("a") <= b <= ord("f") or ord("A") <= b <= ord("F")
+
+
+def _decode_json_string(raw: bytearray, *, has_escape: bool) -> str:
+    text = raw.decode("utf-8")
+    if not has_escape:
+        return text
+
+    scan_input = f'{text}"'
+    value, end = _SCAN_JSON_STRING(scan_input, 0, True)
+    if end != len(scan_input):
+        raise ValueError("json string scanner did not consume full token")
+    return value
 
 
 def _is_json_value_start(b: int) -> bool:

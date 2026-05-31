@@ -119,7 +119,7 @@ export const zeroConnectorOauthStartContract = c.router({
     path: "/api/zero/connectors/:type/oauth/start",
     headers: authHeadersSchema,
     pathParams: z.object({ type: connectorTypeSchema }),
-    body: z.object({}).optional(),
+    body: z.object({ authMethod: connectorAuthMethodIdSchema }),
     responses: {
       200: connectorOauthStartResponseSchema,
       400: apiErrorSchema,
@@ -159,7 +159,7 @@ export const zeroConnectorOauthDeviceAuthSessionContract = c.router({
     path: "/api/zero/connectors/:type/oauth/device/sessions",
     headers: authHeadersSchema,
     pathParams: z.object({ type: connectorTypeSchema }),
-    body: z.object({}).optional(),
+    body: z.object({ authMethod: connectorAuthMethodIdSchema }),
     responses: {
       200: connectorOauthDeviceAuthSessionStartResponseSchema,
       400: apiErrorSchema,
@@ -239,7 +239,7 @@ export const zeroConnectorSessionsContract = c.router({
     path: "/api/zero/connectors/:type/sessions",
     headers: authHeadersSchema,
     pathParams: z.object({ type: connectorTypeSchema }),
-    body: z.object({}).optional(),
+    body: z.object({ authMethod: connectorAuthMethodIdSchema }),
     responses: {
       200: connectorSessionResponseSchema,
       400: apiErrorSchema,

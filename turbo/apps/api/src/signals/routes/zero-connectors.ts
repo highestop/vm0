@@ -13,12 +13,20 @@ import {
   zeroConnectorsMainContract,
   zeroConnectorsSearchContract,
 } from "@vm0/api-contracts/contracts/zero-connectors";
-import { connectorTypeSchema } from "@vm0/connectors/connectors";
-import { getConnectorAuthMethod } from "@vm0/connectors/connector-utils";
+import {
+  connectorAuthMethodIdSchema,
+  connectorTypeSchema,
+  type ConnectorAuthMethodId,
+  type ConnectorType,
+} from "@vm0/connectors/connectors";
+import {
+  getConnectorAuthMethod,
+  hasConnectorAuthCodeGrant,
+} from "@vm0/connectors/connector-utils";
 import { connectorOauthStates } from "@vm0/db/schema/connector-oauth-state";
 import { connectorSessions } from "@vm0/db/schema/connector-session";
 import { and, eq } from "drizzle-orm";
-import type { z } from "zod";
+import { z } from "zod";
 
 import {
   authContext$,
@@ -31,7 +39,7 @@ import { bodyResultOf, pathParamsOf, queryOf } from "../context/request";
 import { badRequestMessage, notFound } from "../../lib/error";
 import { optionalEnv } from "../../lib/env";
 import { nowDate } from "../../lib/time";
-import { writeDb$ } from "../external/db";
+import { writeDb$, type Db } from "../external/db";
 import {
   connectManualGrantConnector$,
   deleteZeroConnectorLocalState$,
@@ -58,7 +66,7 @@ import {
 import {
   buildResolvedConnectorAuthCodeAuthUrl,
   prepareResolvedConnectorAuthCodeStart,
-  resolveConnectorAuthCodeStartType,
+  resolveConnectorAuthCodeStartMethod,
 } from "./connector-auth-code-start";
 
 const CONNECTOR_SESSION_TTL_SECONDS = 15 * 60;
@@ -70,6 +78,12 @@ type ConnectorAuthorizeRoute = AppRoute & {
   readonly pathParams: z.ZodType<{ readonly type: string }>;
   readonly query: z.ZodType<{ readonly session?: string }>;
 };
+
+const connectorSessionIdSchema = z.uuid();
+
+type ResolvedAuthCodeStartMethod =
+  | ReturnType<typeof resolveConnectorAuthCodeStartMethod>
+  | { readonly ok: false; readonly reason: "missing_auth_code_grant" };
 
 const connectorReadAuth = {
   requireOrganization: true,
@@ -173,6 +187,110 @@ function connectorMissingAuthCodeGrantResponse(type: string) {
     },
     400,
   );
+}
+
+function connectorAuthCodeStartErrorMessage(
+  type: string,
+  authMethod: string,
+  reason:
+    | "missing_auth_code_grant"
+    | "missing_auth_method"
+    | "wrong_grant_kind",
+): string {
+  switch (reason) {
+    case "missing_auth_code_grant": {
+      return `${type} connector does not use an auth-code grant`;
+    }
+    case "missing_auth_method": {
+      return `${type} connector does not have ${authMethod} auth method`;
+    }
+    case "wrong_grant_kind": {
+      return `${type} ${authMethod} auth method does not use an auth-code grant`;
+    }
+  }
+}
+
+function connectorAuthorizeAuthCodeStartErrorResponse(
+  type: string,
+  reason:
+    | "invalid_session"
+    | "missing_auth_code_grant"
+    | "missing_auth_method"
+    | "wrong_grant_kind",
+) {
+  if (reason === "invalid_session") {
+    return jsonResponse({ error: "Invalid connector session" }, 400);
+  }
+  if (reason === "missing_auth_method" || reason === "wrong_grant_kind") {
+    return jsonResponse(
+      { error: "Invalid connector session auth method" },
+      500,
+    );
+  }
+  return connectorMissingAuthCodeGrantResponse(type);
+}
+
+function connectorAuthorizeMissingOrgResponse() {
+  return jsonResponse(
+    {
+      error: {
+        message: "Explicit org context required — ensure active org in session",
+        code: "BAD_REQUEST",
+      },
+    },
+    400,
+  );
+}
+
+function resolveRequestedAuthCodeStartMethod(
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+): ResolvedAuthCodeStartMethod {
+  if (!hasConnectorAuthCodeGrant(type)) {
+    return { ok: false, reason: "missing_auth_code_grant" };
+  }
+  return resolveConnectorAuthCodeStartMethod(type, authMethod);
+}
+
+async function resolveSessionAuthCodeStartMethod(args: {
+  readonly writeDb: Db;
+  readonly sessionId: string;
+  readonly type: ConnectorType;
+  readonly userId: string;
+}): Promise<
+  | ResolvedAuthCodeStartMethod
+  | { readonly ok: false; readonly reason: "invalid_session" }
+> {
+  const [session] = await args.writeDb
+    .select({
+      type: connectorSessions.type,
+      authMethod: connectorSessions.authMethod,
+      userId: connectorSessions.userId,
+      status: connectorSessions.status,
+      expiresAt: connectorSessions.expiresAt,
+    })
+    .from(connectorSessions)
+    .where(eq(connectorSessions.id, args.sessionId))
+    .limit(1);
+
+  if (
+    !session ||
+    session.type !== args.type ||
+    session.userId !== args.userId ||
+    session.status !== "pending" ||
+    session.expiresAt <= nowDate()
+  ) {
+    return { ok: false, reason: "invalid_session" };
+  }
+
+  const authMethodResult = connectorAuthMethodIdSchema.safeParse(
+    session.authMethod,
+  );
+  if (!authMethodResult.success) {
+    return { ok: false, reason: "missing_auth_method" };
+  }
+
+  return resolveRequestedAuthCodeStartMethod(args.type, authMethodResult.data);
 }
 
 function internalServerError(message: string) {
@@ -347,6 +465,14 @@ export function createAuthorizeConnectorInner(route: ConnectorAuthorizeRoute) {
     }
     const type = typeResult.data;
 
+    const sessionResult = query.session
+      ? connectorSessionIdSchema.safeParse(query.session)
+      : undefined;
+    if (!sessionResult?.success) {
+      return jsonResponse({ error: "Invalid connector session" }, 400);
+    }
+    const sessionId = sessionResult.data;
+
     const auth = await set(
       requiredAuthContext$,
       { requireOrganization: true },
@@ -366,28 +492,28 @@ export function createAuthorizeConnectorInner(route: ConnectorAuthorizeRoute) {
       return jsonResponse(auth.body, auth.status);
     }
 
-    const authCodeStartType = resolveConnectorAuthCodeStartType(type);
-    if (!authCodeStartType.ok) {
-      return connectorMissingAuthCodeGrantResponse(type);
-    }
-
     if (!auth.orgId) {
-      return jsonResponse(
-        {
-          error: {
-            message:
-              "Explicit org context required — ensure active org in session",
-            code: "BAD_REQUEST",
-          },
-        },
-        400,
-      );
+      return connectorAuthorizeMissingOrgResponse();
     }
 
     const availability = await get(
       userConnectorAvailability(auth.orgId, auth.userId),
     );
     signal.throwIfAborted();
+    const writeDb = set(writeDb$);
+    const authCodeStartType = await resolveSessionAuthCodeStartMethod({
+      writeDb,
+      sessionId,
+      type,
+      userId: auth.userId,
+    });
+    signal.throwIfAborted();
+    if (!authCodeStartType.ok) {
+      return connectorAuthorizeAuthCodeStartErrorResponse(
+        type,
+        authCodeStartType.reason,
+      );
+    }
     if (
       !availability.isAuthMethodAvailable(
         authCodeStartType.type,
@@ -421,12 +547,28 @@ export function createAuthorizeConnectorInner(route: ConnectorAuthorizeRoute) {
     );
     signal.throwIfAborted();
 
+    await writeDb.insert(connectorOauthStates).values({
+      state: prepared.state,
+      type: authCodeStartType.type,
+      authMethod: authCodeStartType.authMethod,
+      userId: auth.userId,
+      orgId: auth.orgId,
+      redirectUri: prepared.redirectUri,
+      sessionId,
+      codeVerifier: authResult.codeVerifier,
+      oauthContext: authResult.oauthContext,
+      expiresAt: new Date(
+        nowDate().getTime() + CONNECTOR_OAUTH_COOKIE_MAX_AGE_SECONDS * 1000,
+      ),
+    });
+    signal.throwIfAborted();
+
     return connectorOAuthStartRedirectResponse({
       url: authResult.url,
       state: prepared.state,
       codeVerifier: authResult.codeVerifier,
       oauthContext: authResult.oauthContext,
-      session: query.session,
+      session: sessionId,
     });
   });
 }
@@ -438,14 +580,28 @@ const authorizeConnectorInner$ = createAuthorizeConnectorInner(
 const startConnectorOauthInner$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     const params = get(pathParamsOf(zeroConnectorOauthStartContract.start));
+    const bodyResult = await get(
+      bodyResultOf(zeroConnectorOauthStartContract.start),
+    );
+    signal.throwIfAborted();
+    if (!bodyResult.ok) {
+      return bodyResult.response;
+    }
     const request = get(request$).raw;
     const auth = get(authContext$);
     const type = params.type;
 
-    const authCodeStartType = resolveConnectorAuthCodeStartType(type);
+    const authCodeStartType = resolveRequestedAuthCodeStartMethod(
+      type,
+      bodyResult.data.authMethod,
+    );
     if (!authCodeStartType.ok) {
       return badRequestMessage(
-        `${type} connector does not use an auth-code grant`,
+        connectorAuthCodeStartErrorMessage(
+          type,
+          bodyResult.data.authMethod,
+          authCodeStartType.reason,
+        ),
       );
     }
 
@@ -497,6 +653,7 @@ const startConnectorOauthInner$ = command(
     await writeDb.insert(connectorOauthStates).values({
       state: prepared.state,
       type: authCodeStartType.type,
+      authMethod: authCodeStartType.authMethod,
       userId: auth.userId,
       orgId: auth.orgId,
       redirectUri: prepared.redirectUri,
@@ -521,10 +678,25 @@ const createConnectorSessionInner$ = command(
   async ({ get, set }, signal: AbortSignal) => {
     const auth = get(organizationAuthContext$);
     const params = get(pathParamsOf(zeroConnectorSessionsContract.create));
-    const authCodeStartType = resolveConnectorAuthCodeStartType(params.type);
+    const bodyResult = await get(
+      bodyResultOf(zeroConnectorSessionsContract.create),
+    );
+    signal.throwIfAborted();
+    if (!bodyResult.ok) {
+      return bodyResult.response;
+    }
+
+    const authCodeStartType = resolveRequestedAuthCodeStartMethod(
+      params.type,
+      bodyResult.data.authMethod,
+    );
     if (!authCodeStartType.ok) {
       return badRequestMessage(
-        `${params.type} connector does not use an auth-code grant`,
+        connectorAuthCodeStartErrorMessage(
+          params.type,
+          bodyResult.data.authMethod,
+          authCodeStartType.reason,
+        ),
       );
     }
 
@@ -552,6 +724,7 @@ const createConnectorSessionInner$ = command(
       .values({
         code,
         type: authCodeStartType.type,
+        authMethod: authCodeStartType.authMethod,
         userId: auth.userId,
         status: "pending",
         expiresAt,

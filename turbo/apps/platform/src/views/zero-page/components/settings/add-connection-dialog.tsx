@@ -80,12 +80,19 @@ type SubmitManualGrantFn = (
 
 type ConnectOAuthAuthCodeAndSettleFn = (
   type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
   onSuccess: () => void | Promise<void>,
   options: PostConnectOptions,
   signal: AbortSignal,
 ) => Promise<void>;
 
-type ConnectOAuthDeviceAuthAndSettleFn = ConnectOAuthAuthCodeAndSettleFn;
+type ConnectOAuthDeviceAuthAndSettleFn = (
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+  onSuccess: () => void | Promise<void>,
+  options: PostConnectOptions,
+  signal: AbortSignal,
+) => Promise<void>;
 
 type ConnectModalContentProps = {
   item: ConnectorTypeWithStatus;
@@ -128,6 +135,17 @@ function connectorOAuthDeviceAuthFlowIsActive(
       state.status === "pending" ||
       state.status === "polling")
   );
+}
+
+function connectorOAuthDeviceAuthStateForMethod(
+  state: ConnectorOAuthDeviceAuthState,
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+): ConnectorOAuthDeviceAuthState | null {
+  if (state.connectorType !== type || state.status === "idle") {
+    return null;
+  }
+  return state.authMethod === authMethod ? state : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,11 +271,13 @@ function getOAuthAuthCodeProgressContent({
 
 function OAuthAuthCodeConnectButton({
   item,
+  authMethod,
   onSuccess,
   showPermissionDialogOnConnect,
   connectOAuthAuthCodeAndSettle,
   signal,
 }: ConnectModalContentProps & {
+  authMethod: ConnectorAuthMethodId;
   connectOAuthAuthCodeAndSettle: ConnectOAuthAuthCodeAndSettleFn;
   signal: AbortSignal;
 }) {
@@ -268,6 +288,7 @@ function OAuthAuthCodeConnectButton({
         return detach(
           connectOAuthAuthCodeAndSettle(
             item.type,
+            authMethod,
             onSuccess,
             {
               showPermissionDialog: showPermissionDialogOnConnect,
@@ -288,6 +309,7 @@ function OAuthAuthCodeConnectMethodContent(props: ConnectMethodContentProps) {
   return (
     <OAuthAuthCodeConnectButton
       item={props.item}
+      authMethod={props.authMethod}
       onSuccess={props.onSuccess}
       showPermissionDialogOnConnect={props.showPermissionDialogOnConnect}
       connectOAuthAuthCodeAndSettle={props.connectOAuthAuthCodeAndSettle}
@@ -371,12 +393,17 @@ function OAuthDeviceAuthConnectMethodContent(props: ConnectMethodContentProps) {
   const openVerificationPage = useSet(
     openConnectorOAuthDeviceAuthVerificationPage$,
   );
-  const current = state.connectorType === props.item.type ? state : null;
+  const current = connectorOAuthDeviceAuthStateForMethod(
+    state,
+    props.item.type,
+    props.authMethod,
+  );
   const starting = current?.status === "starting";
 
   const start = onDomEventFn(async () => {
     await props.connectOAuthDeviceAuthAndSettle(
       props.item.type,
+      props.authMethod,
       props.onSuccess,
       {
         showPermissionDialog: props.showPermissionDialogOnConnect,
@@ -396,7 +423,7 @@ function OAuthDeviceAuthConnectMethodContent(props: ConnectMethodContentProps) {
       <OAuthDeviceAuthCodePanel
         state={current}
         onOpenVerificationPage={() => {
-          openVerificationPage(props.item.type);
+          openVerificationPage(props.item.type, props.authMethod);
         }}
       />
     );
@@ -631,7 +658,7 @@ function ConnectModalContent({
   onSuccess,
   showPermissionDialogOnConnect,
 }: ConnectModalContentProps) {
-  const [settleLoadable, connectOAuthAuthCodeAndSettle] = useLoadableSet(
+  const [settleLoadable, connectOAuthAuthCodeAndSettleCommand] = useLoadableSet(
     connectConnectorOAuthAuthCodeAndSettle$,
   );
   const [, connectOAuthDeviceAuthAndSettle] = useLoadableSet(
@@ -661,6 +688,25 @@ function ConnectModalContent({
   const onConnectSuccess = async () => {
     await runConnectSuccess(item.type, onSuccess, pageSignal);
   };
+  const connectOAuthAuthCodeAndSettle: ConnectOAuthAuthCodeAndSettleFn = async (
+    type,
+    authMethod,
+    connectSuccess,
+    options,
+    signal,
+  ) => {
+    await connectOAuthAuthCodeAndSettleCommand(
+      { type, authMethod, onSuccess: connectSuccess, options },
+      signal,
+    );
+  };
+  const connectOAuthDeviceAuthAndSettleCommandFn: ConnectOAuthDeviceAuthAndSettleFn =
+    async (type, authMethod, connectSuccess, options, signal) => {
+      await connectOAuthDeviceAuthAndSettle(
+        { type, authMethod, onSuccess: connectSuccess, options },
+        signal,
+      );
+    };
 
   const progressContent =
     hasAuthCodeGrant(item.type, item.availableAuthMethods) &&
@@ -680,7 +726,7 @@ function ConnectModalContent({
       onSuccess={onConnectSuccess}
       showPermissionDialogOnConnect={showPermissionDialogOnConnect}
       connectOAuthAuthCodeAndSettle={connectOAuthAuthCodeAndSettle}
-      connectOAuthDeviceAuthAndSettle={connectOAuthDeviceAuthAndSettle}
+      connectOAuthDeviceAuthAndSettle={connectOAuthDeviceAuthAndSettleCommandFn}
       submitManualGrant={submitManualGrant}
       manualGrantSubmitting={manualGrantSubmitting}
       signal={pageSignal}

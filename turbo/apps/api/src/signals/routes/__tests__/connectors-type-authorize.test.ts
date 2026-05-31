@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 
+import type { ConnectorAuthMethodId } from "@vm0/connectors/connectors";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
+import { connectorOauthStates } from "@vm0/db/schema/connector-oauth-state";
+import { connectorSessions } from "@vm0/db/schema/connector-session";
 import { userFeatureSwitches } from "@vm0/db/schema/user-feature-switches";
 import { createStore } from "ccstate";
-import { eq } from "drizzle-orm";
-import { describe, expect, it, beforeEach } from "vitest";
+import { eq, like } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../../app-factory";
 import { mockEnv, mockOptionalEnv } from "../../../lib/env";
+import { nowDate } from "../../../lib/time";
 import { testContext } from "../../../__tests__/test-helpers";
 import { writeDb$ } from "../../external/db";
 import { createZeroRouteMocks } from "./helpers/zero-route-test";
@@ -17,6 +21,7 @@ const store = createStore();
 const mocks = createZeroRouteMocks(context);
 
 const BASE_URL = "https://app.vm0.test";
+const AUTH_REQUEST_USER_ID_PREFIX = "user_connectors_type_authorize_";
 
 function authorizeUrl(type: string, session?: string): string {
   const url = new URL(`/api/connectors/${type}/authorize`, BASE_URL);
@@ -32,13 +37,24 @@ function sessionHeaders(): HeadersInit {
 
 async function requestAuthorize(
   type: string,
-  options: { readonly session?: string; readonly authenticated?: boolean } = {},
+  options: {
+    readonly session?: string;
+    readonly authenticated?: boolean;
+    readonly withSession?: boolean;
+  } = {},
 ): Promise<Response> {
+  const userId = `${AUTH_REQUEST_USER_ID_PREFIX}${randomUUID()}`;
   if (options.authenticated) {
-    mocks.clerk.session(`user_${randomUUID()}`, `org_${randomUUID()}`);
+    const orgId = `org_${randomUUID()}`;
+    mocks.clerk.session(userId, orgId);
   }
+  const session =
+    options.session ??
+    (options.authenticated && options.withSession !== false
+      ? await createPendingConnectorSession({ userId, type })
+      : undefined);
   const app = createApp({ signal: context.signal });
-  return await app.request(authorizeUrl(type, options.session), {
+  return await app.request(authorizeUrl(type, session), {
     method: "GET",
     headers: options.authenticated ? sessionHeaders() : undefined,
   });
@@ -48,7 +64,7 @@ async function requestAuthorizeWithFeature(
   type: string,
   featureKey: FeatureSwitchKey,
 ): Promise<Response> {
-  const userId = `user_${randomUUID()}`;
+  const userId = `${AUTH_REQUEST_USER_ID_PREFIX}${randomUUID()}`;
   const orgId = `org_${randomUUID()}`;
   const db = store.set(writeDb$);
   await db.insert(userFeatureSwitches).values({
@@ -56,9 +72,10 @@ async function requestAuthorizeWithFeature(
     userId,
     switches: { [featureKey]: true },
   });
+  const sessionId = await createPendingConnectorSession({ userId, type });
   mocks.clerk.session(userId, orgId);
   const app = createApp({ signal: context.signal });
-  const response = await app.request(authorizeUrl(type), {
+  const response = await app.request(authorizeUrl(type, sessionId), {
     method: "GET",
     headers: sessionHeaders(),
   });
@@ -66,6 +83,29 @@ async function requestAuthorizeWithFeature(
     .delete(userFeatureSwitches)
     .where(eq(userFeatureSwitches.orgId, orgId));
   return response;
+}
+
+async function createPendingConnectorSession(args: {
+  readonly userId: string;
+  readonly type?: string;
+  readonly authMethod?: ConnectorAuthMethodId;
+}): Promise<string> {
+  const [session] = await store
+    .set(writeDb$)
+    .insert(connectorSessions)
+    .values({
+      code: `${randomUUID().slice(0, 4).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`,
+      type: args.type ?? "github",
+      authMethod: args.authMethod ?? "oauth",
+      userId: args.userId,
+      status: "pending",
+      expiresAt: new Date(nowDate().getTime() + 600_000),
+    })
+    .returning({ id: connectorSessions.id });
+  if (!session) {
+    throw new Error("Failed to create connector session");
+  }
+  return session.id;
 }
 
 describe("GET /api/connectors/:type/authorize", () => {
@@ -93,6 +133,18 @@ describe("GET /api/connectors/:type/authorize", () => {
     mockOptionalEnv("X_OAUTH_CLIENT_SECRET", "x-test-client-secret");
   });
 
+  afterEach(async () => {
+    const db = store.set(writeDb$);
+    await db
+      .delete(connectorOauthStates)
+      .where(
+        like(connectorOauthStates.userId, `${AUTH_REQUEST_USER_ID_PREFIX}%`),
+      );
+    await db
+      .delete(connectorSessions)
+      .where(like(connectorSessions.userId, `${AUTH_REQUEST_USER_ID_PREFIX}%`));
+  });
+
   it("returns 400 for an unknown connector type", async () => {
     const response = await requestAuthorize("invalid");
 
@@ -102,15 +154,20 @@ describe("GET /api/connectors/:type/authorize", () => {
     });
   });
 
-  it("redirects unauthenticated users to sign-in with the direct route", async () => {
-    const response = await requestAuthorize("github");
+  it("redirects unauthenticated users to sign-in with a pending connector session", async () => {
+    const sessionId = await createPendingConnectorSession({
+      userId: `${AUTH_REQUEST_USER_ID_PREFIX}${randomUUID()}`,
+    });
+    const response = await requestAuthorize("github", { session: sessionId });
 
     expect(response.status).toBe(307);
     const location = response.headers.get("location");
     expect(location).not.toBeNull();
     const url = new URL(location!);
     expect(url.pathname).toBe("/sign-in");
-    expect(url.searchParams.get("redirect_url")).toBe(authorizeUrl("github"));
+    expect(url.searchParams.get("redirect_url")).toBe(
+      authorizeUrl("github", sessionId),
+    );
   });
 
   it("redirects to GitHub OAuth with the direct callback URI", async () => {
@@ -148,28 +205,34 @@ describe("GET /api/connectors/:type/authorize", () => {
   });
 
   it("stores the connector session id when provided", async () => {
-    const response = await requestAuthorize("github", {
-      authenticated: true,
-      session: "session-123",
+    const userId = `${AUTH_REQUEST_USER_ID_PREFIX}${randomUUID()}`;
+    const orgId = `org_${randomUUID()}`;
+    mocks.clerk.session(userId, orgId);
+    const sessionId = await createPendingConnectorSession({ userId });
+    const app = createApp({ signal: context.signal });
+    const response = await app.request(authorizeUrl("github", sessionId), {
+      method: "GET",
+      headers: sessionHeaders(),
     });
 
     const cookies = response.headers.getSetCookie();
     expect(
       cookies.some((cookie) => {
-        return cookie.startsWith("connector_oauth_session=session-123");
+        return cookie.startsWith(`connector_oauth_session=${sessionId}`);
       }),
     ).toBeTruthy();
   });
 
-  it("does not set a session cookie when the query parameter is absent", async () => {
-    const response = await requestAuthorize("github", { authenticated: true });
+  it("rejects authorization without a pending connector session", async () => {
+    const response = await requestAuthorize("github", {
+      authenticated: true,
+      withSession: false,
+    });
 
-    const cookies = response.headers.getSetCookie();
-    expect(
-      cookies.some((cookie) => {
-        return cookie.startsWith("connector_oauth_session=");
-      }),
-    ).toBeFalsy();
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toStrictEqual({
+      error: "Invalid connector session",
+    });
   });
 
   it("rejects feature-disabled direct OAuth authorization", async () => {

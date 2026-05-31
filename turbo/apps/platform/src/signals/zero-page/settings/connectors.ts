@@ -139,6 +139,18 @@ export function getConnectorConnectLaunchMode({
   return "oauth-auth-code";
 }
 
+export function getConnectorAuthCodeConnectMethod(
+  type: ConnectorType,
+  availableAuthMethods: readonly ConnectorAuthMethodId[],
+): ConnectorAuthMethodId | null {
+  for (const authMethod of availableAuthMethods) {
+    if (getConnectorAuthMethod(type, authMethod)?.grant.kind === "auth-code") {
+      return authMethod;
+    }
+  }
+  return null;
+}
+
 function buildConnectorTypeStatus(params: {
   readonly type: ConnectorType;
   readonly connector: ConnectorResponse | null;
@@ -415,6 +427,7 @@ const internalSelectedConnectorType$ = state<ConnectorType | null>(null);
 
 type ActiveConnectorOAuthDeviceAuthState = {
   readonly connectorType: ConnectorType;
+  readonly authMethod: ConnectorAuthMethodId;
   readonly requestId: string;
   readonly sessionId: string;
   readonly sessionToken: string;
@@ -435,6 +448,7 @@ export type ConnectorOAuthDeviceAuthState =
   | {
       readonly status: "starting";
       readonly connectorType: ConnectorType;
+      readonly authMethod: ConnectorAuthMethodId;
       readonly requestId: string;
     }
   | (ActiveConnectorOAuthDeviceAuthState & {
@@ -442,7 +456,8 @@ export type ConnectorOAuthDeviceAuthState =
     })
   | {
       readonly status: "denied" | "expired" | "error";
-      readonly connectorType: ConnectorType | null;
+      readonly connectorType: ConnectorType;
+      readonly authMethod: ConnectorAuthMethodId;
       readonly message: string;
     };
 
@@ -768,6 +783,7 @@ const OAUTH_DEVICE_AUTH_MIN_POLL_INTERVAL_MS = IN_VITEST ? 10 : 1000;
 
 type PollConnectorOAuthDeviceAuthArgs = {
   readonly type: ConnectorType;
+  readonly authMethod: ConnectorAuthMethodId;
   readonly requestId: string;
   readonly createClient: ZeroClientFactory;
   readonly options: PostConnectOptions;
@@ -806,6 +822,7 @@ function getOAuthDeviceAuthTerminalMessage(
 function isCurrentConnectorOAuthDeviceAuthRequest(
   state: ConnectorOAuthDeviceAuthState,
   type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
   requestId: string,
 ): state is ActiveConnectorOAuthDeviceAuthState & {
   readonly status: "pending" | "polling";
@@ -813,6 +830,7 @@ function isCurrentConnectorOAuthDeviceAuthRequest(
   return (
     (state.status === "pending" || state.status === "polling") &&
     state.connectorType === type &&
+    state.authMethod === authMethod &&
     state.requestId === requestId
   );
 }
@@ -826,11 +844,16 @@ export const clearConnectorOAuthDeviceAuth$ = command(({ set }) => {
 });
 
 export const openConnectorOAuthDeviceAuthVerificationPage$ = command(
-  ({ get, set }, type: ConnectorType): boolean => {
+  (
+    { get, set },
+    type: ConnectorType,
+    authMethod: ConnectorAuthMethodId,
+  ): boolean => {
     const current = get(internalConnectorOAuthDeviceAuthState$);
     if (
       (current.status !== "pending" && current.status !== "polling") ||
-      current.connectorType !== type
+      current.connectorType !== type ||
+      current.authMethod !== authMethod
     ) {
       return false;
     }
@@ -862,6 +885,7 @@ const pollConnectorOAuthDeviceAuth$ = command(
     { get, set },
     {
       type,
+      authMethod,
       requestId,
       createClient,
       options,
@@ -869,15 +893,21 @@ const pollConnectorOAuthDeviceAuth$ = command(
     signal: AbortSignal,
   ): Promise<boolean> => {
     const client = createClient(zeroConnectorOauthDeviceAuthSessionContract);
+    const isCurrentRequest = (state: ConnectorOAuthDeviceAuthState) => {
+      return isCurrentConnectorOAuthDeviceAuthRequest(
+        state,
+        type,
+        authMethod,
+        requestId,
+      );
+    };
     let completed = false;
     let expired = false;
 
     await setLoop(
       async (sig) => {
         const current = get(internalConnectorOAuthDeviceAuthState$);
-        if (
-          !isCurrentConnectorOAuthDeviceAuthRequest(current, type, requestId)
-        ) {
+        if (!isCurrentRequest(current)) {
           return true;
         }
 
@@ -921,9 +951,7 @@ const pollConnectorOAuthDeviceAuth$ = command(
             };
 
         const latest = get(internalConnectorOAuthDeviceAuthState$);
-        if (
-          !isCurrentConnectorOAuthDeviceAuthRequest(latest, type, requestId)
-        ) {
+        if (!isCurrentRequest(latest)) {
           return true;
         }
 
@@ -944,6 +972,7 @@ const pollConnectorOAuthDeviceAuth$ = command(
           set(internalConnectorOAuthDeviceAuthState$, {
             status: pollResult.status,
             connectorType: type,
+            authMethod,
             message: getOAuthDeviceAuthTerminalMessage(pollResult),
           });
           return true;
@@ -974,13 +1003,11 @@ const pollConnectorOAuthDeviceAuth$ = command(
     );
 
     const latest = get(internalConnectorOAuthDeviceAuthState$);
-    if (
-      expired &&
-      isCurrentConnectorOAuthDeviceAuthRequest(latest, type, requestId)
-    ) {
+    if (expired && isCurrentRequest(latest)) {
       set(internalConnectorOAuthDeviceAuthState$, {
         status: "expired",
         connectorType: type,
+        authMethod,
         message: "Connection session expired. Start again to retry.",
       });
     }
@@ -992,12 +1019,14 @@ export const connectConnectorOAuthDeviceAuth$ = command(
   async (
     { get, set },
     type: ConnectorType,
+    authMethod: ConnectorAuthMethodId,
     options: PostConnectOptions,
     signal: AbortSignal,
   ): Promise<boolean> => {
     if (!hasConnectorDeviceAuthGrant(type)) {
       throw new Error(`${type} does not use device authorization OAuth`);
     }
+    assertConnectorUsesDeviceAuthMethod(type, authMethod);
 
     const flow = createConnectorConnectFlowState(type);
     set(internalConnectFlowState$, flow);
@@ -1012,6 +1041,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
         set(internalConnectorOAuthDeviceAuthState$, {
           status: "starting",
           connectorType: type,
+          authMethod,
           requestId,
         });
 
@@ -1023,7 +1053,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
           accept(
             client.create({
               params: { type },
-              body: {},
+              body: { authMethod },
               fetchOptions: { signal: flowSignal },
             }),
             [200],
@@ -1039,6 +1069,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
           set(internalConnectorOAuthDeviceAuthState$, {
             status: "error",
             connectorType: type,
+            authMethod,
             message: oauthDeviceAuthErrorMessage(startSettled.error),
           });
         }
@@ -1050,6 +1081,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
         set(internalConnectorOAuthDeviceAuthState$, {
           status: "pending",
           connectorType: type,
+          authMethod,
           requestId,
           sessionId: startResult.sessionId,
           sessionToken: startResult.sessionToken,
@@ -1070,6 +1102,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
           pollConnectorOAuthDeviceAuth$,
           {
             type,
+            authMethod,
             requestId,
             createClient,
             options,
@@ -1089,6 +1122,7 @@ export const connectConnectorOAuthDeviceAuth$ = command(
             (current.status !== "starting" &&
               current.status !== "pending" &&
               current.status !== "polling") ||
+            current.authMethod !== authMethod ||
             current.requestId !== requestId
           ) {
             return current;
@@ -1103,19 +1137,23 @@ export const connectConnectorOAuthDeviceAuth$ = command(
 export const connectConnectorOAuthDeviceAuthAndSettle$ = command(
   async (
     { set },
-    type: ConnectorType,
-    onSuccess: () => void | Promise<void>,
-    options: PostConnectOptions,
+    args: {
+      readonly type: ConnectorType;
+      readonly authMethod: ConnectorAuthMethodId;
+      readonly onSuccess: () => void | Promise<void>;
+      readonly options: PostConnectOptions;
+    },
     signal: AbortSignal,
   ): Promise<void> => {
     const connected = await set(
       connectConnectorOAuthDeviceAuth$,
-      type,
-      options,
+      args.type,
+      args.authMethod,
+      args.options,
       signal,
     );
     if (connected) {
-      await onSuccess();
+      await args.onSuccess();
     }
   },
 );
@@ -1197,15 +1235,40 @@ const resetOAuthAuthCodeConnectorPopupSignal$ = resetSignal();
 // Connect command
 // ---------------------------------------------------------------------------
 
-function assertConnectorUsesOAuthAuthCode(type: ConnectorType): void {
-  if (!hasConnectorAuthCodeGrant(type)) {
-    throw new Error(`${type} does not use an auth-code grant`);
+function assertConnectorUsesAuthCodeMethod(
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+): void {
+  const method = getConnectorAuthMethod(type, authMethod);
+  if (!method) {
+    throw new Error(`${type} does not have ${authMethod} auth method`);
+  }
+  if (method.grant.kind !== "auth-code") {
+    throw new Error(`${type} ${authMethod} does not use an auth-code grant`);
+  }
+}
+
+function assertConnectorUsesDeviceAuthMethod(
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+): void {
+  const method = getConnectorAuthMethod(type, authMethod);
+  if (!method) {
+    throw new Error(`${type} does not have ${authMethod} auth method`);
+  }
+  if (method.grant.kind !== "device-auth") {
+    throw new Error(`${type} ${authMethod} does not use a device-auth grant`);
   }
 }
 
 const openConnectorOAuthAuthCodeWindow$ = command(
-  async ({ get }, type: ConnectorType, signal: AbortSignal) => {
-    assertConnectorUsesOAuthAuthCode(type);
+  async (
+    { get },
+    type: ConnectorType,
+    authMethod: ConnectorAuthMethodId,
+    signal: AbortSignal,
+  ) => {
+    assertConnectorUsesAuthCodeMethod(type, authMethod);
 
     const standalone = isStandaloneMode();
 
@@ -1224,7 +1287,7 @@ const openConnectorOAuthAuthCodeWindow$ = command(
     const startResult = await accept(
       startClient.start({
         params: { type },
-        body: {},
+        body: { authMethod },
         fetchOptions: { signal },
       }),
       [200],
@@ -1245,10 +1308,11 @@ export const connectConnectorOAuthAuthCode$ = command(
   async (
     { get, set },
     type: ConnectorType,
+    authMethod: ConnectorAuthMethodId,
     options: PostConnectOptions,
     signal: AbortSignal,
   ) => {
-    assertConnectorUsesOAuthAuthCode(type);
+    assertConnectorUsesAuthCodeMethod(type, authMethod);
 
     const flow = createConnectorConnectFlowState(type);
     set(internalConnectFlowState$, flow);
@@ -1259,6 +1323,7 @@ export const connectConnectorOAuthAuthCode$ = command(
         const authWindow = await set(
           openConnectorOAuthAuthCodeWindow$,
           type,
+          authMethod,
           signal,
         );
         signal.throwIfAborted();
@@ -1397,19 +1462,23 @@ export const connectConnectorOAuthAuthCode$ = command(
 export const connectConnectorOAuthAuthCodeAndSettle$ = command(
   async (
     { set },
-    type: ConnectorType,
-    onSuccess: () => void | Promise<void>,
-    options: PostConnectOptions,
+    args: {
+      readonly type: ConnectorType;
+      readonly authMethod: ConnectorAuthMethodId;
+      readonly onSuccess: () => void | Promise<void>;
+      readonly options: PostConnectOptions;
+    },
     signal: AbortSignal,
   ): Promise<void> => {
     const connected = await set(
       connectConnectorOAuthAuthCode$,
-      type,
-      options,
+      args.type,
+      args.authMethod,
+      args.options,
       signal,
     );
     if (connected) {
-      await onSuccess();
+      await args.onSuccess();
     }
   },
 );

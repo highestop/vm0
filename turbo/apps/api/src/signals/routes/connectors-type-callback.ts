@@ -1,6 +1,7 @@
 import { command } from "ccstate";
 import { connectorsTypeCallbackContract } from "@vm0/api-contracts/contracts/connectors-type-callback";
 import {
+  connectorAuthMethodHasGrantKind,
   getConnectorAuthMethod,
   resolveConnectorAuthClientForMethod,
   getConnectorAuthMethodGrantScopes,
@@ -10,7 +11,7 @@ import {
   connectorAuthMethodIdSchema,
   connectorTypeSchema,
   type AuthCodeGrantConnectorType,
-  type ConnectorAuthMethodId,
+  type ConnectorAuthCodeGrantAuthMethodId,
 } from "@vm0/connectors/connectors";
 import {
   exchangeConnectorAuthCode,
@@ -53,7 +54,7 @@ type CallbackIdentity = {
 
 type CompleteOAuthCallbackInput = {
   readonly connectorType: AuthCodeGrantConnectorType;
-  readonly authMethod: ConnectorAuthMethodId;
+  readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
   readonly code: string;
   readonly redirectUri: string;
   readonly state: string;
@@ -77,7 +78,7 @@ type ResolvedCallbackState =
       readonly ok: true;
       readonly identity: CallbackIdentity;
       readonly sessionId: string | undefined;
-      readonly authMethod: ConnectorAuthMethodId;
+      readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
       readonly codeVerifier: string | undefined;
       readonly oauthContext: string | undefined;
       readonly redirectUri: string;
@@ -146,7 +147,7 @@ function missingStateRedirectResponse(origin: string, type: string): Response {
 
 async function exchangeTokenForConnector(args: {
   readonly connectorType: AuthCodeGrantConnectorType;
-  readonly authMethod: ConnectorAuthMethodId;
+  readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
   readonly code: string;
   readonly redirectUri: string;
   readonly state: string | undefined;
@@ -164,6 +165,7 @@ async function exchangeTokenForConnector(args: {
 
   return await exchangeConnectorAuthCode({
     type: args.connectorType,
+    authMethod: args.authMethod,
     authClient,
     code: args.code,
     redirectUri: args.redirectUri,
@@ -175,7 +177,7 @@ async function exchangeTokenForConnector(args: {
 
 function getRequestedScopes(
   connectorType: AuthCodeGrantConnectorType,
-  authMethod: ConnectorAuthMethodId,
+  authMethod: ConnectorAuthCodeGrantAuthMethodId,
 ): readonly string[] {
   return getConnectorAuthMethodGrantScopes(connectorType, authMethod);
 }
@@ -314,7 +316,10 @@ function validateStoredAuthCodeMethod(args: {
   readonly origin: string;
   readonly type: string;
 }):
-  | { readonly ok: true; readonly authMethod: ConnectorAuthMethodId }
+  | {
+      readonly ok: true;
+      readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
+    }
   | { readonly ok: false; readonly response: Response } {
   const authMethodResult = connectorAuthMethodIdSchema.safeParse(
     args.authMethod,
@@ -330,7 +335,19 @@ function validateStoredAuthCodeMethod(args: {
     args.connectorType,
     authMethodResult.data,
   );
-  if (!method || method.grant.kind !== "auth-code") {
+  if (!method) {
+    return {
+      ok: false,
+      response: invalidStoredAuthMethodResponse(args.origin, args.type),
+    };
+  }
+  if (
+    !connectorAuthMethodHasGrantKind(
+      args.connectorType,
+      authMethodResult.data,
+      "auth-code",
+    )
+  ) {
     return {
       ok: false,
       response: invalidStoredAuthMethodResponse(args.origin, args.type),
@@ -348,7 +365,10 @@ async function resolveTrustedCallbackAuthMethod(args: {
   readonly type: string;
   readonly signal: AbortSignal;
 }): Promise<
-  | { readonly ok: true; readonly authMethod: ConnectorAuthMethodId }
+  | {
+      readonly ok: true;
+      readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
+    }
   | { readonly ok: false; readonly response: Response }
 > {
   const storedAuthMethod = validateStoredAuthCodeMethod({

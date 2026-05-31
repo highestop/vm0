@@ -1,4 +1,5 @@
 import {
+  connectorAuthMethodHasGrantKind,
   getConnectorAuthMethod,
   resolveConnectorAuthClientForMethod,
   type ConnectorAuthClient,
@@ -6,6 +7,7 @@ import {
 } from "@vm0/connectors/connector-utils";
 import type {
   AuthCodeGrantConnectorType,
+  ConnectorAuthCodeGrantAuthMethodId,
   ConnectorAuthMethodId,
 } from "@vm0/connectors/connectors";
 import {
@@ -31,7 +33,7 @@ type ResolveConnectorAuthCodeStartMethodResult =
   | {
       readonly ok: true;
       readonly type: AuthCodeGrantConnectorType;
-      readonly authMethod: ConnectorAuthMethodId;
+      readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
     }
   | {
       readonly ok: false;
@@ -50,7 +52,7 @@ export function resolveConnectorAuthCodeStartMethod(
   if (!method) {
     return { ok: false, reason: "missing_auth_method" };
   }
-  if (method.grant.kind !== "auth-code") {
+  if (!connectorAuthMethodHasGrantKind(type, authMethod, "auth-code")) {
     return { ok: false, reason: "wrong_grant_kind" };
   }
 
@@ -61,7 +63,7 @@ export function resolveConnectorAuthCodeStartMethod(
 // the selected auth method for this auth-code flow.
 export function prepareResolvedConnectorAuthCodeStart(args: {
   readonly type: AuthCodeGrantConnectorType;
-  readonly authMethod: ConnectorAuthMethodId;
+  readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
   readonly origin: string;
   readonly readEnv: ConnectorEnvReader;
 }): PrepareResolvedConnectorAuthCodeStartResult {
@@ -86,6 +88,7 @@ export function prepareResolvedConnectorAuthCodeStart(args: {
 
 export async function buildResolvedConnectorAuthCodeAuthUrl(args: {
   readonly type: AuthCodeGrantConnectorType;
+  readonly authMethod: ConnectorAuthCodeGrantAuthMethodId;
   readonly authClient: ConnectorAuthClient;
   readonly redirectUri: string;
   readonly state: string;
@@ -93,6 +96,7 @@ export async function buildResolvedConnectorAuthCodeAuthUrl(args: {
   return normalizeAuthUrlResult(
     await buildConnectorAuthCodeAuthorizationUrl({
       type: args.type,
+      authMethod: args.authMethod,
       authClient: args.authClient,
       redirectUri: args.redirectUri,
       state: args.state,

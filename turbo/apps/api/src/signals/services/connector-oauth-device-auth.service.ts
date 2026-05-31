@@ -8,10 +8,12 @@ import type {
 import {
   connectorAuthMethodIdSchema,
   type ConnectorAuthMethodId,
+  type ConnectorDeviceAuthGrantAuthMethodId,
   type ConnectorType,
   type DeviceAuthGrantConnectorType,
 } from "@vm0/connectors/connectors";
 import {
+  connectorAuthMethodHasGrantKind,
   getConnectorAuthMethod,
   resolveConnectorAuthClientForMethod,
   hasConnectorAuthCodeGrant,
@@ -87,6 +89,7 @@ type PollClaimedSessionArgs = {
   readonly orgId: string;
   readonly userId: string;
   readonly type: DeviceAuthGrantConnectorType;
+  readonly authMethod: ConnectorDeviceAuthGrantAuthMethodId;
   readonly authClient: ConnectorAuthClient;
   readonly session: DeviceAuthSessionRow;
   readonly claimStartedAt: Date;
@@ -102,7 +105,7 @@ type ResolvedDeviceAuthType = {
 
 type ResolvedDeviceAuthMethod = {
   readonly type: DeviceAuthGrantConnectorType;
-  readonly authMethod: ConnectorAuthMethodId;
+  readonly authMethod: ConnectorDeviceAuthGrantAuthMethodId;
 };
 
 const connectorOauthDeviceAuthDisabled = Object.freeze({
@@ -222,7 +225,13 @@ function resolveDeviceAuthMethod(
       `${type} connector does not have ${authMethod} auth method`,
     );
   }
-  if (method.grant.kind !== "device-auth") {
+  if (
+    !connectorAuthMethodHasGrantKind(
+      resolvedType.type,
+      authMethodResult.data,
+      "device-auth",
+    )
+  ) {
     return badRequestMessage(
       `${type} ${authMethod} auth method does not use a device-auth grant`,
     );
@@ -244,7 +253,7 @@ function resolveStoredDeviceAuthMethod(
 
 function resolveRequiredAuthClient(
   type: DeviceAuthGrantConnectorType,
-  authMethod: ConnectorAuthMethodId,
+  authMethod: ConnectorDeviceAuthGrantAuthMethodId,
 ): ConnectorAuthClient | ReturnType<typeof internalServerError> {
   const authClient = resolveConnectorAuthClientForMethod(
     type,
@@ -642,6 +651,7 @@ async function runClaimedSession(
   });
   const pollResult = await pollConnectorDeviceAuthorization({
     type: args.type,
+    authMethod: args.authMethod,
     authClient: args.authClient,
     deviceCode: providerState.deviceCode,
   });
@@ -760,6 +770,7 @@ export const startConnectorOauthDeviceAuthSession$ = command(
 
     const startResult = await startConnectorDeviceAuthorization({
       type: resolvedMethod.type,
+      authMethod: resolvedMethod.authMethod,
       authClient,
     });
     signal.throwIfAborted();
@@ -951,6 +962,7 @@ export const pollConnectorOauthDeviceAuthSession$ = command(
       orgId: args.orgId,
       userId: args.userId,
       type: resolvedMethod.type,
+      authMethod: resolvedMethod.authMethod,
       authClient,
       session: claimedSession,
       claimStartedAt,

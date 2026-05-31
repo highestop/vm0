@@ -1,5 +1,5 @@
 import {
-  connectorAuthMethodHasGrantKind,
+  connectorAuthMethodRefHasGrantKind,
   getConnectorAuthMethod,
   resolveConnectorAuthClientForMethod,
   type ConnectorAuthClient,
@@ -9,6 +9,7 @@ import type {
   AuthCodeGrantConnectorType,
   ConnectorAuthCodeGrantAuthMethodId,
   ConnectorAuthMethodId,
+  ConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   buildConnectorAuthCodeAuthorizationUrl,
@@ -45,18 +46,23 @@ function normalizeAuthUrlResult(result: string | AuthUrlResult): AuthUrlResult {
 }
 
 export function resolveConnectorAuthCodeStartMethod(
-  type: AuthCodeGrantConnectorType,
+  type: ConnectorType,
   authMethod: ConnectorAuthMethodId,
 ): ResolveConnectorAuthCodeStartMethodResult {
+  const authMethodRef = { type, authMethod };
   const method = getConnectorAuthMethod(type, authMethod);
   if (!method) {
     return { ok: false, reason: "missing_auth_method" };
   }
-  if (!connectorAuthMethodHasGrantKind(type, authMethod, "auth-code")) {
+  if (!connectorAuthMethodRefHasGrantKind(authMethodRef, "auth-code")) {
     return { ok: false, reason: "wrong_grant_kind" };
   }
 
-  return { ok: true, type, authMethod };
+  return {
+    ok: true,
+    type: authMethodRef.type,
+    authMethod: authMethodRef.authMethod,
+  };
 }
 
 // Prepare only synchronous auth-code start data after callers have validated

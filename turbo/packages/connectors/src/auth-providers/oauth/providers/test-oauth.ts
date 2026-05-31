@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 
-import { getAuthCodeGrantConfig } from "../grant-config";
+import type { ConnectorAuthCodeGrantConfig } from "@vm0/connectors/connectors";
 import { throwOAuthError } from "../error";
 export {
   TEST_OAUTH_CLIENT_ID,
@@ -137,14 +137,12 @@ function getAuthorizationUrl(): string {
   );
 }
 
-function getTestOAuthTokenUrl(): string {
-  return resolveTestOAuthProviderUrl(
-    "tokenUrl",
-    getAuthCodeGrantConfig("test-oauth").tokenUrl,
-  );
+function getTestOAuthTokenUrl(tokenUrl: string): string {
+  return resolveTestOAuthProviderUrl("tokenUrl", tokenUrl);
 }
 
 export function buildTestOAuthAuthorizationUrl(
+  authCodeGrant: ConnectorAuthCodeGrantConfig,
   clientId: string,
   redirectUri: string,
   state: string,
@@ -153,7 +151,7 @@ export function buildTestOAuthAuthorizationUrl(
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "read",
+    scope: authCodeGrant.scopes.join(" "),
     state,
   });
   return `${getAuthorizationUrl()}?${params.toString()}`;
@@ -168,11 +166,12 @@ const tokenResponseSchema = z.object({
 });
 
 async function postToken(
+  tokenUrl: string,
   body: URLSearchParams,
   operation: "exchange" | "refresh",
   signal: AbortSignal | undefined,
 ): Promise<TokenResponse> {
-  const response = await fetch(getTestOAuthTokenUrl(), {
+  const response = await fetch(getTestOAuthTokenUrl(tokenUrl), {
     signal,
     method: "POST",
     headers: {
@@ -197,12 +196,14 @@ async function postToken(
 }
 
 export async function exchangeTestOAuthCode(
+  authCodeGrant: ConnectorAuthCodeGrantConfig,
   clientId: string,
   clientSecret: string,
   code: string,
   redirectUri: string,
 ): Promise<TokenResponse> {
   return postToken(
+    authCodeGrant.tokenUrl,
     new URLSearchParams({
       grant_type: "authorization_code",
       client_id: clientId,
@@ -216,12 +217,14 @@ export async function exchangeTestOAuthCode(
 }
 
 export async function refreshTestOAuthToken(
+  tokenUrl: string,
   clientId: string,
   clientSecret: string,
   refreshToken: string,
   signal: AbortSignal,
 ): Promise<TokenResponse> {
   return postToken(
+    tokenUrl,
     new URLSearchParams({
       grant_type: "refresh_token",
       client_id: clientId,

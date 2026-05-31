@@ -1,12 +1,19 @@
 import {
   CONNECTOR_TYPE_KEYS,
   CONNECTOR_TYPES,
+  connectorAuthMethodIdSchema,
   type ConnectorAuthMethodConfig,
   type ConnectorAuthMethodId,
+  type ConnectorAuthCodeGrantAuthMethodId,
+  type ConnectorDeviceAuthGrantAuthMethodId,
   type ConnectorAuthMethodIds,
+  type ConnectorAuthMethodIdsByAccessKind,
   type ConnectorAuthMethodIdsByGrantKind,
+  type ConnectorAuthMethodIdsByRevokeKind,
+  type ConnectorTypesByGrantKind,
   type ConnectorAuthMethodClientConfig,
   type ConnectorAccessConfig,
+  type ConnectorAccessKind,
   type ConnectorAuthCodeGrantConfig,
   type ConnectorAuthClientConfig,
   type ConnectorDeviceAuthGrantConfig,
@@ -15,8 +22,8 @@ import {
   type ConnectorGrantConfig,
   type ConnectorGrantKind,
   type ConnectorManualGrantFieldConfig,
+  type ConnectorRevokeKind,
   type ConnectorType,
-  type ConnectorAuthProviderType,
   type AuthCodeGrantConnectorType,
   type DeviceAuthGrantConnectorType,
   type DynamicPublicConnectorAuthClientConfig,
@@ -34,10 +41,10 @@ const CONNECTOR_AUTH_METHOD_PRIORITY = {
   api: 2,
 } as const satisfies Record<ConnectorAuthMethodId, number>;
 
-function isConnectorAuthMethodId(
-  authMethod: string,
-): authMethod is ConnectorAuthMethodId {
-  return Object.hasOwn(CONNECTOR_AUTH_METHOD_PRIORITY, authMethod);
+function connectorAuthMethodPriority(
+  authMethod: ConnectorAuthMethodId,
+): number {
+  return CONNECTOR_AUTH_METHOD_PRIORITY[authMethod];
 }
 
 export function getConfiguredConnectorAuthMethods(
@@ -45,11 +52,13 @@ export function getConfiguredConnectorAuthMethods(
 ): ConnectorAuthMethodId[] {
   // Configured methods are raw registry entries; callers apply feature flags.
   return Object.keys(CONNECTOR_TYPES[type].authMethods)
-    .filter(isConnectorAuthMethodId)
+    .map((authMethod) => {
+      return connectorAuthMethodIdSchema.parse(authMethod);
+    })
     .sort((a, b) => {
-      return (
-        CONNECTOR_AUTH_METHOD_PRIORITY[a] - CONNECTOR_AUTH_METHOD_PRIORITY[b]
-      );
+      const priorityDiff =
+        connectorAuthMethodPriority(a) - connectorAuthMethodPriority(b);
+      return priorityDiff === 0 ? a.localeCompare(b) : priorityDiff;
     });
 }
 
@@ -82,22 +91,74 @@ export function getConnectorAuthMethod(
   return undefined;
 }
 
-export function getConnectorAuthMethodIdForGrantKind(
-  type: ConnectorType,
-  grantKind: ConnectorGrantKind,
-): ConnectorAuthMethodId | undefined {
-  for (const authMethod of getConfiguredConnectorAuthMethods(type)) {
-    if (connectorAuthMethodHasGrantKind(type, authMethod, grantKind)) {
-      return authMethod;
-    }
-  }
-  return undefined;
+export function getConnectorAuthMethodIdsForGrantKind<
+  Type extends ConnectorType,
+  Kind extends ConnectorGrantKind,
+>(
+  type: Type,
+  grantKind: Kind,
+): ConnectorAuthMethodIdsByGrantKind<Type, Kind>[] {
+  return getConfiguredConnectorAuthMethods(type).filter(
+    (
+      authMethod,
+    ): authMethod is ConnectorAuthMethodIdsByGrantKind<Type, Kind> => {
+      return connectorAuthMethodHasGrantKind(type, authMethod, grantKind);
+    },
+  );
 }
 
-function connectorAuthMethodValues(
-  type: ConnectorType,
-): ConnectorAuthMethodConfig[] {
-  return Object.values(CONNECTOR_TYPES[type].authMethods);
+function connectorAuthMethodHasAccessKind<
+  Type extends ConnectorType,
+  Kind extends ConnectorAccessKind,
+>(
+  type: Type,
+  authMethod: string,
+  accessKind: Kind,
+): authMethod is ConnectorAuthMethodIdsByAccessKind<Type, Kind> {
+  return getConnectorAuthMethod(type, authMethod)?.access.kind === accessKind;
+}
+
+export function getConnectorAuthMethodIdsForAccessKind<
+  Type extends ConnectorType,
+  Kind extends ConnectorAccessKind,
+>(
+  type: Type,
+  accessKind: Kind,
+): ConnectorAuthMethodIdsByAccessKind<Type, Kind>[] {
+  return getConfiguredConnectorAuthMethods(type).filter(
+    (
+      authMethod,
+    ): authMethod is ConnectorAuthMethodIdsByAccessKind<Type, Kind> => {
+      return connectorAuthMethodHasAccessKind(type, authMethod, accessKind);
+    },
+  );
+}
+
+function connectorAuthMethodHasRevokeKind<
+  Type extends ConnectorType,
+  Kind extends ConnectorRevokeKind,
+>(
+  type: Type,
+  authMethod: string,
+  revokeKind: Kind,
+): authMethod is ConnectorAuthMethodIdsByRevokeKind<Type, Kind> {
+  return getConnectorAuthMethod(type, authMethod)?.revoke.kind === revokeKind;
+}
+
+export function getConnectorAuthMethodIdsForRevokeKind<
+  Type extends ConnectorType,
+  Kind extends ConnectorRevokeKind,
+>(
+  type: Type,
+  revokeKind: Kind,
+): ConnectorAuthMethodIdsByRevokeKind<Type, Kind>[] {
+  return getConfiguredConnectorAuthMethods(type).filter(
+    (
+      authMethod,
+    ): authMethod is ConnectorAuthMethodIdsByRevokeKind<Type, Kind> => {
+      return connectorAuthMethodHasRevokeKind(type, authMethod, revokeKind);
+    },
+  );
 }
 
 function getManualGrantFields(
@@ -212,53 +273,6 @@ export function getConnectorAuthMethodAccessMetadata(
   }
 }
 
-function authMethodAccessPriority(method: ConnectorAuthMethodConfig): number {
-  switch (method.grant.kind) {
-    case "auth-code":
-    case "device-auth":
-      return 2;
-    case "managed":
-    case "manual":
-      return 1;
-  }
-}
-
-type ConnectorScopeBearingGrantConfig =
-  | ConnectorAuthCodeGrantConfig
-  | ConnectorDeviceAuthGrantConfig;
-
-function isConnectorScopeBearingGrantConfig(
-  method: ConnectorAuthMethodConfig,
-): method is ConnectorAuthMethodConfig & {
-  readonly grant: ConnectorScopeBearingGrantConfig;
-} {
-  switch (method.grant.kind) {
-    case "auth-code":
-    case "device-auth":
-      return true;
-    case "manual":
-    case "managed":
-      return false;
-  }
-}
-
-function getConnectorScopeBearingGrantConfig(
-  type: ConnectorAuthProviderType,
-): ConnectorScopeBearingGrantConfig;
-function getConnectorScopeBearingGrantConfig(
-  type: ConnectorType,
-): ConnectorScopeBearingGrantConfig | undefined;
-function getConnectorScopeBearingGrantConfig(
-  type: ConnectorType,
-): ConnectorScopeBearingGrantConfig | undefined {
-  for (const method of connectorAuthMethodValues(type)) {
-    if (isConnectorScopeBearingGrantConfig(method)) {
-      return method.grant;
-    }
-  }
-  return undefined;
-}
-
 export function connectorAuthMethodHasGrantKind<
   Type extends ConnectorType,
   Kind extends ConnectorGrantKind,
@@ -269,6 +283,67 @@ export function connectorAuthMethodHasGrantKind<
 ): authMethod is ConnectorAuthMethodIdsByGrantKind<Type, Kind> {
   const method = getConnectorAuthMethod(type, authMethod);
   return method?.grant.kind === grantKind;
+}
+
+export interface ConnectorAuthMethodRef {
+  readonly type: ConnectorType;
+  readonly authMethod: ConnectorAuthMethodId;
+}
+
+export type ConnectorAuthMethodRefByGrantKind<Kind extends ConnectorGrantKind> =
+  {
+    readonly [Type in ConnectorTypesByGrantKind<Kind>]: {
+      readonly type: Type;
+      readonly authMethod: ConnectorAuthMethodIdsByGrantKind<Type, Kind>;
+    };
+  }[ConnectorTypesByGrantKind<Kind>];
+
+export function connectorAuthMethodRefHasGrantKind<
+  Kind extends ConnectorGrantKind,
+>(
+  authMethodRef: ConnectorAuthMethodRef,
+  grantKind: Kind,
+): authMethodRef is ConnectorAuthMethodRefByGrantKind<Kind> {
+  return (
+    getConnectorAuthMethod(authMethodRef.type, authMethodRef.authMethod)?.grant
+      .kind === grantKind
+  );
+}
+
+export function getConnectorAuthMethodAuthCodeGrantConfig<
+  Type extends AuthCodeGrantConnectorType,
+>(
+  type: Type,
+  authMethod: ConnectorAuthCodeGrantAuthMethodId<Type>,
+): ConnectorAuthCodeGrantConfig;
+export function getConnectorAuthMethodAuthCodeGrantConfig(
+  type: ConnectorType,
+  authMethod: string,
+): ConnectorAuthCodeGrantConfig | undefined;
+export function getConnectorAuthMethodAuthCodeGrantConfig(
+  type: ConnectorType,
+  authMethod: string,
+): ConnectorAuthCodeGrantConfig | undefined {
+  const grant = getConnectorAuthMethod(type, authMethod)?.grant;
+  return grant?.kind === "auth-code" ? grant : undefined;
+}
+
+export function getConnectorAuthMethodDeviceAuthGrantConfig<
+  Type extends DeviceAuthGrantConnectorType,
+>(
+  type: Type,
+  authMethod: ConnectorDeviceAuthGrantAuthMethodId<Type>,
+): ConnectorDeviceAuthGrantConfig;
+export function getConnectorAuthMethodDeviceAuthGrantConfig(
+  type: ConnectorType,
+  authMethod: string,
+): ConnectorDeviceAuthGrantConfig | undefined;
+export function getConnectorAuthMethodDeviceAuthGrantConfig(
+  type: ConnectorType,
+  authMethod: string,
+): ConnectorDeviceAuthGrantConfig | undefined {
+  const grant = getConnectorAuthMethod(type, authMethod)?.grant;
+  return grant?.kind === "device-auth" ? grant : undefined;
 }
 
 function connectorGrantScopes(
@@ -283,54 +358,6 @@ function connectorGrantScopes(
     case undefined:
       return [];
   }
-}
-
-export function getConnectorAuthCodeGrantConfig(
-  type: AuthCodeGrantConnectorType,
-): ConnectorAuthCodeGrantConfig;
-export function getConnectorAuthCodeGrantConfig(
-  type: ConnectorType,
-): ConnectorAuthCodeGrantConfig | undefined;
-export function getConnectorAuthCodeGrantConfig(
-  type: ConnectorType,
-): ConnectorAuthCodeGrantConfig | undefined {
-  for (const method of connectorAuthMethodValues(type)) {
-    switch (method.grant.kind) {
-      case "auth-code":
-        return method.grant;
-      case "device-auth":
-      case "manual":
-      case "managed":
-        break;
-    }
-  }
-  return undefined;
-}
-
-export function getConnectorDeviceAuthGrantConfig(
-  type: DeviceAuthGrantConnectorType,
-): ConnectorDeviceAuthGrantConfig;
-export function getConnectorDeviceAuthGrantConfig(
-  type: ConnectorType,
-): ConnectorDeviceAuthGrantConfig | undefined;
-export function getConnectorDeviceAuthGrantConfig(
-  type: ConnectorType,
-): ConnectorDeviceAuthGrantConfig | undefined {
-  for (const method of connectorAuthMethodValues(type)) {
-    switch (method.grant.kind) {
-      case "device-auth":
-        return method.grant;
-      case "auth-code":
-      case "manual":
-      case "managed":
-        break;
-    }
-  }
-  return undefined;
-}
-
-export function getConnectorGrantScopes(type: ConnectorType): string[] {
-  return [...connectorGrantScopes(getConnectorScopeBearingGrantConfig(type))];
 }
 
 export function getConnectorAuthMethodGrantScopes(
@@ -741,20 +768,29 @@ export function getConnectorAuthMethodEnvBindings(
   return method ? connectorAccessEnvBindings(method.access) : {};
 }
 
+export interface ConnectorEnvBindingEntry {
+  readonly authMethod: ConnectorAuthMethodId;
+  readonly envName: string;
+  readonly valueRef: string;
+}
+
 /**
- * Get runtime environment bindings for a connector type.
+ * Get all configured environment binding entries across auth methods.
+ *
+ * This is for discovery and reverse lookup. Runtime injection must use
+ * getConnectorAuthMethodEnvBindings() with the selected auth method.
  */
-export function getConnectorEnvBindings(
+export function getConnectorEnvBindingEntries(
   type: ConnectorType,
-): ConnectorEnvBindings {
-  const methods = connectorAuthMethodValues(type).sort((a, b) => {
-    return authMethodAccessPriority(a) - authMethodAccessPriority(b);
-  });
-  const envBindings: ConnectorEnvBindings = {};
-  for (const method of methods) {
-    Object.assign(envBindings, connectorAccessEnvBindings(method.access));
+): ConnectorEnvBindingEntry[] {
+  const entries: ConnectorEnvBindingEntry[] = [];
+  for (const authMethod of getConfiguredConnectorAuthMethods(type)) {
+    const envBindings = getConnectorAuthMethodEnvBindings(type, authMethod);
+    for (const [envName, valueRef] of Object.entries(envBindings)) {
+      entries.push({ authMethod, envName, valueRef });
+    }
   }
-  return envBindings;
+  return entries;
 }
 
 /**
@@ -780,15 +816,17 @@ export function getConnectorEnvNamesForSecret(
       continue;
     }
 
-    // Find all environment names that reference this secret.
-    const envBindings = getConnectorEnvBindings(type);
-    const envNames = Object.entries(envBindings)
-      .filter(([, valueRef]) => {
-        return valueRef === `$secrets.${secretName}`;
-      })
-      .map(([envName]) => {
-        return envName;
-      });
+    const envNames = [
+      ...new Set(
+        getConnectorEnvBindingEntries(type)
+          .filter(({ valueRef }) => {
+            return valueRef === `$secrets.${secretName}`;
+          })
+          .map(({ envName }) => {
+            return envName;
+          }),
+      ),
+    ];
 
     if (envNames.length > 0) {
       return { connectorLabel: config.label, envNames };
@@ -801,13 +839,13 @@ export function getConnectorEnvNamesForSecret(
 export function hasConnectorAuthCodeGrant(
   type: ConnectorType,
 ): type is AuthCodeGrantConnectorType {
-  return getConnectorAuthCodeGrantConfig(type) !== undefined;
+  return getConnectorAuthMethodIdsForGrantKind(type, "auth-code").length > 0;
 }
 
 export function hasConnectorDeviceAuthGrant(
   type: ConnectorType,
 ): type is DeviceAuthGrantConnectorType {
-  return getConnectorDeviceAuthGrantConfig(type) !== undefined;
+  return getConnectorAuthMethodIdsForGrantKind(type, "device-auth").length > 0;
 }
 
 function hasRequiredGrantScopes(
@@ -852,20 +890,6 @@ function scopeDiff(
   };
 }
 
-/**
- * Check if stored scopes cover all currently required scopes for the first
- * scope-bearing grant on a connector type.
- */
-export function hasRequiredScopes(
-  connectorType: ConnectorType,
-  storedScopes: string[] | null,
-): boolean {
-  return hasRequiredGrantScopes(
-    getConnectorGrantScopes(connectorType),
-    storedScopes,
-  );
-}
-
 export function hasRequiredConnectorAuthMethodScopes(
   connectorType: ConnectorType,
   authMethod: string,
@@ -875,17 +899,6 @@ export function hasRequiredConnectorAuthMethodScopes(
     getConnectorAuthMethodGrantScopes(connectorType, authMethod),
     storedScopes,
   );
-}
-
-/**
- * Compute the diff between currently required scopes and stored scopes for the
- * first scope-bearing grant on a connector type.
- */
-export function getScopeDiff(
-  connectorType: ConnectorType,
-  storedScopes: string[] | null,
-): ScopeDiff {
-  return scopeDiff(getConnectorGrantScopes(connectorType), storedScopes);
 }
 
 export function getConnectorAuthMethodScopeDiff(
@@ -920,9 +933,12 @@ export function getConnectorTypeForSecretName(
         return type;
       }
     }
-    // Check envBindings names
-    const envBindings = getConnectorEnvBindings(type);
-    if (name in envBindings) {
+    const hasEnvName = getConnectorEnvBindingEntries(type).some(
+      ({ envName }) => {
+        return envName === name;
+      },
+    );
+    if (hasEnvName) {
       return type;
     }
   }

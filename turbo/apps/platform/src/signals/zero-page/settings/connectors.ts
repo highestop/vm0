@@ -5,6 +5,7 @@ import { accept } from "../../../lib/accept.ts";
 import {
   CONNECTOR_TYPE_KEYS,
   CONNECTOR_TYPES,
+  connectorAuthMethodIdSchema,
   type ConnectorAuthMethodId,
   type ConnectorType,
   type ConnectorDisplayCategory,
@@ -15,7 +16,6 @@ import {
   getConnectorTags,
   hasRequiredConnectorAuthMethodScopes,
   isGoogleOAuthConnector,
-  hasConnectorAuthCodeGrant,
   hasConnectorDeviceAuthGrant,
 } from "@vm0/connectors/connector-utils";
 import {
@@ -124,13 +124,11 @@ export function getConnectorConnectLaunchMode({
   readonly availableAuthMethods: readonly ConnectorAuthMethodId[];
   readonly preferModalForGoogleOAuth?: boolean;
 }): ConnectorConnectLaunchMode {
-  const hasAuthCodeGrant = availableAuthMethods.some((authMethod) => {
-    return getConnectorAuthMethod(type, authMethod)?.grant.kind === "auth-code";
-  });
-  if (!hasAuthCodeGrant) {
+  const [authMethod] = availableAuthMethods;
+  if (availableAuthMethods.length !== 1 || !authMethod) {
     return "modal";
   }
-  if (!hasConnectorAuthCodeGrant(type)) {
+  if (getConnectorAuthMethod(type, authMethod)?.grant.kind !== "auth-code") {
     return "modal";
   }
   if (preferModalForGoogleOAuth && isGoogleOAuthConnector(type)) {
@@ -139,16 +137,36 @@ export function getConnectorConnectLaunchMode({
   return "oauth-auth-code";
 }
 
-export function getConnectorAuthCodeConnectMethod(
+export function getAvailableAuthCodeAuthMethod(
+  type: ConnectorType,
+  availableAuthMethods: readonly ConnectorAuthMethodId[],
+  authMethod: string,
+): ConnectorAuthMethodId | null {
+  const authMethodResult = connectorAuthMethodIdSchema.safeParse(authMethod);
+  if (!authMethodResult.success) {
+    return null;
+  }
+  if (!availableAuthMethods.includes(authMethodResult.data)) {
+    return null;
+  }
+  if (
+    getConnectorAuthMethod(type, authMethodResult.data)?.grant.kind !==
+    "auth-code"
+  ) {
+    return null;
+  }
+  return authMethodResult.data;
+}
+
+export function getOnlyAvailableAuthCodeAuthMethod(
   type: ConnectorType,
   availableAuthMethods: readonly ConnectorAuthMethodId[],
 ): ConnectorAuthMethodId | null {
-  for (const authMethod of availableAuthMethods) {
-    if (getConnectorAuthMethod(type, authMethod)?.grant.kind === "auth-code") {
-      return authMethod;
-    }
+  const [authMethod] = availableAuthMethods;
+  if (availableAuthMethods.length !== 1 || !authMethod) {
+    return null;
   }
-  return null;
+  return getAvailableAuthCodeAuthMethod(type, availableAuthMethods, authMethod);
 }
 
 function buildConnectorTypeStatus(params: {

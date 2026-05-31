@@ -7,15 +7,12 @@ import {
   cliAuthTestTokenContract,
 } from "@vm0/api-contracts/contracts/cli-auth-test";
 import {
-  type AuthCodeGrantConnectorType,
+  type ConnectorAuthProviderType,
+  type ConnectorAuthMethodId,
+  type ConnectorType,
   connectorTypeSchema,
-  type DeviceAuthGrantConnectorType,
 } from "@vm0/connectors/connectors";
-import {
-  getConnectorAuthMethodIdForGrantKind,
-  hasConnectorAuthCodeGrant,
-  hasConnectorDeviceAuthGrant,
-} from "@vm0/connectors/connector-utils";
+import { getConnectorAuthMethod } from "@vm0/connectors/connector-utils";
 import { agentComposes } from "@vm0/db/schema/agent-compose";
 import { deviceCodes } from "@vm0/db/schema/device-codes";
 import { modelProviders } from "@vm0/db/schema/model-provider";
@@ -67,6 +64,14 @@ const testCodexOauthQuery$ = queryOf(cliAuthTestCodexOauthContract.create);
 
 function stringError(status: 400 | 404, error: string) {
   return { status, body: { error } };
+}
+
+function connectorTypeHasSelectedProviderDrivenGrant(
+  type: ConnectorType,
+  authMethod: ConnectorAuthMethodId,
+): type is ConnectorAuthProviderType {
+  const grantKind = getConnectorAuthMethod(type, authMethod)?.grant.kind;
+  return grantKind === "auth-code" || grantKind === "device-auth";
 }
 
 function testEndpointAllowed(request: {
@@ -193,7 +198,10 @@ const createTestConnector$ = command(
       ) {
         return stringError(400, "Invalid JSON body");
       }
-      return stringError(400, "connectorName and accessToken are required");
+      return stringError(
+        400,
+        "connectorName, authMethod, and accessToken are required",
+      );
     }
 
     const connectorParsed = connectorTypeSchema.safeParse(
@@ -216,41 +224,35 @@ const createTestConnector$ = command(
       return stringError(400, "Test user has no org — run test-token first");
     }
 
-    let grantConnectorType:
-      | AuthCodeGrantConnectorType
-      | DeviceAuthGrantConnectorType;
-    let authMethodGrantKind: "auth-code" | "device-auth";
-    if (hasConnectorAuthCodeGrant(connectorType)) {
-      grantConnectorType = connectorType;
-      authMethodGrantKind = "auth-code";
-    } else if (hasConnectorDeviceAuthGrant(connectorType)) {
-      grantConnectorType = connectorType;
-      authMethodGrantKind = "device-auth";
-    } else {
+    const authMethod = bodyResult.data.authMethod;
+    if (!getConnectorAuthMethod(connectorType, authMethod)) {
       return stringError(
         400,
-        `${connectorType} connector does not use an auth-code or device-auth grant`,
+        `${connectorType} connector does not configure auth method ${authMethod}`,
       );
     }
-    const authMethod = getConnectorAuthMethodIdForGrantKind(
-      grantConnectorType,
-      authMethodGrantKind,
-    );
-    if (!authMethod) {
-      throw new Error(`${grantConnectorType} connector has no auth method`);
+
+    if (
+      !connectorTypeHasSelectedProviderDrivenGrant(connectorType, authMethod)
+    ) {
+      return stringError(
+        400,
+        `${connectorType} connector auth method ${authMethod} does not use an auth-code or device-auth grant`,
+      );
     }
+
     await set(
       upsertConnectorTokenConnection$,
       {
         orgId,
         userId,
-        type: grantConnectorType,
+        type: connectorType,
         authMethod,
         accessToken: bodyResult.data.accessToken,
         userInfo: {
-          id: `e2e-test-${grantConnectorType}`,
-          username: `e2e-${grantConnectorType}`,
-          email: `e2e-${grantConnectorType}@test.vm0.ai`,
+          id: `e2e-test-${connectorType}`,
+          username: `e2e-${connectorType}`,
+          email: `e2e-${connectorType}@test.vm0.ai`,
         },
         oauthScopes: [],
         refreshToken: bodyResult.data.refreshToken,

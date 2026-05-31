@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { HttpResponse, http } from "msw";
-import { resolveConnectorAuthClientForMethod } from "../../../../connector-utils";
+import {
+  getConnectorAuthMethodAuthCodeGrantConfig,
+  resolveConnectorAuthClientForMethod,
+} from "../../../../connector-utils";
 import { hasConnectorAuthCodeGrantProvider } from "../../../connector-auth";
 import {
   buildMetaAdsAuthorizationUrl,
@@ -13,10 +16,15 @@ import { server } from "./test-server";
 const TOKEN_URL = "https://graph.facebook.com/v22.0/oauth/access_token";
 const USER_URL = "https://graph.facebook.com/v22.0/me";
 
+function authCodeGrant() {
+  return getConnectorAuthMethodAuthCodeGrantConfig("meta-ads", "oauth");
+}
+
 describe("connector/providers/meta-ads", () => {
   describe("buildMetaAdsAuthorizationUrl", () => {
     it("builds URL with client_id, redirect_uri, state, and scopes", () => {
       const url = buildMetaAdsAuthorizationUrl(
+        authCodeGrant(),
         "test-client-id",
         "https://example.com/callback",
         "test-state",
@@ -59,6 +67,7 @@ describe("connector/providers/meta-ads", () => {
       server.use(shortLivedHandler, longLivedHandler, userHandler);
 
       const result = await exchangeMetaAdsCode(
+        authCodeGrant(),
         "client-id",
         "client-secret",
         "test-code",
@@ -90,6 +99,7 @@ describe("connector/providers/meta-ads", () => {
 
       await expect(
         exchangeMetaAdsCode(
+          authCodeGrant(),
           "client-id",
           "client-secret",
           "bad-code",
@@ -106,6 +116,7 @@ describe("connector/providers/meta-ads", () => {
 
       await expect(
         exchangeMetaAdsCode(
+          authCodeGrant(),
           "client-id",
           "client-secret",
           "test-code",
@@ -122,6 +133,7 @@ describe("connector/providers/meta-ads", () => {
 
       await expect(
         exchangeMetaAdsCode(
+          authCodeGrant(),
           "client-id",
           "client-secret",
           "test-code",
@@ -144,6 +156,10 @@ describe("connector/providers/meta-ads", () => {
 
     it("buildAuthUrl delegates to buildMetaAdsAuthorizationUrl", () => {
       const url = metaAdsProvider.grant.buildAuthUrl({
+        authCodeGrant: getConnectorAuthMethodAuthCodeGrantConfig(
+          "meta-ads",
+          "oauth",
+        ),
         clientId: "test-client",
         redirectUri: "https://example.com/callback",
         state: "test-state",

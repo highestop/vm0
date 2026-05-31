@@ -5,6 +5,7 @@ import {
 } from "@vm0/api-contracts/contracts/github-oauth";
 import type { AuthCodeGrantConnectorType } from "@vm0/connectors/connectors";
 import {
+  getConnectorAuthMethodAuthCodeGrantConfig,
   getConnectorAuthMethodGrantScopes,
   resolveConnectorAuthClientForMethod,
   isStaticConfidentialConnectorAuthClient,
@@ -31,7 +32,7 @@ import {
   findGithubInstallationByInstallationId,
   getGithubInstallationAccessToken,
   getGithubInstallationInfo,
-  getGithubConnectorAuthCodeMethod,
+  getGithubOAuthAuthMethod,
   githubUserConnectCallbackRedirectUri,
   isGithubOauthStateSignatureValid,
   linkGithubVm0User,
@@ -89,7 +90,7 @@ function githubAppSetupCallbackRedirectUri(origin: string): string {
 function githubUserOauthClient():
   | StaticConfidentialConnectorAuthClient
   | undefined {
-  const authMethod = getGithubConnectorAuthCodeMethod();
+  const authMethod = getGithubOAuthAuthMethod();
   const authClient = resolveConnectorAuthClientForMethod(
     GITHUB_CONNECTOR_TYPE,
     authMethod,
@@ -346,9 +347,11 @@ const connectGithubUserAfterSetup$ = command(
         sendsRedirectUri: false,
       });
 
+      const authMethod = getGithubOAuthAuthMethod();
       const tokenResult = await settle(
         (async () => {
           const { accessToken, scopes } = await exchangeGitHubCode(
+            getConnectorAuthMethodAuthCodeGrantConfig("github", authMethod),
             credentials.clientId,
             credentials.clientSecret,
             code,
@@ -381,7 +384,6 @@ const connectGithubUserAfterSetup$ = command(
         scopes,
       });
 
-      const authMethod = getGithubConnectorAuthCodeMethod();
       await set(
         upsertConnectorTokenConnection$,
         {
@@ -742,7 +744,7 @@ const callbackGithubUserOauth$ = command(
       return worksErrorRedirect("GitHub OAuth is not configured");
     }
 
-    const authMethod = getGithubConnectorAuthCodeMethod();
+    const authMethod = getGithubOAuthAuthMethod();
     const origin = getOAuthWebOrigin(request);
     const redirectUri = githubUserConnectCallbackRedirectUri(origin);
     const token = await exchangeConnectorAuthCode({

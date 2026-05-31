@@ -24,7 +24,13 @@ import { now } from "../../../lib/time";
 import { server } from "../../../mocks/server";
 import { signSandboxJwtForTests } from "../../auth/tokens";
 import { writeDb$ } from "../../external/db";
+import { setFirewallAuthRefreshTimeoutMsForTests } from "../../services/agent-webhook-firewall-auth.service";
 import { upsertOrgMultiAuthModelProvider$ } from "../../services/zero-model-provider.service";
+import {
+  decryptSecretForTests,
+  encryptSecretForTests,
+} from "./helpers/encrypt-secret";
+import { createFixtureTracker } from "./helpers/zero-route-test";
 import {
   deleteUsageInsightFixture$,
   seedCompose$,
@@ -32,11 +38,6 @@ import {
   seedUsageInsightFixture$,
   type UsageInsightFixture,
 } from "./helpers/zero-usage-insight";
-import { createFixtureTracker } from "./helpers/zero-route-test";
-import {
-  decryptSecretForTests,
-  encryptSecretForTests,
-} from "./helpers/encrypt-secret";
 
 const context = testContext();
 const store = createStore();
@@ -103,6 +104,32 @@ function deferred(): {
     throw new Error("Failed to create deferred promise");
   }
   return { promise, resolve: resolvePromise };
+}
+
+function requestAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) {
+    return signal.reason;
+  }
+  const error = new Error("Provider refresh aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function rejectWhenRequestAborts(
+  request: Request,
+  onAbort: () => void,
+): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const rejectAbort = () => {
+      onAbort();
+      reject(requestAbortError(request.signal));
+    };
+    if (request.signal.aborted) {
+      rejectAbort();
+      return;
+    }
+    request.signal.addEventListener("abort", rejectAbort, { once: true });
+  });
 }
 
 async function hasWaitingAdvisoryLock(lockKey: string): Promise<boolean> {
@@ -595,6 +622,7 @@ async function codexProviderState(fixture: FirewallFixture): Promise<{
 
 describe("POST /api/webhooks/agent/firewall/auth", () => {
   let restoreDynamicTestOAuthRefresh: (() => void) | undefined;
+  let restoreFirewallAuthRefreshTimeout: (() => void) | undefined;
 
   beforeEach(() => {
     mockOptionalEnv("NOTION_OAUTH_CLIENT_ID", "notion-client");
@@ -604,6 +632,8 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
   afterEach(() => {
     restoreDynamicTestOAuthRefresh?.();
     restoreDynamicTestOAuthRefresh = undefined;
+    restoreFirewallAuthRefreshTimeout?.();
+    restoreFirewallAuthRefreshTimeout = undefined;
   });
 
   it("rejects missing sandbox auth before parsing the body", async () => {
@@ -2608,6 +2638,47 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     });
   });
 
+  it("classifies connector refresh timeouts as upstream without marking reconnect", async () => {
+    restoreFirewallAuthRefreshTimeout =
+      setFirewallAuthRefreshTimeoutMsForTests(25);
+    const fixture = await track(seedFixture());
+    await seedExpiredNotionConnector(fixture);
+    const providerAbortObserved = deferred();
+    server.use(
+      http.post("https://api.notion.com/v1/oauth/token", ({ request }) => {
+        return rejectWhenRequestAborts(request, providerAbortObserved.resolve);
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            NOTION_TOKEN: "stale-notion-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("NOTION_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            NOTION_TOKEN: "notion",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    await providerAbortObserved.promise;
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["notion"],
+      failureReason: "upstream_provider",
+    });
+    await expect(notionConnectorState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+    });
+  });
+
   it.each(["temporarily_unavailable", "server_error"] as const)(
     "classifies standard OAuth %s refresh failures as upstream",
     async (oauthError) => {
@@ -3714,6 +3785,61 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
       [502],
     );
 
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["codex-oauth-token"],
+      failureReason: "upstream_provider",
+    });
+    await expect(codexProviderState(fixture)).resolves.toMatchObject({
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+    });
+  });
+
+  it("classifies model-provider refresh timeouts as upstream without marking reconnect", async () => {
+    restoreFirewallAuthRefreshTimeout =
+      setFirewallAuthRefreshTimeoutMsForTests(25);
+    const fixture = await track(seedFixture());
+    await seedCodexModelProvider(fixture, {
+      accessToken: "stale-chatgpt-token",
+      refreshToken: "chatgpt-refresh-token",
+      tokenExpiresAt: new Date(now() - 60_000),
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+    });
+    const providerAbortObserved = deferred();
+    server.use(
+      http.post("https://auth.openai.com/oauth/token", ({ request }) => {
+        return rejectWhenRequestAborts(request, providerAbortObserved.resolve);
+      }),
+    );
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            CHATGPT_ACCESS_TOKEN: "stale-chatgpt-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("CHATGPT_ACCESS_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            CHATGPT_ACCESS_TOKEN: "codex-oauth-token",
+          },
+          secretConnectorMetadataMap: {
+            CHATGPT_ACCESS_TOKEN: {
+              sourceType: "model-provider",
+              sourceUserId: ORG_SENTINEL_USER_ID,
+              metadataKey: "codex-oauth-token",
+            },
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    await providerAbortObserved.promise;
     expect(response.body.error).toMatchObject({
       code: "TOKEN_REFRESH_FAILED",
       connectors: ["codex-oauth-token"],

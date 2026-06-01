@@ -11,6 +11,13 @@ const c = initContract();
 export const MIN_EPOCH_MS_TIMESTAMP = 1_000_000_000_000;
 const apiStartTimeSchema = z.number().int().min(MIN_EPOCH_MS_TIMESTAMP);
 
+export const CANONICAL_WORKING_DIR = "/home/user/workspace";
+const CANONICAL_CLAUDE_PROJECT_NAME = CANONICAL_WORKING_DIR.replace(
+  /^\//,
+  "",
+).replace(/\//g, "-");
+export const CANONICAL_CLAUDE_MEMORY_MOUNT_PATH = `/home/user/.claude/projects/-${CANONICAL_CLAUDE_PROJECT_NAME}/memory`;
+
 export function elapsedSinceApiStartMs(
   apiStartTimeMs: number | undefined,
   nowMs: number,
@@ -147,7 +154,6 @@ export const secretConnectorMetadataMapSchema = z.record(
  * Secrets are encrypted with AES-256-GCM before storage
  */
 export const storedExecutionContextSchema = z.object({
-  workingDir: z.string(),
   storageManifest: storageManifestSchema.nullable(),
   environment: z.record(z.string(), z.string()).nullable(),
   resumeSession: resumeSessionSchema.nullable(),
@@ -205,8 +211,6 @@ export const executionContextSchema = z.object({
   vars: z.record(z.string(), z.string()).nullable(),
   checkpointId: z.uuid().nullable(),
   sandboxToken: z.string(),
-  // New fields for E2B parity:
-  workingDir: z.string(),
   storageManifest: storageManifestSchema.nullable(),
   environment: z.record(z.string(), z.string()).nullable(),
   resumeSession: resumeSessionSchema.nullable(),

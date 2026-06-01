@@ -44,27 +44,6 @@ async fn run() -> i32 {
     // Record API-to-agent E2E time (as early as possible)
     guest_agent::timing::record_e2e_from_api("api_to_agent_start");
 
-    // Validate required env vars
-    if env::working_dir().is_empty() {
-        log_error!(LOG_TAG, "Fatal: VM0_WORKING_DIR is required but not set");
-        let masker = Arc::new(masker::SecretMasker::from_env());
-        let telemetry = match HttpClient::for_current_env() {
-            Ok(http) => Some(Telemetry::spawn(masker, http)),
-            Err(e) => {
-                log_error!(LOG_TAG, "Final telemetry unavailable: {e}");
-                None
-            }
-        };
-        log_info!(LOG_TAG, "▷ Cleanup");
-        if let Some(telemetry) = telemetry {
-            final_telemetry(&telemetry).await;
-            telemetry.shutdown().await;
-        }
-        log_info!(LOG_TAG, "Background processes stopped");
-        log_info!(LOG_TAG, "✗ Sandbox failed (exit code 1)");
-        return 1;
-    }
-
     let http = match HttpClient::for_current_env() {
         Ok(http) => http,
         Err(e) => {
@@ -85,7 +64,11 @@ async fn run() -> i32 {
     let control_handle = control::ControlHandle::spawn(shutdown.clone());
     let start = Instant::now();
 
-    log_info!(LOG_TAG, "Working directory: {}", env::working_dir());
+    log_info!(
+        LOG_TAG,
+        "Working directory: {}",
+        paths::CANONICAL_WORKING_DIR
+    );
 
     let t = Instant::now();
     let heartbeat_handle = tokio::spawn({
@@ -157,9 +140,7 @@ async fn execute(
 
     // Working directory setup
     let wd_start = Instant::now();
-    if let Err(e) = std::fs::create_dir_all(env::working_dir())
-        .and_then(|()| std::env::set_current_dir(env::working_dir()))
-    {
+    if let Err(e) = setup_working_dir(paths::CANONICAL_WORKING_DIR) {
         let msg = format!("Working dir setup failed: {e}");
         log_error!(LOG_TAG, "{msg}");
         write_guest_error_file(&msg);
@@ -690,6 +671,12 @@ async fn complete_execution(
 
 fn should_create_success_checkpoint(cli_exit_code: i32, exit_code: i32) -> bool {
     cli_exit_code == 0 && exit_code == 0
+}
+
+fn setup_working_dir(path: impl AsRef<Path>) -> std::io::Result<()> {
+    let path = path.as_ref();
+    std::fs::create_dir_all(path)?;
+    std::env::set_current_dir(path)
 }
 
 /// Final telemetry upload — best-effort and logs on failure.
@@ -1362,7 +1349,6 @@ mod tests {
             std::env::set_var("VM0_API_URL", server.base_url());
             std::env::set_var("VM0_API_TOKEN", "test-token");
             std::env::set_var("VM0_RUN_ID", "main-recovery-checkpoint");
-            std::env::set_var("VM0_WORKING_DIR", "/tmp/main-recovery-checkpoint");
             std::env::set_var("VM0_PROMPT", "/event-upload-failure");
         }
 
@@ -1436,7 +1422,6 @@ mod tests {
             std::env::set_var("VM0_API_URL", server.base_url());
             std::env::set_var("VM0_API_TOKEN", "test-token");
             std::env::set_var("VM0_RUN_ID", "main-recovery-checkpoint");
-            std::env::set_var("VM0_WORKING_DIR", "/tmp/main-recovery-checkpoint");
             std::env::set_var("VM0_PROMPT", "/checkpoint-failure");
         }
 
@@ -1507,7 +1492,6 @@ mod tests {
             std::env::set_var("VM0_API_URL", server.base_url());
             std::env::set_var("VM0_API_TOKEN", "test-token");
             std::env::set_var("VM0_RUN_ID", "main-recovery-checkpoint");
-            std::env::set_var("VM0_WORKING_DIR", "/tmp/main-recovery-checkpoint");
             std::env::set_var("VM0_PROMPT", "plain prompt");
         }
 
@@ -1584,7 +1568,6 @@ mod tests {
             std::env::set_var("VM0_API_URL", server.base_url());
             std::env::set_var("VM0_API_TOKEN", "test-token");
             std::env::set_var("VM0_RUN_ID", "main-recovery-checkpoint");
-            std::env::set_var("VM0_WORKING_DIR", "/tmp/main-recovery-checkpoint");
             std::env::set_var("VM0_PROMPT", "/help");
         }
 
@@ -1669,7 +1652,6 @@ mod tests {
             std::env::set_var("VM0_API_URL", server.base_url());
             std::env::set_var("VM0_API_TOKEN", "test-token");
             std::env::set_var("VM0_RUN_ID", "main-recovery-checkpoint");
-            std::env::set_var("VM0_WORKING_DIR", "/tmp/main-recovery-checkpoint");
             std::env::set_var("VM0_PROMPT", "plain prompt");
         }
 

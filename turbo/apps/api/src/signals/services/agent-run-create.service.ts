@@ -1,5 +1,6 @@
 import { command, type Getter } from "ccstate";
 import {
+  CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
   DEFAULT_PROFILE,
   type SecretConnectorMetadata,
   type StorageManifest,
@@ -60,7 +61,6 @@ import {
   getAllFeatureStates,
   type FeatureSwitchContext,
 } from "@vm0/core/feature-switch";
-import { MOUNT_PATH_TEMPLATE } from "@vm0/api-contracts/contracts/composes";
 import { resolveSkillRef, parseGitHubTreeUrl } from "@vm0/core/github-url";
 import {
   getCustomSkillStorageName,
@@ -72,6 +72,7 @@ import {
   expandVariablesInString,
   extractAndGroupVariables,
 } from "@vm0/core/variable-expander";
+import { expandMountPath } from "@vm0/api-contracts/contracts/composes";
 import {
   agentComposes,
   agentComposeVersions,
@@ -133,8 +134,6 @@ import { recordSandboxOperation } from "../external/sandbox-op-log";
 const PENDING_RUN_TTL_MS = 15 * 60 * 1000;
 const QUEUED_RUN_TTL_MS = 2 * 60 * 60 * 1000;
 const AUTO_MEMORY_ARTIFACT_NAME = "memory";
-const AUTO_MEMORY_MOUNT_PATH =
-  "/home/user/.claude/projects/-home-user-workspace/memory";
 const CODEX_AUTO_MEMORY_MOUNT_PATH = "/home/user/.codex/memories";
 
 const TIER_LIMITS = Object.freeze({
@@ -585,10 +584,6 @@ async function resolveRequestedRunFramework(
   );
 }
 
-function frameworkWorkingDir(_framework: SupportedFramework): string {
-  return "/home/user/workspace";
-}
-
 function frameworkApiKeyEnv(framework: SupportedFramework): string {
   return framework === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
 }
@@ -599,7 +594,7 @@ function autoMemoryArtifact(framework: SupportedFramework): ContextArtifact {
     mountPath:
       framework === "codex"
         ? CODEX_AUTO_MEMORY_MOUNT_PATH
-        : AUTO_MEMORY_MOUNT_PATH,
+        : CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
   };
 }
 
@@ -617,25 +612,18 @@ function withAutoMemoryArtifact(
   return [...artifacts, autoMemoryArtifact(framework)];
 }
 
-function resolveComposeArtifactMountPath(
-  artifact: ComposeArtifact,
-  framework: SupportedFramework,
-): string {
-  if (!artifact.mount_path || artifact.mount_path === MOUNT_PATH_TEMPLATE) {
-    return frameworkWorkingDir(framework);
-  }
-  return artifact.mount_path;
+function resolveComposeArtifactMountPath(artifact: ComposeArtifact): string {
+  return expandMountPath(artifact.mount_path);
 }
 
 function composeArtifacts(
   content: AgentComposeContent,
-  framework: SupportedFramework,
 ): readonly ContextArtifact[] {
   return (content.artifacts ?? []).map((artifact) => {
     return {
       name: artifact.name,
       version: artifact.version,
-      mountPath: resolveComposeArtifactMountPath(artifact, framework),
+      mountPath: resolveComposeArtifactMountPath(artifact),
     };
   });
 }
@@ -649,7 +637,7 @@ function artifactsForRun(args: {
     args.resolved.sessionId || args.resolved.resumedFromCheckpointId
       ? args.resolved.artifacts
       : [
-          ...composeArtifacts(args.resolved.content, args.framework),
+          ...composeArtifacts(args.resolved.content),
           ...args.resolved.artifacts,
         ];
   return withAutoMemoryArtifact(
@@ -2874,7 +2862,6 @@ async function buildStoredExecutionContext(args: {
 
   return {
     context: {
-      workingDir: frameworkWorkingDir(args.framework),
       storageManifest: args.storageManifest,
       environment: {
         ...expandEnvironment({

@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 
 import { runsMainContract } from "@vm0/api-contracts/contracts/runs";
 import {
+  CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
+  CANONICAL_WORKING_DIR,
+} from "@vm0/api-contracts/contracts/runners";
+import { MOUNT_PATH_TEMPLATE } from "@vm0/api-contracts/contracts/composes";
+import {
   getModelProviderFirewall,
   type ModelProviderType,
 } from "@vm0/api-contracts/contracts/model-providers";
@@ -1430,7 +1435,7 @@ describe("POST /api/agent/runs", () => {
       { name: "artifact", mountPath: "/mnt/work" },
       {
         name: "memory",
-        mountPath: "/home/user/.claude/projects/-home-user-workspace/memory",
+        mountPath: CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
       },
     ]);
     expect(
@@ -1456,7 +1461,9 @@ describe("POST /api/agent/runs", () => {
       fixture: fx,
       overrides: { volumes: ["kb:/mnt/kb"] },
       volumes: { kb: { name: "knowledge-base", version: "latest" } },
-      artifacts: [{ name: "compose-artifact", mount_path: "/mnt/artifact" }],
+      artifacts: [
+        { name: "compose-artifact", mount_path: MOUNT_PATH_TEMPLATE },
+      ],
     });
 
     const response = await accept(
@@ -1508,12 +1515,12 @@ describe("POST /api/agent/runs", () => {
         }),
     ).toStrictEqual([
       {
-        mountPath: "/mnt/artifact",
+        mountPath: CANONICAL_WORKING_DIR,
         name: "compose-artifact",
         version: artifactVersion,
       },
       {
-        mountPath: "/home/user/.claude/projects/-home-user-workspace/memory",
+        mountPath: CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
         name: "memory",
         version: expect.any(String),
       },

@@ -34,7 +34,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use api_contracts::generated::model_providers::model_provider_env::placeholders as model_provider_placeholders;
+use api_contracts::generated::constants::model_provider_env::placeholders as model_provider_placeholders;
+use api_contracts::generated::constants::runners::paths::CANONICAL_WORKING_DIR;
 
 use crate::ids::RunId;
 
@@ -1872,8 +1873,7 @@ async fn restore_claude_session(
     context: &ExecutionContext,
     session: &ResumeSession,
 ) -> RunnerResult<()> {
-    let project_name = context
-        .working_dir
+    let project_name = CANONICAL_WORKING_DIR
         .trim_start_matches('/')
         .replace('/', "-");
     let session_dir = format!("/home/user/.claude/projects/-{project_name}");
@@ -1991,7 +1991,6 @@ fn build_env_json_with_host_env(
     {
         env.insert("VM0_APPEND_SYSTEM_PROMPT".into(), asp.clone());
     }
-    env.insert("VM0_WORKING_DIR".into(), context.working_dir.clone());
     env.insert(
         "VM0_API_START_TIME".into(),
         context
@@ -2129,6 +2128,8 @@ const RUNNER_OWNED_ENV_KEYS: &[&str] = &[
     "VM0_SANDBOX_REUSE_RESULT",
     "VM0_PROMPT",
     "VM0_APPEND_SYSTEM_PROMPT",
+    // Retired runner-owned key. Keep scrubbing user-provided values so the
+    // removed working-dir parameter does not leak into guest CLI processes.
     "VM0_WORKING_DIR",
     "VM0_API_START_TIME",
     "CLI_AGENT_TYPE",
@@ -2421,7 +2422,6 @@ mod tests {
             vars: None,
             checkpoint_id: None,
             sandbox_token: "tok".into(),
-            working_dir: "/workspace".into(),
             storage_manifest: None,
             environment: None,
             resume_session: None,
@@ -2607,7 +2607,7 @@ mod tests {
         assert_eq!(env.get("VM0_RUN_ID").unwrap(), &RunId::nil().to_string());
         assert_eq!(env.get("VM0_API_TOKEN").unwrap(), "tok");
         assert_eq!(env.get("VM0_PROMPT").unwrap(), "test prompt");
-        assert_eq!(env.get("VM0_WORKING_DIR").unwrap(), "/workspace");
+        assert!(!env.contains_key("VM0_WORKING_DIR"));
         // Guest-agent needs these to post /complete with full metadata when
         // checkpoint lands before VM teardown.
         assert!(
@@ -2748,6 +2748,7 @@ mod tests {
             ("CUSTOM_ENV".into(), "kept".into()),
             ("VM0_PROMPT".into(), "user prompt".into()),
             ("VM0_API_TOKEN".into(), "stolen".into()),
+            ("VM0_WORKING_DIR".into(), "/legacy".into()),
             ("VM0_FEATURE_FLAGS".into(), r#"{"bad":true}"#.into()),
             (RUNNER_CONCURRENCY_FACTOR_ENV.into(), "99".into()),
             (RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV.into(), "999".into()),
@@ -2771,6 +2772,7 @@ mod tests {
         assert_eq!(env.get("VM0_PROMPT").unwrap(), "test prompt");
         assert_eq!(env.get("VM0_API_TOKEN").unwrap(), "tok");
         assert_eq!(env.get("CLI_AGENT_TYPE").unwrap(), "codex");
+        assert!(!env.contains_key("VM0_WORKING_DIR"));
         assert!(!env.contains_key("VM0_FEATURE_FLAGS"));
         assert!(!env.contains_key(RUNNER_CONCURRENCY_FACTOR_ENV));
         assert!(!env.contains_key(RUNNER_DISK_BANDWIDTH_MIB_PER_SEC_ENV));
@@ -2820,7 +2822,7 @@ mod tests {
             "Use terse answers."
         );
         assert_eq!(env.get("VM0_RESUME_SESSION_ID").unwrap(), "sess-123");
-        assert_eq!(env.get("VM0_WORKING_DIR").unwrap(), "/workspace");
+        assert!(!env.contains_key("VM0_WORKING_DIR"));
     }
 
     #[test]
@@ -3161,7 +3163,6 @@ mod tests {
             "runId": "00000000-0000-0000-0000-000000000001",
             "prompt": "test",
             "sandboxToken": "tok",
-            "workingDir": "/workspace",
             "cliAgentType": "claude-code",
             "billableFirewalls": [],
             "firewalls": [{
@@ -3204,7 +3205,6 @@ mod tests {
             "runId": "00000000-0000-0000-0000-000000000001",
             "prompt": "test",
             "sandboxToken": "tok",
-            "workingDir": "/workspace",
             "cliAgentType": "claude-code",
             "billableFirewalls": []
         });

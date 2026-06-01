@@ -153,7 +153,6 @@ function getEffectiveConcurrencyLimit(tier: keyof typeof TIER_LIMITS): number {
 
 const ORG_SENTINEL_USER_ID = "__org__";
 const CUSTOM_CONNECTOR_SECRET_PLACEHOLDER = "{{secret}}";
-const PLATFORM_ENV_SECRET_NAMES = ["GOOGLE_ADS_DEVELOPER_TOKEN"] as const;
 const L = logger("AgentRunCreate");
 const CONNECTOR_SECRET_REF_PREFIX = "$secrets.";
 const CONNECTOR_VAR_REF_PREFIX = "$vars.";
@@ -1553,6 +1552,7 @@ interface ConnectorEnvBindingSet {
   readonly connectorType: ConnectorType;
   readonly authMethod: string;
   readonly envBindings: Record<string, string>;
+  readonly platformSecretNames: ReadonlySet<string>;
   readonly optionalSecretNames: ReadonlySet<string>;
   readonly optionalVariableNames: ReadonlySet<string>;
 }
@@ -1602,6 +1602,10 @@ function connectorEnvBindingSets(
 ): readonly ConnectorEnvBindingSet[] {
   return rows.map((row) => {
     const method = getConnectorAuthMethod(row.connectorType, row.authMethod);
+    const accessMetadata = getConnectorAuthMethodAccessMetadata(
+      row.connectorType,
+      row.authMethod,
+    );
     if (!method) {
       throw new Error(
         `Invalid auth method "${row.authMethod}" for stored connector "${row.connectorType}"`,
@@ -1628,6 +1632,7 @@ function connectorEnvBindingSets(
         row.connectorType,
         row.authMethod,
       ),
+      platformSecretNames: new Set(accessMetadata?.platformSecrets ?? []),
       optionalSecretNames,
       optionalVariableNames,
     };
@@ -1640,10 +1645,13 @@ function collectStoredConnectorRequirements(
   const secretNames = new Set<string>();
   const variableNames = new Set<string>();
 
-  for (const { envBindings } of bindingSets) {
+  for (const { envBindings, platformSecretNames } of bindingSets) {
     for (const valueRef of Object.values(envBindings)) {
       if (valueRef.startsWith(CONNECTOR_SECRET_REF_PREFIX)) {
-        secretNames.add(valueRef.slice(CONNECTOR_SECRET_REF_PREFIX.length));
+        const secretName = valueRef.slice(CONNECTOR_SECRET_REF_PREFIX.length);
+        if (!platformSecretNames.has(secretName)) {
+          secretNames.add(secretName);
+        }
       } else if (valueRef.startsWith(CONNECTOR_VAR_REF_PREFIX)) {
         variableNames.add(valueRef.slice(CONNECTOR_VAR_REF_PREFIX.length));
       }
@@ -1723,6 +1731,23 @@ async function loadStoredConnectorVariables(
   );
 }
 
+function handlePlatformSecretBinding(args: {
+  readonly secrets: Record<string, string>;
+  readonly envName: string;
+  readonly secretName: string;
+  readonly platformSecretNames: ReadonlySet<string>;
+}): boolean {
+  if (!args.platformSecretNames.has(args.secretName)) {
+    return false;
+  }
+
+  const secretValue = optionalEnv(args.secretName);
+  if (secretValue) {
+    args.secrets[args.envName] = secretValue;
+  }
+  return true;
+}
+
 function resolveStoredConnectorState(
   bindingSets: readonly ConnectorEnvBindingSet[],
   connectorSecrets: Record<string, string>,
@@ -1737,12 +1762,23 @@ function resolveStoredConnectorState(
     connectorType,
     authMethod,
     envBindings,
+    platformSecretNames,
     optionalSecretNames,
     optionalVariableNames,
   } of bindingSets) {
     for (const [envName, valueRef] of Object.entries(envBindings)) {
       if (valueRef.startsWith(CONNECTOR_SECRET_REF_PREFIX)) {
         const secretName = valueRef.slice(CONNECTOR_SECRET_REF_PREFIX.length);
+        if (
+          handlePlatformSecretBinding({
+            secrets,
+            envName,
+            secretName,
+            platformSecretNames,
+          })
+        ) {
+          continue;
+        }
         const secretValue = connectorSecrets[secretName];
         if (secretValue !== undefined) {
           secrets[envName] = secretValue;
@@ -1781,9 +1817,14 @@ function resolveStoredConnectorState(
       for (const [envName, valueRef] of Object.entries(
         accessMetadata.envBindings,
       )) {
-        if (valueRef.startsWith(CONNECTOR_SECRET_REF_PREFIX)) {
-          secretConnectorMap[envName] = connectorType;
+        if (!valueRef.startsWith(CONNECTOR_SECRET_REF_PREFIX)) {
+          continue;
         }
+        const secretName = valueRef.slice(CONNECTOR_SECRET_REF_PREFIX.length);
+        if (platformSecretNames.has(secretName)) {
+          continue;
+        }
+        secretConnectorMap[envName] = connectorType;
       }
     }
   }
@@ -1859,23 +1900,6 @@ async function loadStoredConnectorContext(
       storedEnvironment: compactRecord(resolved.environment),
     };
   });
-}
-
-function injectPlatformEnvSecrets(
-  connectorTypes: readonly ConnectorType[],
-): Record<string, string> | undefined {
-  if (!connectorTypes.includes("google-ads")) {
-    return undefined;
-  }
-
-  const result: Record<string, string> = {};
-  for (const name of PLATFORM_ENV_SECRET_NAMES) {
-    const value = optionalEnv(name);
-    if (value) {
-      result[name] = value;
-    }
-  }
-  return compactRecord(result);
 }
 
 function customConnectorSecretKey(connectorId: string): string {
@@ -3006,16 +3030,12 @@ function buildStoredExecutionSecrets(args: {
   readonly bodySecrets: Record<string, string> | undefined;
   readonly customConnectorContext: CustomConnectorRuntimeContext;
 }): StoredExecutionSecrets {
-  const platformSecrets = injectPlatformEnvSecrets(
-    args.connectorContext.connectorTypes,
-  );
   const filteredConnectorMap = filterSecretConnectorMap({
     secretConnectorMap: args.connectorContext.secretConnectorMap,
     overriddenSecrets: [
       args.modelProvider?.secrets,
       args.bodySecrets,
       args.customConnectorContext.secrets,
-      platformSecrets,
     ],
   });
   // The merged map is the runtime `secrets.NAME` namespace consumed by firewall
@@ -3028,7 +3048,6 @@ function buildStoredExecutionSecrets(args: {
       args.modelProvider?.secrets,
       args.bodySecrets,
       args.customConnectorContext.secrets,
-      platformSecrets,
     ),
     secretConnectorMap:
       mergeRecords(

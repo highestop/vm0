@@ -22,6 +22,7 @@ import {
   type ConnectorGrantConfig,
   type ConnectorGrantKind,
   type ConnectorManualGrantFieldConfig,
+  type ConnectorPlatformSecretName,
   type ConnectorRevokeKind,
   type ConnectorType,
   type AuthCodeGrantConnectorType,
@@ -226,20 +227,35 @@ function connectorAccessEnvBindings(
   }
 }
 
+function connectorAccessPlatformSecrets(
+  access: ConnectorAccessConfig,
+): readonly ConnectorPlatformSecretName[] {
+  switch (access.kind) {
+    case "static":
+    case "refresh-token":
+      return access.platformSecrets ?? [];
+    case "none":
+      return [];
+  }
+}
+
 export type ConnectorAuthMethodAccessMetadata =
   | {
       readonly kind: "static";
       readonly envBindings: ConnectorEnvBindings;
+      readonly platformSecrets: readonly ConnectorPlatformSecretName[];
     }
   | {
       readonly kind: "refresh-token";
       readonly accessToken: string;
       readonly refreshToken: string;
       readonly envBindings: ConnectorEnvBindings;
+      readonly platformSecrets: readonly ConnectorPlatformSecretName[];
     }
   | {
       readonly kind: "none";
       readonly envBindings: ConnectorEnvBindings;
+      readonly platformSecrets: readonly ConnectorPlatformSecretName[];
     };
 
 export function getConnectorAuthMethodAccessMetadata(
@@ -256,6 +272,7 @@ export function getConnectorAuthMethodAccessMetadata(
       return {
         kind: "static",
         envBindings: method.access.envBindings,
+        platformSecrets: method.access.platformSecrets ?? [],
       };
     case "refresh-token":
       return {
@@ -263,11 +280,13 @@ export function getConnectorAuthMethodAccessMetadata(
         accessToken: method.access.accessToken,
         refreshToken: method.access.refreshToken,
         envBindings: method.access.envBindings,
+        platformSecrets: method.access.platformSecrets ?? [],
       };
     case "none":
       return {
         kind: "none",
         envBindings: {},
+        platformSecrets: [],
       };
   }
 }
@@ -680,13 +699,15 @@ export function getRuntimeAvailableConnectorTypes(
 }
 
 /**
- * Get secret names for a specific auth method
+ * Get connector-owned secret storage names for a specific auth method.
  */
-export function getConnectorSecretNames(
+export function getConnectorOwnedSecretNames(
   type: ConnectorType,
   authMethod: string,
 ): string[] {
-  return connectorMethodSecretNames(getConnectorAuthMethod(type, authMethod));
+  return connectorMethodOwnedSecretNames(
+    getConnectorAuthMethod(type, authMethod),
+  );
 }
 
 /**
@@ -699,7 +720,7 @@ export function getConnectorVariableNames(
   return connectorMethodVariableNames(getConnectorAuthMethod(type, authMethod));
 }
 
-function connectorMethodSecretNames(
+function connectorMethodOwnedSecretNames(
   method: ConnectorAuthMethodConfig | undefined,
 ): string[] {
   if (!method) {
@@ -725,6 +746,13 @@ function connectorMethodSecretNames(
   if (method.access.kind === "refresh-token") {
     names.add(method.access.accessToken);
     names.add(method.access.refreshToken);
+  }
+
+  const platformSecretNames: ReadonlySet<string> = new Set(
+    connectorAccessPlatformSecrets(method.access),
+  );
+  for (const secretName of platformSecretNames) {
+    names.delete(secretName);
   }
 
   return [...names];
@@ -809,7 +837,7 @@ export function getConnectorEnvNamesForSecret(
     const config = CONNECTOR_TYPES[type];
 
     const found = Object.values(config.authMethods).some((method) => {
-      return connectorMethodSecretNames(method).includes(secretName);
+      return connectorMethodOwnedSecretNames(method).includes(secretName);
     });
     if (!found) {
       continue;
@@ -928,7 +956,7 @@ export function getConnectorTypeForSecretName(
       }
     }
     for (const method of Object.values(config.authMethods)) {
-      if (connectorMethodSecretNames(method).includes(name)) {
+      if (connectorMethodOwnedSecretNames(method).includes(name)) {
         return type;
       }
     }

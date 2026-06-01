@@ -881,6 +881,20 @@ export {
   type ZeroUserConnectorsContract,
 } from "./user-connectors";
 export {
+  zeroUserPermissionGrantsContract,
+  userPermissionGrantActionSchema,
+  userPermissionGrantTtlSecondsSchema,
+  userPermissionGrantResponseSchema,
+  listUserPermissionGrantsQuerySchema,
+  upsertUserPermissionGrantRequestSchema,
+  type UserPermissionGrantAction,
+  type UserPermissionGrantTtlSeconds,
+  type UserPermissionGrantResponse,
+  type ListUserPermissionGrantsQuery,
+  type UpsertUserPermissionGrantRequest,
+  type ZeroUserPermissionGrantsContract,
+} from "./zero-user-permission-grants";
+export {
   zeroConnectorsMainContract,
   zeroConnectorsByTypeContract,
   zeroConnectorScopeDiffContract,

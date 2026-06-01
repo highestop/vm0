@@ -1018,6 +1018,7 @@ export const API_BACKEND_REWRITES = [
     "/api/zero/permission-access-requests",
     "/api/zero/permission-access-requests",
   ],
+  ["/api/zero/user-permission-grants", "/api/zero/user-permission-grants"],
   ["/api/zero/permission-policies", "/api/zero/permission-policies"],
   ["/api/zero/push-subscriptions", "/api/zero/push-subscriptions"],
   ["/api/zero/queue-position", "/api/zero/queue-position"],

@@ -151,6 +151,7 @@ import { zeroUsageInsightRoutes } from "./routes/zero-usage-insight";
 import { zeroUsageMembersRoutes } from "./routes/zero-usage-members";
 import { zeroUsageRunsRoutes } from "./routes/zero-usage-runs";
 import { zeroUserPreferencesRoutes } from "./routes/zero-user-preferences";
+import { zeroUserPermissionGrantsRoutes } from "./routes/zero-user-permission-grants";
 import { zeroUserModelPreferenceRoutes } from "./routes/zero-user-model-preference";
 import { zeroVoiceIoQuotaRoutes } from "./routes/zero-voice-io-quota";
 import { zeroVoiceIoSpeechRoutes } from "./routes/zero-voice-io-speech";
@@ -302,6 +303,7 @@ export const ROUTES: readonly RouteEntry[] = [
   ...zeroPermissionAccessRequestsRoutes,
   ...zeroPermissionPoliciesRoutes,
   ...zeroPushSubscriptionsRoutes,
+  ...zeroUserPermissionGrantsRoutes,
   ...zeroUserPreferencesRoutes,
   ...zeroUserModelPreferenceRoutes,
   ...zeroSecretsRoutes,

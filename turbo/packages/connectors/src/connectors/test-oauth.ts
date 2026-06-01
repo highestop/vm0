@@ -1,7 +1,27 @@
-import type { ConnectorConfig } from "../connectors";
+import type {
+  ConnectorAuthClientConfig,
+  ConnectorAuthCodeGrantConfig,
+  ConnectorConfig,
+  ConnectorRevokeConfig,
+} from "../connectors";
 import { FeatureSwitchKey } from "../feature-switch-key";
 
 const OAUTH_TOKEN_URL = "/api/test/oauth-provider/token";
+
+const TEST_OAUTH_CLIENT = {
+  clientRegistration: "static",
+  clientType: "confidential",
+  clientId: "test-oauth-client",
+  clientSecret: "test-oauth-secret",
+} satisfies ConnectorAuthClientConfig;
+
+const TEST_OAUTH_AUTH_CODE_GRANT = {
+  kind: "auth-code",
+  tokenUrl: OAUTH_TOKEN_URL,
+  scopes: ["read"],
+} satisfies ConnectorAuthCodeGrantConfig;
+
+const TEST_OAUTH_REVOKE = { kind: "none" } satisfies ConnectorRevokeConfig;
 
 export const testOauth = {
   "test-oauth": {
@@ -14,17 +34,8 @@ export const testOauth = {
         featureFlag: FeatureSwitchKey.TestOauthConnector,
         label: "OAuth",
         helpText: "Test-only OAuth provider. Only reachable in dev/preview.",
-        client: {
-          clientRegistration: "static",
-          clientType: "confidential",
-          clientId: "test-oauth-client",
-          clientSecret: "test-oauth-secret",
-        },
-        grant: {
-          kind: "auth-code",
-          tokenUrl: OAUTH_TOKEN_URL,
-          scopes: ["read"],
-        },
+        client: TEST_OAUTH_CLIENT,
+        grant: TEST_OAUTH_AUTH_CODE_GRANT,
         access: {
           kind: "refresh-token",
           tokenUrl: OAUTH_TOKEN_URL,
@@ -34,7 +45,25 @@ export const testOauth = {
             TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_ACCESS_TOKEN",
           },
         },
-        revoke: { kind: "none" },
+        revoke: TEST_OAUTH_REVOKE,
+      },
+      api: {
+        featureFlag: FeatureSwitchKey.TestOauthConnector,
+        label: "API OAuth",
+        helpText:
+          "Secondary test-only OAuth method used to exercise method-aware provider registration.",
+        client: TEST_OAUTH_CLIENT,
+        grant: TEST_OAUTH_AUTH_CODE_GRANT,
+        access: {
+          kind: "refresh-token",
+          tokenUrl: OAUTH_TOKEN_URL,
+          accessToken: "TEST_OAUTH_API_ACCESS_TOKEN",
+          refreshToken: "TEST_OAUTH_API_REFRESH_TOKEN",
+          envBindings: {
+            TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+          },
+        },
+        revoke: TEST_OAUTH_REVOKE,
       },
     },
     defaultAuthMethod: "oauth",

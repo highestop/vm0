@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 import mitm_addon
 from tests.request_handler_helpers import (
     _single_firewall_vm,
@@ -105,6 +107,54 @@ async def test_firewall_malformed_config_block_reports_reason(
                     {
                         "name": "read-repos",
                         "rules": ["GET /repos/{a}literal{b}"],
+                    },
+                ],
+            },
+            network_policy={
+                "allow": ["read-repos"],
+                "deny": [],
+                "ask": [],
+                "unknownPolicy": "allow",
+            },
+        ),
+    )
+
+    flow = real_flow(
+        with_response=False,
+        client_ip="10.200.0.5",
+        host="api.github.com",
+        path="/repos/org/repo",
+    )
+
+    with mitm_ctx(registry_path=str(reg_path), api_url="https://api.vm0.ai"):
+        await mitm_addon.request(flow)
+
+    assert flow.response is not None
+    assert flow.response.status_code == 403
+    body = json.loads(flow.response.content)
+    assert body["error"] == "permission_denied"
+    assert body["permissions"] == []
+    assert body["reason"] == "malformed_firewall_config"
+    proxy_log_entry = json.loads((tmp_path / "proxy.jsonl").read_text().splitlines()[0])
+    assert proxy_log_entry["type"] == "firewall_block"
+    assert proxy_log_entry["reason"] == "malformed_firewall_config"
+
+
+async def test_firewall_malformed_auth_config_block_reports_reason(
+    tmp_path, real_flow, mitm_ctx, headers
+):
+    """Malformed auth config blocks before the auth handler runs."""
+    reg_path = _write_registry(
+        tmp_path,
+        vm_info=_single_firewall_vm(
+            tmp_path,
+            api_entry={
+                "base": "https://api.github.com",
+                "auth": {"headers": None},
+                "permissions": [
+                    {
+                        "name": "read-repos",
+                        "rules": ["GET /repos/{owner}/{repo}"],
                     },
                 ],
             },
@@ -550,10 +600,11 @@ async def test_browser_firewall_match_does_not_bypass_denied_unknown_policy(
     assert body["reason"] == "unknown_endpoint"
 
 
+@pytest.mark.parametrize("path", ["/repos/%2e%2e/admin", "/repos\\admin"])
 async def test_firewall_unsafe_path_blocks_before_auth_injection(
-    tmp_path, real_flow, mitm_ctx, fake_firewall_headers, headers
+    tmp_path, real_flow, mitm_ctx, fake_firewall_headers, headers, path
 ):
-    """Unsafe dot-segment paths block before trusted auth is injected."""
+    """Unsafe paths block before trusted auth is injected."""
     reg_path = _write_registry(
         tmp_path,
         vm_info=_single_firewall_vm(
@@ -581,7 +632,7 @@ async def test_firewall_unsafe_path_blocks_before_auth_injection(
         with_response=False,
         client_ip="10.200.0.5",
         host="api.github.com",
-        path="/repos/%2e%2e/admin",
+        path=path,
     )
 
     with (
@@ -601,7 +652,7 @@ async def test_firewall_unsafe_path_blocks_before_auth_injection(
     assert body["error"] == "permission_denied"
     assert body["message"] == "Request blocked: unsafe path"
     assert body["method"] == "GET"
-    assert body["path"] == "/repos/%2e%2e/admin"
+    assert body["path"] == path
     assert body["name"] == "github"
     assert body["permissions"] == []
     assert body["reason"] == "unsafe_path"

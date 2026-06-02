@@ -1091,6 +1091,7 @@ export const API_BACKEND_REWRITES = [
     "/api/zero/schedules/:name/enable",
     ZERO_SCHEDULES_ENABLE_PATH_RE,
   ],
+  ["/api/zero/memory", "/api/zero/memory"],
   ["/api/zero/skills", "/api/zero/skills"],
   [
     ZERO_SKILLS_BY_NAME_REWRITE_SOURCE,

@@ -55,4 +55,5 @@ export enum FeatureSwitchKey {
   ChatArtifactSidebar = "chatArtifactSidebar",
   ChatGithubPrTracking = "chatGithubPrTracking",
   ChatScrollToBottomButton = "chatScrollToBottomButton",
+  MemoryViewer = "memoryViewer",
 }

@@ -54,5 +54,6 @@ export enum FeatureSwitchKey {
   SandboxIoLimiters = "sandboxIoLimiters",
   SessionWorkspaceImageCache = "sessionWorkspaceImageCache",
   ChatArtifactSidebar = "chatArtifactSidebar",
+  ChatGithubPrTracking = "chatGithubPrTracking",
   ChatScrollToBottomButton = "chatScrollToBottomButton",
 }

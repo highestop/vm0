@@ -222,8 +222,6 @@ export {
   CONNECTOR_TYPES,
   getConnectorOwnedSecretNames,
   getConnectorEnvBindingEntries,
-  getConnectorEnvNamesForSecret,
-  getConnectorTypeForSecretName,
   connectorResponseSchema,
   connectorListResponseSchema,
   scopeDiffResponseSchema,

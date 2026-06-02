@@ -44,11 +44,11 @@ import {
   getConnectorAuthMethodDeviceAuthGrantConfig,
   getConnectorAuthMethodAccessMetadata,
   getConnectorAuthMethodStorageMetadata,
-  getConnectorOwnedAccessSecretBindingEntries,
+  getConnectorStoredSecretDisplayInfo,
+  getDiagnosticConnectorTypeForRuntimeEnvName,
   resolveConnectorAuthClientForMethod,
   getConnectorAuthMethodEnvBindings,
   getConnectorAuthMethod,
-  getConnectorTypeForSecretName,
   getConnectorEnvBindingEntries,
   getConnectorManualGrantFieldNames,
   getConnectorManualGrantFieldNamesForAuthMethod,
@@ -588,6 +588,28 @@ describe("connector auth method config", () => {
 
     expect(duplicateSecrets).toStrictEqual([]);
     expect(duplicateVariables).toStrictEqual([]);
+  });
+
+  it("keeps runtime env aliases unique across connector types", () => {
+    const envAliasOwners = new Map<string, Set<ConnectorType>>();
+
+    for (const type of CONNECTOR_TYPE_KEYS) {
+      for (const { envName } of getConnectorEnvBindingEntries(type)) {
+        const owners = envAliasOwners.get(envName) ?? new Set<ConnectorType>();
+        owners.add(type);
+        envAliasOwners.set(envName, owners);
+      }
+    }
+
+    const crossConnectorDuplicates = [...envAliasOwners].flatMap(
+      ([envName, owners]) => {
+        return owners.size > 1
+          ? [{ envName, connectorTypes: [...owners].sort() }]
+          : [];
+      },
+    );
+
+    expect(crossConnectorDuplicates).toStrictEqual([]);
   });
 });
 
@@ -1840,42 +1862,6 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
       "GOOGLE_ADS_REFRESH_TOKEN",
     ]);
   });
-
-  it("returns connector-owned access secret binding entries", () => {
-    const googleAdsAccess = getConnectorAuthMethodAccessMetadata(
-      "google-ads",
-      "oauth",
-    );
-    const slockAccess = getConnectorAuthMethodAccessMetadata("slock", "oauth");
-    const githubAccess = getConnectorAuthMethodAccessMetadata(
-      "github",
-      "oauth",
-    );
-    if (!googleAdsAccess || !slockAccess || !githubAccess) {
-      throw new Error("Expected access metadata for test connectors");
-    }
-
-    expect(
-      getConnectorOwnedAccessSecretBindingEntries(googleAdsAccess),
-    ).toStrictEqual([
-      {
-        envName: "GOOGLE_ADS_TOKEN",
-        secretName: "GOOGLE_ADS_ACCESS_TOKEN",
-      },
-    ]);
-    expect(
-      getConnectorOwnedAccessSecretBindingEntries(slockAccess),
-    ).toStrictEqual([
-      { envName: "SLOCK_TOKEN", secretName: "SLOCK_ACCESS_TOKEN" },
-      { envName: "SLOCK_SERVER_ID", secretName: "SLOCK_SERVER_ID" },
-    ]);
-    expect(
-      getConnectorOwnedAccessSecretBindingEntries(githubAccess),
-    ).toStrictEqual([
-      { envName: "GH_TOKEN", secretName: "GITHUB_ACCESS_TOKEN" },
-      { envName: "GITHUB_TOKEN", secretName: "GITHUB_ACCESS_TOKEN" },
-    ]);
-  });
 });
 
 describe("getConnectorAuthMethodStorageMetadata", () => {
@@ -2111,26 +2097,31 @@ describe("getConnectorEnvBindingEntries", () => {
     expect(firewall.apis[0]?.permissions).toStrictEqual([]);
   });
 
-  it("authorization-grant auth methods have consistent secrets and envBindings naming", () => {
-    // All naming derives from a single prefix XXX:
-    //   oauth secrets:      XXX_ACCESS_TOKEN (required), XXX_REFRESH_TOKEN (optional)
-    //   envBindings: values -> declared connector secrets or platform sources
-    //   api-token secrets:  XXX_TOKEN (if api-token auth method exists)
+  it("authorization-grant auth methods keep the documented secret naming convention", () => {
+    // This is a registry naming convention. Runtime behavior must use
+    // storage.secretRoles and runtimeBindings, not infer roles from names.
     for (const type of connectorTypeSchema.options) {
       if (!hasConnectorAuthorizationGrant(type)) continue;
 
-      const oauthSecrets = getConnectorOwnedSecretNames(type, "oauth");
-      const prefix = oauthSecrets
-        .find((s) => {
-          return s.endsWith("_ACCESS_TOKEN");
-        })
-        ?.replace(/_ACCESS_TOKEN$/, "");
+      const storageMetadata = getConnectorAuthMethodStorageMetadata(
+        type,
+        "oauth",
+      );
+      const accessSecretName = storageMetadata?.secretRoles.accessToken;
       expect(
-        prefix,
-        `${type}: oauth secrets must include an _ACCESS_TOKEN key`,
+        accessSecretName,
+        `${type}: OAuth auth method must declare an access token role`,
       ).toBeDefined();
+      if (!accessSecretName) {
+        continue;
+      }
+      expect(
+        accessSecretName.endsWith("_ACCESS_TOKEN"),
+        `${type}: access token role must keep the _ACCESS_TOKEN naming convention`,
+      ).toBe(true);
 
-      const accessSecretName = `${prefix}_ACCESS_TOKEN`;
+      const oauthSecrets = getConnectorOwnedSecretNames(type, "oauth");
+      const prefix = accessSecretName.replace(/_ACCESS_TOKEN$/, "");
       const refreshSecretName = `${prefix}_REFRESH_TOKEN`;
       expect(
         oauthSecrets,
@@ -2140,39 +2131,32 @@ describe("getConnectorEnvBindingEntries", () => {
       const oauthMethod = getConnectorAuthMethod(type, "oauth");
       if (oauthMethod?.access.kind === "refresh-token") {
         expect(
+          storageMetadata.secretRoles.refreshToken,
+          `${type}: refresh-token access must declare a refresh token role`,
+        ).toBe(refreshSecretName);
+        expect(
           oauthSecrets,
           `${type}: refresh-token access must include ${refreshSecretName}`,
         ).toContain(refreshSecretName);
       }
 
-      const envBindings = getConnectorAuthMethodEnvBindings(type, "oauth");
-      const accessMetadata = getConnectorAuthMethodAccessMetadata(
-        type,
-        "oauth",
+      const runtimeSecretNames = storageMetadata.runtimeBindings.flatMap(
+        (entry) => {
+          return entry.source.kind === "connector-secret"
+            ? [entry.source.name]
+            : [];
+        },
       );
-      const platformSecretNames: ReadonlySet<string> = new Set(
-        accessMetadata?.platformSecrets ?? [],
-      );
-      const mappedSecretNames = Object.values(envBindings).map((valueRef) => {
-        expect(
-          valueRef.startsWith("$secrets."),
-          `${type}: OAuth envBindings value ${valueRef} must reference a secret`,
-        ).toBe(true);
-        return valueRef.slice("$secrets.".length);
-      });
 
       expect(
-        mappedSecretNames,
-        `${type}: envBindings must expose ${accessSecretName}`,
+        runtimeSecretNames,
+        `${type}: runtimeBindings must expose the access token role`,
       ).toContain(accessSecretName);
 
-      for (const secretName of mappedSecretNames) {
-        if (platformSecretNames.has(secretName)) {
-          continue;
-        }
+      for (const secretName of runtimeSecretNames) {
         expect(
           oauthSecrets,
-          `${type}: mapped secret ${secretName} must be declared by OAuth auth method`,
+          `${type}: runtime secret ${secretName} must be declared by OAuth auth method`,
         ).toContain(secretName);
       }
 
@@ -2184,12 +2168,13 @@ describe("getConnectorEnvBindingEntries", () => {
           continue;
         }
         expect(
-          mappedSecretNames,
-          `${type}: extra OAuth secret ${secretName} must be exposed by envBindings`,
+          runtimeSecretNames,
+          `${type}: extra OAuth secret ${secretName} must be exposed by runtimeBindings`,
         ).toContain(secretName);
       }
 
       const expectedAccessRef = `$secrets.${accessSecretName}`;
+      const envBindings = getConnectorAuthMethodEnvBindings(type, "oauth");
       expect(
         Object.values(envBindings),
         `${type}: envBindings must include ${expectedAccessRef}`,
@@ -2700,24 +2685,62 @@ describe("connector OAuth device authorization config", () => {
   });
 });
 
-describe("getConnectorTypeForSecretName", () => {
-  it("finds connector type for OAuth env bindings key", () => {
-    expect(getConnectorTypeForSecretName("GH_TOKEN")).toBe("github");
-    expect(getConnectorTypeForSecretName("GITHUB_TOKEN")).toBe("github");
+describe("getConnectorStoredSecretDisplayInfo", () => {
+  it("returns display env aliases for stored connector secrets", () => {
+    expect(
+      getConnectorStoredSecretDisplayInfo("GITHUB_ACCESS_TOKEN"),
+    ).toStrictEqual({
+      connectorLabel: "GitHub",
+      envNames: ["GH_TOKEN", "GITHUB_TOKEN"],
+    });
   });
 
-  it("finds connector type for api-token auth method secret", () => {
-    expect(getConnectorTypeForSecretName("ATLASSIAN_TOKEN")).toBe("atlassian");
-    expect(getConnectorTypeForSecretName("ATLASSIAN_EMAIL")).toBe("atlassian");
-    expect(getConnectorTypeForSecretName("ATLASSIAN_DOMAIN")).toBe("atlassian");
+  it("returns null for stored connector secrets without runtime env aliases", () => {
+    expect(
+      getConnectorStoredSecretDisplayInfo("SLOCK_REFRESH_TOKEN"),
+    ).toBeNull();
   });
 
-  it("finds connector type for OAuth auth method secret", () => {
-    expect(getConnectorTypeForSecretName("GITHUB_ACCESS_TOKEN")).toBe("github");
+  it("returns null for platform secrets referenced by runtime env aliases", () => {
+    expect(
+      getConnectorStoredSecretDisplayInfo("GOOGLE_ADS_DEVELOPER_TOKEN"),
+    ).toBeNull();
   });
 
-  it("returns null for unknown secret name", () => {
-    expect(getConnectorTypeForSecretName("UNKNOWN_SECRET")).toBeNull();
+  it("returns null for unknown stored secret names", () => {
+    expect(getConnectorStoredSecretDisplayInfo("UNKNOWN_SECRET")).toBeNull();
+  });
+});
+
+describe("getDiagnosticConnectorTypeForRuntimeEnvName", () => {
+  it("finds connector type for runtime env aliases", () => {
+    expect(getDiagnosticConnectorTypeForRuntimeEnvName("GH_TOKEN")).toBe(
+      "github",
+    );
+    expect(getDiagnosticConnectorTypeForRuntimeEnvName("GITHUB_TOKEN")).toBe(
+      "github",
+    );
+    expect(getDiagnosticConnectorTypeForRuntimeEnvName("ATLASSIAN_TOKEN")).toBe(
+      "atlassian",
+    );
+    expect(getDiagnosticConnectorTypeForRuntimeEnvName("ATLASSIAN_EMAIL")).toBe(
+      "atlassian",
+    );
+    expect(
+      getDiagnosticConnectorTypeForRuntimeEnvName("ATLASSIAN_DOMAIN"),
+    ).toBe("atlassian");
+  });
+
+  it("does not treat stored secret names as runtime env aliases", () => {
+    expect(
+      getDiagnosticConnectorTypeForRuntimeEnvName("GITHUB_ACCESS_TOKEN"),
+    ).toBeNull();
+  });
+
+  it("returns null for unknown runtime env aliases", () => {
+    expect(
+      getDiagnosticConnectorTypeForRuntimeEnvName("UNKNOWN_SECRET"),
+    ).toBeNull();
   });
 });
 

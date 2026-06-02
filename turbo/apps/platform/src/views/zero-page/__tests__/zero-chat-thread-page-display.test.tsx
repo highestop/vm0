@@ -84,7 +84,7 @@ describe("zero chat thread page display - permission action card", () => {
     };
   }
 
-  it("executes permission URLs as permission actions for admins", async () => {
+  it("executes permission URLs as permission actions for agent owners", async () => {
     let updatedPolicies: unknown;
 
     mockChatLifecycle({
@@ -152,7 +152,82 @@ describe("zero chat thread page display - permission action card", () => {
         vercel: { policies: { "projects:write": "allow" } },
       });
     });
-    expect(within(card).getByText("Permissions updated")).toBeInTheDocument();
+    const status = within(card).getByText("Permissions updated");
+    expect(status).toBeInTheDocument();
+    expect(status.closest("button")).toBeNull();
+  });
+
+  it("lets org admins confirm permission actions for agents they do not own", async () => {
+    let updatedPolicies: unknown;
+
+    setMockOrg({ role: "admin" });
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "assistant",
+          content:
+            "https://app.vm0.ai/agents/4f189ea8-ada2-416d-83a9-9c25ddb960c9/permissions?ref=vercel&permission=projects%3Awrite&action=allow",
+          runId: "run-permission-action-admin-non-owner",
+          status: "completed",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    server.use(
+      mockApi(zeroAgentsByIdContract.get, ({ respond }) => {
+        return respond(200, {
+          agentId: "4f189ea8-ada2-416d-83a9-9c25ddb960c9",
+          ownerId: "other-owner-id",
+          description: null,
+          displayName: null,
+          sound: null,
+          avatarUrl: null,
+          permissionPolicies: {
+            vercel: { policies: { "projects:write": "deny" } },
+          },
+          customSkills: [],
+          modelProviderId: null,
+          selectedModel: null,
+          preferPersonalProvider: false,
+        });
+      }),
+      mockApi(
+        zeroAgentPermissionPoliciesContract.update,
+        ({ body, respond }) => {
+          updatedPolicies = body.policies;
+          return respond(200, {
+            agentId: body.agentId,
+            ownerId: "other-owner-id",
+            description: null,
+            displayName: null,
+            sound: null,
+            avatarUrl: null,
+            permissionPolicies: body.policies,
+            customSkills: [],
+            modelProviderId: null,
+            selectedModel: null,
+            preferPersonalProvider: false,
+          });
+        },
+      ),
+    );
+
+    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+
+    const card = await waitFor(() => {
+      return screen.getByTestId("permission-action-card");
+    });
+    expect(within(card).getByText("Confirm")).toBeInTheDocument();
+    expect(
+      within(card).queryByText("Request approval"),
+    ).not.toBeInTheDocument();
+    click(await within(card).findByText("Confirm"));
+
+    await waitFor(() => {
+      expect(updatedPolicies).toStrictEqual({
+        vercel: { policies: { "projects:write": "allow" } },
+      });
+    });
   });
 
   it("offers Confirm when the requested permission has no explicit stored policy", async () => {
@@ -351,19 +426,14 @@ describe("zero chat thread page display - permission action card", () => {
       return screen.getByTestId("permission-action-card");
     });
     await waitFor(() => {
-      expect(
-        queryAllByRoleFast("button", card).some((element) => {
-          return element.textContent === "Request sent";
-        }),
-      ).toBeTruthy();
+      expect(within(card).getByText("Request sent")).toBeInTheDocument();
     });
-    const button = queryAllByRoleFast("button", card).find((element) => {
-      return element.textContent === "Request sent";
-    });
-    expect(button).toBeDefined();
-    expect(button).toBeDisabled();
-
-    click(button!);
+    expect(within(card).getByText("Request sent").closest("button")).toBeNull();
+    expect(
+      queryAllByRoleFast("button", card).some((element) => {
+        return element.textContent === "Request sent";
+      }),
+    ).toBeFalsy();
 
     expect(createCalled).toBeFalsy();
   });
@@ -437,6 +507,7 @@ describe("zero chat thread page display - permission action card", () => {
     await waitFor(() => {
       expect(within(card).getByText("Request sent")).toBeInTheDocument();
     });
+    expect(within(card).getByText("Request sent").closest("button")).toBeNull();
     await waitFor(() => {
       expect(hasSubscription("permissionAccessRequestsChanged")).toBeTruthy();
     });

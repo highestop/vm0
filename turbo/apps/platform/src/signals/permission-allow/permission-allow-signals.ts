@@ -20,6 +20,7 @@ import {
   permissionGrantsToFirewallPolicies,
   resolveFirewallPolicies,
 } from "@vm0/connectors/firewalls";
+import { toast } from "@vm0/ui/components/ui/sonner";
 import { delay } from "signal-timers";
 import { zeroClient$ } from "../api-client.ts";
 import { pathParams$, searchParams$, replaceSearchParams$ } from "../route.ts";
@@ -455,6 +456,9 @@ export const saveAdminFocusedPolicy$ = command(
       },
     };
     await set(saveFirewallPolicies$, agentId, fullPolicies, signal);
+    toast.success(
+      action === "deny" ? "Permissions denied" : "Permissions updated",
+    );
     set(internalAdminFocusedSaved$, true);
   },
 );

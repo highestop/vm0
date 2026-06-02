@@ -1,13 +1,14 @@
 /**
  * Interaction tests for permission-allow-page.tsx.
  *
- * Covers admin Confirm button, admin request approve/reject,
+ * Covers owner Confirm button, owner request approve/reject,
  * and member request submission. These test the new centered
  * approval card UI.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "@vm0/ui/components/ui/sonner";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import {
@@ -33,11 +34,24 @@ import {
   setMockUserPermissionGrants,
 } from "../../../mocks/handlers/api-user-permission-grants.ts";
 
+vi.mock("@vm0/ui/components/ui/sonner", async (importOriginal) => {
+  const actual =
+    (await importOriginal()) as typeof import("@vm0/ui/components/ui/sonner");
+  return {
+    ...actual,
+    toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+  };
+});
+
 const context = testContext();
 const mockApi = createMockApi(context);
 
 const AGENT_ID = "c0000000-0000-4000-a000-000000000001";
 const REQUEST_ID = "d0000000-0000-4000-a000-000000000001";
+
+beforeEach(() => {
+  vi.mocked(toast.success).mockClear();
+});
 
 function defaultAgentResponse(overrides?: Record<string, unknown>) {
   return {
@@ -105,10 +119,10 @@ function pendingRequest(
 }
 
 // ---------------------------------------------------------------------------
-// Admin doctor mode: Confirm button
+// Owner doctor mode: Confirm button
 // ---------------------------------------------------------------------------
 
-describe("permission allow page - admin doctor mode", () => {
+describe("permission allow page - owner doctor mode", () => {
   it("fw-d-018: Confirm button saves the policy", async () => {
     let savedBody: unknown;
     server.use(
@@ -142,6 +156,7 @@ describe("permission allow page - admin doctor mode", () => {
       agentId: AGENT_ID,
       policies: { slack: { policies: { "channels:read": "deny" } } },
     });
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith("Permissions denied");
   });
 
   it("fw-d-019: Confirm shows result card after save", async () => {
@@ -390,10 +405,10 @@ describe("permission allow page - self-service user grants", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin request mode: Approve / Disapprove
+// Owner request mode: Approve / Disapprove
 // ---------------------------------------------------------------------------
 
-describe("permission allow page - admin request mode", () => {
+describe("permission allow page - owner request mode", () => {
   it("fw-d-021: Approve change button approves pending request", async () => {
     let requestStatus: PermissionAccessRequestResponse["status"] = "pending";
     server.use(

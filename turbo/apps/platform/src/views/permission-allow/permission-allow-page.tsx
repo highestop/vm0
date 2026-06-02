@@ -12,10 +12,7 @@ import {
   IconLoader2,
   IconX,
 } from "@tabler/icons-react";
-import {
-  isFirewallConnectorType,
-  resolveFirewallPolicies,
-} from "@vm0/connectors/firewalls";
+import { isFirewallConnectorType } from "@vm0/connectors/firewalls";
 import { CONNECTOR_TYPES } from "@vm0/connectors/connectors";
 import type { FirewallPolicies } from "@vm0/connectors/firewall-types";
 import type { UserPermissionGrantResponse } from "@vm0/api-contracts/contracts/zero-user-permission-grants";
@@ -559,7 +556,11 @@ function RequestModeView() {
   const currentUser =
     userLoadable.state === "hasData" ? userLoadable.data : undefined;
   const isAdmin = adminLoadable.state === "hasData" && adminLoadable.data;
-  const canManagePermissions = isAdmin;
+  const canManagePermissions = canManageAgentPermissions(
+    agent,
+    currentUser,
+    isAdmin,
+  );
 
   return (
     <RequestStatusView
@@ -819,12 +820,11 @@ function DoctorModeView({
     );
   }
 
-  // Check effective policy
-  const resolved = resolveFirewallPolicies(agent.permissionPolicies, [ref]);
-  const effectivePolicy = resolved?.[ref]?.policies[permission.name] ?? "allow";
+  const storedPolicy =
+    agent.permissionPolicies?.[ref]?.policies?.[permission.name];
 
   // Policy already matches — show result
-  if (effectivePolicy === action) {
+  if (storedPolicy === action) {
     return resultCard;
   }
 
@@ -952,6 +952,14 @@ function findPermission(
   );
 }
 
+function canManageAgentPermissions(
+  agent: { ownerId: string },
+  user: { id?: string } | undefined,
+  isAdmin: boolean,
+): boolean {
+  return isAdmin || Boolean(user && user.id === agent.ownerId);
+}
+
 // ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
@@ -1002,7 +1010,11 @@ function PermissionAllowDoctorPage({
   const currentUser =
     userLoadable.state === "hasData" ? userLoadable.data : undefined;
   const isAdmin = adminLoadable.state === "hasData" && adminLoadable.data;
-  const canManagePermissions = isAdmin;
+  const canManagePermissions = canManageAgentPermissions(
+    agent,
+    currentUser,
+    isAdmin,
+  );
   const userName = resolveUserName(currentUser);
   const focusedPermission = findPermission(ref, permission);
   const userPermissionGrants =

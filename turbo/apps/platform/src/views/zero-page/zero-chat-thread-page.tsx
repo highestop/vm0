@@ -56,6 +56,7 @@ import {
 } from "@vm0/ui";
 import { RUN_ERROR_GUIDANCE } from "@vm0/api-contracts/contracts/errors";
 import type { ChatThreadArtifactFile } from "@vm0/api-contracts/contracts/chat-threads";
+import type { UserPermissionGrantResponse } from "@vm0/api-contracts/contracts/zero-user-permission-grants";
 import { isSupportedRunModel } from "@vm0/api-contracts/contracts/model-providers";
 import emptyChatImg from "./assets/empty-chat.webp";
 import emptyArtifactImg from "./assets/empty-artifact.webp";
@@ -164,6 +165,7 @@ import {
   setBillingSubPage$,
 } from "../../signals/zero-page/settings/org-manage-tabs-state.ts";
 import { isOrgAdmin$ } from "../../signals/org.ts";
+import { user$ } from "../../signals/auth.ts";
 import { agentById } from "../../signals/agent.ts";
 import {
   extractPermissions,
@@ -2689,12 +2691,29 @@ interface PermissionActionButtonState {
   saveDone: boolean;
   submitDone: boolean;
   alreadyApplied: boolean;
+  explicitUserGrantApplied: boolean;
   canManagePermissions: boolean;
   selfServiceGrant: boolean;
   existingRequestStatus: "pending" | "approved" | "rejected" | null;
 }
 
 type PermissionAction = "allow" | "deny";
+
+interface PermissionActionAgent {
+  ownerId: string;
+  permissionPolicies: FirewallPolicies | null;
+}
+
+type PermissionActionUserGrant = UserPermissionGrantResponse;
+
+interface PermissionActionExistingRequest {
+  status: "pending" | "approved" | "rejected";
+}
+
+interface LoadableLike<T> {
+  state: string;
+  data?: T;
+}
 
 type UpsertUserPermissionGrantFn = (
   params: {
@@ -2731,6 +2750,18 @@ type SubmitAccessRequestFn = (
 ) => Promise<void>;
 
 type SubscribePermissionRequestsFn = (signal: AbortSignal) => Promise<void>;
+
+function loadableData<T>(loadable: LoadableLike<T>): T | undefined {
+  return loadable.state === "hasData" ? loadable.data : undefined;
+}
+
+function loadableBoolean(loadable: LoadableLike<boolean>): boolean {
+  return loadableData(loadable) ?? false;
+}
+
+function permissionActionVerb(action: PermissionAction): string {
+  return action === "allow" ? "Allow" : "Deny";
+}
 
 function permissionActionButtonLabel(
   state: PermissionActionButtonState,
@@ -2786,6 +2817,27 @@ function permissionActionButtonDisabled(
   );
 }
 
+function permissionActionStatusText(
+  state: PermissionActionButtonState,
+  action: "allow" | "deny",
+): { label: string; className: string } | null {
+  if (state.explicitUserGrantApplied) {
+    return null;
+  }
+  if (state.saveDone || state.alreadyApplied) {
+    return action === "allow"
+      ? { label: "Permissions updated", className: "text-green-600" }
+      : { label: "Permission denied", className: "text-destructive" };
+  }
+  if (state.existingRequestStatus === "approved") {
+    return { label: "Permissions updated", className: "text-green-600" };
+  }
+  if (state.existingRequestStatus === "pending" || state.submitDone) {
+    return { label: "Request sent", className: "text-green-600" };
+  }
+  return null;
+}
+
 function PermissionActionButton({
   state,
   action,
@@ -2795,6 +2847,15 @@ function PermissionActionButton({
   action: "allow" | "deny";
   onClick: () => void;
 }) {
+  const status = permissionActionStatusText(state, action);
+  if (status) {
+    return (
+      <span className={`shrink-0 text-sm font-medium ${status.className}`}>
+        {status.label}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
@@ -2811,12 +2872,14 @@ function PermissionActionButton({
 function isPermissionActionLoading(params: {
   userPermissionGrantsEnabled: boolean;
   agentLoading: boolean;
+  userLoading: boolean;
   adminLoading: boolean;
   existingRequestLoading: boolean;
   userGrantsLoading: boolean;
 }): boolean {
   return (
     params.agentLoading ||
+    params.userLoading ||
     params.adminLoading ||
     (!params.userPermissionGrantsEnabled && params.existingRequestLoading) ||
     (params.userPermissionGrantsEnabled && params.userGrantsLoading)
@@ -2825,11 +2888,13 @@ function isPermissionActionLoading(params: {
 
 function shouldLoadExistingPermissionRequest(params: {
   userPermissionGrantsEnabled: boolean;
+  userLoaded: boolean;
   adminLoaded: boolean;
   canManagePermissions: boolean;
 }): boolean {
   return (
     !params.userPermissionGrantsEnabled &&
+    params.userLoaded &&
     params.adminLoaded &&
     !params.canManagePermissions
   );
@@ -2846,12 +2911,14 @@ function isPermissionActionSaving(params: {
 function isPermissionActionLoadError(params: {
   userPermissionGrantsEnabled: boolean;
   agentError: boolean;
+  userError: boolean;
   adminError: boolean;
   existingRequestError: boolean;
   userGrantsError: boolean;
 }): boolean {
   return (
     params.agentError ||
+    params.userError ||
     params.adminError ||
     (!params.userPermissionGrantsEnabled && params.existingRequestError) ||
     (params.userPermissionGrantsEnabled && params.userGrantsError)
@@ -2881,6 +2948,78 @@ function isPermissionActionAlreadyApplied(params: {
     : params.storedPolicy === params.action;
 }
 
+function canManageAgentPermissions(
+  agent: PermissionActionAgent | null,
+  user: { id?: string } | undefined,
+  isAdmin: boolean,
+): boolean {
+  return isAdmin || Boolean(agent && user && user.id === agent.ownerId);
+}
+
+function findPermissionActionPermission(block: PermissionActionBlock) {
+  return extractPermissions(block.connectorRef).find((permission) => {
+    return permission.name === block.permission;
+  });
+}
+
+function permissionActionExistingRequest(
+  userPermissionGrantsEnabled: boolean,
+  loadable: LoadableLike<PermissionActionExistingRequest | null>,
+): PermissionActionExistingRequest | null {
+  if (userPermissionGrantsEnabled) {
+    return null;
+  }
+  return loadableData(loadable) ?? null;
+}
+
+function permissionActionUserGrantPolicy(
+  userPermissionGrantsEnabled: boolean,
+  loadable: LoadableLike<readonly PermissionActionUserGrant[]>,
+  block: PermissionActionBlock,
+): FirewallPolicyValue | undefined {
+  if (!userPermissionGrantsEnabled) {
+    return undefined;
+  }
+  const grants = loadableData(loadable);
+  if (!grants) {
+    return undefined;
+  }
+  return resolveUserPermissionGrantPolicy(
+    grants,
+    block.connectorRef,
+    block.permission,
+  );
+}
+
+function explicitPermissionActionUserGrantApplied(
+  userPermissionGrantsEnabled: boolean,
+  loadable: LoadableLike<readonly PermissionActionUserGrant[]>,
+  block: PermissionActionBlock,
+): boolean {
+  if (!userPermissionGrantsEnabled) {
+    return false;
+  }
+  return (
+    loadableData(loadable)?.some((grant) => {
+      return (
+        grant.agentId === block.agentId &&
+        grant.connectorRef === block.connectorRef &&
+        grant.permission === block.permission &&
+        grant.action === block.action
+      );
+    }) ?? false
+  );
+}
+
+function storedPermissionActionPolicy(
+  agent: PermissionActionAgent | null,
+  block: PermissionActionBlock,
+): string | undefined {
+  return agent?.permissionPolicies?.[block.connectorRef]?.policies?.[
+    block.permission
+  ];
+}
+
 function createPermissionActionButtonState(params: {
   hasAgent: boolean;
   hasPermission: boolean;
@@ -2888,6 +3027,7 @@ function createPermissionActionButtonState(params: {
   loadError: boolean;
   saving: boolean;
   alreadyApplied: boolean;
+  explicitUserGrantApplied: boolean;
   canManagePermissions: boolean;
   selfServiceGrant: boolean;
   existingRequestStatus: "pending" | "approved" | "rejected" | null;
@@ -2903,14 +3043,135 @@ function createPermissionActionButtonState(params: {
     saveDone: params.saveDone,
     submitDone: params.submitDone,
     alreadyApplied: params.alreadyApplied,
+    explicitUserGrantApplied: params.explicitUserGrantApplied,
     canManagePermissions: params.canManagePermissions,
     selfServiceGrant: params.selfServiceGrant,
     existingRequestStatus: params.existingRequestStatus,
   };
 }
 
+function createPermissionActionCardButtonState(params: {
+  agent: PermissionActionAgent | null;
+  focusedPermission: { name: string } | undefined;
+  loading: boolean;
+  loadError: boolean;
+  saving: boolean;
+  saveDone: boolean;
+  submitDone: boolean;
+  alreadyApplied: boolean;
+  explicitUserGrantApplied: boolean;
+  canManagePermissions: boolean;
+  userPermissionGrantsEnabled: boolean;
+  existingRequest: PermissionActionExistingRequest | null;
+}): PermissionActionButtonState {
+  return createPermissionActionButtonState({
+    hasAgent: Boolean(params.agent),
+    hasPermission: Boolean(params.focusedPermission),
+    loading: params.loading,
+    loadError: params.loadError,
+    saving: params.saving,
+    saveDone: params.saveDone,
+    submitDone: params.submitDone,
+    alreadyApplied: params.alreadyApplied,
+    explicitUserGrantApplied: params.explicitUserGrantApplied,
+    canManagePermissions: params.canManagePermissions,
+    selfServiceGrant: params.userPermissionGrantsEnabled,
+    existingRequestStatus: params.existingRequest?.status ?? null,
+  });
+}
+
+function createPermissionActionCardViewState(params: {
+  block: PermissionActionBlock;
+  userPermissionGrantsEnabled: boolean;
+  agent: PermissionActionAgent | null;
+  agentLoadableState: string;
+  userLoadableState: string;
+  adminLoadableState: string;
+  existingRequestLoadable: LoadableLike<PermissionActionExistingRequest | null>;
+  userGrantsLoadable: LoadableLike<readonly PermissionActionUserGrant[]>;
+  saveLoadableState: string;
+  submitLoadableState: string;
+  grantLoadableState: string;
+  canManagePermissions: boolean;
+}) {
+  const focusedPermission = findPermissionActionPermission(params.block);
+  const actionLabel = permissionActionVerb(params.block.action);
+  const loading = isPermissionActionLoading({
+    userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
+    agentLoading: params.agentLoadableState === "loading",
+    userLoading: params.userLoadableState === "loading",
+    adminLoading: params.adminLoadableState === "loading",
+    existingRequestLoading: params.existingRequestLoadable.state === "loading",
+    userGrantsLoading: params.userGrantsLoadable.state === "loading",
+  });
+  const loadError = isPermissionActionLoadError({
+    userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
+    agentError: params.agentLoadableState === "hasError",
+    userError: params.userLoadableState === "hasError",
+    adminError: params.adminLoadableState === "hasError",
+    existingRequestError: params.existingRequestLoadable.state === "hasError",
+    userGrantsError: params.userGrantsLoadable.state === "hasError",
+  });
+  const saving = isPermissionActionSaving({
+    saveLoading: params.saveLoadableState === "loading",
+    submitLoading: params.submitLoadableState === "loading",
+    grantLoading: params.grantLoadableState === "loading",
+  });
+  const existingRequest = permissionActionExistingRequest(
+    params.userPermissionGrantsEnabled,
+    params.existingRequestLoadable,
+  );
+  const userGrantPolicy = permissionActionUserGrantPolicy(
+    params.userPermissionGrantsEnabled,
+    params.userGrantsLoadable,
+    params.block,
+  );
+  const explicitUserGrantApplied = explicitPermissionActionUserGrantApplied(
+    params.userPermissionGrantsEnabled,
+    params.userGrantsLoadable,
+    params.block,
+  );
+  const alreadyApplied = isPermissionActionAlreadyApplied({
+    hasAgent: Boolean(params.agent),
+    userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
+    userGrantPolicy,
+    storedPolicy: storedPermissionActionPolicy(params.agent, params.block),
+    action: params.block.action,
+  });
+  const saveDone =
+    params.saveLoadableState === "hasData" ||
+    params.grantLoadableState === "hasData";
+  const submitDone = params.submitLoadableState === "hasData";
+  const finished = isPermissionActionFinished({
+    saveDone,
+    submitDone,
+    grantDone: params.grantLoadableState === "hasData",
+  });
+  const buttonState = createPermissionActionCardButtonState({
+    agent: params.agent,
+    focusedPermission,
+    loading,
+    loadError,
+    saving,
+    saveDone,
+    submitDone,
+    alreadyApplied,
+    explicitUserGrantApplied,
+    canManagePermissions: params.canManagePermissions,
+    userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
+    existingRequest,
+  });
+  return {
+    actionLabel,
+    buttonState,
+    existingRequest,
+    focusedPermission,
+    finished,
+  };
+}
+
 function runPermissionAction(params: {
-  agent: { permissionPolicies: FirewallPolicies | null } | null;
+  agent: PermissionActionAgent | null;
   focusedPermission: { name: string } | undefined;
   existingRequest: { status: "pending" | "approved" | "rejected" } | null;
   state: PermissionActionButtonState;
@@ -2950,7 +3211,7 @@ function runPermissionAction(params: {
 function createPermissionActionHandler(params: {
   block: PermissionActionBlock;
   pageSignal: AbortSignal;
-  agent: { permissionPolicies: FirewallPolicies | null } | null;
+  agent: PermissionActionAgent | null;
   focusedPermission: { name: string } | undefined;
   existingRequest: { status: "pending" | "approved" | "rejected" } | null;
   state: PermissionActionButtonState;
@@ -3077,6 +3338,7 @@ function PermissionActionCard({ block }: { block: PermissionActionBlock }) {
     features?.[FeatureSwitchKey.UserPermissionGrants] ?? false;
   const config = CONNECTOR_TYPES[block.connectorRef];
   const agentLoadable = useLastLoadable(agentById(block.agentId));
+  const userLoadable = useLastLoadable(user$);
   const adminLoadable = useLoadable(isOrgAdmin$);
   const [saveLoadable, savePolicy] = useLoadableSet(saveAdminFocusedPolicy$);
   const [submitLoadable, submitRequest] = useLoadableSet(submitAccessRequest$);
@@ -3084,8 +3346,14 @@ function PermissionActionCard({ block }: { block: PermissionActionBlock }) {
     upsertUserPermissionGrant$,
   );
   const subscribeRequests = useSet(subscribePermissionAccessRequestsChanged$);
-  const canManagePermissions =
-    adminLoadable.state === "hasData" && adminLoadable.data;
+  const agent = loadableData<PermissionActionAgent>(agentLoadable) ?? null;
+  const currentUser = loadableData<{ id?: string }>(userLoadable);
+  const isAdmin = loadableBoolean(adminLoadable);
+  const canManagePermissions = canManageAgentPermissions(
+    agent,
+    currentUser,
+    isAdmin,
+  );
   const existingRequestLoadable = useLoadable(
     permissionExistingRequestByAction({
       agentId: block.agentId,
@@ -3094,6 +3362,7 @@ function PermissionActionCard({ block }: { block: PermissionActionBlock }) {
       action: block.action,
       enabled: shouldLoadExistingPermissionRequest({
         userPermissionGrantsEnabled,
+        userLoaded: userLoadable.state === "hasData",
         adminLoaded: adminLoadable.state === "hasData",
         canManagePermissions,
       }),
@@ -3105,90 +3374,36 @@ function PermissionActionCard({ block }: { block: PermissionActionBlock }) {
       enabled: userPermissionGrantsEnabled,
     }),
   );
-  const focusedPermission = extractPermissions(block.connectorRef).find((p) => {
-    return p.name === block.permission;
-  });
-  const actionLabel = block.action === "allow" ? "Allow" : "Deny";
-  const loading = isPermissionActionLoading({
+  const actionState = createPermissionActionCardViewState({
+    block,
     userPermissionGrantsEnabled,
-    agentLoading: agentLoadable.state === "loading",
-    adminLoading: adminLoadable.state === "loading",
-    existingRequestLoading: existingRequestLoadable.state === "loading",
-    userGrantsLoading: userGrantsLoadable.state === "loading",
-  });
-  const loadError = isPermissionActionLoadError({
-    userPermissionGrantsEnabled,
-    agentError: agentLoadable.state === "hasError",
-    adminError: adminLoadable.state === "hasError",
-    existingRequestError: existingRequestLoadable.state === "hasError",
-    userGrantsError: userGrantsLoadable.state === "hasError",
-  });
-  const saving = isPermissionActionSaving({
-    saveLoading: saveLoadable.state === "loading",
-    submitLoading: submitLoadable.state === "loading",
-    grantLoading: grantLoadable.state === "loading",
-  });
-  const agent = agentLoadable.state === "hasData" ? agentLoadable.data : null;
-  const existingRequest =
-    !userPermissionGrantsEnabled && existingRequestLoadable.state === "hasData"
-      ? existingRequestLoadable.data
-      : null;
-  const userGrantPolicy =
-    userPermissionGrantsEnabled && userGrantsLoadable.state === "hasData"
-      ? resolveUserPermissionGrantPolicy(
-          userGrantsLoadable.data,
-          block.connectorRef,
-          block.permission,
-        )
-      : undefined;
-  const storedPolicy =
-    agent?.permissionPolicies?.[block.connectorRef]?.policies?.[
-      block.permission
-    ];
-  const alreadyApplied = isPermissionActionAlreadyApplied({
-    hasAgent: Boolean(agent),
-    userPermissionGrantsEnabled,
-    userGrantPolicy,
-    storedPolicy,
-    action: block.action,
-  });
-  const saveDone =
-    saveLoadable.state === "hasData" || grantLoadable.state === "hasData";
-  const submitDone = submitLoadable.state === "hasData";
-  const finished = isPermissionActionFinished({
-    saveDone,
-    submitDone,
-    grantDone: grantLoadable.state === "hasData",
-  });
-  const buttonState = createPermissionActionButtonState({
-    hasAgent: Boolean(agent),
-    hasPermission: Boolean(focusedPermission),
-    loading,
-    loadError,
-    saving,
-    saveDone,
-    submitDone,
-    alreadyApplied,
+    agent,
+    agentLoadableState: agentLoadable.state,
+    userLoadableState: userLoadable.state,
+    adminLoadableState: adminLoadable.state,
+    existingRequestLoadable,
+    userGrantsLoadable,
+    saveLoadableState: saveLoadable.state,
+    submitLoadableState: submitLoadable.state,
+    grantLoadableState: grantLoadable.state,
     canManagePermissions,
-    selfServiceGrant: userPermissionGrantsEnabled,
-    existingRequestStatus: existingRequest?.status ?? null,
   });
 
   return (
     <PermissionActionCardContent
       block={block}
       connectorLabel={config.label}
-      actionLabel={actionLabel}
-      permissionName={focusedPermission?.name ?? block.permission}
-      buttonState={buttonState}
+      actionLabel={actionState.actionLabel}
+      permissionName={actionState.focusedPermission?.name ?? block.permission}
+      buttonState={actionState.buttonState}
       onClick={createPermissionActionHandler({
         block,
         pageSignal,
         agent,
-        focusedPermission,
-        existingRequest,
-        state: buttonState,
-        finished,
+        focusedPermission: actionState.focusedPermission,
+        existingRequest: actionState.existingRequest,
+        state: actionState.buttonState,
+        finished: actionState.finished,
         userPermissionGrantsEnabled,
         canManagePermissions,
         upsertGrant,

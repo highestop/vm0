@@ -10,7 +10,9 @@ import {
   type ConnectorAuthMethodIdsByAccessKind,
   type ConnectorAuthMethodIdsByGrantKind,
   type ConnectorAuthMethodIdsByRevokeKind,
+  type ConnectorTypesByAccessKind,
   type ConnectorTypesByGrantKind,
+  type ConnectorTypesByRevokeKind,
   type ConnectorAuthMethodClientConfig,
   type ConnectorAccessConfig,
   type ConnectorAccessKind,
@@ -28,10 +30,8 @@ import {
   type AuthCodeGrantConnectorType,
   type DeviceAuthGrantConnectorType,
   type DynamicPublicConnectorAuthClientConfig,
-  type RefreshTokenAccessConnectorType,
   type StaticConfidentialConnectorAuthClientConfig,
   type StaticPublicConnectorAuthClientConfig,
-  type TokenRevokeConnectorType,
 } from "./connectors";
 import type { FeatureSwitchKey } from "./feature-switch-key";
 
@@ -459,6 +459,24 @@ export type ConnectorAuthMethodRefByGrantKind<Kind extends ConnectorGrantKind> =
     };
   }[ConnectorTypesByGrantKind<Kind>];
 
+export type ConnectorAuthMethodRefByAccessKind<
+  Kind extends ConnectorAccessKind,
+> = {
+  readonly [Type in ConnectorTypesByAccessKind<Kind>]: {
+    readonly type: Type;
+    readonly authMethod: ConnectorAuthMethodIdsByAccessKind<Type, Kind>;
+  };
+}[ConnectorTypesByAccessKind<Kind>];
+
+export type ConnectorAuthMethodRefByRevokeKind<
+  Kind extends ConnectorRevokeKind,
+> = {
+  readonly [Type in ConnectorTypesByRevokeKind<Kind>]: {
+    readonly type: Type;
+    readonly authMethod: ConnectorAuthMethodIdsByRevokeKind<Type, Kind>;
+  };
+}[ConnectorTypesByRevokeKind<Kind>];
+
 export function connectorAuthMethodRefHasGrantKind<
   Kind extends ConnectorGrantKind,
 >(
@@ -468,6 +486,30 @@ export function connectorAuthMethodRefHasGrantKind<
   return (
     getConnectorAuthMethod(authMethodRef.type, authMethodRef.authMethod)?.grant
       .kind === grantKind
+  );
+}
+
+export function connectorAuthMethodRefHasAccessKind<
+  Kind extends ConnectorAccessKind,
+>(
+  authMethodRef: ConnectorAuthMethodRef,
+  accessKind: Kind,
+): authMethodRef is ConnectorAuthMethodRefByAccessKind<Kind> {
+  return (
+    getConnectorAuthMethod(authMethodRef.type, authMethodRef.authMethod)?.access
+      .kind === accessKind
+  );
+}
+
+export function connectorAuthMethodRefHasRevokeKind<
+  Kind extends ConnectorRevokeKind,
+>(
+  authMethodRef: ConnectorAuthMethodRef,
+  revokeKind: Kind,
+): authMethodRef is ConnectorAuthMethodRefByRevokeKind<Kind> {
+  return (
+    getConnectorAuthMethod(authMethodRef.type, authMethodRef.authMethod)?.revoke
+      .kind === revokeKind
   );
 }
 
@@ -528,24 +570,6 @@ export function getConnectorAuthMethodGrantScopes(
   return [
     ...connectorGrantScopes(getConnectorAuthMethod(type, authMethod)?.grant),
   ];
-}
-
-export function connectorAuthMethodSupportsTokenRevoke(
-  type: ConnectorType,
-  authMethod: string,
-): type is TokenRevokeConnectorType {
-  return (
-    getConnectorAuthMethod(type, authMethod)?.revoke.kind === "token-revoke"
-  );
-}
-
-export function connectorAuthMethodSupportsRefreshTokenAccess(
-  type: ConnectorType,
-  authMethod: string,
-): type is RefreshTokenAccessConnectorType {
-  return (
-    getConnectorAuthMethod(type, authMethod)?.access.kind === "refresh-token"
-  );
 }
 
 export function getConnectorGenerationTypes(
@@ -649,6 +673,12 @@ export type StaticConfidentialConnectorAuthClient = {
   readonly clientSecret: string;
 };
 
+export type StaticConfidentialConnectorAuthClientIdentity = {
+  readonly clientRegistration: "static";
+  readonly clientType: "confidential";
+  readonly clientId: string;
+};
+
 export type StaticPublicConnectorAuthClient = {
   readonly clientRegistration: "static";
   readonly clientType: "public";
@@ -668,6 +698,11 @@ export type ConnectorAuthClient =
   | StaticConnectorAuthClient
   | DynamicPublicConnectorAuthClient;
 
+export type ConnectorAuthClientIdentity =
+  | StaticConfidentialConnectorAuthClientIdentity
+  | StaticPublicConnectorAuthClient
+  | DynamicPublicConnectorAuthClient;
+
 export type ConnectorAuthClientForConfig<
   Client extends ConnectorAuthClientConfig,
 > = Client extends StaticConfidentialConnectorAuthClientConfig
@@ -683,6 +718,56 @@ export type ConnectorAuthClientForMethod<
   Method extends ConnectorAuthMethodIds<Type>,
 > = ConnectorAuthClientForConfig<ConnectorAuthMethodClientConfig<Type, Method>>;
 
+export type ConnectorAuthClientIdentityForConfig<
+  Client extends ConnectorAuthClientConfig,
+> = Client extends StaticConfidentialConnectorAuthClientConfig
+  ? StaticConfidentialConnectorAuthClientIdentity
+  : Client extends StaticPublicConnectorAuthClientConfig
+    ? StaticPublicConnectorAuthClient
+    : Client extends DynamicPublicConnectorAuthClientConfig
+      ? DynamicPublicConnectorAuthClient
+      : never;
+
+export type ConnectorAuthClientIdentityForMethod<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = ConnectorAuthClientIdentityForConfig<
+  ConnectorAuthMethodClientConfig<Type, Method>
+>;
+
+export type ConnectorAuthMethodClientRef<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = {
+  readonly type: Type;
+  readonly authMethod: Method;
+  readonly authClient: ConnectorAuthClientForMethod<Type, Method>;
+};
+
+export type ConnectorAuthClientGrantKind = "auth-code" | "device-auth";
+
+export type ConnectorAuthMethodClientRefByGrantKind<
+  Kind extends ConnectorAuthClientGrantKind,
+> = {
+  readonly [Type in ConnectorTypesByGrantKind<Kind>]: {
+    readonly [Method in ConnectorAuthMethodIdsByGrantKind<
+      Type,
+      Kind
+    >]: ConnectorAuthMethodClientRef<Type, Method>;
+  }[ConnectorAuthMethodIdsByGrantKind<Type, Kind>];
+}[ConnectorTypesByGrantKind<Kind>];
+
+export type ConnectorAuthMethodClientRefByAccessKind<
+  Kind extends "refresh-token",
+> = {
+  readonly [Type in ConnectorTypesByAccessKind<Kind>]: {
+    readonly [Method in ConnectorAuthMethodIdsByAccessKind<
+      Type,
+      Kind
+    >]: ConnectorAuthMethodClientRef<Type, Method>;
+  }[ConnectorAuthMethodIdsByAccessKind<Type, Kind>];
+}[ConnectorTypesByAccessKind<Kind>];
+
 export function isStaticConnectorAuthClient(
   authClient: ConnectorAuthClient,
 ): authClient is StaticConnectorAuthClient {
@@ -696,6 +781,44 @@ export function isStaticConfidentialConnectorAuthClient(
     isStaticConnectorAuthClient(authClient) &&
     authClient.clientType === "confidential"
   );
+}
+
+export function connectorAuthClientIdentity(
+  authClient: StaticConfidentialConnectorAuthClient,
+): StaticConfidentialConnectorAuthClientIdentity;
+export function connectorAuthClientIdentity(
+  authClient: StaticPublicConnectorAuthClient,
+): StaticPublicConnectorAuthClient;
+export function connectorAuthClientIdentity(
+  authClient: DynamicPublicConnectorAuthClient,
+): DynamicPublicConnectorAuthClient;
+export function connectorAuthClientIdentity(
+  authClient: ConnectorAuthClient,
+): ConnectorAuthClientIdentity;
+export function connectorAuthClientIdentity(
+  authClient: ConnectorAuthClient,
+): ConnectorAuthClientIdentity {
+  switch (authClient.clientRegistration) {
+    case "dynamic":
+      return authClient;
+    case "static":
+      return {
+        clientRegistration: "static",
+        clientType: authClient.clientType,
+        clientId: authClient.clientId,
+      };
+  }
+}
+
+export function connectorAuthClientIdentityForMethod<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+>(
+  authClient: ConnectorAuthClientForMethod<Type, Method>,
+): ConnectorAuthClientIdentityForMethod<Type, Method> {
+  return connectorAuthClientIdentity(
+    authClient,
+  ) as ConnectorAuthClientIdentityForMethod<Type, Method>;
 }
 
 export function getConnectorAuthClientConfigForMethod<
@@ -791,6 +914,57 @@ export function resolveConnectorAuthClientForMethod(
     return undefined;
   }
   return resolveConnectorAuthClient(clientConfig, readEnv);
+}
+
+type ResolvedConnectorAuthMethodClientRef = {
+  readonly type: ConnectorType;
+  readonly authMethod: ConnectorAuthMethodId;
+  readonly authClient: ConnectorAuthClient;
+};
+
+function resolveConnectorAuthMethodClientRef(
+  authMethodRef: ConnectorAuthMethodRef,
+  readEnv: ConnectorEnvReader,
+): ResolvedConnectorAuthMethodClientRef | undefined {
+  const authClient = resolveConnectorAuthClientForMethod(
+    authMethodRef.type,
+    authMethodRef.authMethod,
+    readEnv,
+  );
+  if (!authClient) {
+    return undefined;
+  }
+  return {
+    type: authMethodRef.type,
+    authMethod: authMethodRef.authMethod,
+    authClient,
+  };
+}
+
+export function resolveConnectorAuthMethodClientRefByGrantKind(
+  authMethodRef: ConnectorAuthMethodRefByGrantKind<"auth-code">,
+  readEnv: ConnectorEnvReader,
+): ConnectorAuthMethodClientRefByGrantKind<"auth-code"> | undefined;
+export function resolveConnectorAuthMethodClientRefByGrantKind(
+  authMethodRef: ConnectorAuthMethodRefByGrantKind<"device-auth">,
+  readEnv: ConnectorEnvReader,
+): ConnectorAuthMethodClientRefByGrantKind<"device-auth"> | undefined;
+export function resolveConnectorAuthMethodClientRefByGrantKind(
+  authMethodRef: ConnectorAuthMethodRefByGrantKind<ConnectorAuthClientGrantKind>,
+  readEnv: ConnectorEnvReader,
+): ResolvedConnectorAuthMethodClientRef | undefined {
+  return resolveConnectorAuthMethodClientRef(authMethodRef, readEnv);
+}
+
+export function resolveConnectorAuthMethodClientRefByAccessKind(
+  authMethodRef: ConnectorAuthMethodRefByAccessKind<"refresh-token">,
+  readEnv: ConnectorEnvReader,
+): ConnectorAuthMethodClientRefByAccessKind<"refresh-token"> | undefined;
+export function resolveConnectorAuthMethodClientRefByAccessKind(
+  authMethodRef: ConnectorAuthMethodRefByAccessKind<"refresh-token">,
+  readEnv: ConnectorEnvReader,
+): ResolvedConnectorAuthMethodClientRef | undefined {
+  return resolveConnectorAuthMethodClientRef(authMethodRef, readEnv);
 }
 
 function hasRuntimeAvailableAuthMethod(

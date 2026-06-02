@@ -8,7 +8,6 @@ import type {
 import {
   connectorAuthMethodIdSchema,
   type ConnectorAuthMethodId,
-  type ConnectorDeviceAuthGrantAuthMethodId,
   type ConnectorType,
   type DeviceAuthGrantConnectorType,
 } from "@vm0/connectors/connectors";
@@ -16,8 +15,8 @@ import {
   connectorAuthMethodRefHasGrantKind,
   getConnectorAuthMethod,
   getConnectorAuthMethodIdsForGrantKind,
-  resolveConnectorAuthClientForMethod,
-  type ConnectorAuthClient,
+  resolveConnectorAuthMethodClientRefByGrantKind,
+  type ConnectorAuthMethodClientRefByGrantKind,
   type ConnectorAuthMethodRef,
   type ConnectorAuthMethodRefByGrantKind,
 } from "@vm0/connectors/connector-utils";
@@ -86,12 +85,13 @@ const encryptedProviderStateSchema = z.object({
 type EncryptedProviderState = z.infer<typeof encryptedProviderStateSchema>;
 
 type DeviceAuthMethodRef = ConnectorAuthMethodRefByGrantKind<"device-auth">;
+type DeviceAuthMethodClientRef =
+  ConnectorAuthMethodClientRefByGrantKind<"device-auth">;
 
-type PollClaimedSessionArgs = DeviceAuthMethodRef & {
+type PollClaimedSessionArgs = DeviceAuthMethodClientRef & {
   readonly writeDb: Db;
   readonly orgId: string;
   readonly userId: string;
-  readonly authClient: ConnectorAuthClient;
   readonly session: DeviceAuthSessionRow;
   readonly claimStartedAt: Date;
   readonly signal: AbortSignal;
@@ -244,19 +244,17 @@ function resolveStoredDeviceAuthMethod(
   return resolved;
 }
 
-function resolveRequiredAuthClient<Type extends DeviceAuthGrantConnectorType>(
-  type: Type,
-  authMethod: ConnectorDeviceAuthGrantAuthMethodId<Type>,
-): ConnectorAuthClient | ReturnType<typeof internalServerError> {
-  const authClient = resolveConnectorAuthClientForMethod(
-    type,
-    authMethod,
+function resolveRequiredAuthClient(
+  method: DeviceAuthMethodRef,
+): DeviceAuthMethodClientRef | ReturnType<typeof internalServerError> {
+  const clientRef = resolveConnectorAuthMethodClientRefByGrantKind(
+    method,
     optionalEnv,
   );
-  if (!authClient) {
-    return internalServerError(`${type} OAuth is not configured`);
+  if (!clientRef) {
+    return internalServerError(`${method.type} auth client not configured`);
   }
-  return authClient;
+  return clientRef;
 }
 
 async function lockDeviceAuthSessionOwner(
@@ -644,9 +642,7 @@ async function runClaimedSession(
     type: args.type,
   });
   const pollResult = await pollConnectorDeviceAuthorization({
-    type: args.type,
-    authMethod: args.authMethod,
-    authClient: args.authClient,
+    ...args,
     deviceCode: providerState.deviceCode,
   });
   args.signal.throwIfAborted();
@@ -747,19 +743,12 @@ export const startConnectorOauthDeviceAuthSession$ = command(
       return connectorOauthDeviceAuthDisabled;
     }
 
-    const authClient = resolveRequiredAuthClient(
-      resolvedMethod.type,
-      resolvedMethod.authMethod,
-    );
-    if ("status" in authClient) {
-      return authClient;
+    const authClientRef = resolveRequiredAuthClient(resolvedMethod);
+    if ("status" in authClientRef) {
+      return authClientRef;
     }
 
-    const startResult = await startConnectorDeviceAuthorization({
-      type: resolvedMethod.type,
-      authMethod: resolvedMethod.authMethod,
-      authClient,
-    });
+    const startResult = await startConnectorDeviceAuthorization(authClientRef);
     signal.throwIfAborted();
 
     const sessionToken = generateSessionToken();
@@ -883,12 +872,9 @@ export const pollConnectorOauthDeviceAuthSession$ = command(
       return connectorOauthDeviceAuthDisabled;
     }
 
-    const authClient = resolveRequiredAuthClient(
-      resolvedMethod.type,
-      resolvedMethod.authMethod,
-    );
-    if ("status" in authClient) {
-      return authClient;
+    const authClientRef = resolveRequiredAuthClient(resolvedMethod);
+    if ("status" in authClientRef) {
+      return authClientRef;
     }
 
     if (session.status === "complete") {
@@ -940,11 +926,10 @@ export const pollConnectorOauthDeviceAuthSession$ = command(
     }
 
     return await pollClaimedSession({
-      ...resolvedMethod,
+      ...authClientRef,
       writeDb,
       orgId: args.orgId,
       userId: args.userId,
-      authClient,
       session: claimedSession,
       claimStartedAt,
       signal,

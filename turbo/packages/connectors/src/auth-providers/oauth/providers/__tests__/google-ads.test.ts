@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { HttpResponse, http } from "msw";
 import {
+  connectorAuthClientIdentity,
   getConnectorAuthMethodAuthCodeGrantConfig,
   resolveConnectorAuthClientForMethod,
+  type StaticConfidentialConnectorAuthClient,
 } from "../../../../connector-utils";
 import { googleAdsProvider } from "../google-ads-provider";
 import { server } from "./test-server";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USER_INFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+const testAuthClient = {
+  clientRegistration: "static",
+  clientType: "confidential",
+  clientId: "test-client",
+  clientSecret: "test-client-secret",
+} satisfies StaticConfidentialConnectorAuthClient;
 
 function testRefreshSignal(): AbortSignal {
   return new AbortController().signal;
@@ -22,7 +30,7 @@ describe("connector/providers/google-ads", () => {
           "google-ads",
           "oauth",
         ),
-        clientId: "test-client",
+        authClient: connectorAuthClientIdentity(testAuthClient),
         redirectUri: "https://example.com/callback",
         state: "test-state",
       });
@@ -106,8 +114,11 @@ describe("connector/providers/google-ads", () => {
           "google-ads",
           "oauth",
         ),
-        clientId: "client-id",
-        clientSecret: "client-secret",
+        authClient: {
+          ...testAuthClient,
+          clientId: "client-id",
+          clientSecret: "client-secret",
+        },
         code: "auth-code",
         redirectUri: "https://example.com/callback",
       });
@@ -143,8 +154,11 @@ describe("connector/providers/google-ads", () => {
       }
 
       const result = await access.refreshToken({
-        clientId: "client-id",
-        clientSecret: "client-secret",
+        authClient: {
+          ...testAuthClient,
+          clientId: "client-id",
+          clientSecret: "client-secret",
+        },
         refreshToken: "refresh-token",
         signal: testRefreshSignal(),
         tokenUrl: getConnectorAuthMethodAuthCodeGrantConfig(

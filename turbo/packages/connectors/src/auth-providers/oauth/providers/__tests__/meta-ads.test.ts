@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { HttpResponse, http } from "msw";
 import {
+  connectorAuthClientIdentity,
   getConnectorAuthMethodAuthCodeGrantConfig,
   resolveConnectorAuthClientForMethod,
+  type StaticConfidentialConnectorAuthClient,
 } from "../../../../connector-utils";
 import {
   buildMetaAdsAuthorizationUrl,
@@ -14,6 +16,12 @@ import { server } from "./test-server";
 
 const TOKEN_URL = "https://graph.facebook.com/v22.0/oauth/access_token";
 const USER_URL = "https://graph.facebook.com/v22.0/me";
+const testAuthClient = {
+  clientRegistration: "static",
+  clientType: "confidential",
+  clientId: "test-client",
+  clientSecret: "test-client-secret",
+} satisfies StaticConfidentialConnectorAuthClient;
 
 function authCodeGrant() {
   return getConnectorAuthMethodAuthCodeGrantConfig("meta-ads", "oauth");
@@ -155,7 +163,7 @@ describe("connector/providers/meta-ads", () => {
           "meta-ads",
           "oauth",
         ),
-        clientId: "test-client",
+        authClient: connectorAuthClientIdentity(testAuthClient),
         redirectUri: "https://example.com/callback",
         state: "test-state",
       });

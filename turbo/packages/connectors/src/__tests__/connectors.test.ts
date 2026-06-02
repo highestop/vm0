@@ -16,6 +16,7 @@ import {
   connectorTypeSchema,
   type ConnectorAuthMethodConfig,
   type ConnectorAuthMethodId,
+  type ConnectorAuthMethodIds,
   type ConnectorAuthCodeGrantAuthMethodId,
   type ConnectorAuthCodeGrantConfig,
   type ConnectorConfig,
@@ -28,10 +29,11 @@ import {
   type TokenRevokeConnectorType,
 } from "../connectors";
 import {
-  connectorAuthMethodSupportsRefreshTokenAccess,
-  connectorAuthMethodSupportsTokenRevoke,
+  connectorAuthClientIdentity,
   connectorAuthMethodHasGrantKind,
+  connectorAuthMethodRefHasAccessKind,
   connectorAuthMethodRefHasGrantKind,
+  connectorAuthMethodRefHasRevokeKind,
   getAvailableConnectorAuthMethods,
   getConnectorAuthMethodGrantScopes,
   getConnectorAuthMethodIdsForAccessKind,
@@ -59,17 +61,26 @@ import {
   hasConnectorDeviceAuthGrant,
   isStaticConfidentialConnectorAuthClient,
   isStaticConnectorAuthClient,
+  type ConnectorAuthClient,
+  type ConnectorAuthClientForMethod,
   type ConnectorEnvReader,
 } from "../connector-utils";
 import { FeatureSwitchKey } from "../feature-switch-key";
 import {
   buildConnectorAuthCodeAuthorizationUrl,
-  getConnectorAuthProviderClientArgs,
   pollConnectorDeviceAuthorization,
   refreshConnectorAuthProviderAccessToken,
   revokeConnectorAuthMethodAccessToken,
   startConnectorDeviceAuthorization,
 } from "../auth-providers/connector-auth";
+import {
+  testOauthDeviceApiProvider,
+  testOauthDeviceProvider,
+} from "../auth-providers/oauth/providers/test-oauth-device-provider";
+import {
+  TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME,
+  TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME,
+} from "../auth-providers/oauth/providers/test-oauth-device";
 import {
   GOOGLE_OAUTH_CONNECTOR_TYPES,
   isGoogleOAuthConnector,
@@ -98,7 +109,22 @@ function hasConnectorAuthorizationGrant(type: ConnectorType): boolean {
 const server = setupServer();
 const SLOCK_ACCESS_TOKEN_TTL_SECONDS = 900;
 
-function getOauthAuthClient(type: ConnectorType, readEnv: ConnectorEnvReader) {
+type OAuthAuthMethodConnectorType = {
+  readonly [Type in ConnectorType]: "oauth" extends ConnectorAuthMethodIds<Type>
+    ? Type
+    : never;
+}[ConnectorType];
+
+function getOauthAuthClient<Type extends OAuthAuthMethodConnectorType>(
+  type: Type,
+  readEnv: ConnectorEnvReader,
+):
+  | ConnectorAuthClientForMethod<Type, ConnectorAuthMethodIds<Type> & "oauth">
+  | undefined;
+function getOauthAuthClient(
+  type: ConnectorType,
+  readEnv: ConnectorEnvReader,
+): ConnectorAuthClient | undefined {
   return resolveConnectorAuthClientForMethod(type, "oauth", readEnv);
 }
 
@@ -658,7 +684,10 @@ describe("connector selected auth method capability checks", () => {
           getConnectorAuthMethodAccessMetadata(type, authMethod)?.kind ===
           "refresh-token";
         expect(
-          connectorAuthMethodSupportsRefreshTokenAccess(type, authMethod),
+          connectorAuthMethodRefHasAccessKind(
+            { type, authMethod },
+            "refresh-token",
+          ),
         ).toBe(hasRefreshTokenAccess);
       }
     }
@@ -670,9 +699,12 @@ describe("connector selected auth method capability checks", () => {
 
     for (const type of connectorTypeSchema.options) {
       for (const authMethod of getConfiguredConnectorAuthMethods(type)) {
-        const supportsTokenRevoke = connectorAuthMethodSupportsTokenRevoke(
-          type,
-          authMethod,
+        const supportsTokenRevoke = connectorAuthMethodRefHasRevokeKind(
+          {
+            type,
+            authMethod,
+          },
+          "token-revoke",
         );
         expect(supportsTokenRevoke).toBe(
           getConnectorAuthMethod(type, authMethod)?.revoke.kind ===
@@ -683,20 +715,31 @@ describe("connector selected auth method capability checks", () => {
   });
 
   it("detects token revoke support from selected auth method config", () => {
-    expect(connectorAuthMethodSupportsTokenRevoke("github", "oauth")).toBe(
-      true,
-    );
-    expect(connectorAuthMethodSupportsTokenRevoke("notion", "oauth")).toBe(
-      false,
-    );
-    expect(connectorAuthMethodSupportsTokenRevoke("stripe", "api-token")).toBe(
-      false,
-    );
+    expect(
+      connectorAuthMethodRefHasRevokeKind(
+        { type: "github", authMethod: "oauth" },
+        "token-revoke",
+      ),
+    ).toBe(true);
+    expect(
+      connectorAuthMethodRefHasRevokeKind(
+        { type: "notion", authMethod: "oauth" },
+        "token-revoke",
+      ),
+    ).toBe(false);
+    expect(
+      connectorAuthMethodRefHasRevokeKind(
+        { type: "stripe", authMethod: "api-token" },
+        "token-revoke",
+      ),
+    ).toBe(false);
   });
-
   it("does not mark non-refreshable auth methods as refresh-token access", () => {
     expect(
-      connectorAuthMethodSupportsRefreshTokenAccess("github", "oauth"),
+      connectorAuthMethodRefHasAccessKind(
+        { type: "github", authMethod: "oauth" },
+        "refresh-token",
+      ),
     ).toBe(false);
     expect(
       getConnectorAuthMethodAccessMetadata("github", "oauth")?.kind,
@@ -717,14 +760,20 @@ describe("connector selected auth method capability checks", () => {
       connectorAuthMethodHasGrantKind("test-oauth", "api", "device-auth"),
     ).toBe(false);
     expect(
-      connectorAuthMethodSupportsRefreshTokenAccess("test-oauth", "oauth"),
+      connectorAuthMethodRefHasAccessKind(
+        { type: "test-oauth", authMethod: "oauth" },
+        "refresh-token",
+      ),
     ).toBe(true);
     expect(
-      connectorAuthMethodSupportsRefreshTokenAccess("test-oauth", "api"),
+      connectorAuthMethodRefHasAccessKind(
+        { type: "test-oauth", authMethod: "api" },
+        "refresh-token",
+      ),
     ).toBe(true);
     expect(
-      connectorAuthMethodSupportsRefreshTokenAccess("test-oauth", "missing"),
-    ).toBe(false);
+      getConnectorAuthMethodIdsForAccessKind("test-oauth", "refresh-token"),
+    ).toStrictEqual(["oauth", "api"]);
     expect(
       getConnectorAuthMethodEnvBindings("test-oauth", "api"),
     ).toStrictEqual({
@@ -757,20 +806,6 @@ describe("connector selected auth method capability checks", () => {
     expect(url.pathname).toBe("/api/test/oauth-provider/authorize");
     expect(url.searchParams.get("client_id")).toBe("test-oauth-client");
     expect(url.searchParams.get("scope")).toBe("read");
-  });
-
-  it("rejects refresh when the selected auth method is not refreshable", async () => {
-    await expect(
-      refreshConnectorAuthProviderAccessToken({
-        type: "stripe",
-        authMethod: "api-token",
-        clientArgs: {},
-        refreshToken: "stripe-refresh-token",
-        signal: testRefreshSignal(),
-      }),
-    ).rejects.toThrow(
-      "stripe connector auth method api-token does not support token refresh",
-    );
   });
 
   it("revokes OAuth tokens through the provider registry", async () => {
@@ -1098,6 +1133,15 @@ describe("connector selected auth method capability checks", () => {
     });
   });
 
+  it("keeps test OAuth device provider access secrets method-specific", () => {
+    expect(testOauthDeviceProvider.access.getAccessSecretName()).toBe(
+      TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME,
+    );
+    expect(testOauthDeviceApiProvider.access.getAccessSecretName()).toBe(
+      TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME,
+    );
+  });
+
   it("starts, polls, and refreshes the Base44 OAuth device provider", async () => {
     server.use(
       http.post(
@@ -1300,7 +1344,7 @@ describe("connector selected auth method capability checks", () => {
       refreshConnectorAuthProviderAccessToken({
         type: "base44",
         authMethod: "oauth",
-        clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
+        authClient: oauthClient,
         refreshToken: "base44-refresh-rotation",
         signal: testRefreshSignal(),
       }),
@@ -1313,7 +1357,7 @@ describe("connector selected auth method capability checks", () => {
       refreshConnectorAuthProviderAccessToken({
         type: "base44",
         authMethod: "oauth",
-        clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
+        authClient: oauthClient,
         refreshToken: "base44-refresh-without-rotation",
         signal: testRefreshSignal(),
       }),
@@ -1646,7 +1690,7 @@ describe("connector selected auth method capability checks", () => {
     const refreshResult = await refreshConnectorAuthProviderAccessToken({
       type: "slock",
       authMethod: "oauth",
-      clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
+      authClient: oauthClient,
       refreshToken: "slock-refresh-token",
       signal: testRefreshSignal(),
     });
@@ -1667,7 +1711,7 @@ describe("connector selected auth method capability checks", () => {
       refreshConnectorAuthProviderAccessToken({
         type: "slock",
         authMethod: "oauth",
-        clientArgs: getConnectorAuthProviderClientArgs(oauthClient),
+        authClient: oauthClient,
         refreshToken: "slock-refresh-malformed",
         signal: testRefreshSignal(),
       }),
@@ -2298,12 +2342,11 @@ describe("getRuntimeAvailableConnectorTypes", () => {
 
   it("derives static confidential OAuth client from connector config", () => {
     const oauthClient = getOauthAuthClient("github", (name) => {
-      return (
-        {
-          GH_OAUTH_CLIENT_ID: "github-client-id",
-          GH_OAUTH_CLIENT_SECRET: "github-client-secret",
-        } as Record<string, string>
-      )[name];
+      const env = new Map([
+        ["GH_OAUTH_CLIENT_ID", "github-client-id"],
+        ["GH_OAUTH_CLIENT_SECRET", "github-client-secret"],
+      ]);
+      return env.get(name);
     });
 
     expect(oauthClient).toStrictEqual({
@@ -2345,12 +2388,11 @@ describe("getRuntimeAvailableConnectorTypes", () => {
 
   it("identifies static OAuth client variants", () => {
     const staticAuthClient = getOauthAuthClient("github", (name) => {
-      return (
-        {
-          GH_OAUTH_CLIENT_ID: "github-client-id",
-          GH_OAUTH_CLIENT_SECRET: "github-client-secret",
-        } as Record<string, string>
-      )[name];
+      const env = new Map([
+        ["GH_OAUTH_CLIENT_ID", "github-client-id"],
+        ["GH_OAUTH_CLIENT_SECRET", "github-client-secret"],
+      ]);
+      return env.get(name);
     });
     if (!staticAuthClient) {
       throw new Error("Expected GitHub OAuth client");
@@ -2363,6 +2405,14 @@ describe("getRuntimeAvailableConnectorTypes", () => {
       const clientSecret: string = staticAuthClient.clientSecret;
       expect(clientSecret).toBe("github-client-secret");
     }
+    const staticAuthClientIdentity =
+      connectorAuthClientIdentity(staticAuthClient);
+    expect(staticAuthClientIdentity).toStrictEqual({
+      clientRegistration: "static",
+      clientType: "confidential",
+      clientId: "github-client-id",
+    });
+    expect("clientSecret" in staticAuthClientIdentity).toBe(false);
 
     const publicAuthClient = getOauthAuthClient("test-oauth-device", emptyEnv);
     if (!publicAuthClient) {

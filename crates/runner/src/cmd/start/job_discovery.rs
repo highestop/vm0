@@ -12,11 +12,13 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use super::active_sessions::ActiveSessionGuard;
 use super::factory_lifecycle::SharedFactory;
+use super::heartbeat::current_held_session_states;
 use super::idle_lifecycle::{
     SharedIdlePool, add_run_with_idle_status_snapshot, spawn_idle_destroy_job,
 };
-use super::job_spawn::{JobProfile, SpawnContext, spawn_job};
+use super::job_spawn::{JobProfile, SpawnContext, SpawnJobRequest, spawn_job};
 use crate::config::ProfileConfig;
 use crate::idle_pool::{IdlePoolSnapshot, IdleUnparkResult, ReusableIdleSandbox};
 use crate::ids::RunId;
@@ -105,7 +107,10 @@ pub(super) async fn handle_discovered_job(job: DiscoveredJob, mut ctx: Discovere
         budget_lease: job_lease,
         cancel: job_cancel,
     } = admission;
-
+    let active_session_guard = ActiveSessionGuard::new(
+        ctx.spawn_ctx.active_sessions.clone(),
+        claimed.context().session_id().map(str::to_owned),
+    );
     info!(run_id = %run_id, profile = %profile_name, "job claimed, spawning executor");
     let device_rate_limits = crate::io_limits::device_rate_limits_for_context(
         ctx.spawn_ctx.device_rate_limits.as_ref(),
@@ -147,11 +152,14 @@ pub(super) async fn handle_discovered_job(job: DiscoveredJob, mut ctx: Discovere
         cancel: job_cancel,
     };
     spawn_job(
-        claimed,
-        sandbox_id,
-        job_profile,
-        reuse_entry,
-        reuse_result,
+        SpawnJobRequest {
+            claimed,
+            sandbox_id,
+            job_profile,
+            reuse_entry,
+            reuse_result,
+            active_session_guard,
+        },
         ctx.spawn_ctx,
         ctx.jobs,
     );
@@ -255,6 +263,13 @@ async fn try_reuse_from_pool(
         let held_session_states = pool.held_session_states();
         (taken, snapshot, held_session_states)
     };
+    let held_session_states = current_held_session_states(
+        held_session_states,
+        ctx.spawn_ctx.exec_config.workspace_cache.as_ref(),
+        &ctx.spawn_ctx.active_sessions,
+        Some(session_id),
+    )
+    .await;
     ctx.spawn_ctx
         .provider
         .set_held_session_states(held_session_states)

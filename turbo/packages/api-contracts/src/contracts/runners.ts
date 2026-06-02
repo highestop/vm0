@@ -82,7 +82,7 @@ export const runnersPollContract = c.router({
     body: z.object({
       group: runnerGroupSchema,
       profiles: z.array(z.string()).optional(),
-      heldSessionStates: z.array(heldSessionStateSchema).max(100).optional(),
+      heldSessionStates: z.array(heldSessionStateSchema).max(1024).optional(),
     }),
     responses: {
       200: z.object({
@@ -300,7 +300,7 @@ export const heartbeatBodySchema = z.object({
   allocatedVcpu: z.number().int().nonnegative(),
   allocatedMemoryMb: z.number().int().nonnegative(),
   runningCount: z.number().int().nonnegative(),
-  heldSessionStates: z.array(heldSessionStateSchema),
+  heldSessionStates: z.array(heldSessionStateSchema).max(1024),
   mode: z.enum(["running", "draining", "stopping"]),
 });
 

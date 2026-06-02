@@ -16,6 +16,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use super::active_sessions::{ActiveSessionGuard, ActiveSessions};
 use super::factory_lifecycle::SharedFactory;
 use super::idle_lifecycle::SharedIdlePool;
 use super::job_lifecycle::{
@@ -61,17 +62,28 @@ pub(super) struct SpawnContext {
     /// completion so soft-drain/resume races do not depend on a stale
     /// spawn-time mode snapshot.
     pub(super) parking_gate: ParkingGate,
-    /// Notifies the main loop to send an immediate heartbeat after parking a VM.
-    /// This eliminates the up-to-10s blind spot where the server doesn't know
-    /// which runner holds a newly-parked session.
+    /// Notifies the main loop to send an immediate heartbeat after session
+    /// affinity state changes. This eliminates the up-to-10s blind spot where
+    /// the server does not know which runner holds a session VM or workspace
+    /// image cache.
     pub(super) park_notify: Arc<tokio::sync::Notify>,
     /// Best-effort signal for the main loop to ask mitmproxy to flush usage.
     pub(super) usage_flush_tx: mpsc::Sender<()>,
+    pub(super) active_sessions: ActiveSessions,
     pub(super) device_rate_limits: Option<sandbox::DeviceRateLimits>,
     #[cfg(test)]
     pub(super) outer_job_panic: Option<OuterJobPanicPoint>,
     #[cfg(test)]
     pub(super) test_observer: StartLoopTestObserver,
+}
+
+pub(super) struct SpawnJobRequest {
+    pub(super) claimed: ClaimedJob,
+    pub(super) sandbox_id: SandboxId,
+    pub(super) job_profile: JobProfile,
+    pub(super) reuse_entry: Option<ReusableIdleSandbox>,
+    pub(super) reuse_result: SandboxReuseResult,
+    pub(super) active_session_guard: ActiveSessionGuard,
 }
 
 /// Spawn a job executor task.
@@ -86,14 +98,18 @@ pub(super) struct SpawnContext {
 /// After a successful execution with a session ID available, the sandbox
 /// is parked in the idle pool instead of being destroyed.
 pub(super) fn spawn_job(
-    claimed: ClaimedJob,
-    sandbox_id: SandboxId,
-    job_profile: JobProfile,
-    reuse_entry: Option<ReusableIdleSandbox>,
-    reuse_result: SandboxReuseResult,
+    request: SpawnJobRequest,
     ctx: &SpawnContext,
     jobs: &mut JoinSet<Option<RunId>>,
 ) {
+    let SpawnJobRequest {
+        claimed,
+        sandbox_id,
+        job_profile,
+        reuse_entry,
+        reuse_result,
+        mut active_session_guard,
+    } = request;
     let (context, completion_auth) = claimed.into_parts();
     let run_id = context.run_id;
     let session_id = context.session_id().map(String::from);
@@ -104,6 +120,7 @@ pub(super) fn spawn_job(
     let factory = job_profile.factory;
     let job_cancel = job_profile.cancel;
     let params = executor::JobParams {
+        profile_name: profile_name.clone(),
         vcpu,
         memory_mb,
         workspace_disk_mb: job_profile.workspace_disk_mb,
@@ -159,7 +176,8 @@ pub(super) fn spawn_job(
 
             let inner = tokio::spawn(async move {
                 if let Some(idle_entry) = reuse_entry {
-                    executor::execute_job_reuse(idle_entry, context, &exec_config, cancel).await
+                    executor::execute_job_reuse(idle_entry, context, &exec_config, &params, cancel)
+                        .await
                 } else {
                     executor::execute_job(
                         &**factory,
@@ -183,6 +201,8 @@ pub(super) fn spawn_job(
                 sandbox,
                 source_ip,
                 network_log_session,
+                workspace_image,
+                workspace_promotable,
                 guest_session_id,
                 telemetry,
             ) = match inner.await {
@@ -192,6 +212,9 @@ pub(super) fn spawn_job(
                     }
                     let exit_code = outcome.exit_code();
                     let err = outcome.error().map(ToOwned::to_owned);
+                    if let Some(guest_session_id) = outcome.guest_session_id.as_deref() {
+                        active_session_guard.activate_late(guest_session_id);
+                    }
                     (
                         exit_code,
                         err,
@@ -199,6 +222,8 @@ pub(super) fn spawn_job(
                         outcome.sandbox,
                         outcome.source_ip,
                         outcome.network_log_session,
+                        outcome.workspace_image,
+                        outcome.workspace_promotable,
                         outcome.guest_session_id,
                         telemetry,
                     )
@@ -224,6 +249,8 @@ pub(super) fn spawn_job(
                         None,
                         String::new(),
                         None,
+                        None,
+                        false,
                         None,
                         empty_telemetry,
                     )
@@ -266,12 +293,14 @@ pub(super) fn spawn_job(
                     guest_session_id,
                     source_ip,
                     network_log_session,
+                    workspace_image,
+                    workspace_promotable,
                     storage_fingerprints,
                     device_rate_limits: job_device_rate_limits,
                     factory: factory_for_cleanup,
                     idle_pool,
                     status: Arc::clone(&status),
-                    park_notify,
+                    park_notify: Arc::clone(&park_notify),
                     parking_gate,
                     network_log_drain: exec_config_for_deferred.network_log_drain.clone(),
                     exit_code,
@@ -293,9 +322,15 @@ pub(super) fn spawn_job(
                 }
             }
             let ownership = OwnershipTransitions::new(status.as_ref());
+            let needs_session_affinity_refresh =
+                completion_ready.needs_session_affinity_refresh();
             completion_ready
                 .complete_and_release(provider.as_ref(), &ownership, &cleanup_state_for_body)
                 .await;
+            drop(active_session_guard);
+            if needs_session_affinity_refresh {
+                park_notify.notify_one();
+            }
 
             // Best-effort telemetry, deferred past `provider.complete` so the
             // user-visible run-complete signal isn't blocked on these uploads.

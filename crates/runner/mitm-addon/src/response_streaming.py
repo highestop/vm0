@@ -61,15 +61,8 @@ def is_model_websocket_usage_enabled(flow: http.HTTPFlow) -> bool:
 def _make_response_chunk_parser(
     feed: _ResponseChunkParser,
     headers: http.Headers,
-) -> _ResponseChunkParser:
-    decompressor = body_utils.create_stream_decompressor(headers)
-    if decompressor is None:
-        return feed
-
-    def parse_chunk(chunk: bytes) -> None:
-        feed(decompressor(chunk))
-
-    return parse_chunk
+) -> _ResponseChunkParser | None:
+    return body_utils.create_stream_decode_feed(headers, feed)
 
 
 def _make_model_sse_parse_error_logger(
@@ -116,6 +109,8 @@ def _configure_response_usage_parser(flow: http.HTTPFlow) -> _ResponseChunkParse
         flow.metadata[_MODEL_WEBSOCKET_USAGE_ENABLED] = True
         return None
     if is_billable_model_provider:
+        if not body_utils.can_stream_decode_usage(flow.response.headers):
+            return None
         content_type = flow.response.headers.get("content-type", "").lower()
         if "text/event-stream" in content_type:
             if uses_openai_responses_usage_protocol(flow):
@@ -132,22 +127,35 @@ def _configure_response_usage_parser(flow: http.HTTPFlow) -> _ResponseChunkParse
                         usage_protocol="anthropic_messages_sse",
                     )
                 )
+            parser = _make_response_chunk_parser(parser_fn, flow.response.headers)
+            if parser is None:
+                return None
             flow.metadata[metadata_keys.MODEL_PROVIDER_USAGE] = usage_dict
             flow.metadata[_MODEL_SSE_USAGE_FINISH] = parser_fn.finish
-            return _make_response_chunk_parser(parser_fn, flow.response.headers)
+            return parser
 
         if uses_openai_responses_usage_protocol(flow):
             extractor = usage.create_openai_responses_json_usage_extractor()
         else:
             extractor = usage.create_anthropic_messages_json_usage_extractor()
+        parser = _make_response_chunk_parser(extractor.feed, flow.response.headers)
+        if parser is None:
+            return None
         flow.metadata[_MODEL_JSON_USAGE_FINISH] = extractor.finish
-        return _make_response_chunk_parser(extractor.feed, flow.response.headers)
+        return parser
 
+    if not is_billable_flow:
+        return None
+    if not body_utils.can_stream_decode_usage(flow.response.headers):
+        return None
     connector_parser = usage.create_connector_response_parser(flow)
     if connector_parser is not None:
+        parser = _make_response_chunk_parser(connector_parser.feed, flow.response.headers)
+        if parser is None:
+            return None
         if connector_parser.finish is not None:
             flow.metadata[_CONNECTOR_RESPONSE_FINISH] = connector_parser.finish
-        return _make_response_chunk_parser(connector_parser.feed, flow.response.headers)
+        return parser
 
     return None
 

@@ -56,6 +56,7 @@ import {
   resetMockComposesList,
   resetMockTeam,
 } from "./api-agents.ts";
+import { apiSkillsHandlers, resetMockSkills } from "./api-skills.ts";
 import { apiRunsHandlers } from "./api-runs.ts";
 import { apiFeatureSwitchesHandlers } from "./api-feature-switches.ts";
 import { apiRealtimeHandlers } from "./api-realtime.ts";
@@ -110,6 +111,7 @@ export const handlers = [
   ...apiIntegrationsAgentPhoneHandlers,
   ...apiIntegrationsGithubHandlers,
   ...apiAgentsHandlers,
+  ...apiSkillsHandlers,
   ...apiRunsHandlers,
   ...apiUserPreferencesHandlers,
   ...apiUserModelPreferenceHandlers,
@@ -154,5 +156,6 @@ export function resetAllMockHandlers(): void {
   resetMockUsageInsight();
   resetMockSchedules();
   resetMockTeam();
+  resetMockSkills();
   resetMockOnboardingStatus();
 }

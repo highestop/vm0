@@ -40,7 +40,7 @@ pub(super) struct DiscoveredJobContext<'a> {
     pub(super) mode_rx: &'a tokio::sync::watch::Receiver<RunnerMode>,
     pub(super) cancel_tokens: &'a Arc<tokio::sync::Mutex<HashMap<RunId, CancellationToken>>>,
     pub(super) spawn_ctx: &'a SpawnContext,
-    pub(super) destroy_tasks: &'a mut JoinSet<()>,
+    pub(super) destroy_tasks: &'a mut JoinSet<bool>,
     pub(super) jobs: &'a mut JoinSet<Option<RunId>>,
 }
 
@@ -294,7 +294,7 @@ async fn try_reuse_from_pool(
                     // task before handing the sandbox to the executor.
                     drop(job_lease);
                     (
-                        Some(sandbox),
+                        Some(*sandbox),
                         budget_lease,
                         SandboxReuseResult::Reused,
                         snapshot,
@@ -307,7 +307,7 @@ async fn try_reuse_from_pool(
                         error = %error,
                         "unpark failed, destroying idle VM and falling through to fresh create"
                     );
-                    spawn_idle_destroy_job(ctx.destroy_tasks, destroy_job, "reuse_unpark_failed");
+                    spawn_idle_destroy_job(ctx.destroy_tasks, *destroy_job, "reuse_unpark_failed");
                     (None, job_lease, SandboxReuseResult::UnparkFailed, snapshot)
                 }
             }

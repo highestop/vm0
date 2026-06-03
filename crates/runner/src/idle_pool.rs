@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::resource_budget::BudgetLease;
 use crate::status::IdleVm;
 use crate::types::HeldSessionState;
+use crate::workspace_image_cache::WorkspaceImagePromotionContext;
+use crate::workspace_promotion::promote_workspace_image_from_parked_sandbox;
 
 /// Default idle timeout for kept-alive VMs (30 minutes).
 ///
@@ -197,6 +199,7 @@ pub(crate) struct IdleParkRequestParts {
     pub(crate) budget_lease: BudgetLease,
     pub(crate) source_ip: String,
     pub(crate) storage_fingerprints: StorageFingerprints,
+    pub(crate) workspace_promotion: Option<WorkspaceImagePromotionContext>,
 }
 
 /// Active-owned sandbox after `Sandbox::park()` succeeds, before idle-pool
@@ -220,6 +223,7 @@ pub struct ParkedIdleCandidate {
     /// Version fingerprints of storages downloaded in the previous turn.
     /// Used to skip re-downloading unchanged entries on reuse.
     storage_fingerprints: StorageFingerprints,
+    workspace_promotion: Option<WorkspaceImagePromotionContext>,
     /// Local terminal timestamp for this parked session.
     ///
     /// `None` is reserved for synthetic test entries and means the VM is not
@@ -245,6 +249,7 @@ pub(crate) struct IdleParkFailure {
     sandbox: Box<dyn Sandbox>,
     factory: Arc<Box<dyn SandboxFactory>>,
     budget_lease: BudgetLease,
+    workspace_promotion: Option<WorkspaceImagePromotionContext>,
     error: String,
 }
 
@@ -253,6 +258,7 @@ pub(crate) struct IdleParkActiveParts {
     pub(crate) sandbox: Box<dyn Sandbox>,
     pub(crate) factory: Arc<Box<dyn SandboxFactory>>,
     pub(crate) budget_lease: BudgetLease,
+    pub(crate) workspace_promotion: Option<WorkspaceImagePromotionContext>,
 }
 
 #[must_use = "idle park failure parts must be logged and cleaned up"]
@@ -277,6 +283,7 @@ impl IdleParkRequest {
             budget_lease,
             source_ip,
             storage_fingerprints,
+            workspace_promotion,
         } = self.parts;
 
         match AssertUnwindSafe(sandbox.park()).catch_unwind().await {
@@ -290,18 +297,23 @@ impl IdleParkRequest {
                 budget_lease,
                 source_ip,
                 storage_fingerprints,
+                workspace_promotion,
                 last_completed_at: None,
             }),
             Ok(Err(e)) => Err(IdleParkFailure {
                 sandbox,
                 factory,
                 budget_lease,
+                workspace_promotion,
                 error: e.to_string(),
             }),
             Err(_) => Err(IdleParkFailure {
                 sandbox,
                 factory,
                 budget_lease,
+                // A panic leaves the park transition state uncertain; destroy
+                // the sandbox, but do not publish a workspace cache image.
+                workspace_promotion: None,
                 error: "sandbox park panicked".into(),
             }),
         }
@@ -314,6 +326,7 @@ impl IdleParkFailure {
             sandbox,
             factory,
             budget_lease,
+            workspace_promotion,
             error,
         } = self;
         IdleParkFailureParts {
@@ -321,6 +334,7 @@ impl IdleParkFailure {
                 sandbox,
                 factory,
                 budget_lease,
+                workspace_promotion,
             },
             error,
         }
@@ -342,6 +356,7 @@ impl ParkedIdleCandidate {
             budget_lease: parts.budget_lease,
             source_ip: parts.source_ip,
             storage_fingerprints: parts.storage_fingerprints,
+            workspace_promotion: None,
             last_completed_at: None,
         }
     }
@@ -371,6 +386,7 @@ impl ParkedIdleCandidate {
             budget_lease,
             source_ip,
             storage_fingerprints,
+            workspace_promotion,
             last_completed_at,
         } = self;
 
@@ -386,22 +402,27 @@ impl ParkedIdleCandidate {
             parked_at,
             idle_timeout,
             storage_fingerprints,
+            workspace_promotion,
             last_completed_at,
         }
     }
 
-    pub(crate) fn into_active_parts(self) -> IdleParkActiveParts {
+    pub(crate) fn into_active_destroy_parts(self) -> (IdleDestroyPayload, BudgetLease) {
         let Self {
             sandbox,
             factory,
             budget_lease,
+            workspace_promotion,
             ..
         } = self;
-        IdleParkActiveParts {
-            sandbox,
-            factory,
+        (
+            IdleDestroyPayload {
+                sandbox,
+                factory,
+                workspace_promotion,
+            },
             budget_lease,
-        }
+        )
     }
 
     fn into_rejected(self) -> RejectedParkedIdleCandidate {
@@ -409,11 +430,16 @@ impl ParkedIdleCandidate {
             sandbox,
             factory,
             budget_lease,
+            workspace_promotion,
             ..
         } = self;
 
         RejectedParkedIdleCandidate {
-            payload: IdleDestroyPayload { sandbox, factory },
+            payload: IdleDestroyPayload {
+                sandbox,
+                factory,
+                workspace_promotion,
+            },
             budget_lease,
         }
     }
@@ -437,6 +463,7 @@ pub struct IdleEntry {
     /// Version fingerprints of storages downloaded in the previous turn.
     /// Used to skip re-downloading unchanged entries on reuse.
     storage_fingerprints: StorageFingerprints,
+    workspace_promotion: Option<WorkspaceImagePromotionContext>,
     last_completed_at: Option<String>,
 }
 
@@ -471,12 +498,14 @@ pub struct ReusableIdleSandbox {
     sandbox_id: SandboxId,
     source_ip: String,
     storage_fingerprints: StorageFingerprints,
+    workspace_promotion: Option<WorkspaceImagePromotionContext>,
 }
 
 pub struct ReusableIdleSandboxParts {
     pub sandbox: Box<dyn Sandbox>,
     pub source_ip: String,
     pub storage_fingerprints: StorageFingerprints,
+    pub workspace_promotion: Option<WorkspaceImagePromotionContext>,
 }
 
 impl ReusableIdleSandbox {
@@ -490,12 +519,14 @@ impl ReusableIdleSandbox {
             sandbox_id: _,
             source_ip,
             storage_fingerprints,
+            workspace_promotion,
         } = self;
 
         ReusableIdleSandboxParts {
             sandbox,
             source_ip,
             storage_fingerprints,
+            workspace_promotion,
         }
     }
 }
@@ -504,12 +535,34 @@ impl ReusableIdleSandbox {
 pub(crate) struct IdleDestroyPayload {
     sandbox: Box<dyn Sandbox>,
     factory: Arc<Box<dyn SandboxFactory>>,
+    workspace_promotion: Option<WorkspaceImagePromotionContext>,
+}
+
+pub(crate) struct IdleDestroyResult {
+    pub(crate) outcome: DestroyOutcome,
+    pub(crate) workspace_cache_promoted: bool,
 }
 
 impl IdleDestroyPayload {
     /// Stop the sandbox and destroy it via its factory.
+    #[cfg(test)]
     pub(crate) async fn stop_and_destroy(self) -> DestroyOutcome {
+        self.promote_then_stop_and_destroy("idle_destroy")
+            .await
+            .outcome
+    }
+
+    pub(crate) async fn promote_then_stop_and_destroy(
+        self,
+        context: &'static str,
+    ) -> IdleDestroyResult {
         let mut sandbox = self.sandbox;
+        let workspace_cache_promoted = promote_workspace_image_from_parked_sandbox(
+            sandbox.as_mut(),
+            self.workspace_promotion.as_ref(),
+            context,
+        )
+        .await;
         let mut uncertain = false;
         match AssertUnwindSafe(sandbox.stop()).catch_unwind().await {
             Ok(Ok(())) => {}
@@ -528,9 +581,15 @@ impl IdleDestroyPayload {
             uncertain = true;
         }
         if uncertain {
-            DestroyOutcome::Uncertain
+            IdleDestroyResult {
+                outcome: DestroyOutcome::Uncertain,
+                workspace_cache_promoted,
+            }
         } else {
-            DestroyOutcome::Completed
+            IdleDestroyResult {
+                outcome: DestroyOutcome::Completed,
+                workspace_cache_promoted,
+            }
         }
     }
 }
@@ -546,15 +605,21 @@ pub struct IdleDestroyJob {
 }
 
 impl IdleDestroyJob {
+    #[cfg(test)]
     pub async fn run(self) {
+        let _ = self.run_with_context("idle_destroy").await;
+    }
+
+    pub async fn run_with_context(self, context: &'static str) -> bool {
         let Self {
             payload,
             budget_lease,
             session_id: _,
             profile_name: _,
         } = self;
-        let _ = payload.stop_and_destroy().await;
+        let result = payload.promote_then_stop_and_destroy(context).await;
         drop(budget_lease);
+        result.workspace_cache_promoted
     }
 
     pub fn session_id(&self) -> &str {
@@ -596,11 +661,11 @@ impl RejectedParkedIdleCandidate {
 
 pub enum IdleUnparkResult {
     Reused {
-        sandbox: ReusableIdleSandbox,
+        sandbox: Box<ReusableIdleSandbox>,
         budget_lease: BudgetLease,
     },
     Failed {
-        destroy_job: IdleDestroyJob,
+        destroy_job: Box<IdleDestroyJob>,
         error: String,
     },
 }
@@ -632,16 +697,16 @@ impl IdleEntry {
             Ok(Ok(())) => {
                 let (sandbox, budget_lease) = self.into_reuse_parts();
                 IdleUnparkResult::Reused {
-                    sandbox,
+                    sandbox: Box::new(sandbox),
                     budget_lease,
                 }
             }
             Ok(Err(e)) => IdleUnparkResult::Failed {
-                destroy_job: self.into_destroy_job(),
+                destroy_job: Box::new(self.into_destroy_job_without_workspace_promotion()),
                 error: e.to_string(),
             },
             Err(_) => IdleUnparkResult::Failed {
-                destroy_job: self.into_destroy_job(),
+                destroy_job: Box::new(self.into_destroy_job_without_workspace_promotion()),
                 error: "sandbox unpark panicked".into(),
             },
         }
@@ -653,6 +718,7 @@ impl IdleEntry {
             sandbox_id,
             source_ip,
             storage_fingerprints,
+            workspace_promotion,
             budget_lease,
             ..
         } = self;
@@ -663,23 +729,42 @@ impl IdleEntry {
                 sandbox_id,
                 source_ip,
                 storage_fingerprints,
+                workspace_promotion,
             },
             budget_lease,
         )
     }
 
     pub fn into_destroy_job(self) -> IdleDestroyJob {
+        self.into_destroy_job_with_workspace_promotion(true)
+    }
+
+    fn into_destroy_job_without_workspace_promotion(self) -> IdleDestroyJob {
+        self.into_destroy_job_with_workspace_promotion(false)
+    }
+
+    fn into_destroy_job_with_workspace_promotion(
+        self,
+        keep_workspace_promotion: bool,
+    ) -> IdleDestroyJob {
         let Self {
             sandbox,
             factory,
             session_id,
             profile_name,
             budget_lease,
+            workspace_promotion,
             ..
         } = self;
 
         IdleDestroyJob {
-            payload: IdleDestroyPayload { sandbox, factory },
+            payload: IdleDestroyPayload {
+                sandbox,
+                factory,
+                workspace_promotion: keep_workspace_promotion
+                    .then_some(workspace_promotion)
+                    .flatten(),
+            },
             budget_lease,
             session_id,
             profile_name,
@@ -992,7 +1077,11 @@ mod tests {
             .await
             .expect("create sandbox");
 
-        IdleDestroyPayload { sandbox, factory }
+        IdleDestroyPayload {
+            sandbox,
+            factory,
+            workspace_promotion: None,
+        }
     }
 
     async fn make_idle_park_request(
@@ -1025,6 +1114,7 @@ mod tests {
             budget_lease,
             source_ip: "10.0.0.1".into(),
             storage_fingerprints: StorageFingerprints::default(),
+            workspace_promotion: None,
         })
     }
 
@@ -1117,6 +1207,7 @@ mod tests {
             budget_lease,
             source_ip: source_ip.into(),
             storage_fingerprints,
+            workspace_promotion: None,
         });
 
         let candidate = match request.park_for_idle().await {
@@ -1141,6 +1232,7 @@ mod tests {
         else {
             panic!("unpark should succeed");
         };
+        let sandbox = *sandbox;
         assert_eq!(sandbox.sandbox_id(), sandbox_id);
         let reused_parts = sandbox.into_parts();
         assert_eq!(reused_parts.source_ip, source_ip);

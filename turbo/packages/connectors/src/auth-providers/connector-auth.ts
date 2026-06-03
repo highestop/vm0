@@ -9,13 +9,15 @@ import {
   type DeviceAuthGrantConnectorType,
   type ConnectorAuthMethodIdsByAccessKind,
   type ConnectorAuthMethodIdsByRevokeKind,
+  type ConnectorRefreshInputValues,
+  type ConnectorRevokeInputValues,
   type RefreshTokenAccessConnectorType,
   type TokenRevokeConnectorType,
 } from "@vm0/connectors/connectors";
 import {
   connectorAuthClientIdentityForMethod,
   connectorAuthMethodRefHasRevokeKind,
-  getConnectorAuthMethod,
+  getConnectorAuthMethodAccessMetadata,
   getConnectorAuthMethodAuthCodeGrantConfig,
   getConnectorAuthMethodGrantScopes,
   isStaticConfidentialConnectorAuthClient,
@@ -33,10 +35,14 @@ import type {
 } from "./types";
 import {
   type AuthUrlResult,
+  type ConnectorAuthProviderRefreshResultBase,
+  type ConnectorAuthProviderRefreshResult,
   type OAuthDeviceAuthPollResult,
+  type OAuthDeviceAuthPollResultBase,
   type OAuthDeviceAuthStartResult,
   type OAuthRefreshResult,
   type OAuthTokenResult,
+  type OAuthTokenResultBase,
 } from "./oauth/types";
 import { providerEnvFromObject, type ProviderEnv } from "./provider-env";
 import { ahrefsProvider } from "./oauth/providers/ahrefs-provider";
@@ -96,10 +102,14 @@ import {
 
 export type {
   AuthUrlResult,
+  ConnectorAuthProviderRefreshResultBase,
+  ConnectorAuthProviderRefreshResult,
   OAuthDeviceAuthPollResult,
+  OAuthDeviceAuthPollResultBase,
   OAuthDeviceAuthStartResult,
   OAuthRefreshResult,
   OAuthTokenResult,
+  OAuthTokenResultBase,
 };
 export type { ProviderEnv };
 export { providerEnvFromObject };
@@ -323,7 +333,9 @@ async function revokeTokenRevokeConnectorAccessToken<
   readonly type: T;
   readonly authMethod: Method;
   readonly readEnv: ConnectorEnvReader;
-  readonly loadAccessToken: () => string | Promise<string>;
+  readonly loadInputs: () =>
+    | ConnectorRevokeInputValues<T, Method>
+    | Promise<ConnectorRevokeInputValues<T, Method>>;
 }): Promise<ConnectorAuthProviderAccessTokenRevokeResult> {
   const revoke = connectorTokenRevokeProviderFor(args.type, args.authMethod);
 
@@ -338,7 +350,7 @@ async function revokeTokenRevokeConnectorAccessToken<
 
   await revoke.revokeToken({
     authClient,
-    accessToken: await args.loadAccessToken(),
+    inputs: await args.loadInputs(),
   });
   return { status: "revoked" };
 }
@@ -463,7 +475,7 @@ type ConnectorDeviceAuthorizationPollCallArgs =
 
 type ConnectorRefreshTokenAccessCallArgs =
   ConnectorRefreshTokenAccessMethodClientRef & {
-    readonly refreshToken: string;
+    readonly inputs: Readonly<Record<string, string>>;
     readonly signal: AbortSignal;
   };
 
@@ -518,10 +530,10 @@ export function exchangeConnectorAuthCode<
   readonly state: string | undefined;
   readonly codeVerifier: string | undefined;
   readonly oauthContext: string | undefined;
-}): Promise<OAuthTokenResult>;
+}): Promise<OAuthTokenResult<T, Method>>;
 export function exchangeConnectorAuthCode(
   args: ConnectorAuthCodeExchangeCallArgs,
-): Promise<OAuthTokenResult>;
+): Promise<OAuthTokenResultBase>;
 export async function exchangeConnectorAuthCode<
   T extends AuthCodeGrantConnectorType,
   Method extends ConnectorAuthCodeGrantAuthMethodId<T>,
@@ -534,7 +546,7 @@ export async function exchangeConnectorAuthCode<
   readonly state: string | undefined;
   readonly codeVerifier: string | undefined;
   readonly oauthContext: string | undefined;
-}): Promise<OAuthTokenResult> {
+}): Promise<OAuthTokenResult<T, Method>> {
   const provider = connectorAuthCodeGrantProviderFor(
     args.type,
     args.authMethod,
@@ -591,10 +603,10 @@ export function pollConnectorDeviceAuthorization<
   readonly authMethod: Method;
   readonly authClient: ConnectorAuthClientForMethod<T, Method>;
   readonly deviceCode: string;
-}): Promise<OAuthDeviceAuthPollResult>;
+}): Promise<OAuthDeviceAuthPollResult<T, Method>>;
 export function pollConnectorDeviceAuthorization(
   args: ConnectorDeviceAuthorizationPollCallArgs,
-): Promise<OAuthDeviceAuthPollResult>;
+): Promise<OAuthDeviceAuthPollResultBase>;
 export async function pollConnectorDeviceAuthorization<
   T extends DeviceAuthGrantConnectorType,
   Method extends ConnectorDeviceAuthGrantAuthMethodId<T>,
@@ -603,7 +615,7 @@ export async function pollConnectorDeviceAuthorization<
   readonly authMethod: Method;
   readonly authClient: ConnectorAuthClientForMethod<T, Method>;
   readonly deviceCode: string;
-}): Promise<OAuthDeviceAuthPollResult> {
+}): Promise<OAuthDeviceAuthPollResult<T, Method>> {
   const provider = connectorDeviceAuthGrantProviderFor(
     args.type,
     args.authMethod,
@@ -621,12 +633,12 @@ export function refreshConnectorAuthProviderAccessToken<
   readonly type: T;
   readonly authMethod: Method;
   readonly authClient: ConnectorAuthClientForMethod<T, Method>;
-  readonly refreshToken: string;
+  readonly inputs: ConnectorRefreshInputValues<T, Method>;
   readonly signal: AbortSignal;
-}): Promise<OAuthRefreshResult>;
+}): Promise<ConnectorAuthProviderRefreshResult<T, Method>>;
 export function refreshConnectorAuthProviderAccessToken(
   args: ConnectorRefreshTokenAccessCallArgs,
-): Promise<OAuthRefreshResult>;
+): Promise<ConnectorAuthProviderRefreshResultBase>;
 export async function refreshConnectorAuthProviderAccessToken<
   T extends RefreshTokenAccessConnectorType,
   Method extends ConnectorAuthMethodIdsByAccessKind<T, "refresh-token">,
@@ -634,31 +646,40 @@ export async function refreshConnectorAuthProviderAccessToken<
   readonly type: T;
   readonly authMethod: Method;
   readonly authClient: ConnectorAuthClientForMethod<T, Method>;
-  readonly refreshToken: string;
+  readonly inputs: ConnectorRefreshInputValues<T, Method>;
   readonly signal: AbortSignal;
-}): Promise<OAuthRefreshResult> {
-  const method = getConnectorAuthMethod(args.type, args.authMethod);
-  if (method?.access.kind !== "refresh-token") {
-    throw new Error(
-      `${args.type} connector auth method ${args.authMethod} does not support token refresh`,
-    );
-  }
+}): Promise<ConnectorAuthProviderRefreshResult<T, Method>> {
+  const accessMetadata = getConnectorAuthMethodAccessMetadata(
+    args.type,
+    args.authMethod,
+  );
   const access = connectorRefreshTokenAccessProviderFor(
     args.type,
     args.authMethod,
   );
-  return await access.refreshToken({
+  const result = await access.refresh({
     authClient: args.authClient,
-    refreshToken: args.refreshToken,
+    inputs: args.inputs,
     signal: args.signal,
   });
+  const declaredOutputs = new Set(Object.keys(accessMetadata.outputs));
+  for (const outputName of Object.keys(result.outputs)) {
+    if (!declaredOutputs.has(outputName)) {
+      throw new Error(
+        `${args.type} connector auth method ${args.authMethod} returned undeclared refresh output ${outputName}`,
+      );
+    }
+  }
+  return result;
 }
 
 export async function revokeConnectorAuthMethodAccessToken(args: {
   readonly type: ConnectorType;
   readonly authMethod: string;
   readonly readEnv: ConnectorEnvReader;
-  readonly loadAccessToken: () => string | Promise<string>;
+  readonly loadInputs: () =>
+    | Readonly<Record<string, string>>
+    | Promise<Readonly<Record<string, string>>>;
 }): Promise<ConnectorAuthProviderAccessTokenRevokeResult> {
   const parsedAuthMethod = connectorAuthMethodIdSchema.safeParse(
     args.authMethod,
@@ -679,6 +700,6 @@ export async function revokeConnectorAuthMethodAccessToken(args: {
     type: authMethodRef.type,
     authMethod: authMethodRef.authMethod,
     readEnv: args.readEnv,
-    loadAccessToken: args.loadAccessToken,
+    loadInputs: args.loadInputs,
   });
 }

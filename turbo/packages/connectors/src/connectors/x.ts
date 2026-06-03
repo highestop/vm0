@@ -19,10 +19,6 @@ export const x = {
         storage: {
           secrets: ["X_ACCESS_TOKEN", "X_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "X_ACCESS_TOKEN",
-            refreshToken: "X_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -50,9 +46,21 @@ export const x = {
             "dm.write", // Send and manage Direct Messages for you.
             "media.write", // Upload media.
           ],
+          outputs: {
+            accessToken: "$secrets.X_ACCESS_TOKEN",
+            refreshToken: "$secrets.X_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.X_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.X_ACCESS_TOKEN",
+            refreshToken: "$secrets.X_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["X_ACCESS_TOKEN"],
           envBindings: {
             X_TOKEN: "$secrets.X_ACCESS_TOKEN",
           },

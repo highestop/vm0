@@ -4,6 +4,7 @@ import {
   exchangeMicrosoftOAuthCode,
   refreshMicrosoftToken,
 } from "../microsoft";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const outlookCalendarProvider: AuthCodeConnectorAuthProvider<"outlook-calendar"> =
   {
     grant: {
@@ -33,8 +34,10 @@ export const outlookCalendarProvider: AuthCodeConnectorAuthProvider<"outlook-cal
           redirectUri,
         );
         return {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken,
+          outputs: {
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+          },
           expiresIn: result.expiresIn,
           scopes: result.scopes,
           userInfo: {
@@ -47,21 +50,17 @@ export const outlookCalendarProvider: AuthCodeConnectorAuthProvider<"outlook-cal
     },
     access: {
       kind: "refresh-token",
-      getAccessSecretName: () => {
-        return "OUTLOOK_CALENDAR_ACCESS_TOKEN";
-      },
-      getRefreshSecretName: () => {
-        return "OUTLOOK_CALENDAR_REFRESH_TOKEN";
-      },
-      refreshToken: (args) => {
+      refresh: async (args) => {
         const { clientId, clientSecret } = args.authClient;
-        const refreshToken = args.refreshToken;
-        return refreshMicrosoftToken(
-          "outlook-calendar",
-          clientId,
-          clientSecret,
-          refreshToken,
-          args.signal,
+        const refreshToken = args.inputs.refreshToken;
+        return oauthRefreshResultToProviderResult(
+          await refreshMicrosoftToken(
+            "outlook-calendar",
+            clientId,
+            clientSecret,
+            refreshToken,
+            args.signal,
+          ),
         );
       },
     },

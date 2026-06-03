@@ -82,7 +82,6 @@ describe("connector/providers/meta-ads", () => {
       );
 
       expect(result.accessToken).toBe("long-lived-token");
-      expect(result.refreshToken).toBeNull();
       expect(result.expiresIn).toBe(5184000);
       expect(result.userInfo.id).toBe("12345");
       expect(result.userInfo.username).toBe("Test User");
@@ -186,12 +185,6 @@ describe("connector/providers/meta-ads", () => {
         clientId: "test-client-id",
         clientSecret: "test-client-secret",
       });
-    });
-
-    it("getSecretName returns META_ADS_ACCESS_TOKEN", () => {
-      expect(metaAdsProvider.access.getAccessSecretName()).toBe(
-        "META_ADS_ACCESS_TOKEN",
-      );
     });
 
     it("refreshToken is not registered (Meta uses long-lived token exchange)", () => {

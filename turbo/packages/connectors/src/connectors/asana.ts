@@ -19,17 +19,25 @@ export const asana = {
         storage: {
           secrets: ["ASANA_ACCESS_TOKEN", "ASANA_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "ASANA_ACCESS_TOKEN",
-            refreshToken: "ASANA_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: [],
+          outputs: {
+            accessToken: "$secrets.ASANA_ACCESS_TOKEN",
+            refreshToken: "$secrets.ASANA_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.ASANA_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.ASANA_ACCESS_TOKEN",
+            refreshToken: "$secrets.ASANA_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["ASANA_ACCESS_TOKEN"],
           envBindings: {
             ASANA_TOKEN: "$secrets.ASANA_ACCESS_TOKEN",
           },

@@ -1,10 +1,15 @@
-import { type ModelProviderAuthProvider } from "../../types";
-import {
-  CHATGPT_OAUTH_CLIENT_ID,
-  getChatgptRefreshSecretName,
-  getChatgptSecretName,
-  refreshChatgptToken,
-} from "./codex-oauth";
+import { type ModelProviderRefreshTokenAuthProvider } from "../../types";
+import { CHATGPT_OAUTH_CLIENT_ID, refreshChatgptToken } from "./codex-oauth";
+import { oauthRefreshResultToProviderResult } from "../types";
+
+type CodexOAuthRefreshInputs = {
+  readonly refreshToken: string;
+};
+
+type CodexOAuthRefreshOutputs = {
+  readonly accessToken: string;
+  readonly refreshToken?: string;
+};
 
 /**
  * Refresh provider for the codex-oauth-token model provider type.
@@ -12,14 +17,12 @@ import {
  * Browser OAuth setup is not supported. Users connect by pasting auth.json;
  * this provider only keeps the derived ChatGPT access token fresh server-side.
  */
-export const codexOauthProvider: ModelProviderAuthProvider = {
+const codexOauthProviderDefinition = {
   grant: {
     kind: "none",
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getChatgptSecretName,
-    getRefreshSecretName: getChatgptRefreshSecretName,
     resolveAuthClient: () => {
       return {
         clientRegistration: "static",
@@ -27,15 +30,26 @@ export const codexOauthProvider: ModelProviderAuthProvider = {
         clientId: CHATGPT_OAUTH_CLIENT_ID,
       };
     },
-    refreshToken: (args) => {
-      return refreshChatgptToken(
-        args.authClient.clientId,
-        args.refreshToken,
-        args.signal,
+    refresh: async (args) => {
+      const refreshToken = args.inputs.refreshToken;
+      return oauthRefreshResultToProviderResult(
+        await refreshChatgptToken(
+          args.authClient.clientId,
+          refreshToken,
+          args.signal,
+        ),
       );
     },
   },
   revoke: {
     kind: "none",
   },
-};
+} satisfies ModelProviderRefreshTokenAuthProvider<
+  CodexOAuthRefreshInputs,
+  CodexOAuthRefreshOutputs
+>;
+
+export const codexOauthProvider: ModelProviderRefreshTokenAuthProvider<
+  CodexOAuthRefreshInputs,
+  CodexOAuthRefreshOutputs
+> = codexOauthProviderDefinition;

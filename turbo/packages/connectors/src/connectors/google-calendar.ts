@@ -23,10 +23,6 @@ export const googleCalendar = {
             "GOOGLE_CALENDAR_REFRESH_TOKEN",
           ],
           variables: [],
-          secretRoles: {
-            accessToken: "GOOGLE_CALENDAR_ACCESS_TOKEN",
-            refreshToken: "GOOGLE_CALENDAR_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -34,9 +30,21 @@ export const googleCalendar = {
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/userinfo.email",
           ],
+          outputs: {
+            accessToken: "$secrets.GOOGLE_CALENDAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.GOOGLE_CALENDAR_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.GOOGLE_CALENDAR_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.GOOGLE_CALENDAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.GOOGLE_CALENDAR_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["GOOGLE_CALENDAR_ACCESS_TOKEN"],
           envBindings: {
             GOOGLE_CALENDAR_TOKEN: "$secrets.GOOGLE_CALENDAR_ACCESS_TOKEN",
           },

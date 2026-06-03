@@ -1,10 +1,7 @@
 import type { AuthCodeConnectorAuthProvider } from "../../types";
-import {
-  buildGmailAuthorizationUrl,
-  exchangeGmailCode,
-  getGmailSecretName,
-} from "./gmail";
+import { buildGmailAuthorizationUrl, exchangeGmailCode } from "./gmail";
 import { refreshGoogleToken } from "../google";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const gmailProvider: AuthCodeConnectorAuthProvider<"gmail"> = {
   grant: {
     kind: "auth-code",
@@ -29,8 +26,10 @@ export const gmailProvider: AuthCodeConnectorAuthProvider<"gmail"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -43,19 +42,17 @@ export const gmailProvider: AuthCodeConnectorAuthProvider<"gmail"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getGmailSecretName,
-    getRefreshSecretName: () => {
-      return "GMAIL_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      const refreshToken = args.refreshToken;
-      return refreshGoogleToken(
-        "gmail",
-        clientId,
-        clientSecret,
-        refreshToken,
-        args.signal,
+      const refreshToken = args.inputs.refreshToken;
+      return oauthRefreshResultToProviderResult(
+        await refreshGoogleToken(
+          "gmail",
+          clientId,
+          clientSecret,
+          refreshToken,
+          args.signal,
+        ),
       );
     },
   },

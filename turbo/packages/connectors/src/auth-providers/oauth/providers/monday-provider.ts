@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildMondayAuthorizationUrl,
   exchangeMondayCode,
-  getMondaySecretName,
   refreshMondayToken,
 } from "./monday";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const mondayProvider: AuthCodeConnectorAuthProvider<"monday"> = {
   grant: {
     kind: "auth-code",
@@ -29,8 +29,10 @@ export const mondayProvider: AuthCodeConnectorAuthProvider<"monday"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -43,17 +45,15 @@ export const mondayProvider: AuthCodeConnectorAuthProvider<"monday"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getMondaySecretName,
-    getRefreshSecretName: () => {
-      return "MONDAY_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshMondayToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshMondayToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

@@ -21,10 +21,6 @@ export const spotify = {
         storage: {
           secrets: ["SPOTIFY_ACCESS_TOKEN", "SPOTIFY_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "SPOTIFY_ACCESS_TOKEN",
-            refreshToken: "SPOTIFY_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -49,9 +45,21 @@ export const spotify = {
             "user-read-email",
             "user-read-private",
           ],
+          outputs: {
+            accessToken: "$secrets.SPOTIFY_ACCESS_TOKEN",
+            refreshToken: "$secrets.SPOTIFY_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.SPOTIFY_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.SPOTIFY_ACCESS_TOKEN",
+            refreshToken: "$secrets.SPOTIFY_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["SPOTIFY_ACCESS_TOKEN"],
           envBindings: {
             SPOTIFY_TOKEN: "$secrets.SPOTIFY_ACCESS_TOKEN",
           },

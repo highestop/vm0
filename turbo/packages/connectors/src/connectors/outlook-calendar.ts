@@ -24,17 +24,25 @@ export const outlookCalendar = {
             "OUTLOOK_CALENDAR_REFRESH_TOKEN",
           ],
           variables: [],
-          secretRoles: {
-            accessToken: "OUTLOOK_CALENDAR_ACCESS_TOKEN",
-            refreshToken: "OUTLOOK_CALENDAR_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["Calendars.ReadWrite", "User.Read", "offline_access"],
+          outputs: {
+            accessToken: "$secrets.OUTLOOK_CALENDAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.OUTLOOK_CALENDAR_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.OUTLOOK_CALENDAR_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.OUTLOOK_CALENDAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.OUTLOOK_CALENDAR_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["OUTLOOK_CALENDAR_ACCESS_TOKEN"],
           envBindings: {
             OUTLOOK_CALENDAR_TOKEN: "$secrets.OUTLOOK_CALENDAR_ACCESS_TOKEN",
           },

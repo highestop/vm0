@@ -21,17 +21,25 @@ export const docusign = {
         storage: {
           secrets: ["DOCUSIGN_ACCESS_TOKEN", "DOCUSIGN_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "DOCUSIGN_ACCESS_TOKEN",
-            refreshToken: "DOCUSIGN_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["signature", "extended", "openid"],
+          outputs: {
+            accessToken: "$secrets.DOCUSIGN_ACCESS_TOKEN",
+            refreshToken: "$secrets.DOCUSIGN_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.DOCUSIGN_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.DOCUSIGN_ACCESS_TOKEN",
+            refreshToken: "$secrets.DOCUSIGN_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["DOCUSIGN_ACCESS_TOKEN"],
           envBindings: {
             DOCUSIGN_TOKEN: "$secrets.DOCUSIGN_ACCESS_TOKEN",
           },

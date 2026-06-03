@@ -11,13 +11,15 @@ import {
 import {
   connectorAuthMethodHasGrantKind,
   getConnectorAuthMethod,
-  getConnectorAuthMethodAccessMetadata,
+  getConnectorAuthMethodGrantMetadata,
+  getConnectorGrantOutputSecretName,
 } from "@vm0/connectors/connector-utils";
 import {
   testOauthApiProvider,
   testOauthProvider,
 } from "@vm0/connectors/auth-providers/oauth/providers/test-oauth-provider";
 import type { AuthCodeConnectorAuthProvider } from "@vm0/connectors/auth-providers/types";
+import type { OAuthTokenResultBase } from "@vm0/connectors/auth-providers";
 import { agentComposes } from "@vm0/db/schema/agent-compose";
 import { connectors } from "@vm0/db/schema/connector";
 import { connectorOauthStates } from "@vm0/db/schema/connector-oauth-state";
@@ -44,7 +46,6 @@ const store = createStore();
 const mocks = createZeroRouteMocks(context);
 
 const BASE_URL = "https://app.vm0.test";
-const SECRET_REF_PREFIX = "$secrets.";
 const API_ORIGIN = "https://api.vm0.ai";
 const WEB_ORIGIN = "https://www.vm0.ai";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -226,6 +227,30 @@ type DynamicTestOAuthExchangeOptions<
   readonly provider: AuthCodeConnectorAuthProvider<"test-oauth", Method>;
 };
 
+type DynamicTestOAuthExchangeResult = {
+  readonly outputs: {
+    readonly accessToken: string;
+    readonly refreshToken: string;
+  };
+  readonly expiresIn: number;
+  readonly scopes: string[];
+  readonly userInfo: {
+    readonly id: string;
+    readonly username: string;
+    readonly email: string;
+  };
+};
+
+type DynamicTestOAuthApiExchangeResult = Omit<
+  DynamicTestOAuthExchangeResult,
+  "outputs"
+> & {
+  readonly outputs: {
+    readonly initialAccessToken: string;
+    readonly initialRefreshToken: string;
+  };
+};
+
 const defaultDynamicTestOAuthExchangeOptions = {
   authMethod: "oauth",
   provider: testOauthProvider,
@@ -235,18 +260,22 @@ function useDynamicTestOAuthExchange(): {
   readonly exchanges: readonly CapturedOAuthExchange[];
   readonly restore: () => void;
 };
-function useDynamicTestOAuthExchange<
-  Method extends ConnectorAuthCodeGrantAuthMethodId<"test-oauth">,
->(
-  args: DynamicTestOAuthExchangeOptions<Method>,
+function useDynamicTestOAuthExchange(
+  args: DynamicTestOAuthExchangeOptions<"oauth">,
 ): {
   readonly exchanges: readonly CapturedOAuthExchange[];
   readonly restore: () => void;
 };
-function useDynamicTestOAuthExchange<
-  Method extends ConnectorAuthCodeGrantAuthMethodId<"test-oauth">,
->(
-  args?: DynamicTestOAuthExchangeOptions<Method>,
+function useDynamicTestOAuthExchange(
+  args: DynamicTestOAuthExchangeOptions<"api">,
+): {
+  readonly exchanges: readonly CapturedOAuthExchange[];
+  readonly restore: () => void;
+};
+function useDynamicTestOAuthExchange(
+  args?:
+    | DynamicTestOAuthExchangeOptions<"oauth">
+    | DynamicTestOAuthExchangeOptions<"api">,
 ): {
   readonly exchanges: readonly CapturedOAuthExchange[];
   readonly restore: () => void;
@@ -264,11 +293,77 @@ function useDynamicTestOAuthExchange<
   };
 }
 
-function configureDynamicTestOAuthExchange<
-  Method extends ConnectorAuthCodeGrantAuthMethodId<"test-oauth">,
->(
+function dynamicTestOAuthExchangeResult(): DynamicTestOAuthExchangeResult {
+  return {
+    outputs: {
+      accessToken: "dynamic-access-token",
+      refreshToken: "dynamic-refresh-token",
+    },
+    expiresIn: 3600,
+    scopes: ["read"],
+    userInfo: {
+      id: "dynamic-user-id",
+      username: "dynamic-user",
+      email: "dynamic@example.com",
+    },
+  };
+}
+
+function dynamicTestOAuthApiExchangeResult(): DynamicTestOAuthApiExchangeResult {
+  return {
+    outputs: {
+      initialAccessToken: "dynamic-access-token",
+      initialRefreshToken: "dynamic-refresh-token",
+    },
+    expiresIn: 3600,
+    scopes: ["read"],
+    userInfo: {
+      id: "dynamic-user-id",
+      username: "dynamic-user",
+      email: "dynamic@example.com",
+    },
+  };
+}
+
+function captureDynamicTestOAuthExchange(
   exchanges: CapturedOAuthExchange[],
-  args: DynamicTestOAuthExchangeOptions<Method>,
+  args:
+    | Parameters<
+        AuthCodeConnectorAuthProvider<
+          "test-oauth",
+          "oauth"
+        >["grant"]["exchangeCode"]
+      >[0]
+    | Parameters<
+        AuthCodeConnectorAuthProvider<
+          "test-oauth",
+          "api"
+        >["grant"]["exchangeCode"]
+      >[0],
+): void {
+  exchanges.push({
+    clientId:
+      args.authClient.clientRegistration === "static"
+        ? args.authClient.clientId
+        : undefined,
+    clientSecret:
+      args.authClient.clientRegistration === "static" &&
+      args.authClient.clientType === "confidential"
+        ? args.authClient.clientSecret
+        : undefined,
+    code: args.code,
+    redirectUri: args.redirectUri,
+    state: args.state,
+    codeVerifier: args.codeVerifier,
+    oauthContext: args.oauthContext,
+  });
+}
+
+function configureDynamicTestOAuthExchange(
+  exchanges: CapturedOAuthExchange[],
+  args:
+    | DynamicTestOAuthExchangeOptions<"oauth">
+    | DynamicTestOAuthExchangeOptions<"api">,
 ): () => void {
   const method = getConnectorAuthMethod("test-oauth", args.authMethod);
   if (method?.grant.kind !== "auth-code") {
@@ -277,40 +372,26 @@ function configureDynamicTestOAuthExchange<
 
   const mutableMethod = method as { client: ConnectorAuthClientConfig };
   const originalClient = mutableMethod.client;
+  mutableMethod.client = dynamicPublicClient;
+  if (args.authMethod === "oauth") {
+    const provider = args.provider;
+    const originalExchangeCode = provider.grant.exchangeCode;
+    provider.grant.exchangeCode = (exchangeArgs) => {
+      captureDynamicTestOAuthExchange(exchanges, exchangeArgs);
+      return Promise.resolve(dynamicTestOAuthExchangeResult());
+    };
+    return () => {
+      mutableMethod.client = originalClient;
+      provider.grant.exchangeCode = originalExchangeCode;
+    };
+  }
+
   const provider = args.provider;
   const originalExchangeCode = provider.grant.exchangeCode;
-
-  mutableMethod.client = dynamicPublicClient;
-  provider.grant.exchangeCode = (args) => {
-    exchanges.push({
-      clientId:
-        args.authClient.clientRegistration === "static"
-          ? args.authClient.clientId
-          : undefined,
-      clientSecret:
-        args.authClient.clientRegistration === "static" &&
-        args.authClient.clientType === "confidential"
-          ? args.authClient.clientSecret
-          : undefined,
-      code: args.code,
-      redirectUri: args.redirectUri,
-      state: args.state,
-      codeVerifier: args.codeVerifier,
-      oauthContext: args.oauthContext,
-    });
-    return Promise.resolve({
-      accessToken: "dynamic-access-token",
-      refreshToken: "dynamic-refresh-token",
-      expiresIn: 3600,
-      scopes: ["read"],
-      userInfo: {
-        id: "dynamic-user-id",
-        username: "dynamic-user",
-        email: "dynamic@example.com",
-      },
-    });
+  provider.grant.exchangeCode = (exchangeArgs) => {
+    captureDynamicTestOAuthExchange(exchanges, exchangeArgs);
+    return Promise.resolve(dynamicTestOAuthApiExchangeResult());
   };
-
   return () => {
     mutableMethod.client = originalClient;
     provider.grant.exchangeCode = originalExchangeCode;
@@ -1143,22 +1224,6 @@ async function findDecryptedSecret(args: {
   return secret ? decryptSecretForTests(secret.encryptedValue) : undefined;
 }
 
-function staticConnectorOwnedAccessSecretName(
-  envBindings: Readonly<Record<string, string>>,
-  platformSecretNames: ReadonlySet<string>,
-): string | undefined {
-  const secretNames = new Set<string>();
-  for (const valueRef of Object.values(envBindings)) {
-    if (valueRef.startsWith(SECRET_REF_PREFIX)) {
-      const secretName = valueRef.slice(SECRET_REF_PREFIX.length);
-      if (!platformSecretNames.has(secretName)) {
-        secretNames.add(secretName);
-      }
-    }
-  }
-  return secretNames.size === 1 ? [...secretNames][0] : undefined;
-}
-
 function callbackAuthMethodForTest(
   type: AuthCodeGrantConnectorType,
 ): ConnectorAuthMethodId {
@@ -1173,37 +1238,23 @@ function accessTokenSecretNameForAuthCodeMethod(
   type: AuthCodeGrantConnectorType,
   authMethod: ConnectorAuthMethodId,
 ): string {
-  const accessMetadata = getConnectorAuthMethodAccessMetadata(type, authMethod);
-  switch (accessMetadata?.kind) {
-    case "refresh-token": {
-      return accessMetadata.accessToken;
-    }
-    case "static": {
-      const secretName = staticConnectorOwnedAccessSecretName(
-        accessMetadata.envBindings,
-        new Set(accessMetadata.platformSecrets),
-      );
-      if (!secretName) {
-        throw new Error(
-          `${type}: auth-code auth method has no static access secret`,
-        );
-      }
-      return secretName;
-    }
-    case "none":
-    case undefined: {
-      throw new Error(`${type}: auth-code auth method has no access secret`);
-    }
+  const grantMetadata = getConnectorAuthMethodGrantMetadata(type, authMethod);
+  const secretName =
+    grantMetadata &&
+    getConnectorGrantOutputSecretName(grantMetadata, "accessToken");
+  if (!secretName) {
+    throw new Error(`${type}: auth-code auth method has no access output`);
   }
+  return secretName;
 }
 
 function refreshTokenSecretNameForAuthCodeMethod(
   type: AuthCodeGrantConnectorType,
   authMethod: ConnectorAuthMethodId,
 ): string | undefined {
-  const accessMetadata = getConnectorAuthMethodAccessMetadata(type, authMethod);
-  return accessMetadata?.kind === "refresh-token"
-    ? accessMetadata.refreshToken
+  const grantMetadata = getConnectorAuthMethodGrantMetadata(type, authMethod);
+  return grantMetadata
+    ? getConnectorGrantOutputSecretName(grantMetadata, "refreshToken")
     : undefined;
 }
 
@@ -2164,7 +2215,7 @@ describe("GET /api/connectors/:type/callback", () => {
     );
   });
 
-  it("stores tokens under the selected non-default auth method", async () => {
+  it("stores tokens through method-specific grant output names", async () => {
     const dynamicOAuth = useDynamicTestOAuthExchange({
       authMethod: "api",
       provider: testOauthApiProvider,
@@ -2210,10 +2261,79 @@ describe("GET /api/connectors/:type/callback", () => {
       }),
     ).resolves.toBe("dynamic-access-token");
     await expect(
+      findDecryptedSecret({
+        orgId,
+        userId,
+        name: "TEST_OAUTH_API_REFRESH_TOKEN",
+      }),
+    ).resolves.toBe("dynamic-refresh-token");
+    await expect(
       findSecret({
         orgId,
         userId,
         name: "TEST_OAUTH_ACCESS_TOKEN",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects method-specific grant responses missing runtime token outputs", async () => {
+    const originalExchangeCode = testOauthApiProvider.grant.exchangeCode;
+    const malformedResult = {
+      ...dynamicTestOAuthApiExchangeResult(),
+      outputs: {
+        initialRefreshToken: "dynamic-refresh-token",
+      },
+    } satisfies OAuthTokenResultBase;
+    testOauthApiProvider.grant.exchangeCode = () => {
+      return Promise.resolve(
+        malformedResult as DynamicTestOAuthApiExchangeResult,
+      );
+    };
+    restoreDynamicTestOAuthExchange = () => {
+      testOauthApiProvider.grant.exchangeCode = originalExchangeCode;
+    };
+
+    const orgId = `org_${randomUUID()}`;
+    const userId = `user_${randomUUID()}`;
+    orgIds.push(orgId);
+    authenticate({ userId, orgId });
+    await seedTrackedOauthState({
+      type: "test-oauth",
+      authMethod: "api",
+      userId,
+      orgId,
+      state: "state-123",
+    });
+
+    const response = await requestCallback({
+      type: "test-oauth",
+      query: { code: "code-123", state: "state-123" },
+      headers: callbackHeaders({ stateCookie: "state-123" }),
+    });
+
+    expectConnectorErrorRedirect(response, {
+      type: "test-oauth",
+      message: "OAuth authorization failed. Please try again.",
+    });
+    await expect(
+      findConnector({
+        orgId,
+        userId,
+        type: "test-oauth",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      findSecret({
+        orgId,
+        userId,
+        name: "TEST_OAUTH_API_ACCESS_TOKEN",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      findSecret({
+        orgId,
+        userId,
+        name: "TEST_OAUTH_API_REFRESH_TOKEN",
       }),
     ).resolves.toBeUndefined();
   });

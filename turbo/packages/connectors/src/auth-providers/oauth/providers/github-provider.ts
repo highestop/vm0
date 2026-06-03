@@ -3,7 +3,6 @@ import {
   buildGitHubAuthorizationUrl,
   exchangeGitHubCode,
   fetchGitHubUserInfo,
-  getGitHubSecretName,
   revokeGitHubGrant,
 } from "./github";
 export const githubProvider: AuthCodeConnectorAuthProvider<"github"> = {
@@ -30,18 +29,17 @@ export const githubProvider: AuthCodeConnectorAuthProvider<"github"> = {
         redirectUri,
       );
       const userInfo = await fetchGitHubUserInfo(accessToken);
-      return { accessToken, scopes, userInfo };
+      return { outputs: { accessToken }, scopes, userInfo };
     },
   },
   access: {
     kind: "none",
-    getAccessSecretName: getGitHubSecretName,
   },
   revoke: {
     kind: "token-revoke",
     revokeToken: (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return revokeGitHubGrant(clientId, clientSecret, args.accessToken);
+      return revokeGitHubGrant(clientId, clientSecret, args.inputs.accessToken);
     },
   },
 };

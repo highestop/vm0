@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildAhrefsAuthorizationUrl,
   exchangeAhrefsCode,
-  getAhrefsSecretName,
   refreshAhrefsToken,
 } from "./ahrefs";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const ahrefsProvider: AuthCodeConnectorAuthProvider<"ahrefs"> = {
   grant: {
     kind: "auth-code",
@@ -29,8 +29,10 @@ export const ahrefsProvider: AuthCodeConnectorAuthProvider<"ahrefs"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -43,17 +45,15 @@ export const ahrefsProvider: AuthCodeConnectorAuthProvider<"ahrefs"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getAhrefsSecretName,
-    getRefreshSecretName: () => {
-      return "AHREFS_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshAhrefsToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshAhrefsToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

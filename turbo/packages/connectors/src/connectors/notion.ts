@@ -19,17 +19,25 @@ export const notion = {
         storage: {
           secrets: ["NOTION_ACCESS_TOKEN", "NOTION_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "NOTION_ACCESS_TOKEN",
-            refreshToken: "NOTION_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: [],
+          outputs: {
+            accessToken: "$secrets.NOTION_ACCESS_TOKEN",
+            refreshToken: "$secrets.NOTION_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.NOTION_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.NOTION_ACCESS_TOKEN",
+            refreshToken: "$secrets.NOTION_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["NOTION_ACCESS_TOKEN"],
           envBindings: {
             NOTION_TOKEN: "$secrets.NOTION_ACCESS_TOKEN",
           },

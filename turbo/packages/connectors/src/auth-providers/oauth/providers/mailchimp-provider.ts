@@ -2,7 +2,6 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildMailchimpAuthorizationUrl,
   exchangeMailchimpCode,
-  getMailchimpSecretName,
 } from "./mailchimp";
 export const mailchimpProvider: AuthCodeConnectorAuthProvider<"mailchimp"> = {
   grant: {
@@ -27,8 +26,9 @@ export const mailchimpProvider: AuthCodeConnectorAuthProvider<"mailchimp"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: null,
+        outputs: {
+          accessToken: result.accessToken,
+        },
         scopes: result.scopes,
         userInfo: {
           id: result.userInfo.id,
@@ -40,7 +40,6 @@ export const mailchimpProvider: AuthCodeConnectorAuthProvider<"mailchimp"> = {
   },
   access: {
     kind: "none",
-    getAccessSecretName: getMailchimpSecretName,
   },
   revoke: { kind: "none" },
 };

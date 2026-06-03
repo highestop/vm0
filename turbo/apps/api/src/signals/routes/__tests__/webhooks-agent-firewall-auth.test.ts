@@ -9,13 +9,17 @@ import type { OrgTier } from "@vm0/api-contracts/contracts/orgs";
 import { webhookFirewallAuthContract } from "@vm0/api-contracts/contracts/webhooks";
 import type { ConnectorAuthClientConfig } from "@vm0/connectors/connectors";
 import { getConnectorAuthMethod } from "@vm0/connectors/connector-utils";
-import { testOauthProvider } from "@vm0/connectors/auth-providers/oauth/providers/test-oauth-provider";
+import {
+  testOauthApiProvider,
+  testOauthProvider,
+} from "@vm0/connectors/auth-providers/oauth/providers/test-oauth-provider";
 import { connectors } from "@vm0/db/schema/connector";
 import { creditExpiresRecord } from "@vm0/db/schema/credit-expires-record";
 import { modelProviders } from "@vm0/db/schema/model-provider";
 import { orgMembersMetadata } from "@vm0/db/schema/org-members-metadata";
 import { orgMetadata } from "@vm0/db/schema/org-metadata";
 import { secrets } from "@vm0/db/schema/secret";
+import { variables } from "@vm0/db/schema/variable";
 
 import { createApp } from "../../../app-factory";
 import { accept, setupApp, testContext } from "../../../__tests__/test-helpers";
@@ -258,6 +262,7 @@ const track = createFixtureTracker<FirewallFixture>(async (fixture) => {
     .delete(modelProviders)
     .where(eq(modelProviders.orgId, fixture.orgId));
   await db.delete(secrets).where(eq(secrets.orgId, fixture.orgId));
+  await db.delete(variables).where(eq(variables.orgId, fixture.orgId));
   await db
     .delete(creditExpiresRecord)
     .where(eq(creditExpiresRecord.orgId, fixture.orgId));
@@ -282,6 +287,22 @@ async function seedSecret(args: {
     name: args.name,
     encryptedValue: encryptSecretForTests(args.value),
     type: args.type,
+  });
+}
+
+async function seedVariable(args: {
+  readonly orgId: string;
+  readonly userId: string;
+  readonly name: string;
+  readonly value: string;
+}): Promise<void> {
+  const db = store.set(writeDb$);
+  await db.insert(variables).values({
+    orgId: args.orgId,
+    userId: args.userId,
+    name: args.name,
+    value: args.value,
+    type: "connector",
   });
 }
 
@@ -432,6 +453,50 @@ async function seedExpiredTestOAuthConnector(
   });
 }
 
+async function seedExpiredTestOAuthApiConnector(
+  fixture: FirewallFixture,
+): Promise<void> {
+  const db = store.set(writeDb$);
+  await db.insert(connectors).values({
+    orgId: fixture.orgId,
+    userId: fixture.userId,
+    type: "test-oauth",
+    authMethod: "api",
+    externalId: "test-oauth-api-user",
+    externalUsername: "test-oauth-api-user",
+    externalEmail: "test-oauth-api@example.com",
+    oauthScopes: JSON.stringify([]),
+    tokenExpiresAt: new Date(now() - 60_000),
+  });
+  await seedSecret({
+    orgId: fixture.orgId,
+    userId: fixture.userId,
+    name: "TEST_OAUTH_API_ACCESS_TOKEN",
+    value: "stale-test-oauth-api-token",
+    type: "connector",
+  });
+  await seedSecret({
+    orgId: fixture.orgId,
+    userId: fixture.userId,
+    name: "TEST_OAUTH_API_REFRESH_TOKEN",
+    value: "test-oauth-api-refresh-token",
+    type: "connector",
+  });
+  await seedSecret({
+    orgId: fixture.orgId,
+    userId: fixture.userId,
+    name: "TEST_OAUTH_API_SECONDARY_TOKEN",
+    value: "old-test-oauth-api-secondary-token",
+    type: "connector",
+  });
+  await seedVariable({
+    orgId: fixture.orgId,
+    userId: fixture.userId,
+    name: "TEST_OAUTH_API_TENANT_ID",
+    value: "tenant-123",
+  });
+}
+
 async function seedStripeApiTokenConnector(
   fixture: FirewallFixture,
   args: { readonly token?: string } = {},
@@ -497,6 +562,13 @@ type CapturedOAuthRefresh = {
   readonly clientId: string | undefined;
   readonly clientSecret: string | undefined;
   readonly refreshToken: string;
+  readonly tenantId?: string;
+};
+
+type TestOAuthApiRefreshOutputs = {
+  readonly refreshedAccessToken: string;
+  readonly refreshedRefreshToken?: string;
+  readonly secondaryToken?: string;
 };
 
 function useDynamicTestOAuthRefresh(): {
@@ -510,24 +582,44 @@ function useDynamicTestOAuthRefresh(): {
   };
 }
 
+function useDynamicTestOAuthApiRefresh(
+  args: {
+    readonly outputs?: TestOAuthApiRefreshOutputs;
+  } = {},
+): {
+  readonly refreshes: readonly CapturedOAuthRefresh[];
+  readonly restore: () => void;
+} {
+  const refreshes: CapturedOAuthRefresh[] = [];
+  return {
+    refreshes,
+    restore: configureDynamicTestOAuthApiRefresh(refreshes, args.outputs),
+  };
+}
+
+function useMalformedTestOAuthApiRefresh(args: {
+  readonly outputs: Readonly<Record<string, string | undefined>>;
+}): {
+  readonly refreshes: readonly CapturedOAuthRefresh[];
+  readonly restore: () => void;
+} {
+  const refreshes: CapturedOAuthRefresh[] = [];
+  return {
+    refreshes,
+    restore: configureMalformedTestOAuthApiRefresh(refreshes, args.outputs),
+  };
+}
+
 function configureDynamicTestOAuthRefresh(
   refreshes: CapturedOAuthRefresh[],
 ): () => void {
   const method = getConnectorAuthMethod("test-oauth", "oauth");
-  if (method?.grant.kind !== "auth-code") {
-    throw new Error("test-oauth OAuth config is missing");
-  }
-
-  const mutableMethod = method as { client: ConnectorAuthClientConfig };
-  const originalClient = mutableMethod.client;
+  const originalClient = method.client;
   const access = testOauthProvider.access;
-  if (access.kind !== "refresh-token") {
-    throw new Error("test-oauth provider should support refresh");
-  }
-  const originalRefreshToken = access.refreshToken;
+  const originalRefresh = access.refresh;
 
-  mutableMethod.client = dynamicPublicClient;
-  access.refreshToken = (args) => {
+  Object.assign(method, { client: dynamicPublicClient });
+  access.refresh = (args) => {
     refreshes.push({
       clientId:
         args.authClient.clientRegistration === "static"
@@ -538,18 +630,100 @@ function configureDynamicTestOAuthRefresh(
         args.authClient.clientType === "confidential"
           ? args.authClient.clientSecret
           : undefined,
-      refreshToken: args.refreshToken,
+      refreshToken: args.inputs.refreshToken,
     });
     return Promise.resolve({
-      accessToken: "fresh-test-oauth-token",
-      refreshToken: "new-test-oauth-refresh-token",
+      outputs: {
+        accessToken: "fresh-test-oauth-token",
+        refreshToken: "new-test-oauth-refresh-token",
+      },
       expiresIn: 3600,
     });
   };
 
   return () => {
-    mutableMethod.client = originalClient;
-    access.refreshToken = originalRefreshToken;
+    Object.assign(method, { client: originalClient });
+    access.refresh = originalRefresh;
+  };
+}
+
+function configureDynamicTestOAuthApiRefresh(
+  refreshes: CapturedOAuthRefresh[],
+  outputs: TestOAuthApiRefreshOutputs = {
+    refreshedAccessToken: "fresh-test-oauth-api-token",
+    secondaryToken: "fresh-test-oauth-api-secondary-token",
+  },
+): () => void {
+  const method = getConnectorAuthMethod("test-oauth", "api");
+  const originalClient = method.client;
+  const access = testOauthApiProvider.access;
+  const originalRefresh = access.refresh;
+
+  Object.assign(method, { client: dynamicPublicClient });
+  access.refresh = (args) => {
+    refreshes.push({
+      clientId:
+        args.authClient.clientRegistration === "static"
+          ? args.authClient.clientId
+          : undefined,
+      clientSecret:
+        args.authClient.clientRegistration === "static" &&
+        args.authClient.clientType === "confidential"
+          ? args.authClient.clientSecret
+          : undefined,
+      refreshToken: args.inputs.apiRefreshToken,
+      tenantId: args.inputs.tenantId,
+    });
+    return Promise.resolve({
+      outputs,
+      expiresIn: 3600,
+    });
+  };
+
+  return () => {
+    Object.assign(method, { client: originalClient });
+    access.refresh = originalRefresh;
+  };
+}
+
+function configureMalformedTestOAuthApiRefresh(
+  refreshes: CapturedOAuthRefresh[],
+  outputs: Readonly<Record<string, string | undefined>>,
+): () => void {
+  const method = getConnectorAuthMethod("test-oauth", "api");
+  const originalClient = method.client;
+  const access = testOauthApiProvider.access;
+  const originalRefresh = access.refresh;
+
+  Object.assign(method, { client: dynamicPublicClient });
+  const malformedRefresh = (
+    args: Parameters<typeof originalRefresh>[0],
+  ): Promise<unknown> => {
+    refreshes.push({
+      clientId:
+        args.authClient.clientRegistration === "static"
+          ? args.authClient.clientId
+          : undefined,
+      clientSecret:
+        args.authClient.clientRegistration === "static" &&
+        args.authClient.clientType === "confidential"
+          ? args.authClient.clientSecret
+          : undefined,
+      refreshToken: args.inputs.apiRefreshToken,
+      tenantId: args.inputs.tenantId,
+    });
+    return Promise.resolve({
+      outputs,
+      expiresIn: 3600,
+    });
+  };
+  // Deliberately bypass provider-specific output typing to exercise the
+  // runtime guard for malformed third-party/provider responses.
+  access.refresh = malformedRefresh as typeof originalRefresh;
+
+  return () => {
+    Object.assign(method, { client: originalClient });
+    access.refresh = originalRefresh;
   };
 }
 
@@ -2007,6 +2181,133 @@ describe("POST /api/webhooks/agent/firewall/auth", () => {
     );
     expect(response.body.refreshedConnectors).toStrictEqual(["test-oauth"]);
     expect(response.body.refreshedSecrets).toStrictEqual(["TEST_OAUTH_TOKEN"]);
+  });
+
+  it("refreshes connector access with mapped inputs and preserves omitted outputs", async () => {
+    const dynamicOAuth = useDynamicTestOAuthApiRefresh();
+    restoreDynamicTestOAuthRefresh = dynamicOAuth.restore;
+    const { refreshes } = dynamicOAuth;
+    const fixture = await track(seedFixture());
+    await seedExpiredTestOAuthApiConnector(fixture);
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            TEST_OAUTH_TOKEN: "stale-test-oauth-api-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("TEST_OAUTH_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            TEST_OAUTH_TOKEN: "test-oauth",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [200],
+    );
+
+    expect(refreshes).toStrictEqual([
+      {
+        clientId: undefined,
+        clientSecret: undefined,
+        refreshToken: "test-oauth-api-refresh-token",
+        tenantId: "tenant-123",
+      },
+    ]);
+    expect(response.body.headers.Authorization).toBe(
+      "Bearer fresh-test-oauth-api-token",
+    );
+    expect(response.body.refreshedConnectors).toStrictEqual(["test-oauth"]);
+    expect(response.body.refreshedSecrets).toStrictEqual(["TEST_OAUTH_TOKEN"]);
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "TEST_OAUTH_API_ACCESS_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("fresh-test-oauth-api-token");
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "TEST_OAUTH_API_SECONDARY_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("fresh-test-oauth-api-secondary-token");
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "TEST_OAUTH_API_REFRESH_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("test-oauth-api-refresh-token");
+  });
+
+  it("returns refresh failure when provider output omits the runtime token", async () => {
+    const dynamicOAuth = useMalformedTestOAuthApiRefresh({
+      outputs: {
+        secondaryToken: "fresh-secondary-only-token",
+      },
+    });
+    restoreDynamicTestOAuthRefresh = dynamicOAuth.restore;
+    const fixture = await track(seedFixture());
+    await seedExpiredTestOAuthApiConnector(fixture);
+
+    const response = await accept(
+      firewallClient().resolve({
+        body: {
+          encryptedSecrets: encryptedSecrets({
+            TEST_OAUTH_TOKEN: "stale-test-oauth-api-token",
+          }),
+          authHeaders: {
+            Authorization: `Bearer ${secretTemplate("TEST_OAUTH_TOKEN")}`,
+          },
+          secretConnectorMap: {
+            TEST_OAUTH_TOKEN: "test-oauth",
+          },
+        },
+        headers: authHeaders(fixture),
+      }),
+      [502],
+    );
+
+    expect(response.body.error).toMatchObject({
+      code: "TOKEN_REFRESH_FAILED",
+      connectors: ["test-oauth"],
+      failureReason: "upstream_provider",
+    });
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "TEST_OAUTH_API_ACCESS_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("stale-test-oauth-api-token");
+    await expect(
+      readSecret({
+        orgId: fixture.orgId,
+        userId: fixture.userId,
+        name: "TEST_OAUTH_API_SECONDARY_TOKEN",
+        type: "connector",
+      }),
+    ).resolves.toBe("old-test-oauth-api-secondary-token");
+    const db = store.set(writeDb$);
+    const [connector] = await db
+      .select({ needsReconnect: connectors.needsReconnect })
+      .from(connectors)
+      .where(
+        and(
+          eq(connectors.orgId, fixture.orgId),
+          eq(connectors.userId, fixture.userId),
+          eq(connectors.type, "test-oauth"),
+        ),
+      );
+    expect(connector?.needsReconnect).toBeFalsy();
   });
 
   it("loads a missing selected connector access secret when the stored token is current", async () => {

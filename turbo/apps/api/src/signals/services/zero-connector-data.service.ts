@@ -8,6 +8,8 @@ import type { ConnectorSearchAuthMethod } from "@vm0/api-contracts/contracts/zer
 import {
   connectorAuthMethodRefHasRevokeKind,
   getAvailableConnectorAuthMethods,
+  getConnectorAuthMethodGrantMetadata,
+  getConnectorAuthMethodRevokeMetadata,
   getConnectorAuthMethodStorageMetadata,
   getConnectorAuthMethodScopeDiff,
   getConnectorAuthMethod,
@@ -86,11 +88,16 @@ interface PreparedManualGrantField {
   readonly value: string;
 }
 
-interface ConnectorTokenSecretMetadata {
-  readonly accessSecretName: string;
-  readonly refreshSecretName: string | undefined;
+interface ConnectorTokenOutputMetadata {
+  readonly outputSecretNames: Readonly<Record<string, string>>;
+  readonly requiredOutputNames: readonly string[];
+  readonly requiredExtraSecretNames: readonly string[];
   readonly isRefreshable: boolean;
 }
+
+type ConnectorTokenOutputValues = Readonly<
+  Record<string, string | null | undefined>
+>;
 
 interface PreparedManualGrantConnect {
   readonly secretValues: readonly PreparedManualGrantField[];
@@ -123,10 +130,15 @@ interface EncryptedConnectorTokenSecret {
   readonly description: string;
 }
 
+interface ConnectorTokenSecretRequirements {
+  readonly requiredOutputNames: readonly string[];
+  readonly requiredExtraSecretNames: readonly string[];
+}
+
 type TokenRevokeMethodRef = ConnectorAuthMethodRefByRevokeKind<"token-revoke">;
 
 type PendingConnectorTokenRevoke = TokenRevokeMethodRef & {
-  readonly encryptedAccessToken: string;
+  readonly encryptedInputs: Readonly<Record<string, string>>;
   readonly featureSwitchContext: FeatureSwitchContext;
 };
 
@@ -504,38 +516,72 @@ async function loadPendingConnectorTokenRevoke(args: {
   readonly featureSwitchContext: FeatureSwitchContext;
   readonly signal: AbortSignal;
 }): Promise<PendingConnectorTokenRevoke | null> {
-  const secretMetadata = connectorTokenSecretMetadataForAuthMethod({
-    type: args.method.type,
-    authMethod: args.method.authMethod,
-  });
-  if (!secretMetadata) {
+  const revokeMetadata = getConnectorAuthMethodRevokeMetadata(
+    args.method.type,
+    args.method.authMethod,
+  );
+  if (revokeMetadata?.kind !== "token-revoke") {
     return null;
   }
-  const accessTokenName = secretMetadata.accessSecretName;
 
-  const [accessTokenSecret] = await args.db
-    .select({ encryptedValue: secrets.encryptedValue })
+  const inputEntries = Object.entries(revokeMetadata.inputs);
+  if (inputEntries.length === 0) {
+    return {
+      ...args.method,
+      encryptedInputs: {},
+      featureSwitchContext: args.featureSwitchContext,
+    };
+  }
+
+  const secretNames = inputEntries.map(([, input]) => {
+    return input.secretName;
+  });
+  const secretRows = await args.db
+    .select({ name: secrets.name, encryptedValue: secrets.encryptedValue })
     .from(secrets)
     .where(
       and(
         eq(secrets.orgId, args.orgId),
         eq(secrets.userId, args.userId),
-        eq(secrets.name, accessTokenName),
+        inArray(secrets.name, secretNames),
         eq(secrets.type, "connector"),
       ),
-    )
-    .limit(1);
+    );
   args.signal.throwIfAborted();
 
-  if (!accessTokenSecret?.encryptedValue) {
-    return null;
+  const encryptedValuesByName = new Map(
+    secretRows.flatMap((row) => {
+      return row.encryptedValue ? [[row.name, row.encryptedValue]] : [];
+    }),
+  );
+  const encryptedInputs: Record<string, string> = {};
+  for (const [inputName, input] of inputEntries) {
+    const encryptedValue = encryptedValuesByName.get(input.secretName);
+    if (!encryptedValue) {
+      return null;
+    }
+    encryptedInputs[inputName] = encryptedValue;
   }
 
   return {
     ...args.method,
-    encryptedAccessToken: accessTokenSecret.encryptedValue,
+    encryptedInputs,
     featureSwitchContext: args.featureSwitchContext,
   };
+}
+
+async function decryptConnectorRevokeInputs(args: {
+  readonly encryptedInputs: Readonly<Record<string, string>>;
+  readonly featureSwitchContext: FeatureSwitchContext;
+}): Promise<Readonly<Record<string, string>>> {
+  const inputs: Record<string, string> = {};
+  for (const [name, encryptedValue] of Object.entries(args.encryptedInputs)) {
+    inputs[name] = await decryptStoredSecretValue(
+      encryptedValue,
+      args.featureSwitchContext,
+    );
+  }
+  return inputs;
 }
 
 function resolveTokenRevokeMethodRef(args: {
@@ -566,11 +612,11 @@ async function revokePendingConnectorToken(args: {
       type: args.pending.type,
       authMethod: args.pending.authMethod,
       readEnv: optionalEnv,
-      loadAccessToken: () => {
-        return decryptStoredSecretValue(
-          args.pending.encryptedAccessToken,
-          args.pending.featureSwitchContext,
-        );
+      loadInputs: () => {
+        return decryptConnectorRevokeInputs({
+          encryptedInputs: args.pending.encryptedInputs,
+          featureSwitchContext: args.pending.featureSwitchContext,
+        });
       },
     }),
   );
@@ -1225,50 +1271,114 @@ function connectorTokenExpiresAt(args: {
     : new Date(nowDate().getTime() + expiresInSecs * 1000);
 }
 
-function connectorTokenSecretMetadataForAuthMethod(args: {
+function connectorTokenOutputMetadataForAuthMethod(args: {
   readonly type: ConnectorType;
   readonly authMethod: string;
-}): ConnectorTokenSecretMetadata | undefined {
+}): ConnectorTokenOutputMetadata | undefined {
   const method = getConnectorAuthMethod(args.type, args.authMethod);
-  const metadata = getConnectorAuthMethodStorageMetadata(
+  const grantMetadata = getConnectorAuthMethodGrantMetadata(
     args.type,
     args.authMethod,
   );
-  if (!method || !metadata) {
+  if (!method || !grantMetadata) {
     return undefined;
   }
 
-  switch (method.access.kind) {
-    case "refresh-token": {
-      const accessSecretName = metadata.secretRoles.accessToken;
-      const refreshSecretName = metadata.secretRoles.refreshToken;
-      if (!accessSecretName || !refreshSecretName) {
-        throw new Error(
-          `${args.type} connector auth method ${args.authMethod} is missing refresh token secret roles`,
-        );
-      }
+  switch (method.grant.kind) {
+    case "auth-code":
+    case "device-auth": {
+      const outputSecretNames = Object.fromEntries(
+        Object.entries(grantMetadata.outputs).map(([outputName, output]) => {
+          return [outputName, output.secretName];
+        }),
+      );
+      const secretRequirements = requiredConnectorTokenSecretRequirements({
+        type: args.type,
+        authMethod: args.authMethod,
+        outputSecretNames,
+      });
       return {
-        accessSecretName,
-        refreshSecretName,
-        isRefreshable: true,
+        outputSecretNames,
+        requiredOutputNames: secretRequirements.requiredOutputNames,
+        requiredExtraSecretNames: secretRequirements.requiredExtraSecretNames,
+        isRefreshable: method.access.kind === "refresh-token",
       };
     }
 
-    case "static": {
-      const accessSecretName = metadata.secretRoles.accessToken;
-      return accessSecretName
-        ? {
-            accessSecretName,
-            refreshSecretName: undefined,
-            isRefreshable: false,
-          }
-        : undefined;
-    }
-
-    case "none":
-    case undefined: {
+    case "manual":
+    case "managed": {
       return undefined;
     }
+  }
+}
+
+function requiredConnectorTokenSecretRequirements(args: {
+  readonly type: ConnectorType;
+  readonly authMethod: string;
+  readonly outputSecretNames: Readonly<Record<string, string>>;
+}): ConnectorTokenSecretRequirements {
+  const storageMetadata = getConnectorAuthMethodStorageMetadata(
+    args.type,
+    args.authMethod,
+  );
+  if (!storageMetadata) {
+    return { requiredOutputNames: [], requiredExtraSecretNames: [] };
+  }
+
+  const outputNameBySecretName = new Map(
+    Object.entries(args.outputSecretNames).map(([outputName, secretName]) => {
+      return [secretName, outputName];
+    }),
+  );
+  const requiredOutputNames = new Set<string>();
+  const requiredExtraSecretNames = new Set<string>();
+  for (const binding of storageMetadata.runtimeBindings) {
+    if (binding.source.kind !== "connector-secret") {
+      continue;
+    }
+    const outputName = outputNameBySecretName.get(binding.source.name);
+    if (outputName) {
+      requiredOutputNames.add(outputName);
+    } else {
+      requiredExtraSecretNames.add(binding.source.name);
+    }
+  }
+  return {
+    requiredOutputNames: [...requiredOutputNames],
+    requiredExtraSecretNames: [...requiredExtraSecretNames],
+  };
+}
+
+function validateRequiredConnectorTokenSecrets(args: {
+  readonly type: ConnectorAuthProviderType;
+  readonly outputs: ConnectorTokenOutputValues;
+  readonly requiredOutputNames: readonly string[];
+  readonly extraSecrets: readonly (readonly [string, string])[];
+  readonly requiredExtraSecretNames: readonly string[];
+}): void {
+  const missingOutputNames = args.requiredOutputNames.filter((outputName) => {
+    return !args.outputs[outputName];
+  });
+  if (missingOutputNames.length > 0) {
+    throw new Error(
+      `${args.type} connector provider did not return required token output(s): ${formatManualGrantFieldList(
+        missingOutputNames,
+      )}`,
+    );
+  }
+
+  const extraSecretValues = new Map(args.extraSecrets);
+  const missingExtraSecretNames = args.requiredExtraSecretNames.filter(
+    (secretName) => {
+      return !extraSecretValues.get(secretName);
+    },
+  );
+  if (missingExtraSecretNames.length > 0) {
+    throw new Error(
+      `${args.type} connector provider did not return required connector secret(s): ${formatManualGrantFieldList(
+        missingExtraSecretNames,
+      )}`,
+    );
   }
 }
 
@@ -1281,20 +1391,16 @@ function allowedConnectorTokenSecretNames(
 
 function isPrimaryConnectorTokenSecret(args: {
   readonly name: string;
-  readonly accessSecretName: string;
-  readonly refreshSecretName: string | undefined;
+  readonly outputSecretNames: ReadonlySet<string>;
 }): boolean {
-  return (
-    args.name === args.accessSecretName || args.name === args.refreshSecretName
-  );
+  return args.outputSecretNames.has(args.name);
 }
 
 function validateExtraConnectorTokenSecrets(args: {
   readonly type: ConnectorAuthProviderType;
   readonly authMethod: ConnectorAuthMethodId;
   readonly extraConnectorSecrets: Readonly<Record<string, string>> | undefined;
-  readonly accessSecretName: string;
-  readonly refreshSecretName: string | undefined;
+  readonly outputSecretNames: Readonly<Record<string, string>>;
 }): readonly (readonly [string, string])[] {
   const extraSecrets = Object.entries(args.extraConnectorSecrets ?? {});
   if (extraSecrets.length === 0) {
@@ -1305,16 +1411,16 @@ function validateExtraConnectorTokenSecrets(args: {
     args.type,
     args.authMethod,
   );
+  const outputSecretNames = new Set(Object.values(args.outputSecretNames));
   for (const [name] of extraSecrets) {
     if (
       isPrimaryConnectorTokenSecret({
         name,
-        accessSecretName: args.accessSecretName,
-        refreshSecretName: args.refreshSecretName,
+        outputSecretNames,
       })
     ) {
       throw new Error(
-        `${args.type} connector provider returned primary token ${name} in extra connector secrets`,
+        `${args.type} connector provider returned mapped token output ${name} in extra connector secrets`,
       );
     }
     if (!allowedSecretNames.has(name)) {
@@ -1350,30 +1456,38 @@ async function encryptExtraConnectorTokenSecrets(args: {
 
 async function encryptConnectorTokenSecretSet(args: {
   readonly type: ConnectorAuthProviderType;
-  readonly accessSecretName: string;
-  readonly accessToken: string;
-  readonly refreshSecretName: string | undefined;
-  readonly refreshToken: string | null | undefined;
+  readonly outputSecretNames: Readonly<Record<string, string>>;
+  readonly requiredOutputNames: readonly string[];
+  readonly requiredExtraSecretNames: readonly string[];
+  readonly outputs: ConnectorTokenOutputValues;
   readonly extraSecrets: readonly (readonly [string, string])[];
   readonly featureSwitchContext: FeatureSwitchContext;
   readonly signal: AbortSignal;
 }): Promise<readonly EncryptedConnectorTokenSecret[]> {
-  const encryptedConnectorTokenSecrets: EncryptedConnectorTokenSecret[] = [
-    await encryptedConnectorTokenSecret({
-      name: args.accessSecretName,
-      value: args.accessToken,
-      description: `Connector access token for ${args.type}`,
-      featureSwitchContext: args.featureSwitchContext,
-    }),
-  ];
-  args.signal.throwIfAborted();
+  validateRequiredConnectorTokenSecrets({
+    type: args.type,
+    outputs: args.outputs,
+    requiredOutputNames: args.requiredOutputNames,
+    extraSecrets: args.extraSecrets,
+    requiredExtraSecretNames: args.requiredExtraSecretNames,
+  });
 
-  if (args.refreshToken && args.refreshSecretName) {
+  const encryptedConnectorTokenSecrets: EncryptedConnectorTokenSecret[] = [];
+  for (const [outputName, value] of Object.entries(args.outputs)) {
+    if (!value) {
+      continue;
+    }
+    const secretName = args.outputSecretNames[outputName];
+    if (!secretName) {
+      throw new Error(
+        `${args.type} connector provider returned undeclared token output ${outputName}`,
+      );
+    }
     encryptedConnectorTokenSecrets.push(
       await encryptedConnectorTokenSecret({
-        name: args.refreshSecretName,
-        value: args.refreshToken,
-        description: `Connector refresh token for ${args.type}`,
+        name: secretName,
+        value,
+        description: `Connector token output for ${args.type}: ${secretName}`,
         featureSwitchContext: args.featureSwitchContext,
       }),
     );
@@ -1553,10 +1667,9 @@ export const upsertConnectorTokenConnection$ = command(
       readonly userId: string;
       readonly type: ConnectorAuthProviderType;
       readonly authMethod: ConnectorAuthMethodId;
-      readonly accessToken: string;
+      readonly outputs: ConnectorTokenOutputValues;
       readonly userInfo: ExternalUserInfo;
       readonly oauthScopes: readonly string[];
-      readonly refreshToken?: string | null;
       readonly expiresIn?: number;
       readonly extraConnectorSecrets?: Readonly<Record<string, string>>;
     },
@@ -1566,25 +1679,24 @@ export const upsertConnectorTokenConnection$ = command(
     readonly created: boolean;
   }> => {
     const writeDb = set(writeDb$);
-    const secretMetadata = connectorTokenSecretMetadataForAuthMethod({
+    const outputMetadata = connectorTokenOutputMetadataForAuthMethod({
       type: args.type,
       authMethod: args.authMethod,
     });
-    if (!secretMetadata) {
+    if (!outputMetadata) {
       throw new Error(
-        `${args.type} connector auth method ${args.authMethod} does not expose an access token secret`,
+        `${args.type} connector auth method ${args.authMethod} does not expose token outputs`,
       );
     }
     const tokenExpiresAt = connectorTokenExpiresAt({
-      isRefreshable: secretMetadata.isRefreshable,
+      isRefreshable: outputMetadata.isRefreshable,
       expiresIn: args.expiresIn,
     });
     const extraSecrets = validateExtraConnectorTokenSecrets({
       type: args.type,
       authMethod: args.authMethod,
       extraConnectorSecrets: args.extraConnectorSecrets,
-      accessSecretName: secretMetadata.accessSecretName,
-      refreshSecretName: secretMetadata.refreshSecretName,
+      outputSecretNames: outputMetadata.outputSecretNames,
     });
     const featureSwitchContext = await get(
       userFeatureSwitchContext(args.orgId, args.userId),
@@ -1594,10 +1706,10 @@ export const upsertConnectorTokenConnection$ = command(
     const encryptedConnectorTokenSecrets = await encryptConnectorTokenSecretSet(
       {
         type: args.type,
-        accessSecretName: secretMetadata.accessSecretName,
-        accessToken: args.accessToken,
-        refreshSecretName: secretMetadata.refreshSecretName,
-        refreshToken: args.refreshToken,
+        outputSecretNames: outputMetadata.outputSecretNames,
+        requiredOutputNames: outputMetadata.requiredOutputNames,
+        requiredExtraSecretNames: outputMetadata.requiredExtraSecretNames,
+        outputs: args.outputs,
         extraSecrets,
         featureSwitchContext,
         signal,

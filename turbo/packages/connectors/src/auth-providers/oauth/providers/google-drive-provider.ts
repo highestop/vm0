@@ -4,6 +4,7 @@ import {
   exchangeGoogleOAuthCode,
   refreshGoogleToken,
 } from "../google";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const googleDriveProvider: AuthCodeConnectorAuthProvider<"google-drive"> =
   {
     grant: {
@@ -33,8 +34,10 @@ export const googleDriveProvider: AuthCodeConnectorAuthProvider<"google-drive"> 
           redirectUri,
         );
         return {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken,
+          outputs: {
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+          },
           expiresIn: result.expiresIn,
           scopes: result.scopes,
           userInfo: {
@@ -47,21 +50,17 @@ export const googleDriveProvider: AuthCodeConnectorAuthProvider<"google-drive"> 
     },
     access: {
       kind: "refresh-token",
-      getAccessSecretName: () => {
-        return "GOOGLE_DRIVE_ACCESS_TOKEN";
-      },
-      getRefreshSecretName: () => {
-        return "GOOGLE_DRIVE_REFRESH_TOKEN";
-      },
-      refreshToken: (args) => {
+      refresh: async (args) => {
         const { clientId, clientSecret } = args.authClient;
-        const refreshToken = args.refreshToken;
-        return refreshGoogleToken(
-          "google-drive",
-          clientId,
-          clientSecret,
-          refreshToken,
-          args.signal,
+        const refreshToken = args.inputs.refreshToken;
+        return oauthRefreshResultToProviderResult(
+          await refreshGoogleToken(
+            "google-drive",
+            clientId,
+            clientSecret,
+            refreshToken,
+            args.signal,
+          ),
         );
       },
     },

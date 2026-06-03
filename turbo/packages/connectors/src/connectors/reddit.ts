@@ -21,17 +21,25 @@ export const reddit = {
         storage: {
           secrets: ["REDDIT_ACCESS_TOKEN", "REDDIT_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "REDDIT_ACCESS_TOKEN",
-            refreshToken: "REDDIT_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["identity", "read"],
+          outputs: {
+            accessToken: "$secrets.REDDIT_ACCESS_TOKEN",
+            refreshToken: "$secrets.REDDIT_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.REDDIT_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.REDDIT_ACCESS_TOKEN",
+            refreshToken: "$secrets.REDDIT_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["REDDIT_ACCESS_TOKEN"],
           envBindings: {
             REDDIT_TOKEN: "$secrets.REDDIT_ACCESS_TOKEN",
           },

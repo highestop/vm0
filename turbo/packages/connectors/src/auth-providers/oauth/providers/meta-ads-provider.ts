@@ -1,9 +1,5 @@
 import type { AuthCodeConnectorAuthProvider } from "../../types";
-import {
-  buildMetaAdsAuthorizationUrl,
-  exchangeMetaAdsCode,
-  getMetaAdsSecretName,
-} from "./meta-ads";
+import { buildMetaAdsAuthorizationUrl, exchangeMetaAdsCode } from "./meta-ads";
 export const metaAdsProvider: AuthCodeConnectorAuthProvider<"meta-ads"> = {
   grant: {
     kind: "auth-code",
@@ -28,8 +24,9 @@ export const metaAdsProvider: AuthCodeConnectorAuthProvider<"meta-ads"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -42,7 +39,6 @@ export const metaAdsProvider: AuthCodeConnectorAuthProvider<"meta-ads"> = {
   },
   access: {
     kind: "none",
-    getAccessSecretName: getMetaAdsSecretName,
   },
   revoke: { kind: "none" },
 };

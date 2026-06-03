@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildRedditAuthorizationUrl,
   exchangeRedditCode,
-  getRedditSecretName,
   refreshRedditToken,
 } from "./reddit";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const redditProvider: AuthCodeConnectorAuthProvider<"reddit"> = {
   grant: {
     kind: "auth-code",
@@ -29,8 +29,10 @@ export const redditProvider: AuthCodeConnectorAuthProvider<"reddit"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -43,17 +45,15 @@ export const redditProvider: AuthCodeConnectorAuthProvider<"reddit"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getRedditSecretName,
-    getRefreshSecretName: () => {
-      return "REDDIT_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshRedditToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshRedditToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

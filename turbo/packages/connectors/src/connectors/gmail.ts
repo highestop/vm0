@@ -19,17 +19,25 @@ export const gmail = {
         storage: {
           secrets: ["GMAIL_ACCESS_TOKEN", "GMAIL_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "GMAIL_ACCESS_TOKEN",
-            refreshToken: "GMAIL_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["https://www.googleapis.com/auth/gmail.modify"],
+          outputs: {
+            accessToken: "$secrets.GMAIL_ACCESS_TOKEN",
+            refreshToken: "$secrets.GMAIL_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.GMAIL_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.GMAIL_ACCESS_TOKEN",
+            refreshToken: "$secrets.GMAIL_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["GMAIL_ACCESS_TOKEN"],
           envBindings: {
             GMAIL_TOKEN: "$secrets.GMAIL_ACCESS_TOKEN",
           },

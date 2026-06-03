@@ -16,7 +16,20 @@ const TEST_OAUTH_CLIENT = {
 const TEST_OAUTH_AUTH_CODE_GRANT = {
   kind: "auth-code",
   scopes: ["read"],
-} satisfies ConnectorAuthCodeGrantConfig;
+  outputs: {
+    accessToken: "$secrets.TEST_OAUTH_ACCESS_TOKEN",
+    refreshToken: "$secrets.TEST_OAUTH_REFRESH_TOKEN",
+  },
+} as const satisfies ConnectorAuthCodeGrantConfig;
+
+const TEST_OAUTH_API_AUTH_CODE_GRANT = {
+  kind: "auth-code",
+  scopes: ["read"],
+  outputs: {
+    initialAccessToken: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+    initialRefreshToken: "$secrets.TEST_OAUTH_API_REFRESH_TOKEN",
+  },
+} as const satisfies ConnectorAuthCodeGrantConfig;
 
 const TEST_OAUTH_REVOKE = { kind: "none" } satisfies ConnectorRevokeConfig;
 
@@ -35,14 +48,18 @@ export const testOauth = {
         storage: {
           secrets: ["TEST_OAUTH_ACCESS_TOKEN", "TEST_OAUTH_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "TEST_OAUTH_ACCESS_TOKEN",
-            refreshToken: "TEST_OAUTH_REFRESH_TOKEN",
-          },
         },
         grant: TEST_OAUTH_AUTH_CODE_GRANT,
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.TEST_OAUTH_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.TEST_OAUTH_ACCESS_TOKEN",
+            refreshToken: "$secrets.TEST_OAUTH_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["TEST_OAUTH_ACCESS_TOKEN"],
           envBindings: {
             TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_ACCESS_TOKEN",
           },
@@ -59,16 +76,23 @@ export const testOauth = {
           secrets: [
             "TEST_OAUTH_API_ACCESS_TOKEN",
             "TEST_OAUTH_API_REFRESH_TOKEN",
+            "TEST_OAUTH_API_SECONDARY_TOKEN",
           ],
-          variables: [],
-          secretRoles: {
-            accessToken: "TEST_OAUTH_API_ACCESS_TOKEN",
-            refreshToken: "TEST_OAUTH_API_REFRESH_TOKEN",
-          },
+          variables: ["TEST_OAUTH_API_TENANT_ID"],
         },
-        grant: TEST_OAUTH_AUTH_CODE_GRANT,
+        grant: TEST_OAUTH_API_AUTH_CODE_GRANT,
         access: {
           kind: "refresh-token",
+          inputs: {
+            apiRefreshToken: "$secrets.TEST_OAUTH_API_REFRESH_TOKEN",
+            tenantId: "$vars.TEST_OAUTH_API_TENANT_ID",
+          },
+          outputs: {
+            refreshedAccessToken: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+            refreshedRefreshToken: "$secrets.TEST_OAUTH_API_REFRESH_TOKEN",
+            secondaryToken: "$secrets.TEST_OAUTH_API_SECONDARY_TOKEN",
+          },
+          refreshableSecrets: ["TEST_OAUTH_API_ACCESS_TOKEN"],
           envBindings: {
             TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
           },

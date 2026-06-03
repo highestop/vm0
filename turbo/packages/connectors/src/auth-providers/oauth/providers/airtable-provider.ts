@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildAirtableAuthorizationUrl,
   exchangeAirtableCode,
-  getAirtableSecretName,
   refreshAirtableToken,
 } from "./airtable";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const airtableProvider: AuthCodeConnectorAuthProvider<"airtable"> = {
   grant: {
     kind: "auth-code",
@@ -31,8 +31,10 @@ export const airtableProvider: AuthCodeConnectorAuthProvider<"airtable"> = {
         codeVerifier,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -45,17 +47,15 @@ export const airtableProvider: AuthCodeConnectorAuthProvider<"airtable"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getAirtableSecretName,
-    getRefreshSecretName: () => {
-      return "AIRTABLE_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshAirtableToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshAirtableToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

@@ -19,11 +19,7 @@ function testRefreshSignal(): AbortSignal {
 }
 
 function getCodexRefreshAccess() {
-  const access = codexOauthProvider.access;
-  if (access.kind !== "refresh-token") {
-    throw new Error("codexOauthProvider must expose refresh-token access");
-  }
-  return access;
+  return codexOauthProvider.access;
 }
 
 describe("connector/providers/codex-oauth", () => {
@@ -200,9 +196,15 @@ describe("connector/providers/codex-oauth", () => {
       expect(
         getModelProviderOAuthSecretMetadata("codex-oauth-token"),
       ).toStrictEqual({
-        accessSecretName: "CHATGPT_ACCESS_TOKEN",
-        refreshSecretName: "CHATGPT_REFRESH_TOKEN",
         isRefreshable: true,
+        inputs: {
+          refreshToken: "CHATGPT_REFRESH_TOKEN",
+        },
+        outputs: {
+          accessToken: "CHATGPT_ACCESS_TOKEN",
+          refreshToken: "CHATGPT_REFRESH_TOKEN",
+        },
+        refreshableSecrets: ["CHATGPT_ACCESS_TOKEN"],
       });
     });
 

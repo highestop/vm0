@@ -19,10 +19,6 @@ export const googleMeet = {
         storage: {
           secrets: ["GOOGLE_MEET_ACCESS_TOKEN", "GOOGLE_MEET_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "GOOGLE_MEET_ACCESS_TOKEN",
-            refreshToken: "GOOGLE_MEET_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -35,9 +31,21 @@ export const googleMeet = {
             "https://www.googleapis.com/auth/meetings.space.readonly",
             "https://www.googleapis.com/auth/userinfo.email",
           ],
+          outputs: {
+            accessToken: "$secrets.GOOGLE_MEET_ACCESS_TOKEN",
+            refreshToken: "$secrets.GOOGLE_MEET_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.GOOGLE_MEET_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.GOOGLE_MEET_ACCESS_TOKEN",
+            refreshToken: "$secrets.GOOGLE_MEET_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["GOOGLE_MEET_ACCESS_TOKEN"],
           envBindings: {
             GOOGLE_MEET_TOKEN: "$secrets.GOOGLE_MEET_ACCESS_TOKEN",
           },

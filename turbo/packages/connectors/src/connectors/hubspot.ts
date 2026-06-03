@@ -19,10 +19,6 @@ export const hubspot = {
         storage: {
           secrets: ["HUBSPOT_ACCESS_TOKEN", "HUBSPOT_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "HUBSPOT_ACCESS_TOKEN",
-            refreshToken: "HUBSPOT_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -40,9 +36,21 @@ export const hubspot = {
             "crm.schemas.contacts.read",
             "settings.users.read",
           ],
+          outputs: {
+            accessToken: "$secrets.HUBSPOT_ACCESS_TOKEN",
+            refreshToken: "$secrets.HUBSPOT_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.HUBSPOT_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.HUBSPOT_ACCESS_TOKEN",
+            refreshToken: "$secrets.HUBSPOT_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["HUBSPOT_ACCESS_TOKEN"],
           envBindings: {
             HUBSPOT_TOKEN: "$secrets.HUBSPOT_ACCESS_TOKEN",
           },

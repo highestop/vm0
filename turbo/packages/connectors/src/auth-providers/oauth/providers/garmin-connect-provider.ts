@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildGarminConnectAuthorizationUrl,
   exchangeGarminConnectCode,
-  getGarminConnectSecretName,
   refreshGarminConnectToken,
 } from "./garmin-connect";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const garminConnectProvider: AuthCodeConnectorAuthProvider<"garmin-connect"> =
   {
     grant: {
@@ -34,8 +34,10 @@ export const garminConnectProvider: AuthCodeConnectorAuthProvider<"garmin-connec
           state,
         );
         return {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken,
+          outputs: {
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+          },
           expiresIn: result.expiresIn,
           scopes: result.scopes,
           userInfo: {
@@ -48,17 +50,15 @@ export const garminConnectProvider: AuthCodeConnectorAuthProvider<"garmin-connec
     },
     access: {
       kind: "refresh-token",
-      getAccessSecretName: getGarminConnectSecretName,
-      getRefreshSecretName: () => {
-        return "GARMIN_CONNECT_REFRESH_TOKEN";
-      },
-      refreshToken: (args) => {
+      refresh: async (args) => {
         const { clientId, clientSecret } = args.authClient;
-        return refreshGarminConnectToken(
-          clientId,
-          clientSecret,
-          args.refreshToken,
-          args.signal,
+        return oauthRefreshResultToProviderResult(
+          await refreshGarminConnectToken(
+            clientId,
+            clientSecret,
+            args.inputs.refreshToken,
+            args.signal,
+          ),
         );
       },
     },

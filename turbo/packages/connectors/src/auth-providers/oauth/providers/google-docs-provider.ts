@@ -4,6 +4,7 @@ import {
   exchangeGoogleOAuthCode,
   refreshGoogleToken,
 } from "../google";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const googleDocsProvider: AuthCodeConnectorAuthProvider<"google-docs"> =
   {
     grant: {
@@ -33,8 +34,10 @@ export const googleDocsProvider: AuthCodeConnectorAuthProvider<"google-docs"> =
           redirectUri,
         );
         return {
-          accessToken: result.accessToken,
-          refreshToken: result.refreshToken,
+          outputs: {
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+          },
           expiresIn: result.expiresIn,
           scopes: result.scopes,
           userInfo: {
@@ -47,21 +50,17 @@ export const googleDocsProvider: AuthCodeConnectorAuthProvider<"google-docs"> =
     },
     access: {
       kind: "refresh-token",
-      getAccessSecretName: () => {
-        return "GOOGLE_DOCS_ACCESS_TOKEN";
-      },
-      getRefreshSecretName: () => {
-        return "GOOGLE_DOCS_REFRESH_TOKEN";
-      },
-      refreshToken: (args) => {
+      refresh: async (args) => {
         const { clientId, clientSecret } = args.authClient;
-        const refreshToken = args.refreshToken;
-        return refreshGoogleToken(
-          "google-docs",
-          clientId,
-          clientSecret,
-          refreshToken,
-          args.signal,
+        const refreshToken = args.inputs.refreshToken;
+        return oauthRefreshResultToProviderResult(
+          await refreshGoogleToken(
+            "google-docs",
+            clientId,
+            clientSecret,
+            refreshToken,
+            args.signal,
+          ),
         );
       },
     },

@@ -20,10 +20,6 @@ export const figma = {
         storage: {
           secrets: ["FIGMA_ACCESS_TOKEN", "FIGMA_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "FIGMA_ACCESS_TOKEN",
-            refreshToken: "FIGMA_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -38,9 +34,21 @@ export const figma = {
             "library_assets:read",
             "library_content:read",
           ],
+          outputs: {
+            accessToken: "$secrets.FIGMA_ACCESS_TOKEN",
+            refreshToken: "$secrets.FIGMA_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.FIGMA_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.FIGMA_ACCESS_TOKEN",
+            refreshToken: "$secrets.FIGMA_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["FIGMA_ACCESS_TOKEN"],
           envBindings: {
             FIGMA_TOKEN: "$secrets.FIGMA_ACCESS_TOKEN",
           },

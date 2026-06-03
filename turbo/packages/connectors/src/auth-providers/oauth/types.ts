@@ -6,6 +6,10 @@ import type {
   ConnectorDeviceAuthGrantAuthMethodId,
   ConnectorAuthMethodIdsByAccessKind,
   ConnectorAuthMethodIdsByRevokeKind,
+  ConnectorGrantOutputValues,
+  ConnectorRefreshInputValues,
+  ConnectorRefreshOutputValues,
+  ConnectorRevokeInputValues,
   ConnectorType,
   DeviceAuthGrantConnectorType,
   RefreshTokenAccessConnectorType,
@@ -16,14 +20,29 @@ import type {
   ConnectorAuthClientIdentityForMethod,
 } from "@vm0/connectors/connector-utils";
 
-export interface OAuthTokenResult {
-  accessToken: string;
-  refreshToken?: string | null;
+export interface OAuthTokenUserInfo {
+  readonly id: string;
+  readonly username: string | null;
+  readonly email: string | null;
+}
+
+export interface OAuthTokenResultFields {
   expiresIn?: number; // seconds until access token expires
   scopes: string[];
-  userInfo: { id: string; username: string | null; email: string | null };
+  userInfo: OAuthTokenUserInfo;
   extraConnectorSecrets?: Readonly<Record<string, string>>;
 }
+
+export type OAuthTokenResultBase = OAuthTokenResultFields & {
+  readonly outputs: Readonly<Record<string, string | null | undefined>>;
+};
+
+export type OAuthTokenResult<
+  T extends AuthCodeGrantConnectorType | DeviceAuthGrantConnectorType,
+  Method extends ConnectorAuthMethodIds<T>,
+> = OAuthTokenResultFields & {
+  readonly outputs: ConnectorGrantOutputValues<T, Method>;
+};
 
 /**
  * Result from buildAuthUrl when PKCE is required.
@@ -48,15 +67,6 @@ interface OAuthExchangeFlowArgs {
   readonly oauthContext?: string;
 }
 
-interface OAuthRefreshFlowArgs {
-  readonly refreshToken: string;
-  readonly signal: AbortSignal;
-}
-
-interface OAuthRevokeFlowArgs {
-  readonly accessToken: string;
-}
-
 interface OAuthDeviceAuthStartFlowArgs {
   readonly scopes: readonly string[];
 }
@@ -69,6 +79,24 @@ export interface OAuthRefreshResult {
   readonly accessToken: string;
   readonly refreshToken: string | null;
   readonly expiresIn?: number;
+}
+
+export function oauthRefreshResultToProviderResult(
+  result: OAuthRefreshResult,
+): {
+  readonly outputs: {
+    readonly accessToken: string;
+    readonly refreshToken?: string;
+  };
+  readonly expiresIn?: number;
+} {
+  return {
+    outputs: {
+      accessToken: result.accessToken,
+      ...(result.refreshToken ? { refreshToken: result.refreshToken } : {}),
+    },
+    ...(result.expiresIn === undefined ? {} : { expiresIn: result.expiresIn }),
+  };
 }
 
 export interface OAuthDeviceAuthStartResult {
@@ -89,9 +117,17 @@ export interface OAuthDeviceAuthSlowDownResult {
   readonly status: "slow_down";
 }
 
-export interface OAuthDeviceAuthCompleteResult {
+export interface OAuthDeviceAuthCompleteResultBase {
   readonly status: "complete";
-  readonly token: OAuthTokenResult;
+  readonly token: OAuthTokenResultBase;
+}
+
+export interface OAuthDeviceAuthCompleteResult<
+  T extends DeviceAuthGrantConnectorType,
+  Method extends ConnectorDeviceAuthGrantAuthMethodId<T>,
+> {
+  readonly status: "complete";
+  readonly token: OAuthTokenResult<T, Method>;
 }
 
 export interface OAuthDeviceAuthDeniedResult {
@@ -112,10 +148,26 @@ export interface OAuthDeviceAuthErrorResult {
   readonly errorDescription?: string;
 }
 
-export type OAuthDeviceAuthPollResult =
+export type OAuthDeviceAuthPollResultBase =
   | OAuthDeviceAuthPendingResult
   | OAuthDeviceAuthSlowDownResult
-  | OAuthDeviceAuthCompleteResult
+  | OAuthDeviceAuthCompleteResultBase
+  | OAuthDeviceAuthDeniedResult
+  | OAuthDeviceAuthExpiredResult
+  | OAuthDeviceAuthErrorResult;
+
+export type OAuthDeviceAuthIncompleteResult = Exclude<
+  OAuthDeviceAuthPollResultBase,
+  OAuthDeviceAuthCompleteResultBase
+>;
+
+export type OAuthDeviceAuthPollResult<
+  T extends DeviceAuthGrantConnectorType,
+  Method extends ConnectorDeviceAuthGrantAuthMethodId<T>,
+> =
+  | OAuthDeviceAuthPendingResult
+  | OAuthDeviceAuthSlowDownResult
+  | OAuthDeviceAuthCompleteResult<T, Method>
   | OAuthDeviceAuthDeniedResult
   | OAuthDeviceAuthExpiredResult
   | OAuthDeviceAuthErrorResult;
@@ -156,13 +208,31 @@ export type ConnectorAuthProviderRefreshArgs<
   T extends RefreshTokenAccessConnectorType,
   Method extends ConnectorAuthMethodIdsByAccessKind<T, "refresh-token"> =
     ConnectorAuthMethodIdsByAccessKind<T, "refresh-token">,
-> = OAuthRefreshFlowArgs & ConnectorAuthMethodClientArgs<T, Method>;
+> = ConnectorAuthMethodClientArgs<T, Method> & {
+  readonly inputs: ConnectorRefreshInputValues<T, Method>;
+  readonly signal: AbortSignal;
+};
+
+export interface ConnectorAuthProviderRefreshResultBase {
+  readonly outputs: Readonly<Record<string, string | undefined>>;
+  readonly expiresIn?: number;
+}
+
+export interface ConnectorAuthProviderRefreshResult<
+  T extends RefreshTokenAccessConnectorType,
+  Method extends ConnectorAuthMethodIdsByAccessKind<T, "refresh-token"> =
+    ConnectorAuthMethodIdsByAccessKind<T, "refresh-token">,
+> extends ConnectorAuthProviderRefreshResultBase {
+  readonly outputs: ConnectorRefreshOutputValues<T, Method>;
+}
 
 export type ConnectorAuthProviderRevokeArgs<
   T extends TokenRevokeConnectorType,
   Method extends ConnectorAuthMethodIdsByRevokeKind<T, "token-revoke"> =
     ConnectorAuthMethodIdsByRevokeKind<T, "token-revoke">,
-> = OAuthRevokeFlowArgs & ConnectorAuthMethodClientArgs<T, Method>;
+> = ConnectorAuthMethodClientArgs<T, Method> & {
+  readonly inputs: ConnectorRevokeInputValues<T, Method>;
+};
 
 export type ConnectorDeviceAuthorizationStartArgs<
   T extends DeviceAuthGrantConnectorType,

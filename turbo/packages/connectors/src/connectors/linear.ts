@@ -19,10 +19,6 @@ export const linear = {
         storage: {
           secrets: ["LINEAR_ACCESS_TOKEN", "LINEAR_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "LINEAR_ACCESS_TOKEN",
-            refreshToken: "LINEAR_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -33,14 +29,31 @@ export const linear = {
             "comments:create",
             "timeSchedule:write",
           ],
+          outputs: {
+            accessToken: "$secrets.LINEAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.LINEAR_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.LINEAR_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.LINEAR_ACCESS_TOKEN",
+            refreshToken: "$secrets.LINEAR_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["LINEAR_ACCESS_TOKEN"],
           envBindings: {
             LINEAR_TOKEN: "$secrets.LINEAR_ACCESS_TOKEN",
           },
         },
-        revoke: { kind: "token-revoke" },
+        revoke: {
+          kind: "token-revoke",
+          inputs: {
+            accessToken: "$secrets.LINEAR_ACCESS_TOKEN",
+          },
+        },
       },
     },
     defaultAuthMethod: "oauth",

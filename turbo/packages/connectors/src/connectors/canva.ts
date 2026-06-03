@@ -21,10 +21,6 @@ export const canva = {
         storage: {
           secrets: ["CANVA_ACCESS_TOKEN", "CANVA_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "CANVA_ACCESS_TOKEN",
-            refreshToken: "CANVA_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -42,9 +38,21 @@ export const canva = {
             "folder:write",
             "profile:read",
           ],
+          outputs: {
+            accessToken: "$secrets.CANVA_ACCESS_TOKEN",
+            refreshToken: "$secrets.CANVA_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.CANVA_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.CANVA_ACCESS_TOKEN",
+            refreshToken: "$secrets.CANVA_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["CANVA_ACCESS_TOKEN"],
           envBindings: {
             CANVA_TOKEN: "$secrets.CANVA_ACCESS_TOKEN",
           },

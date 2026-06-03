@@ -19,10 +19,10 @@ import type {
   ConnectorDeviceAuthorizationStartArgs,
   ConnectorAuthCodeExchangeArgs,
   ConnectorAuthProviderRefreshArgs,
+  ConnectorAuthProviderRefreshResult,
   ConnectorAuthProviderRevokeArgs,
   OAuthDeviceAuthPollResult,
   OAuthDeviceAuthStartResult,
-  OAuthRefreshResult,
   OAuthTokenResult,
 } from "./oauth/types";
 import type { ProviderEnv } from "./provider-env";
@@ -42,7 +42,7 @@ export interface AuthCodeGrantProvider<
   ): string | AuthUrlResult | Promise<string | AuthUrlResult>;
   exchangeCode(
     args: ConnectorAuthCodeExchangeArgs<T, Method>,
-  ): Promise<OAuthTokenResult>;
+  ): Promise<OAuthTokenResult<T, Method>>;
 }
 
 export interface DeviceAuthGrantProvider<
@@ -56,12 +56,11 @@ export interface DeviceAuthGrantProvider<
   ): Promise<OAuthDeviceAuthStartResult>;
   pollDeviceAuth(
     args: ConnectorDeviceAuthorizationPollArgs<T, Method>,
-  ): Promise<OAuthDeviceAuthPollResult>;
+  ): Promise<OAuthDeviceAuthPollResult<T, Method>>;
 }
 
 export interface NoneAccessProvider {
   readonly kind: "none";
-  getAccessSecretName(): string;
 }
 
 export interface RefreshTokenAccessProvider<
@@ -70,11 +69,9 @@ export interface RefreshTokenAccessProvider<
     ConnectorAuthMethodIdsByAccessKind<T, "refresh-token">,
 > {
   readonly kind: "refresh-token";
-  getAccessSecretName(): string;
-  getRefreshSecretName(): string;
-  refreshToken(
+  refresh(
     args: ConnectorAuthProviderRefreshArgs<T, Method>,
-  ): Promise<OAuthRefreshResult>;
+  ): Promise<ConnectorAuthProviderRefreshResult<T, Method>>;
 }
 
 export type ConnectorAuthProviderAccess<
@@ -156,32 +153,73 @@ export type ModelProviderGrantProvider = NoneGrantProvider;
 
 export type ModelProviderAuthClient = StaticConnectorAuthClient;
 
-interface ModelProviderAuthProviderRefreshArgs {
+type ModelProviderAuthProviderRefreshInputs = Readonly<Record<string, string>>;
+
+type ModelProviderAuthProviderRefreshOutputs = Readonly<
+  Record<string, string | undefined>
+>;
+
+interface ModelProviderAuthProviderRefreshArgs<
+  Inputs extends ModelProviderAuthProviderRefreshInputs =
+    ModelProviderAuthProviderRefreshInputs,
+> {
   readonly authClient: ModelProviderAuthClient;
-  readonly refreshToken: string;
+  readonly inputs: Inputs;
   readonly signal: AbortSignal;
 }
 
-interface ModelProviderRefreshTokenAccessProvider {
+export interface ModelProviderAuthProviderRefreshResult<
+  Outputs extends ModelProviderAuthProviderRefreshOutputs =
+    ModelProviderAuthProviderRefreshOutputs,
+> {
+  readonly outputs: Outputs;
+  readonly expiresIn?: number;
+}
+
+export interface ModelProviderRefreshTokenAccessProvider<
+  Inputs extends ModelProviderAuthProviderRefreshInputs =
+    ModelProviderAuthProviderRefreshInputs,
+  Outputs extends ModelProviderAuthProviderRefreshOutputs =
+    ModelProviderAuthProviderRefreshOutputs,
+> {
   readonly kind: "refresh-token";
-  getAccessSecretName(): string;
-  getRefreshSecretName(): string;
   resolveAuthClient(
     currentEnv: ProviderEnv,
   ): ModelProviderAuthClient | undefined;
-  refreshToken(
-    args: ModelProviderAuthProviderRefreshArgs,
-  ): Promise<OAuthRefreshResult>;
+  refresh(
+    args: ModelProviderAuthProviderRefreshArgs<Inputs>,
+  ): Promise<ModelProviderAuthProviderRefreshResult<Outputs>>;
 }
 
-export type ModelProviderAccessProvider =
+export type ModelProviderAccessProvider<
+  Inputs extends ModelProviderAuthProviderRefreshInputs =
+    ModelProviderAuthProviderRefreshInputs,
+  Outputs extends ModelProviderAuthProviderRefreshOutputs =
+    ModelProviderAuthProviderRefreshOutputs,
+> =
   | NoneAccessProvider
-  | ModelProviderRefreshTokenAccessProvider;
+  | ModelProviderRefreshTokenAccessProvider<Inputs, Outputs>;
 
 export type ModelProviderRevokeProvider = NoneRevokeProvider;
 
-export type ModelProviderAuthProvider = AuthProvider<
+export type ModelProviderAuthProvider<
+  Inputs extends ModelProviderAuthProviderRefreshInputs =
+    ModelProviderAuthProviderRefreshInputs,
+  Outputs extends ModelProviderAuthProviderRefreshOutputs =
+    ModelProviderAuthProviderRefreshOutputs,
+> = AuthProvider<
   ModelProviderGrantProvider,
-  ModelProviderAccessProvider,
+  ModelProviderAccessProvider<Inputs, Outputs>,
+  ModelProviderRevokeProvider
+>;
+
+export type ModelProviderRefreshTokenAuthProvider<
+  Inputs extends ModelProviderAuthProviderRefreshInputs =
+    ModelProviderAuthProviderRefreshInputs,
+  Outputs extends ModelProviderAuthProviderRefreshOutputs =
+    ModelProviderAuthProviderRefreshOutputs,
+> = AuthProvider<
+  ModelProviderGrantProvider,
+  ModelProviderRefreshTokenAccessProvider<Inputs, Outputs>,
   ModelProviderRevokeProvider
 >;

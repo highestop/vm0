@@ -21,17 +21,25 @@ export const mercury = {
         storage: {
           secrets: ["MERCURY_ACCESS_TOKEN", "MERCURY_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "MERCURY_ACCESS_TOKEN",
-            refreshToken: "MERCURY_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["offline_access"],
+          outputs: {
+            accessToken: "$secrets.MERCURY_ACCESS_TOKEN",
+            refreshToken: "$secrets.MERCURY_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.MERCURY_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.MERCURY_ACCESS_TOKEN",
+            refreshToken: "$secrets.MERCURY_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["MERCURY_ACCESS_TOKEN"],
           envBindings: {
             MERCURY_TOKEN: "$secrets.MERCURY_ACCESS_TOKEN",
           },

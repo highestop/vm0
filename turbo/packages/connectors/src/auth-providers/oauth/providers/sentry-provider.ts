@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildSentryAuthorizationUrl,
   exchangeSentryCode,
-  getSentrySecretName,
   refreshSentryToken,
 } from "./sentry";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const sentryProvider: AuthCodeConnectorAuthProvider<"sentry"> = {
   grant: {
     kind: "auth-code",
@@ -29,8 +29,10 @@ export const sentryProvider: AuthCodeConnectorAuthProvider<"sentry"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -43,17 +45,15 @@ export const sentryProvider: AuthCodeConnectorAuthProvider<"sentry"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getSentrySecretName,
-    getRefreshSecretName: () => {
-      return "SENTRY_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshSentryToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshSentryToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

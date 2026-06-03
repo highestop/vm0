@@ -36,6 +36,8 @@ import {
   connectorAuthMethodRefHasRevokeKind,
   getAvailableConnectorAuthMethods,
   getConnectorAuthMethodGrantScopes,
+  getConnectorAuthMethodGrantMetadata,
+  getConnectorAuthMethodRevokeMetadata,
   getConnectorAuthMethodIdsForAccessKind,
   getConnectorAuthMethodIdsForGrantKind,
   getConnectorAuthMethodIdsForRevokeKind,
@@ -46,6 +48,8 @@ import {
   getConnectorAuthMethodDeviceAuthGrantConfig,
   getConnectorAuthMethodAccessMetadata,
   getConnectorAuthMethodStorageMetadata,
+  getConnectorGrantOutputSecretName,
+  getConnectorRefreshOutputSecretName,
   getConnectorStoredSecretDisplayInfo,
   getDiagnosticConnectorTypeForRuntimeEnvName,
   resolveConnectorAuthClientForMethod,
@@ -63,6 +67,7 @@ import {
   isStaticConnectorAuthClient,
   type ConnectorAuthClient,
   type ConnectorAuthClientForMethod,
+  type ConnectorAuthMethodRef,
   type ConnectorEnvReader,
 } from "../connector-utils";
 import { FeatureSwitchKey } from "../feature-switch-key";
@@ -73,10 +78,6 @@ import {
   revokeConnectorAuthMethodAccessToken,
   startConnectorDeviceAuthorization,
 } from "../auth-providers/connector-auth";
-import {
-  testOauthDeviceApiProvider,
-  testOauthDeviceProvider,
-} from "../auth-providers/oauth/providers/test-oauth-device-provider";
 import {
   TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME,
   TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME,
@@ -837,8 +838,8 @@ describe("connector selected auth method capability checks", () => {
         type: "github",
         authMethod: "oauth",
         readEnv,
-        loadAccessToken: () => {
-          return "gh-access-token";
+        loadInputs: () => {
+          return { accessToken: "gh-access-token" };
         },
       }),
     ).resolves.toStrictEqual({ status: "revoked" });
@@ -849,7 +850,7 @@ describe("connector selected auth method capability checks", () => {
   });
 
   it("returns unsupported for connectors without revoke support", async () => {
-    let loadedAccessToken = false;
+    let loadedInputs = false;
 
     await expect(
       revokeConnectorAuthMethodAccessToken({
@@ -858,17 +859,17 @@ describe("connector selected auth method capability checks", () => {
         readEnv: () => {
           return undefined;
         },
-        loadAccessToken: () => {
-          loadedAccessToken = true;
-          return "notion-access-token";
+        loadInputs: () => {
+          loadedInputs = true;
+          return { accessToken: "notion-access-token" };
         },
       }),
     ).resolves.toStrictEqual({ status: "unsupported" });
-    expect(loadedAccessToken).toBe(false);
+    expect(loadedInputs).toBe(false);
   });
 
   it("returns unsupported for selected auth methods without token revoke", async () => {
-    let loadedAccessToken = false;
+    let loadedInputs = false;
 
     await expect(
       revokeConnectorAuthMethodAccessToken({
@@ -877,17 +878,17 @@ describe("connector selected auth method capability checks", () => {
         readEnv: () => {
           return undefined;
         },
-        loadAccessToken: () => {
-          loadedAccessToken = true;
-          return "gh-access-token";
+        loadInputs: () => {
+          loadedInputs = true;
+          return { accessToken: "gh-access-token" };
         },
       }),
     ).resolves.toStrictEqual({ status: "unsupported" });
-    expect(loadedAccessToken).toBe(false);
+    expect(loadedInputs).toBe(false);
   });
 
-  it("returns unsupported without loading access token when revoke client env is missing", async () => {
-    let loadedAccessToken = false;
+  it("returns unsupported without loading inputs when revoke client env is missing", async () => {
+    let loadedInputs = false;
 
     await expect(
       revokeConnectorAuthMethodAccessToken({
@@ -896,13 +897,13 @@ describe("connector selected auth method capability checks", () => {
         readEnv: () => {
           return undefined;
         },
-        loadAccessToken: () => {
-          loadedAccessToken = true;
-          return "gh-access-token";
+        loadInputs: () => {
+          loadedInputs = true;
+          return { accessToken: "gh-access-token" };
         },
       }),
     ).resolves.toStrictEqual({ status: "unsupported" });
-    expect(loadedAccessToken).toBe(false);
+    expect(loadedInputs).toBe(false);
   });
 
   it("builds the expected authorization URL base for every OAuth provider", async () => {
@@ -1119,10 +1120,11 @@ describe("connector selected auth method capability checks", () => {
     ).resolves.toStrictEqual({
       status: "complete",
       token: {
-        accessToken:
-          "test-device-access:test-oauth-device-client:test-device:test-oauth-device-client:read",
+        outputs: {
+          accessToken:
+            "test-device-access:test-oauth-device-client:test-device:test-oauth-device-client:read",
+        },
         expiresIn: 3600,
-        refreshToken: null,
         scopes: ["read"],
         userInfo: {
           id: "test-oauth-device-user",
@@ -1134,12 +1136,14 @@ describe("connector selected auth method capability checks", () => {
   });
 
   it("keeps test OAuth device provider access secrets method-specific", () => {
-    expect(testOauthDeviceProvider.access.getAccessSecretName()).toBe(
-      TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME,
-    );
-    expect(testOauthDeviceApiProvider.access.getAccessSecretName()).toBe(
-      TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME,
-    );
+    expect(
+      getConnectorAuthMethodGrantMetadata("test-oauth-device", "oauth")?.outputs
+        .accessToken?.secretName,
+    ).toBe(TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME);
+    expect(
+      getConnectorAuthMethodGrantMetadata("test-oauth-device", "api")?.outputs
+        .accessToken?.secretName,
+    ).toBe(TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME);
   });
 
   it("starts, polls, and refreshes the Base44 OAuth device provider", async () => {
@@ -1328,8 +1332,10 @@ describe("connector selected auth method capability checks", () => {
     ).resolves.toStrictEqual({
       status: "complete",
       token: {
-        accessToken: "base44-access-token",
-        refreshToken: "base44-refresh-token",
+        outputs: {
+          accessToken: "base44-access-token",
+          refreshToken: "base44-refresh-token",
+        },
         expiresIn: 3600,
         scopes: ["apps:read", "apps:write", "offline"],
         userInfo: {
@@ -1345,12 +1351,16 @@ describe("connector selected auth method capability checks", () => {
         type: "base44",
         authMethod: "oauth",
         authClient: oauthClient,
-        refreshToken: "base44-refresh-rotation",
+        inputs: {
+          refreshToken: "base44-refresh-rotation",
+        },
         signal: testRefreshSignal(),
       }),
     ).resolves.toStrictEqual({
-      accessToken: "base44-access-refreshed",
-      refreshToken: "base44-refresh-rotated",
+      outputs: {
+        accessToken: "base44-access-refreshed",
+        refreshToken: "base44-refresh-rotated",
+      },
       expiresIn: 3600,
     });
     await expect(
@@ -1358,12 +1368,15 @@ describe("connector selected auth method capability checks", () => {
         type: "base44",
         authMethod: "oauth",
         authClient: oauthClient,
-        refreshToken: "base44-refresh-without-rotation",
+        inputs: {
+          refreshToken: "base44-refresh-without-rotation",
+        },
         signal: testRefreshSignal(),
       }),
     ).resolves.toStrictEqual({
-      accessToken: "base44-access-refreshed",
-      refreshToken: null,
+      outputs: {
+        accessToken: "base44-access-refreshed",
+      },
       expiresIn: 3600,
     });
   });
@@ -1646,8 +1659,10 @@ describe("connector selected auth method capability checks", () => {
     expect(completeResult).toMatchObject({
       status: "complete",
       token: {
-        accessToken: slockAccessToken,
-        refreshToken: "slock-refresh-token",
+        outputs: {
+          accessToken: slockAccessToken,
+          refreshToken: "slock-refresh-token",
+        },
         expiresIn: expect.any(Number),
         scopes: [],
         userInfo: {
@@ -1681,8 +1696,10 @@ describe("connector selected auth method capability checks", () => {
     expect(malformedCompleteResult).toMatchObject({
       status: "complete",
       token: {
-        accessToken: slockMalformedAccessToken,
-        refreshToken: "slock-refresh-malformed",
+        outputs: {
+          accessToken: slockMalformedAccessToken,
+          refreshToken: "slock-refresh-malformed",
+        },
         expiresIn: undefined,
       },
     });
@@ -1691,12 +1708,16 @@ describe("connector selected auth method capability checks", () => {
       type: "slock",
       authMethod: "oauth",
       authClient: oauthClient,
-      refreshToken: "slock-refresh-token",
+      inputs: {
+        refreshToken: "slock-refresh-token",
+      },
       signal: testRefreshSignal(),
     });
     expect(refreshResult).toStrictEqual({
-      accessToken: slockRefreshedAccessToken,
-      refreshToken: "slock-refresh-rotated",
+      outputs: {
+        accessToken: slockRefreshedAccessToken,
+        refreshToken: "slock-refresh-rotated",
+      },
       expiresIn: expect.any(Number),
     });
     if (refreshResult.expiresIn === undefined) {
@@ -1712,13 +1733,16 @@ describe("connector selected auth method capability checks", () => {
         type: "slock",
         authMethod: "oauth",
         authClient: oauthClient,
-        refreshToken: "slock-refresh-malformed",
+        inputs: {
+          refreshToken: "slock-refresh-malformed",
+        },
         signal: testRefreshSignal(),
       }),
     ).resolves.toStrictEqual({
-      accessToken: slockMalformedAccessToken,
-      refreshToken: "slock-refresh-malformed-rotated",
-      expiresIn: undefined,
+      outputs: {
+        accessToken: slockMalformedAccessToken,
+        refreshToken: "slock-refresh-malformed-rotated",
+      },
     });
   });
 });
@@ -1803,8 +1827,26 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
       getConnectorAuthMethodAccessMetadata("stripe", "oauth"),
     ).toStrictEqual({
       kind: "refresh-token",
-      accessToken: "STRIPE_ACCESS_TOKEN",
-      refreshToken: "STRIPE_REFRESH_TOKEN",
+      inputs: {
+        refreshToken: {
+          valueRef: "$secrets.STRIPE_REFRESH_TOKEN",
+          source: {
+            kind: "connector-secret",
+            name: "STRIPE_REFRESH_TOKEN",
+          },
+        },
+      },
+      outputs: {
+        accessToken: {
+          valueRef: "$secrets.STRIPE_ACCESS_TOKEN",
+          secretName: "STRIPE_ACCESS_TOKEN",
+        },
+        refreshToken: {
+          valueRef: "$secrets.STRIPE_REFRESH_TOKEN",
+          secretName: "STRIPE_REFRESH_TOKEN",
+        },
+      },
+      refreshableSecrets: ["STRIPE_ACCESS_TOKEN"],
       envBindings: {
         STRIPE_TOKEN: "$secrets.STRIPE_ACCESS_TOKEN",
       },
@@ -1829,13 +1871,74 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
       getConnectorAuthMethodAccessMetadata("google-ads", "oauth"),
     ).toStrictEqual({
       kind: "refresh-token",
-      accessToken: "GOOGLE_ADS_ACCESS_TOKEN",
-      refreshToken: "GOOGLE_ADS_REFRESH_TOKEN",
+      inputs: {
+        refreshToken: {
+          valueRef: "$secrets.GOOGLE_ADS_REFRESH_TOKEN",
+          source: {
+            kind: "connector-secret",
+            name: "GOOGLE_ADS_REFRESH_TOKEN",
+          },
+        },
+      },
+      outputs: {
+        accessToken: {
+          valueRef: "$secrets.GOOGLE_ADS_ACCESS_TOKEN",
+          secretName: "GOOGLE_ADS_ACCESS_TOKEN",
+        },
+        refreshToken: {
+          valueRef: "$secrets.GOOGLE_ADS_REFRESH_TOKEN",
+          secretName: "GOOGLE_ADS_REFRESH_TOKEN",
+        },
+      },
+      refreshableSecrets: ["GOOGLE_ADS_ACCESS_TOKEN"],
       envBindings: {
         GOOGLE_ADS_TOKEN: "$secrets.GOOGLE_ADS_ACCESS_TOKEN",
         GOOGLE_ADS_DEVELOPER_TOKEN: "$secrets.GOOGLE_ADS_DEVELOPER_TOKEN",
       },
       platformSecrets: ["GOOGLE_ADS_DEVELOPER_TOKEN"],
+    });
+  });
+
+  it("supports multi-input and multi-output refresh metadata", () => {
+    expect(
+      getConnectorAuthMethodAccessMetadata("test-oauth", "api"),
+    ).toStrictEqual({
+      kind: "refresh-token",
+      inputs: {
+        apiRefreshToken: {
+          valueRef: "$secrets.TEST_OAUTH_API_REFRESH_TOKEN",
+          source: {
+            kind: "connector-secret",
+            name: "TEST_OAUTH_API_REFRESH_TOKEN",
+          },
+        },
+        tenantId: {
+          valueRef: "$vars.TEST_OAUTH_API_TENANT_ID",
+          source: {
+            kind: "connector-variable",
+            name: "TEST_OAUTH_API_TENANT_ID",
+          },
+        },
+      },
+      outputs: {
+        refreshedAccessToken: {
+          valueRef: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+          secretName: "TEST_OAUTH_API_ACCESS_TOKEN",
+        },
+        refreshedRefreshToken: {
+          valueRef: "$secrets.TEST_OAUTH_API_REFRESH_TOKEN",
+          secretName: "TEST_OAUTH_API_REFRESH_TOKEN",
+        },
+        secondaryToken: {
+          valueRef: "$secrets.TEST_OAUTH_API_SECONDARY_TOKEN",
+          secretName: "TEST_OAUTH_API_SECONDARY_TOKEN",
+        },
+      },
+      refreshableSecrets: ["TEST_OAUTH_API_ACCESS_TOKEN"],
+      envBindings: {
+        TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+      },
+      platformSecrets: [],
     });
   });
 
@@ -1887,14 +1990,12 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
           }
         }
         if (accessMetadata.kind === "refresh-token") {
-          expect(
-            platformSecretNames.has(accessMetadata.accessToken),
-            `${type}/${authMethod}: access token storage must stay connector-owned`,
-          ).toBe(false);
-          expect(
-            platformSecretNames.has(accessMetadata.refreshToken),
-            `${type}/${authMethod}: refresh token storage must stay connector-owned`,
-          ).toBe(false);
+          for (const output of Object.values(accessMetadata.outputs)) {
+            expect(
+              platformSecretNames.has(output.secretName),
+              `${type}/${authMethod}: refresh output storage must stay connector-owned`,
+            ).toBe(false);
+          }
         }
       }
     }
@@ -1909,16 +2010,13 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
 });
 
 describe("getConnectorAuthMethodStorageMetadata", () => {
-  it("returns explicit static provider token storage roles", () => {
+  it("returns static provider storage and runtime bindings", () => {
     expect(
       getConnectorAuthMethodStorageMetadata("github", "oauth"),
     ).toStrictEqual({
       storage: {
         secrets: ["GITHUB_ACCESS_TOKEN"],
         variables: [],
-      },
-      secretRoles: {
-        accessToken: "GITHUB_ACCESS_TOKEN",
       },
       runtimeBindings: [
         {
@@ -1949,7 +2047,6 @@ describe("getConnectorAuthMethodStorageMetadata", () => {
         secrets: ["STRIPE_TOKEN"],
         variables: [],
       },
-      secretRoles: {},
       runtimeBindings: [
         {
           envName: "STRIPE_TOKEN",
@@ -1974,10 +2071,6 @@ describe("getConnectorAuthMethodStorageMetadata", () => {
           "SLOCK_REFRESH_TOKEN",
         ],
         variables: [],
-      },
-      secretRoles: {
-        accessToken: "SLOCK_ACCESS_TOKEN",
-        refreshToken: "SLOCK_REFRESH_TOKEN",
       },
       runtimeBindings: [
         {
@@ -2008,10 +2101,6 @@ describe("getConnectorAuthMethodStorageMetadata", () => {
         secrets: ["GOOGLE_ADS_ACCESS_TOKEN", "GOOGLE_ADS_REFRESH_TOKEN"],
         variables: [],
       },
-      secretRoles: {
-        accessToken: "GOOGLE_ADS_ACCESS_TOKEN",
-        refreshToken: "GOOGLE_ADS_REFRESH_TOKEN",
-      },
       runtimeBindings: [
         {
           envName: "GOOGLE_ADS_TOKEN",
@@ -2030,6 +2119,42 @@ describe("getConnectorAuthMethodStorageMetadata", () => {
           },
         },
       ],
+    });
+  });
+});
+
+describe("getConnectorAuthMethodGrantMetadata", () => {
+  it("returns provider output secret mappings for OAuth grants", () => {
+    expect(
+      getConnectorAuthMethodGrantMetadata("linear", "oauth"),
+    ).toStrictEqual({
+      kind: "auth-code",
+      outputs: {
+        accessToken: {
+          valueRef: "$secrets.LINEAR_ACCESS_TOKEN",
+          secretName: "LINEAR_ACCESS_TOKEN",
+        },
+        refreshToken: {
+          valueRef: "$secrets.LINEAR_REFRESH_TOKEN",
+          secretName: "LINEAR_REFRESH_TOKEN",
+        },
+      },
+    });
+  });
+});
+
+describe("getConnectorAuthMethodRevokeMetadata", () => {
+  it("returns provider input secret mappings for token revoke", () => {
+    expect(
+      getConnectorAuthMethodRevokeMetadata("github", "oauth"),
+    ).toStrictEqual({
+      kind: "token-revoke",
+      inputs: {
+        accessToken: {
+          valueRef: "$secrets.GITHUB_ACCESS_TOKEN",
+          secretName: "GITHUB_ACCESS_TOKEN",
+        },
+      },
     });
   });
 });
@@ -2143,18 +2268,36 @@ describe("getConnectorEnvBindingEntries", () => {
 
   it("authorization-grant auth methods keep the documented secret naming convention", () => {
     // This is a registry naming convention. Runtime behavior must use
-    // storage.secretRoles and runtimeBindings, not infer roles from names.
+    // grant output metadata and runtimeBindings, not infer roles from names.
     for (const type of connectorTypeSchema.options) {
       if (!hasConnectorAuthorizationGrant(type)) continue;
 
+      const oauthAuthMethodRef: ConnectorAuthMethodRef = {
+        type,
+        authMethod: "oauth",
+      };
+      const hasRefreshTokenAccess = connectorAuthMethodRefHasAccessKind(
+        oauthAuthMethodRef,
+        "refresh-token",
+      );
+      const grantMetadata = getConnectorAuthMethodGrantMetadata(type, "oauth");
       const storageMetadata = getConnectorAuthMethodStorageMetadata(
         type,
         "oauth",
       );
-      const accessSecretName = storageMetadata?.secretRoles.accessToken;
+      if (!storageMetadata) {
+        throw new Error(`${type}: missing OAuth storage metadata`);
+      }
+      if (!grantMetadata) {
+        throw new Error(`${type}: missing OAuth grant metadata`);
+      }
+      const accessSecretName = getConnectorGrantOutputSecretName(
+        grantMetadata,
+        "accessToken",
+      );
       expect(
         accessSecretName,
-        `${type}: OAuth auth method must declare an access token role`,
+        `${type}: OAuth auth method must declare access token storage`,
       ).toBeDefined();
       if (!accessSecretName) {
         continue;
@@ -2172,11 +2315,18 @@ describe("getConnectorEnvBindingEntries", () => {
         `${type}: oauth secrets must include ${accessSecretName}`,
       ).toContain(accessSecretName);
 
-      const oauthMethod = getConnectorAuthMethod(type, "oauth");
-      if (oauthMethod?.access.kind === "refresh-token") {
+      if (hasRefreshTokenAccess) {
+        const accessMetadata = getConnectorAuthMethodAccessMetadata(
+          oauthAuthMethodRef.type,
+          oauthAuthMethodRef.authMethod,
+        );
         expect(
-          storageMetadata.secretRoles.refreshToken,
-          `${type}: refresh-token access must declare a refresh token role`,
+          getConnectorGrantOutputSecretName(grantMetadata, "refreshToken"),
+          `${type}: grant must declare refresh token storage`,
+        ).toBe(refreshSecretName);
+        expect(
+          getConnectorRefreshOutputSecretName(accessMetadata, "refreshToken"),
+          `${type}: refresh-token access must declare refresh token storage`,
         ).toBe(refreshSecretName);
         expect(
           oauthSecrets,
@@ -2233,7 +2383,7 @@ describe("getConnectorEnvBindingEntries", () => {
 
       expect(oauthSecrets, `${type}: unexpected primary OAuth secrets`).toEqual(
         expect.arrayContaining(
-          oauthMethod?.access.kind === "refresh-token"
+          hasRefreshTokenAccess
             ? [accessSecretName, refreshSecretName]
             : [accessSecretName],
         ),

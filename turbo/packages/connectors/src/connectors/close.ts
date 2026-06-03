@@ -21,17 +21,25 @@ export const close = {
         storage: {
           secrets: ["CLOSE_ACCESS_TOKEN", "CLOSE_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "CLOSE_ACCESS_TOKEN",
-            refreshToken: "CLOSE_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["all.full_access", "offline_access"],
+          outputs: {
+            accessToken: "$secrets.CLOSE_ACCESS_TOKEN",
+            refreshToken: "$secrets.CLOSE_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.CLOSE_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.CLOSE_ACCESS_TOKEN",
+            refreshToken: "$secrets.CLOSE_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["CLOSE_ACCESS_TOKEN"],
           envBindings: {
             CLOSE_TOKEN: "$secrets.CLOSE_ACCESS_TOKEN",
           },

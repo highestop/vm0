@@ -22,17 +22,25 @@ export const stripe = {
         storage: {
           secrets: ["STRIPE_ACCESS_TOKEN", "STRIPE_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "STRIPE_ACCESS_TOKEN",
-            refreshToken: "STRIPE_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
           scopes: ["read_write"],
+          outputs: {
+            accessToken: "$secrets.STRIPE_ACCESS_TOKEN",
+            refreshToken: "$secrets.STRIPE_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.STRIPE_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.STRIPE_ACCESS_TOKEN",
+            refreshToken: "$secrets.STRIPE_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["STRIPE_ACCESS_TOKEN"],
           envBindings: {
             STRIPE_TOKEN: "$secrets.STRIPE_ACCESS_TOKEN",
           },

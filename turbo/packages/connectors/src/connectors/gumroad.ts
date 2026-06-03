@@ -20,10 +20,6 @@ export const gumroad = {
         storage: {
           secrets: ["GUMROAD_ACCESS_TOKEN", "GUMROAD_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "GUMROAD_ACCESS_TOKEN",
-            refreshToken: "GUMROAD_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -34,9 +30,21 @@ export const gumroad = {
             "mark_sales_as_shipped",
             "edit_sales",
           ],
+          outputs: {
+            accessToken: "$secrets.GUMROAD_ACCESS_TOKEN",
+            refreshToken: "$secrets.GUMROAD_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.GUMROAD_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.GUMROAD_ACCESS_TOKEN",
+            refreshToken: "$secrets.GUMROAD_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["GUMROAD_ACCESS_TOKEN"],
           envBindings: {
             GUMROAD_TOKEN: "$secrets.GUMROAD_ACCESS_TOKEN",
           },

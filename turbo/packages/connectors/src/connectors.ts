@@ -331,11 +331,13 @@ export interface ConnectorManualGrantConfig {
 export interface ConnectorAuthCodeGrantConfig {
   readonly kind: "auth-code";
   readonly scopes: string[];
+  readonly outputs: ConnectorGrantOutputBindings;
 }
 
 export interface ConnectorDeviceAuthGrantConfig {
   readonly kind: "device-auth";
   readonly scopes: string[];
+  readonly outputs: ConnectorGrantOutputBindings;
 }
 
 export interface ConnectorManagedGrantConfig {
@@ -358,16 +360,24 @@ export const CONNECTOR_PLATFORM_SECRET_NAMES = [
 export type ConnectorPlatformSecretName =
   (typeof CONNECTOR_PLATFORM_SECRET_NAMES)[number];
 
+export type ConnectorSecretValueRef = `$secrets.${string}`;
+export type ConnectorVariableValueRef = `$vars.${string}`;
+export type ConnectorRefreshTokenInputValueRef =
+  | ConnectorSecretValueRef
+  | ConnectorVariableValueRef;
+
+export type ConnectorGrantOutputBindings = Record<
+  string,
+  ConnectorSecretValueRef
+>;
+export type ConnectorRevokeInputBindings = Record<
+  string,
+  ConnectorSecretValueRef
+>;
+
 export interface ConnectorStorageConfig {
   readonly secrets: readonly string[];
   readonly variables: readonly string[];
-  /** Role mapping for provider-written or refreshable connector secrets. */
-  readonly secretRoles?: ConnectorSecretRolesConfig;
-}
-
-export interface ConnectorSecretRolesConfig {
-  readonly accessToken?: string;
-  readonly refreshToken?: string;
 }
 
 interface ConnectorEnvBindingAccessConfigBase {
@@ -383,8 +393,20 @@ export interface ConnectorStaticAccessConfig extends ConnectorEnvBindingAccessCo
   readonly kind: "static";
 }
 
+export type ConnectorRefreshTokenInputBindings = Record<
+  string,
+  ConnectorRefreshTokenInputValueRef
+>;
+export type ConnectorRefreshTokenOutputBindings = Record<
+  string,
+  ConnectorSecretValueRef
+>;
+
 export interface ConnectorRefreshTokenAccessConfig extends ConnectorEnvBindingAccessConfigBase {
   readonly kind: "refresh-token";
+  readonly inputs: ConnectorRefreshTokenInputBindings;
+  readonly outputs: ConnectorRefreshTokenOutputBindings;
+  readonly refreshableSecrets: readonly string[];
 }
 
 export interface ConnectorNoAccessConfig {
@@ -404,6 +426,7 @@ export type ConnectorRevokeConfig =
     }
   | {
       readonly kind: "token-revoke";
+      readonly inputs: ConnectorRevokeInputBindings;
     };
 
 interface ConnectorAuthMethodConfigBase {
@@ -616,6 +639,16 @@ type ConnectorRuntimeValueRef<Storage, Access> =
   | `$secrets.${ConnectorStorageSecretName<Storage> | ConnectorAccessPlatformSecretName<Access>}`
   | `$vars.${ConnectorStorageVariableName<Storage>}`;
 
+type ConnectorRefreshInputValueRef<Storage> =
+  | `$secrets.${ConnectorStorageSecretName<Storage>}`
+  | `$vars.${ConnectorStorageVariableName<Storage>}`;
+
+type ConnectorRefreshOutputValueRef<Storage> =
+  `$secrets.${ConnectorStorageSecretName<Storage>}`;
+
+type ConnectorRevokeInputValueRef<Storage> =
+  `$secrets.${ConnectorStorageSecretName<Storage>}`;
+
 type ValidatedConnectorEnvBindings<EnvBindings, Storage, Access> = {
   readonly [EnvName in keyof EnvBindings]: EnvBindings[EnvName] extends ConnectorRuntimeValueRef<
     Storage,
@@ -625,16 +658,109 @@ type ValidatedConnectorEnvBindings<EnvBindings, Storage, Access> = {
     : ConnectorRuntimeValueRef<Storage, Access>;
 };
 
+type ValidatedConnectorRefreshInputs<Inputs, Storage> = {
+  readonly [InputName in keyof Inputs]: Inputs[InputName] extends ConnectorRefreshInputValueRef<Storage>
+    ? Inputs[InputName]
+    : ConnectorRefreshInputValueRef<Storage>;
+};
+
+type ValidatedConnectorRefreshOutputs<Outputs, Storage> = {
+  readonly [OutputName in keyof Outputs]: Outputs[OutputName] extends ConnectorRefreshOutputValueRef<Storage>
+    ? Outputs[OutputName]
+    : ConnectorRefreshOutputValueRef<Storage>;
+};
+
+type ValidatedConnectorGrantOutputs<Outputs, Storage> = {
+  readonly [OutputName in keyof Outputs]: Outputs[OutputName] extends ConnectorRefreshOutputValueRef<Storage>
+    ? Outputs[OutputName]
+    : ConnectorRefreshOutputValueRef<Storage>;
+};
+
+type ValidatedConnectorRevokeInputs<Inputs, Storage> = {
+  readonly [InputName in keyof Inputs]: Inputs[InputName] extends ConnectorRevokeInputValueRef<Storage>
+    ? Inputs[InputName]
+    : ConnectorRevokeInputValueRef<Storage>;
+};
+
+type ConnectorRefreshOutputSecretName<Outputs> =
+  Outputs[keyof Outputs] extends infer Ref
+    ? Ref extends `$secrets.${infer Name}`
+      ? Name
+      : never
+    : never;
+
+type ConnectorRefreshableSecretName<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> =
+  ConnectorRefreshMappingFor<Type, Method> extends {
+    readonly refreshableSecrets: readonly (infer SecretName)[];
+  }
+    ? Extract<SecretName, string>
+    : never;
+
+type ConnectorRefreshOutputSecretNameFromRef<Ref> =
+  Ref extends `$secrets.${infer Name}` ? Name : never;
+
+type ConnectorRequiredRefreshOutputName<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = {
+  readonly [OutputName in keyof ConnectorRefreshOutputsFor<
+    Type,
+    Method
+  >]: ConnectorRefreshOutputSecretNameFromRef<
+    ConnectorRefreshOutputsFor<Type, Method>[OutputName]
+  > extends ConnectorRefreshableSecretName<Type, Method>
+    ? OutputName
+    : never;
+}[keyof ConnectorRefreshOutputsFor<Type, Method>];
+
+type ValidatedConnectorRefreshableSecrets<Secrets, Outputs> =
+  Secrets extends readonly unknown[]
+    ? {
+        readonly [Index in keyof Secrets]: Secrets[Index] extends ConnectorRefreshOutputSecretName<Outputs>
+          ? Secrets[Index]
+          : ConnectorRefreshOutputSecretName<Outputs>;
+      }
+    : readonly ConnectorRefreshOutputSecretName<Outputs>[];
+
+type ValidatedConnectorRefreshTokenAccessConfig<Access, Storage> =
+  Access extends {
+    readonly inputs: infer Inputs;
+    readonly outputs: infer Outputs;
+    readonly refreshableSecrets: infer RefreshableSecrets;
+  }
+    ? Access & {
+        readonly inputs: ValidatedConnectorRefreshInputs<Inputs, Storage>;
+        readonly outputs: ValidatedConnectorRefreshOutputs<Outputs, Storage>;
+        readonly refreshableSecrets: ValidatedConnectorRefreshableSecrets<
+          RefreshableSecrets,
+          Outputs
+        >;
+      }
+    : never;
+
 type ValidatedConnectorAccessConfig<Access, Storage> = Access extends {
   readonly envBindings: infer EnvBindings;
 }
-  ? Access & {
-      readonly envBindings: ValidatedConnectorEnvBindings<
-        EnvBindings,
-        Storage,
-        Access
-      >;
+  ? Access extends {
+      readonly kind: "refresh-token";
     }
+    ? ValidatedConnectorRefreshTokenAccessConfig<Access, Storage> & {
+        readonly envBindings: ValidatedConnectorEnvBindings<
+          EnvBindings,
+          Storage,
+          Access
+        >;
+      }
+    : Access & {
+        readonly envBindings: ValidatedConnectorEnvBindings<
+          EnvBindings,
+          Storage,
+          Access
+        >;
+      }
   : Access;
 
 type ValidatedConnectorManualGrantField<
@@ -667,82 +793,35 @@ type ValidatedConnectorGrantConfig<Grant, Storage> = Grant extends {
           : never;
       };
     }
-  : Grant;
-
-type ValidatedConnectorSecretName<Name, Storage> =
-  Name extends ConnectorStorageSecretName<Storage>
-    ? Name
-    : ConnectorStorageSecretName<Storage>;
-
-type ValidatedConnectorSecretRoles<Bindings, Storage> = Bindings & {
-  readonly accessToken?: Bindings extends {
-    readonly accessToken: infer Name;
-  }
-    ? ValidatedConnectorSecretName<Name, Storage>
-    : ConnectorStorageSecretName<Storage>;
-  readonly refreshToken?: Bindings extends {
-    readonly refreshToken: infer Name;
-  }
-    ? ValidatedConnectorSecretName<Name, Storage>
-    : ConnectorStorageSecretName<Storage>;
-};
-
-type ConnectorSecretRolesFromStorage<Storage> = Storage extends {
-  readonly secretRoles: infer Bindings;
-}
-  ? Bindings
-  : Record<string, never>;
-
-type ConnectorRefreshSecretRoles<Storage> = ValidatedConnectorSecretRoles<
-  ConnectorSecretRolesFromStorage<Storage>,
-  Storage
-> & {
-  readonly accessToken: ConnectorStorageSecretName<Storage>;
-  readonly refreshToken: ConnectorStorageSecretName<Storage>;
-};
-
-type ConnectorStaticProviderSecretRoles<Storage> =
-  ValidatedConnectorSecretRoles<
-    ConnectorSecretRolesFromStorage<Storage>,
-    Storage
-  > & {
-    readonly accessToken: ConnectorStorageSecretName<Storage>;
-  };
-
-type ValidatedConnectorStorageSecretRolesProperty<Method, Storage> =
-  Method extends {
-    readonly access: { readonly kind: "refresh-token" };
-  }
-    ? {
-        readonly secretRoles: ConnectorRefreshSecretRoles<Storage>;
+  : Grant extends {
+        readonly kind: "auth-code" | "device-auth";
+        readonly outputs: infer Outputs;
       }
-    : Method extends {
-          readonly grant: { readonly kind: "auth-code" | "device-auth" };
-          readonly access: { readonly kind: "static" };
-        }
-      ? {
-          readonly secretRoles: ConnectorStaticProviderSecretRoles<Storage>;
-        }
-      : Storage extends { readonly secretRoles: infer Bindings }
-        ? {
-            readonly secretRoles: ValidatedConnectorSecretRoles<
-              Bindings,
-              Storage
-            >;
-          }
-        : { readonly secretRoles?: ConnectorSecretRolesConfig };
+    ? Grant & {
+        readonly outputs: ValidatedConnectorGrantOutputs<Outputs, Storage>;
+      }
+    : Grant;
+
+type ValidatedConnectorRevokeConfig<Revoke, Storage> = Revoke extends {
+  readonly kind: "token-revoke";
+  readonly inputs: infer Inputs;
+}
+  ? Revoke & {
+      readonly inputs: ValidatedConnectorRevokeInputs<Inputs, Storage>;
+    }
+  : Revoke;
 
 type ValidatedConnectorAuthMethod<Method> = Method extends {
   readonly storage: infer Storage;
   readonly grant: infer Grant;
   readonly access: infer Access;
+  readonly revoke: infer Revoke;
 }
   ? Method & {
-      readonly storage: Storage &
-        ConnectorStorageConfig &
-        ValidatedConnectorStorageSecretRolesProperty<Method, Storage>;
+      readonly storage: Storage & ConnectorStorageConfig;
       readonly grant: ValidatedConnectorGrantConfig<Grant, Storage>;
       readonly access: ValidatedConnectorAccessConfig<Access, Storage>;
+      readonly revoke: ValidatedConnectorRevokeConfig<Revoke, Storage>;
     }
   : never;
 
@@ -1040,6 +1119,108 @@ export type ConnectorAuthMethodConfigFor<
   Type extends ConnectorType,
   Method extends ConnectorAuthMethodIds<Type>,
 > = ConnectorAuthMethodsOf<Type>[Method] & ConnectorAuthMethodConfig;
+
+type ConnectorRefreshMappingFor<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = ConnectorAuthMethodsOf<Type>[Method] extends {
+  readonly access: {
+    readonly kind: "refresh-token";
+    readonly inputs: infer Inputs;
+    readonly outputs: infer Outputs;
+    readonly refreshableSecrets: infer RefreshableSecrets;
+  };
+}
+  ? {
+      readonly inputs: Inputs;
+      readonly outputs: Outputs;
+      readonly refreshableSecrets: RefreshableSecrets;
+    }
+  : never;
+
+type ConnectorGrantOutputsFor<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = ConnectorAuthMethodsOf<Type>[Method] extends {
+  readonly grant: {
+    readonly kind: "auth-code" | "device-auth";
+    readonly outputs: infer Outputs;
+  };
+}
+  ? Outputs
+  : never;
+
+type ConnectorRefreshInputsFor<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> =
+  ConnectorRefreshMappingFor<Type, Method> extends {
+    readonly inputs: infer Inputs;
+  }
+    ? Inputs
+    : never;
+
+type ConnectorRefreshOutputsFor<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> =
+  ConnectorRefreshMappingFor<Type, Method> extends {
+    readonly outputs: infer Outputs;
+  }
+    ? Outputs
+    : never;
+
+type ConnectorRevokeInputsFor<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = ConnectorAuthMethodsOf<Type>[Method] extends {
+  readonly revoke: {
+    readonly kind: "token-revoke";
+    readonly inputs: infer Inputs;
+  };
+}
+  ? Inputs
+  : never;
+
+export type ConnectorRefreshInputValues<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = {
+  readonly [InputName in keyof ConnectorRefreshInputsFor<Type, Method>]: string;
+};
+
+export type ConnectorGrantOutputValues<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = {
+  readonly [OutputName in keyof ConnectorGrantOutputsFor<Type, Method>]:
+    | string
+    | null
+    | undefined;
+};
+
+export type ConnectorRefreshOutputValues<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = Readonly<
+  Record<
+    Extract<ConnectorRequiredRefreshOutputName<Type, Method>, string>,
+    string
+  >
+> & {
+  readonly [OutputName in Exclude<
+    keyof ConnectorRefreshOutputsFor<Type, Method>,
+    ConnectorRequiredRefreshOutputName<Type, Method>
+  >]?: string;
+};
+
+export type ConnectorRevokeInputValues<
+  Type extends ConnectorType,
+  Method extends ConnectorAuthMethodIds<Type>,
+> = Readonly<
+  Record<Extract<keyof ConnectorRevokeInputsFor<Type, Method>, string>, string>
+>;
+
 export type ConnectorAuthMethodClientConfig<
   Type extends ConnectorType,
   Method extends ConnectorAuthMethodIds<Type>,

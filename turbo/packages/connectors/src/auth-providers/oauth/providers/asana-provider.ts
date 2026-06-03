@@ -2,9 +2,9 @@ import type { AuthCodeConnectorAuthProvider } from "../../types";
 import {
   buildAsanaAuthorizationUrl,
   exchangeAsanaCode,
-  getAsanaSecretName,
   refreshAsanaToken,
 } from "./asana";
+import { oauthRefreshResultToProviderResult } from "../types";
 export const asanaProvider: AuthCodeConnectorAuthProvider<"asana"> = {
   grant: {
     kind: "auth-code",
@@ -24,8 +24,10 @@ export const asanaProvider: AuthCodeConnectorAuthProvider<"asana"> = {
         redirectUri,
       );
       return {
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        outputs: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        },
         expiresIn: result.expiresIn,
         scopes: result.scopes,
         userInfo: {
@@ -38,17 +40,15 @@ export const asanaProvider: AuthCodeConnectorAuthProvider<"asana"> = {
   },
   access: {
     kind: "refresh-token",
-    getAccessSecretName: getAsanaSecretName,
-    getRefreshSecretName: () => {
-      return "ASANA_REFRESH_TOKEN";
-    },
-    refreshToken: (args) => {
+    refresh: async (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return refreshAsanaToken(
-        clientId,
-        clientSecret,
-        args.refreshToken,
-        args.signal,
+      return oauthRefreshResultToProviderResult(
+        await refreshAsanaToken(
+          clientId,
+          clientSecret,
+          args.inputs.refreshToken,
+          args.signal,
+        ),
       );
     },
   },

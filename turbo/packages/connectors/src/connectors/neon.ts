@@ -21,10 +21,6 @@ export const neon = {
         storage: {
           secrets: ["NEON_ACCESS_TOKEN", "NEON_REFRESH_TOKEN"],
           variables: [],
-          secretRoles: {
-            accessToken: "NEON_ACCESS_TOKEN",
-            refreshToken: "NEON_REFRESH_TOKEN",
-          },
         },
         grant: {
           kind: "auth-code",
@@ -36,9 +32,21 @@ export const neon = {
             "urn:neoncloud:projects:update",
             "urn:neoncloud:projects:delete",
           ],
+          outputs: {
+            accessToken: "$secrets.NEON_ACCESS_TOKEN",
+            refreshToken: "$secrets.NEON_REFRESH_TOKEN",
+          },
         },
         access: {
           kind: "refresh-token",
+          inputs: {
+            refreshToken: "$secrets.NEON_REFRESH_TOKEN",
+          },
+          outputs: {
+            accessToken: "$secrets.NEON_ACCESS_TOKEN",
+            refreshToken: "$secrets.NEON_REFRESH_TOKEN",
+          },
+          refreshableSecrets: ["NEON_ACCESS_TOKEN"],
           envBindings: {
             NEON_TOKEN: "$secrets.NEON_ACCESS_TOKEN",
           },

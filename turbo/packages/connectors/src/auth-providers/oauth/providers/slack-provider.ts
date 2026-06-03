@@ -3,7 +3,6 @@ import {
   buildSlackAuthorizationUrl,
   exchangeSlackCode,
   fetchSlackUserInfo,
-  getSlackSecretName,
   revokeSlackToken,
 } from "./slack";
 export const slackProvider: AuthCodeConnectorAuthProvider<"slack"> = {
@@ -34,7 +33,9 @@ export const slackProvider: AuthCodeConnectorAuthProvider<"slack"> = {
         slackResult.accessToken,
       );
       return {
-        accessToken: slackResult.accessToken,
+        outputs: {
+          accessToken: slackResult.accessToken,
+        },
         scopes: slackResult.scopes,
         userInfo: {
           id: slackUser.id,
@@ -46,13 +47,12 @@ export const slackProvider: AuthCodeConnectorAuthProvider<"slack"> = {
   },
   access: {
     kind: "none",
-    getAccessSecretName: getSlackSecretName,
   },
   revoke: {
     kind: "token-revoke",
     revokeToken: (args) => {
       const { clientId, clientSecret } = args.authClient;
-      return revokeSlackToken(clientId, clientSecret, args.accessToken);
+      return revokeSlackToken(clientId, clientSecret, args.inputs.accessToken);
     },
   },
 };

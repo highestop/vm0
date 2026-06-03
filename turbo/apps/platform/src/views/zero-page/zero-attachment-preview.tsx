@@ -232,7 +232,7 @@ function HtmlSitePreviewCard({
       }}
       aria-label={`Open html preview for ${filename}`}
       title={title}
-      className="group/site-preview inline-flex w-[min(100%,320px)] flex-col overflow-hidden rounded-lg border border-foreground/10 bg-background text-left align-top text-foreground no-underline shadow-sm transition-all duration-200 hover:scale-[1.015] hover:border-foreground/20 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30"
+      className="group/site-preview inline-flex w-[min(100%,400px)] flex-col overflow-hidden rounded-lg border border-foreground/10 bg-background text-left align-top text-foreground no-underline shadow-sm transition-all duration-200 hover:scale-[1.015] hover:border-foreground/20 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30"
     >
       <div className="flex min-h-10 items-center border-b border-border/60 bg-background/95 px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium">

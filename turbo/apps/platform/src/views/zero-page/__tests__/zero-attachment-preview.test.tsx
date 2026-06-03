@@ -534,6 +534,7 @@ describe("document thumbnail preview", () => {
     const preview = screen.getByTestId("attachment-preview-html");
     expect(preview).toBeInTheDocument();
     expect(preview.tagName).toBe("A");
+    expect(preview).toHaveClass("w-[min(100%,400px)]");
     expect(preview).toHaveAttribute("href", "https://example.com/page.html");
     expect(preview).toHaveTextContent("page.html");
     const iframe = within(preview).getByTitle("Site preview for page.html");

@@ -3471,7 +3471,6 @@ interface PermissionActionButtonState {
   saveDone: boolean;
   submitDone: boolean;
   alreadyApplied: boolean;
-  explicitUserGrantApplied: boolean;
   canManagePermissions: boolean;
   selfServiceGrant: boolean;
   existingRequestStatus: "pending" | "approved" | "rejected" | null;
@@ -3545,7 +3544,6 @@ function permissionActionVerb(action: PermissionAction): string {
 
 function permissionActionButtonLabel(
   state: PermissionActionButtonState,
-  action: PermissionAction,
 ): string {
   if (state.loading) {
     return "Checking permissions";
@@ -3555,21 +3553,6 @@ function permissionActionButtonLabel(
   }
   if (!state.hasPermission) {
     return "Unknown permission";
-  }
-  if (state.saveDone || state.alreadyApplied) {
-    return action === "allow" ? "Permissions updated" : "Permission denied";
-  }
-  if (state.existingRequestStatus === "pending") {
-    return "Request sent";
-  }
-  if (state.existingRequestStatus === "approved") {
-    return "Permissions updated";
-  }
-  if (state.existingRequestStatus === "rejected") {
-    return "Request denied";
-  }
-  if (state.submitDone) {
-    return "Request sent";
   }
   if (state.saving) {
     return state.canManagePermissions || state.selfServiceGrant
@@ -3588,12 +3571,8 @@ function permissionActionButtonDisabled(
     state.loading ||
     state.loadError ||
     state.saving ||
-    state.alreadyApplied ||
-    state.saveDone ||
-    state.submitDone ||
     !state.hasAgent ||
-    !state.hasPermission ||
-    Boolean(state.existingRequestStatus)
+    !state.hasPermission
   );
 }
 
@@ -3601,9 +3580,6 @@ function permissionActionStatusText(
   state: PermissionActionButtonState,
   action: "allow" | "deny",
 ): { label: string; className: string } | null {
-  if (state.explicitUserGrantApplied) {
-    return null;
-  }
   if (state.saveDone || state.alreadyApplied) {
     return action === "allow"
       ? { label: "Permissions updated", className: "text-green-600" }
@@ -3614,6 +3590,9 @@ function permissionActionStatusText(
   }
   if (state.existingRequestStatus === "pending" || state.submitDone) {
     return { label: "Request sent", className: "text-green-600" };
+  }
+  if (state.existingRequestStatus === "rejected") {
+    return { label: "Request denied", className: "text-destructive" };
   }
   return null;
 }
@@ -3644,7 +3623,7 @@ function PermissionActionButton({
       className="inline-flex h-9 w-full shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent sm:w-auto"
     >
       {state.saving && <IconLoader2 size={15} className="animate-spin" />}
-      {permissionActionButtonLabel(state, action)}
+      {permissionActionButtonLabel(state)}
     </button>
   );
 }
@@ -3771,26 +3750,6 @@ function permissionActionUserGrantPolicy(
   );
 }
 
-function explicitPermissionActionUserGrantApplied(
-  userPermissionGrantsEnabled: boolean,
-  loadable: LoadableLike<readonly PermissionActionUserGrant[]>,
-  block: PermissionActionBlock,
-): boolean {
-  if (!userPermissionGrantsEnabled) {
-    return false;
-  }
-  return (
-    loadableData(loadable)?.some((grant) => {
-      return (
-        grant.agentId === block.agentId &&
-        grant.connectorRef === block.connectorRef &&
-        grant.permission === block.permission &&
-        grant.action === block.action
-      );
-    }) ?? false
-  );
-}
-
 function storedPermissionActionPolicy(
   agent: PermissionActionAgent | null,
   block: PermissionActionBlock,
@@ -3807,7 +3766,6 @@ function createPermissionActionButtonState(params: {
   loadError: boolean;
   saving: boolean;
   alreadyApplied: boolean;
-  explicitUserGrantApplied: boolean;
   canManagePermissions: boolean;
   selfServiceGrant: boolean;
   existingRequestStatus: "pending" | "approved" | "rejected" | null;
@@ -3823,7 +3781,6 @@ function createPermissionActionButtonState(params: {
     saveDone: params.saveDone,
     submitDone: params.submitDone,
     alreadyApplied: params.alreadyApplied,
-    explicitUserGrantApplied: params.explicitUserGrantApplied,
     canManagePermissions: params.canManagePermissions,
     selfServiceGrant: params.selfServiceGrant,
     existingRequestStatus: params.existingRequestStatus,
@@ -3839,7 +3796,6 @@ function createPermissionActionCardButtonState(params: {
   saveDone: boolean;
   submitDone: boolean;
   alreadyApplied: boolean;
-  explicitUserGrantApplied: boolean;
   canManagePermissions: boolean;
   userPermissionGrantsEnabled: boolean;
   existingRequest: PermissionActionExistingRequest | null;
@@ -3853,7 +3809,6 @@ function createPermissionActionCardButtonState(params: {
     saveDone: params.saveDone,
     submitDone: params.submitDone,
     alreadyApplied: params.alreadyApplied,
-    explicitUserGrantApplied: params.explicitUserGrantApplied,
     canManagePermissions: params.canManagePermissions,
     selfServiceGrant: params.userPermissionGrantsEnabled,
     existingRequestStatus: params.existingRequest?.status ?? null,
@@ -3906,11 +3861,6 @@ function createPermissionActionCardViewState(params: {
     params.userGrantsLoadable,
     params.block,
   );
-  const explicitUserGrantApplied = explicitPermissionActionUserGrantApplied(
-    params.userPermissionGrantsEnabled,
-    params.userGrantsLoadable,
-    params.block,
-  );
   const alreadyApplied = isPermissionActionAlreadyApplied({
     hasAgent: Boolean(params.agent),
     userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
@@ -3936,7 +3886,6 @@ function createPermissionActionCardViewState(params: {
     saveDone,
     submitDone,
     alreadyApplied,
-    explicitUserGrantApplied,
     canManagePermissions: params.canManagePermissions,
     userPermissionGrantsEnabled: params.userPermissionGrantsEnabled,
     existingRequest,

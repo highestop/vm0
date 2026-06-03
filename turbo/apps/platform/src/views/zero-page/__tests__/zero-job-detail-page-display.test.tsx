@@ -19,7 +19,6 @@ import { setMockConnectors } from "../../../mocks/handlers/api-connectors.ts";
 import { setMockOrg } from "../../../mocks/handlers/api-org.ts";
 import { setMockTeam } from "../../../mocks/handlers/api-agents.ts";
 import { pathname, search } from "../../../signals/location.ts";
-import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 
 const context = testContext();
 const mockApi = createMockApi(context);
@@ -54,7 +53,6 @@ function mockAPIs() {
         displayName: "My Agent",
         sound: null,
         avatarUrl: "preset:2",
-        permissionPolicies: null,
         customSkills: [],
       });
     }),
@@ -170,7 +168,6 @@ describe("zero job detail page - display", () => {
             displayName: "Zero",
             sound: null,
             avatarUrl: null,
-            permissionPolicies: null,
             customSkills: [],
             modelProviderId: null,
             selectedModel: null,
@@ -245,31 +242,10 @@ describe("zero job detail page - connector display", () => {
     ).toBeInTheDocument();
   });
 
-  it("should hide connector permission management for non-admin members", async () => {
+  it("should show connector permission management for non-admin members", async () => {
     mockAPIsWithConnectors();
     setMockOrg({ role: "member" });
     detachedSetupPage({ context, path: "/agents/my-agent" });
-
-    await waitFor(() => {
-      expect(screen.getByText("Slack")).toBeInTheDocument();
-    });
-
-    expect(
-      screen.getByRole("switch", { name: /Slack access/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByLabelText(/Manage Slack permissions/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("should show connector permission management for non-admin members when user grants are enabled", async () => {
-    mockAPIsWithConnectors();
-    setMockOrg({ role: "member" });
-    detachedSetupPage({
-      context,
-      path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.UserPermissionGrants]: true },
-    });
 
     await waitFor(() => {
       expect(screen.getByText("Slack")).toBeInTheDocument();
@@ -294,11 +270,7 @@ describe("zero job detail page - connector display", () => {
       }),
     );
 
-    detachedSetupPage({
-      context,
-      path: "/agents/my-agent",
-      featureSwitches: { [FeatureSwitchKey.UserPermissionGrants]: true },
-    });
+    detachedSetupPage({ context, path: "/agents/my-agent" });
 
     await waitFor(() => {
       expect(

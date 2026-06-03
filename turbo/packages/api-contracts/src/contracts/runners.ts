@@ -17,6 +17,7 @@ const CANONICAL_CLAUDE_PROJECT_NAME = CANONICAL_WORKING_DIR.replace(
   "",
 ).replace(/\//g, "-");
 export const CANONICAL_CLAUDE_MEMORY_MOUNT_PATH = `/home/user/.claude/projects/-${CANONICAL_CLAUDE_PROJECT_NAME}/memory`;
+export const CANONICAL_CODEX_MEMORY_MOUNT_PATH = "/home/user/.codex/memories";
 
 export function elapsedSinceApiStartMs(
   apiStartTimeMs: number | undefined,
@@ -111,6 +112,13 @@ export const storageEntrySchema = z.object({
 /**
  * Artifact entry in manifest
  */
+// Optional internal checkpoint behavior for a missing artifact root. Absence
+// is equivalent to "fail".
+export const artifactMissingRootPolicySchema = z.enum([
+  "fail",
+  "preserveParentVersion",
+]);
+
 export const artifactEntrySchema = z.object({
   mountPath: z.string(),
   vasStorageName: z.string(),
@@ -118,6 +126,7 @@ export const artifactEntrySchema = z.object({
   vasVersionId: z.string(),
   archiveUrl: z.string(),
   manifestUrl: z.string().optional(),
+  missingRootPolicy: artifactMissingRootPolicySchema.optional(),
 });
 
 /**

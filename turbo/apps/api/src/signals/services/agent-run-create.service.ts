@@ -1,7 +1,9 @@
 import { command, computed, type Computed } from "ccstate";
 import {
+  CANONICAL_CODEX_MEMORY_MOUNT_PATH,
   CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
   DEFAULT_PROFILE,
+  type ArtifactEntry,
   type SecretConnectorMetadata,
   type StorageManifest,
   type StoredExecutionContext,
@@ -135,7 +137,6 @@ import { recordSandboxOperation } from "../external/sandbox-op-log";
 const PENDING_RUN_TTL_MS = 15 * 60 * 1000;
 const QUEUED_RUN_TTL_MS = 2 * 60 * 60 * 1000;
 const AUTO_MEMORY_ARTIFACT_NAME = MEMORY_ARTIFACT_NAME;
-const CODEX_AUTO_MEMORY_MOUNT_PATH = "/home/user/.codex/memories";
 
 const TIER_LIMITS = Object.freeze({
   free: 1,
@@ -182,6 +183,23 @@ interface ContextArtifact {
   readonly name: string;
   readonly version?: string;
   readonly mountPath: string;
+  readonly generatedBy?: "apiAutoMemory";
+}
+
+interface AutoMemoryContextArtifact {
+  readonly name: typeof AUTO_MEMORY_ARTIFACT_NAME;
+  readonly mountPath: string;
+  readonly generatedBy: "apiAutoMemory";
+}
+
+interface StorageContextArtifact extends ContextArtifact {
+  readonly missingRootPolicy?: ArtifactEntry["missingRootPolicy"];
+}
+
+interface RunArtifacts {
+  readonly artifacts: readonly ContextArtifact[];
+  // Index into `artifacts` for API-managed memory checkpoint policy.
+  readonly autoMemoryPolicyArtifactIndex: number | undefined;
 }
 
 interface ComposeArtifact {
@@ -587,28 +605,68 @@ function frameworkApiKeyEnv(framework: SupportedFramework): string {
   return framework === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
 }
 
-function autoMemoryArtifact(framework: SupportedFramework): ContextArtifact {
+function autoMemoryMountPath(framework: SupportedFramework): string {
+  return framework === "codex"
+    ? CANONICAL_CODEX_MEMORY_MOUNT_PATH
+    : CANONICAL_CLAUDE_MEMORY_MOUNT_PATH;
+}
+
+function autoMemoryArtifact(
+  framework: SupportedFramework,
+): AutoMemoryContextArtifact {
   return {
     name: AUTO_MEMORY_ARTIFACT_NAME,
-    mountPath:
-      framework === "codex"
-        ? CODEX_AUTO_MEMORY_MOUNT_PATH
-        : CANONICAL_CLAUDE_MEMORY_MOUNT_PATH,
+    mountPath: autoMemoryMountPath(framework),
+    generatedBy: "apiAutoMemory",
   };
 }
 
-function withAutoMemoryArtifact(
+function isAutoMemoryArtifact(
+  artifact: ContextArtifact,
+  framework: SupportedFramework,
+): boolean {
+  return (
+    artifact.name === AUTO_MEMORY_ARTIFACT_NAME &&
+    artifact.mountPath === autoMemoryMountPath(framework) &&
+    artifact.generatedBy === "apiAutoMemory"
+  );
+}
+
+function claimsAutoMemorySlot(
+  artifact: ContextArtifact,
+  framework: SupportedFramework,
+): boolean {
+  return (
+    artifact.name === AUTO_MEMORY_ARTIFACT_NAME ||
+    artifact.mountPath === autoMemoryMountPath(framework)
+  );
+}
+
+function withoutSupersededAutoMemoryArtifacts(
   artifacts: readonly ContextArtifact[],
   framework: SupportedFramework,
+  slotOwnerIndex: number,
 ): readonly ContextArtifact[] {
-  if (
-    artifacts.some((artifact) => {
-      return artifact.name === AUTO_MEMORY_ARTIFACT_NAME;
-    })
-  ) {
-    return artifacts;
-  }
-  return [...artifacts, autoMemoryArtifact(framework)];
+  return artifacts.filter((artifact, index) => {
+    return (
+      index >= slotOwnerIndex || !isAutoMemoryArtifact(artifact, framework)
+    );
+  });
+}
+
+function storageArtifactsForRun(
+  artifacts: readonly ContextArtifact[],
+  autoMemoryPolicyArtifactIndex: number | undefined,
+): readonly StorageContextArtifact[] {
+  return artifacts.map((artifact, index) => {
+    if (index === autoMemoryPolicyArtifactIndex) {
+      return {
+        ...artifact,
+        missingRootPolicy: "preserveParentVersion",
+      };
+    }
+    return artifact;
+  });
 }
 
 function resolveComposeArtifactMountPath(artifact: ComposeArtifact): string {
@@ -631,18 +689,58 @@ function artifactsForRun(args: {
   readonly resolved: ResolvedCompose;
   readonly framework: SupportedFramework;
   readonly bodyArtifacts: readonly ContextArtifact[] | undefined;
-}): readonly ContextArtifact[] {
-  const baseArtifacts =
-    args.resolved.sessionId || args.resolved.resumedFromCheckpointId
-      ? args.resolved.artifacts
-      : [
-          ...composeArtifacts(args.resolved.content),
-          ...args.resolved.artifacts,
-        ];
-  return withAutoMemoryArtifact(
-    [...baseArtifacts, ...(args.bodyArtifacts ?? [])],
-    args.framework,
-  );
+}): RunArtifacts {
+  const isContinuation =
+    Boolean(args.resolved.sessionId) ||
+    Boolean(args.resolved.resumedFromCheckpointId);
+  const composeContextArtifacts = isContinuation
+    ? []
+    : composeArtifacts(args.resolved.content);
+  const persistedArtifactStart = composeContextArtifacts.length;
+  const persistedArtifactEnd =
+    persistedArtifactStart + args.resolved.artifacts.length;
+  const baseArtifacts = isContinuation
+    ? args.resolved.artifacts
+    : [...composeContextArtifacts, ...args.resolved.artifacts];
+  const bodyArtifacts = args.bodyArtifacts ?? [];
+  const artifacts = [...baseArtifacts, ...bodyArtifacts];
+
+  let autoMemorySlotArtifactIndex: number | undefined;
+  for (let index = artifacts.length - 1; index >= 0; index -= 1) {
+    const artifact = artifacts[index];
+    if (artifact && claimsAutoMemorySlot(artifact, args.framework)) {
+      autoMemorySlotArtifactIndex = index;
+      break;
+    }
+  }
+  if (autoMemorySlotArtifactIndex === undefined) {
+    return {
+      artifacts: [...artifacts, autoMemoryArtifact(args.framework)],
+      autoMemoryPolicyArtifactIndex: artifacts.length,
+    };
+  }
+
+  const slotOwner = artifacts[autoMemorySlotArtifactIndex]!;
+  if (!isAutoMemoryArtifact(slotOwner, args.framework)) {
+    return {
+      artifacts: withoutSupersededAutoMemoryArtifacts(
+        artifacts,
+        args.framework,
+        autoMemorySlotArtifactIndex,
+      ),
+      autoMemoryPolicyArtifactIndex: undefined,
+    };
+  }
+
+  const autoMemoryPolicyArtifactIndex =
+    autoMemorySlotArtifactIndex >= persistedArtifactStart &&
+    autoMemorySlotArtifactIndex < persistedArtifactEnd
+      ? autoMemorySlotArtifactIndex
+      : undefined;
+  return {
+    artifacts,
+    autoMemoryPolicyArtifactIndex,
+  };
 }
 
 function runnerGroup(content: AgentComposeContent): string | null {
@@ -3119,6 +3217,7 @@ function buildRunnerJobPayload(
     readonly resolved: ResolvedCompose;
     readonly body: CreateRunBody;
     readonly artifacts: readonly ContextArtifact[];
+    readonly autoMemoryPolicyArtifactIndex: number | undefined;
     readonly framework: SupportedFramework;
     readonly modelProvider: ResolvedModelProviderEnvironment | null;
     readonly connectorContext: ConnectorRuntimeContext;
@@ -3166,7 +3265,10 @@ function buildRunnerJobPayload(
           agentOrgId: args.resolved.orgId,
           runtimeOrgId: args.orgId,
           userId: args.userId,
-          artifacts: args.artifacts,
+          artifacts: storageArtifactsForRun(
+            args.artifacts,
+            args.autoMemoryPolicyArtifactIndex,
+          ),
           volumeVersionOverrides: body.volumeVersions,
           additionalVolumes: args.additionalVolumes,
           framework: args.framework,
@@ -3227,6 +3329,7 @@ function dispatchRun(
     readonly resolved: ResolvedCompose;
     readonly body: CreateRunBody;
     readonly artifacts: readonly ContextArtifact[];
+    readonly autoMemoryPolicyArtifactIndex: number | undefined;
     readonly framework: SupportedFramework;
     readonly modelProvider: ResolvedModelProviderEnvironment | null;
     readonly connectorContext: ConnectorRuntimeContext;
@@ -3299,6 +3402,7 @@ function enqueueRunForConcurrency(
     readonly resolved: ResolvedCompose;
     readonly body: CreateRunBody;
     readonly artifacts: readonly ContextArtifact[];
+    readonly autoMemoryPolicyArtifactIndex: number | undefined;
     readonly framework: SupportedFramework;
     readonly modelProvider: ResolvedModelProviderEnvironment | null;
     readonly connectorContext: ConnectorRuntimeContext;
@@ -3407,6 +3511,7 @@ interface PreparedRunContext {
   readonly connectorContext: ConnectorRuntimeContext;
   readonly customConnectorContext: CustomConnectorRuntimeContext;
   readonly artifacts: readonly ContextArtifact[];
+  readonly autoMemoryPolicyArtifactIndex: number | undefined;
   readonly additionalVolumes: readonly AdditionalVolume[] | undefined;
   readonly userTimezone: string | undefined;
   readonly featureSwitchContext: FeatureSwitchContext;
@@ -3710,7 +3815,7 @@ function prepareRunContext(
       const userTimezone = await loadUserTimezone(db, args);
       signal.throwIfAborted();
 
-      const artifacts = artifactsForRun({
+      const runArtifacts = artifactsForRun({
         resolved,
         framework,
         bodyArtifacts: body.artifacts,
@@ -3727,7 +3832,9 @@ function prepareRunContext(
         modelProvider,
         connectorContext,
         customConnectorContext,
-        artifacts,
+        artifacts: runArtifacts.artifacts,
+        autoMemoryPolicyArtifactIndex:
+          runArtifacts.autoMemoryPolicyArtifactIndex,
         additionalVolumes,
         userTimezone,
         featureSwitchContext,
@@ -3800,6 +3907,8 @@ function completeQueuedRun(input: {
             resolved: input.context.resolved,
             body: input.context.body,
             artifacts: input.context.artifacts,
+            autoMemoryPolicyArtifactIndex:
+              input.context.autoMemoryPolicyArtifactIndex,
             framework: input.context.framework,
             modelProvider: input.context.modelProvider,
             connectorContext: input.context.connectorContext,
@@ -3845,6 +3954,8 @@ function completePendingRun(input: {
             resolved: input.context.resolved,
             body: input.context.body,
             artifacts: input.context.artifacts,
+            autoMemoryPolicyArtifactIndex:
+              input.context.autoMemoryPolicyArtifactIndex,
             framework: input.context.framework,
             modelProvider: input.context.modelProvider,
             connectorContext: input.context.connectorContext,

@@ -1345,6 +1345,8 @@ const runScheduleChatModeNow$ = command(
       runId: result.body.runId,
       prompt: schedule.prompt,
       appendQueueMarker: result.body.status === "queued",
+      scheduleId: schedule.id,
+      scheduleTitle: schedule.name,
     });
     signal.throwIfAborted();
 

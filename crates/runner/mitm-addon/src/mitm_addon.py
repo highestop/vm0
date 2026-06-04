@@ -67,6 +67,10 @@ _BROWSER_USER_AGENT_MARKERS = (
 )
 _MODEL_PROVIDER_USAGE_REPORTED = "_model_provider_usage_reported"
 _USAGE_FLOW_TRACKED = "_usage_flow_tracked"
+# Network log size fields are consumed as JavaScript numbers downstream.
+_MAX_SAFE_NETWORK_LOG_SIZE = 9_007_199_254_740_991
+# Bound untrusted log-only header parsing before splitting comma lists.
+_MAX_CONTENT_LENGTH_HEADER_CHARS = 256
 
 # Runner-triggered usage drain protocol:
 # - Rust writes `usage-flush-request` with the active usageStateId and a fresh
@@ -635,7 +639,37 @@ def _response_size(flow: http.HTTPFlow) -> int:
     if streamed_size is not None:
         return streamed_size
 
-    return int(flow.response.headers.get("content-length", 0))
+    return _content_length_response_size(flow.response.headers.get("content-length"))
+
+
+def _content_length_response_size(content_length: str | None) -> int:
+    if content_length is None:
+        return 0
+    if len(content_length) > _MAX_CONTENT_LENGTH_HEADER_CHARS:
+        return 0
+
+    response_size: int | None = None
+    for value in content_length.split(","):
+        parsed_size = _single_content_length_response_size(value)
+        if parsed_size is None:
+            return 0
+        if response_size is None:
+            response_size = parsed_size
+        elif response_size != parsed_size:
+            return 0
+
+    return response_size if response_size is not None else 0
+
+
+def _single_content_length_response_size(content_length: str) -> int | None:
+    content_length = content_length.strip(" \t")
+    if not content_length.isascii() or not content_length.isdigit():
+        return None
+
+    response_size = int(content_length)
+    if response_size > _MAX_SAFE_NETWORK_LOG_SIZE:
+        return None
+    return response_size
 
 
 def _release_usage_hook_state(flow: http.HTTPFlow, *, release_tracking: bool) -> None:
@@ -704,7 +738,6 @@ def response(flow: http.HTTPFlow) -> None:
     firewall_action = flow.metadata.get(metadata_keys.FIREWALL_ACTION, "ALLOW")
 
     request_size = len(flow.request.raw_content or b"")
-    response_size = _response_size(flow)
     stream_buf = flow.metadata.get(metadata_keys.STREAM_BUFFER)
     status_code = flow.response.status_code if flow.response else 0
 
@@ -714,6 +747,7 @@ def response(flow: http.HTTPFlow) -> None:
     network_log_path = flow.metadata.get(metadata_keys.VM_NETWORK_LOG_PATH, "")
     proxy_log_path = flow.metadata.get(metadata_keys.VM_PROXY_LOG_PATH, "")
     if network_log_path:
+        response_size = _response_size(flow)
         log_entry = _http_network_log_entry(
             flow,
             action=firewall_action,

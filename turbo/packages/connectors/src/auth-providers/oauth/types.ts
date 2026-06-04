@@ -5,7 +5,6 @@ import type {
   ConnectorAuthCodeGrantAuthMethodId,
   ConnectorDeviceAuthGrantAuthMethodId,
   ConnectorAuthMethodIdsByRevokeKind,
-  ConnectorGrantOutputValues,
   ConnectorRevokeInputValues,
   ConnectorType,
   DeviceAuthGrantConnectorType,
@@ -15,30 +14,10 @@ import type {
   ConnectorAuthClientForMethod,
   ConnectorAuthClientIdentityForMethod,
 } from "@vm0/connectors/connector-utils";
-
-export interface OAuthTokenUserInfo {
-  readonly id: string;
-  readonly username: string | null;
-  readonly email: string | null;
-}
-
-export interface OAuthTokenResultFields {
-  expiresIn?: number; // seconds until access token expires
-  scopes: string[];
-  userInfo: OAuthTokenUserInfo;
-  extraConnectorSecrets?: Readonly<Record<string, string>>;
-}
-
-export type OAuthTokenResultBase = OAuthTokenResultFields & {
-  readonly outputs: Readonly<Record<string, string | null | undefined>>;
-};
-
-export type OAuthTokenResult<
-  T extends AuthCodeGrantConnectorType | DeviceAuthGrantConnectorType,
-  Method extends ConnectorAuthMethodIds<T>,
-> = OAuthTokenResultFields & {
-  readonly outputs: ConnectorGrantOutputValues<T, Method>;
-};
+import type {
+  ConnectorAuthProviderGrantResult,
+  ConnectorAuthProviderGrantResultForMethod,
+} from "../grant-result";
 
 /**
  * Result from buildAuthUrl when PKCE is required.
@@ -115,7 +94,7 @@ export interface OAuthDeviceAuthSlowDownResult {
 
 export interface OAuthDeviceAuthCompleteResultBase {
   readonly status: "complete";
-  readonly token: OAuthTokenResultBase;
+  readonly token: ConnectorAuthProviderGrantResult;
 }
 
 export interface OAuthDeviceAuthCompleteResult<
@@ -123,7 +102,7 @@ export interface OAuthDeviceAuthCompleteResult<
   Method extends ConnectorDeviceAuthGrantAuthMethodId<T>,
 > {
   readonly status: "complete";
-  readonly token: OAuthTokenResult<T, Method>;
+  readonly token: ConnectorAuthProviderGrantResultForMethod<T, Method>;
 }
 
 export interface OAuthDeviceAuthDeniedResult {

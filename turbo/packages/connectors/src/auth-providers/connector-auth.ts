@@ -35,13 +35,15 @@ import type {
   RefreshTokenAccessProvider,
   TokenRevokeProvider,
 } from "./types";
+import type {
+  ConnectorAuthProviderGrantResult,
+  ConnectorAuthProviderGrantResultForMethod,
+} from "./grant-result";
 import {
   type AuthUrlResult,
   type OAuthDeviceAuthPollResult,
   type OAuthDeviceAuthPollResultBase,
   type OAuthDeviceAuthStartResult,
-  type OAuthTokenResult,
-  type OAuthTokenResultBase,
 } from "./oauth/types";
 import { providerEnvFromObject, type ProviderEnv } from "./provider-env";
 import { ahrefsProvider } from "./oauth/providers/ahrefs-provider";
@@ -100,14 +102,8 @@ import {
 } from "./oauth/providers/test-oauth-device-provider";
 
 export type {
-  AuthUrlResult,
   ConnectorAuthProviderRefreshResultBase,
   ConnectorAuthProviderRefreshResult,
-  OAuthDeviceAuthPollResult,
-  OAuthDeviceAuthPollResultBase,
-  OAuthDeviceAuthStartResult,
-  OAuthTokenResult,
-  OAuthTokenResultBase,
 };
 export type { ProviderEnv };
 export { providerEnvFromObject };
@@ -528,10 +524,10 @@ export function exchangeConnectorAuthCode<
   readonly state: string | undefined;
   readonly codeVerifier: string | undefined;
   readonly oauthContext: string | undefined;
-}): Promise<OAuthTokenResult<T, Method>>;
+}): Promise<ConnectorAuthProviderGrantResultForMethod<T, Method>>;
 export function exchangeConnectorAuthCode(
   args: ConnectorAuthCodeExchangeCallArgs,
-): Promise<OAuthTokenResultBase>;
+): Promise<ConnectorAuthProviderGrantResult>;
 export async function exchangeConnectorAuthCode<
   T extends AuthCodeGrantConnectorType,
   Method extends ConnectorAuthCodeGrantAuthMethodId<T>,
@@ -544,7 +540,7 @@ export async function exchangeConnectorAuthCode<
   readonly state: string | undefined;
   readonly codeVerifier: string | undefined;
   readonly oauthContext: string | undefined;
-}): Promise<OAuthTokenResult<T, Method>> {
+}): Promise<ConnectorAuthProviderGrantResultForMethod<T, Method>> {
   const provider = connectorAuthCodeGrantProviderFor(
     args.type,
     args.authMethod,

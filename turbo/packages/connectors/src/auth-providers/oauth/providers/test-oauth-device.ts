@@ -3,8 +3,8 @@ import { z } from "zod";
 import type {
   OAuthDeviceAuthIncompleteResult,
   OAuthDeviceAuthStartResult,
-  OAuthTokenResultFields,
 } from "../types";
+import type { ConnectorAuthProviderGrantResult } from "../../grant-result";
 import { throwOAuthError } from "../error";
 import {
   resolveTestOAuthProviderUrl,
@@ -46,11 +46,9 @@ const tokenErrorResponseSchema = z.object({
   error_description: z.string().optional(),
 });
 
-type TestOAuthDeviceTokenResult = OAuthTokenResultFields & {
-  readonly outputs: {
-    readonly accessToken: string;
-  };
-};
+type TestOAuthDeviceTokenResult = ConnectorAuthProviderGrantResult<{
+  readonly accessToken: string;
+}>;
 
 type TestOAuthDevicePollResult =
   | OAuthDeviceAuthIncompleteResult

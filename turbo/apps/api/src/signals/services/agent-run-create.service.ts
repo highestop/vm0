@@ -189,12 +189,6 @@ interface ContextArtifact {
   readonly generatedBy?: "apiAutoMemory";
 }
 
-interface AutoMemoryContextArtifact {
-  readonly name: typeof AUTO_MEMORY_ARTIFACT_NAME;
-  readonly mountPath: string;
-  readonly generatedBy: "apiAutoMemory";
-}
-
 interface StorageContextArtifact extends ContextArtifact {
   readonly missingRootPolicy?: ArtifactEntry["missingRootPolicy"];
 }
@@ -614,24 +608,20 @@ function autoMemoryMountPath(framework: SupportedFramework): string {
     : CANONICAL_CLAUDE_MEMORY_MOUNT_PATH;
 }
 
-function autoMemoryArtifact(
-  framework: SupportedFramework,
-): AutoMemoryContextArtifact {
+function autoMemoryArtifact(framework: SupportedFramework): ContextArtifact {
   return {
     name: AUTO_MEMORY_ARTIFACT_NAME,
     mountPath: autoMemoryMountPath(framework),
-    generatedBy: "apiAutoMemory",
   };
 }
 
-function isAutoMemoryArtifact(
+function isCanonicalAutoMemoryArtifact(
   artifact: ContextArtifact,
   framework: SupportedFramework,
 ): boolean {
   return (
     artifact.name === AUTO_MEMORY_ARTIFACT_NAME &&
-    artifact.mountPath === autoMemoryMountPath(framework) &&
-    artifact.generatedBy === "apiAutoMemory"
+    artifact.mountPath === autoMemoryMountPath(framework)
   );
 }
 
@@ -652,7 +642,8 @@ function withoutSupersededAutoMemoryArtifacts(
 ): readonly ContextArtifact[] {
   return artifacts.filter((artifact, index) => {
     return (
-      index >= slotOwnerIndex || !isAutoMemoryArtifact(artifact, framework)
+      index >= slotOwnerIndex ||
+      !isCanonicalAutoMemoryArtifact(artifact, framework)
     );
   });
 }
@@ -699,9 +690,6 @@ function artifactsForRun(args: {
   const composeContextArtifacts = isContinuation
     ? []
     : composeArtifacts(args.resolved.content);
-  const persistedArtifactStart = composeContextArtifacts.length;
-  const persistedArtifactEnd =
-    persistedArtifactStart + args.resolved.artifacts.length;
   const baseArtifacts = isContinuation
     ? args.resolved.artifacts
     : [...composeContextArtifacts, ...args.resolved.artifacts];
@@ -724,7 +712,7 @@ function artifactsForRun(args: {
   }
 
   const slotOwner = artifacts[autoMemorySlotArtifactIndex]!;
-  if (!isAutoMemoryArtifact(slotOwner, args.framework)) {
+  if (!isCanonicalAutoMemoryArtifact(slotOwner, args.framework)) {
     return {
       artifacts: withoutSupersededAutoMemoryArtifacts(
         artifacts,
@@ -735,14 +723,9 @@ function artifactsForRun(args: {
     };
   }
 
-  const autoMemoryPolicyArtifactIndex =
-    autoMemorySlotArtifactIndex >= persistedArtifactStart &&
-    autoMemorySlotArtifactIndex < persistedArtifactEnd
-      ? autoMemorySlotArtifactIndex
-      : undefined;
   return {
     artifacts,
-    autoMemoryPolicyArtifactIndex,
+    autoMemoryPolicyArtifactIndex: autoMemorySlotArtifactIndex,
   };
 }
 

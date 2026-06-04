@@ -40,6 +40,10 @@ import {
   refreshConnectorAuthProviderAccessToken,
   type ProviderEnv,
 } from "@vm0/connectors/auth-providers";
+import {
+  isProviderHttpError,
+  isProviderResponseError,
+} from "@vm0/connectors/auth-providers/provider-error";
 import { isOAuthProviderHttpError } from "@vm0/connectors/auth-providers/oauth/error";
 import {
   getModelProviderRefreshMetadata,
@@ -645,6 +649,15 @@ function refreshFailureReasonFromError(
     ) {
       return "upstream_provider";
     }
+  }
+  if (
+    isProviderHttpError(error) &&
+    (error.status >= 500 || error.status === 429)
+  ) {
+    return "upstream_provider";
+  }
+  if (isProviderResponseError(error)) {
+    return "upstream_provider";
   }
   if (isFetchNetworkError(error)) {
     return "upstream_provider";

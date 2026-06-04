@@ -5,6 +5,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import matching
 import registry
 from tests.auth_state_helpers import (
@@ -916,3 +918,37 @@ class TestGetVmContext:
         )
         assert isinstance(result, matching.FirewallBlock)
         assert result.reason == "malformed_firewall_config"
+
+    @pytest.mark.parametrize(
+        "firewalls",
+        [0, 1, False, True, "", {}, {"name": "example"}, "broken"],
+    )
+    def test_malformed_top_level_firewalls_shape_rejects_vm(self, tmp_path, firewalls):
+        path = tmp_path / "registry.json"
+        _write_firewall_registry(path)
+        data = json.loads(path.read_text())
+        data["vms"]["10.200.0.1"]["firewalls"] = firewalls
+        path.write_text(json.dumps(data))
+
+        with patch.object(registry.ctx, "log", MagicMock(), create=True):
+            context = registry.get_vm_context("10.200.0.1", str(path))
+            state = registry.load_registry_state(str(path))
+
+        assert context is None
+        assert not isinstance(state, registry.RegistryUnavailable)
+        assert "10.200.0.1" not in state.vms
+        assert state.invalid_vms["10.200.0.1"].reason == "invalid_firewalls"
+
+    def test_null_top_level_firewalls_shape_is_no_firewall_context(self, tmp_path):
+        path = tmp_path / "registry.json"
+        _write_firewall_registry(path)
+        data = json.loads(path.read_text())
+        data["vms"]["10.200.0.1"]["firewalls"] = None
+        path.write_text(json.dumps(data))
+
+        context = registry.get_vm_context("10.200.0.1", str(path))
+
+        assert context is not None
+        _, compiled_firewalls, compiled_network_policies = context
+        assert compiled_firewalls is None
+        assert compiled_network_policies is not None

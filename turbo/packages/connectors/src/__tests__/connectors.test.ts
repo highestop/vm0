@@ -78,6 +78,7 @@ import {
   revokeConnectorAuthMethodAccessToken,
   startConnectorDeviceAuthorization,
 } from "../auth-providers/connector-auth";
+import type { ConnectorAuthProviderRefreshArgs } from "../auth-providers/types";
 import {
   TEST_OAUTH_DEVICE_ACCESS_SECRET_NAME,
   TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME,
@@ -324,7 +325,7 @@ describe("connector auth method lifecycle helpers", () => {
     ).toStrictEqual(["oauth", "api"]);
     expect(
       getConnectorAuthMethodIdsForAccessKind("test-oauth", "refresh-token"),
-    ).toStrictEqual(["oauth", "api"]);
+    ).toStrictEqual(["oauth", "api-token", "api"]);
 
     expect(
       connectorAuthMethodHasGrantKind("github", "oauth", "auth-code"),
@@ -694,6 +695,40 @@ describe("connector selected auth method capability checks", () => {
     }
   });
 
+  it("types refresh provider auth clients from the selected auth method", () => {
+    type ClientBackedRefreshArgs = ConnectorAuthProviderRefreshArgs<
+      "test-oauth",
+      "oauth"
+    >;
+    type InputOnlyRefreshArgs = ConnectorAuthProviderRefreshArgs<
+      "test-oauth",
+      "api-token"
+    >;
+    type DefaultRefreshArgs = ConnectorAuthProviderRefreshArgs<"test-oauth">;
+    type DefaultInputOnlyRefreshArgs = Exclude<
+      DefaultRefreshArgs,
+      { readonly authClient: unknown }
+    >;
+
+    expectTypeOf<ClientBackedRefreshArgs["authClient"]>().toEqualTypeOf<
+      ConnectorAuthClientForMethod<"test-oauth", "oauth">
+    >();
+    expectTypeOf<"authClient">().not.toMatchTypeOf<
+      keyof InputOnlyRefreshArgs
+    >();
+    expectTypeOf<InputOnlyRefreshArgs["inputs"]>().toEqualTypeOf<{
+      readonly inputSecret: string;
+      readonly inputVariable: string;
+    }>();
+    expectTypeOf<"authClient">().not.toMatchTypeOf<
+      keyof DefaultInputOnlyRefreshArgs
+    >();
+    expectTypeOf<DefaultInputOnlyRefreshArgs["inputs"]>().toEqualTypeOf<{
+      readonly inputSecret: string;
+      readonly inputVariable: string;
+    }>();
+  });
+
   it("matches exactly the auth methods that declare token revoke", () => {
     expectTypeOf<"github">().toMatchTypeOf<TokenRevokeConnectorType>();
     expectTypeOf<"notion">().not.toMatchTypeOf<TokenRevokeConnectorType>();
@@ -773,12 +808,23 @@ describe("connector selected auth method capability checks", () => {
       ),
     ).toBe(true);
     expect(
+      connectorAuthMethodRefHasAccessKind(
+        { type: "test-oauth", authMethod: "api-token" },
+        "refresh-token",
+      ),
+    ).toBe(true);
+    expect(
       getConnectorAuthMethodIdsForAccessKind("test-oauth", "refresh-token"),
-    ).toStrictEqual(["oauth", "api"]);
+    ).toStrictEqual(["oauth", "api-token", "api"]);
     expect(
       getConnectorAuthMethodEnvBindings("test-oauth", "api"),
     ).toStrictEqual({
       TEST_OAUTH_TOKEN: "$secrets.TEST_OAUTH_API_ACCESS_TOKEN",
+    });
+    expect(
+      getConnectorAuthMethodEnvBindings("test-oauth", "api-token"),
+    ).toStrictEqual({
+      TEST_OAUTH_API_TOKEN: "$secrets.TEST_OAUTH_API_TOKEN_ACCESS_TOKEN",
     });
 
     const authClient = resolveConnectorAuthClientForMethod(
@@ -1144,6 +1190,25 @@ describe("connector selected auth method capability checks", () => {
       getConnectorAuthMethodGrantMetadata("test-oauth-device", "api")?.outputs
         .accessToken?.secretName,
     ).toBe(TEST_OAUTH_DEVICE_API_ACCESS_SECRET_NAME);
+  });
+
+  it("refreshes an input-only connector access provider without an auth client", async () => {
+    await expect(
+      refreshConnectorAuthProviderAccessToken({
+        type: "test-oauth",
+        authMethod: "api-token",
+        inputs: {
+          inputSecret: "secret-input",
+          inputVariable: "variable-input",
+        },
+        signal: testRefreshSignal(),
+      }),
+    ).resolves.toStrictEqual({
+      outputs: {
+        accessToken: "fresh-test-oauth-api-token:secret-input:variable-input",
+      },
+      expiresIn: 3600,
+    });
   });
 
   it("starts, polls, and refreshes the Base44 OAuth device provider", async () => {
@@ -1942,6 +2007,41 @@ describe("getConnectorAuthMethodAccessMetadata", () => {
     });
   });
 
+  it("supports input-only refresh metadata", () => {
+    expect(
+      getConnectorAuthMethodAccessMetadata("test-oauth", "api-token"),
+    ).toStrictEqual({
+      kind: "refresh-token",
+      inputs: {
+        inputSecret: {
+          valueRef: "$secrets.TEST_OAUTH_TOKEN",
+          source: {
+            kind: "connector-secret",
+            name: "TEST_OAUTH_TOKEN",
+          },
+        },
+        inputVariable: {
+          valueRef: "$vars.TEST_OAUTH_API_TOKEN_INPUT_VAR",
+          source: {
+            kind: "connector-variable",
+            name: "TEST_OAUTH_API_TOKEN_INPUT_VAR",
+          },
+        },
+      },
+      outputs: {
+        accessToken: {
+          valueRef: "$secrets.TEST_OAUTH_API_TOKEN_ACCESS_TOKEN",
+          secretName: "TEST_OAUTH_API_TOKEN_ACCESS_TOKEN",
+        },
+      },
+      refreshableSecrets: ["TEST_OAUTH_API_TOKEN_ACCESS_TOKEN"],
+      envBindings: {
+        TEST_OAUTH_API_TOKEN: "$secrets.TEST_OAUTH_API_TOKEN_ACCESS_TOKEN",
+      },
+      platformSecrets: [],
+    });
+  });
+
   it("returns undefined for an unknown auth method", () => {
     expect(
       getConnectorAuthMethodAccessMetadata("stripe", "missing"),
@@ -2392,9 +2492,16 @@ describe("getConnectorEnvBindingEntries", () => {
       // api-token (if exists): exactly one secret XXX_TOKEN
       const apiTokenFields = getApiTokenManualGrantFields(type);
       if (apiTokenFields) {
+        const apiTokenSecretFields = Object.entries(apiTokenFields)
+          .filter(([, field]) => {
+            return field.storage !== "variable";
+          })
+          .map(([name]) => {
+            return name;
+          });
         expect(
-          Object.keys(apiTokenFields),
-          `${type}: api-token must have exactly ["${prefix}_TOKEN"]`,
+          apiTokenSecretFields,
+          `${type}: api-token must have exactly one secret field ["${prefix}_TOKEN"]`,
         ).toEqual([`${prefix}_TOKEN`]);
       }
     }

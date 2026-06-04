@@ -594,21 +594,15 @@ const TRIAL_WORKFLOW_CHANNELS: readonly { key: string; src: string }[] = [
 
 function TrialWorkflowSlide() {
   return (
-    <div className="relative h-full w-full p-1.5">
-      <img
-        src={trialWorkflowSrc}
-        alt="Workflow preview"
-        decoding="async"
-        className="block h-full w-full object-cover object-top rounded-xl"
-      />
-      <div className="zero-border absolute bottom-0 left-1/2 flex -translate-x-1/2 translate-y-1/2 items-center justify-center gap-3 rounded-full bg-background/90 px-3 py-1.5 shadow-sm backdrop-blur">
+    <div className="h-full w-full flex flex-col items-center justify-center gap-3 p-3">
+      <div className="flex items-center justify-center gap-4">
         {TRIAL_WORKFLOW_CHANNELS.map((channel) => {
           // Slack's source SVG places its mark in the centre of a padded
           // 270x270 viewBox; without scaling, the visible hash mark is much
           // smaller than Telegram + iMessage which fill their own viewBoxes
           // edge to edge. scale-[1.85] sizes Slack to match, and the
-          // remaining ~3px asymmetry around the layout box is well within the
-          // icon spacing.
+          // remaining ~3px asymmetry around the layout box is well within
+          // the gap-4 (16px) inter-icon spacing.
           const slackScale =
             channel.key === "slack" ? "scale-[1.85] -mr-px" : "";
           return (
@@ -617,11 +611,17 @@ function TrialWorkflowSlide() {
               src={channel.src}
               alt=""
               decoding="async"
-              className={`h-7 w-7 object-contain ${slackScale}`}
+              className={`h-9 w-9 object-contain ${slackScale}`}
             />
           );
         })}
       </div>
+      <img
+        src={trialWorkflowSrc}
+        alt="Workflow preview"
+        decoding="async"
+        className="block min-h-0 min-w-0 max-w-full max-h-full object-contain rounded-xl"
+      />
     </div>
   );
 }
@@ -680,9 +680,9 @@ function OnboardingTrialPanel() {
   return (
     <div
       data-testid="onboarding-trial-gallery"
-      className="flex flex-col gap-6 w-full max-w-[720px] items-center"
+      className="flex flex-col gap-5 w-full max-w-[560px] lg:max-w-[640px] xl:max-w-[760px] items-center"
     >
-      <div className="aspect-[5/4] max-h-[min(520px,calc(100dvh-260px))] w-full rounded-2xl">
+      <div className="aspect-[4/3] w-full rounded-2xl overflow-hidden">
         {activeIndex === 0 ? (
           <TrialWorkflowSlide />
         ) : activeIndex === 1 ? (
@@ -1070,14 +1070,15 @@ function OnboardingIllustrationPanel() {
   const showOrbit = stepKey === "connectors";
   const showChat = stepKey === "workspace";
   const showTrial = stepKey === "trial";
-  const panelSizeClass = showTrial
-    ? "lg:w-[48%] px-6 pb-8 pt-16 xl:px-8 xl:pb-10 xl:pt-20"
-    : "w-2/5 p-10";
 
   return (
     <div
-      className={`hidden lg:flex ${panelSizeClass} shrink-0 flex-col items-center relative overflow-hidden ${
-        showChat ? "pt-[8%]" : showTrial ? "justify-start" : "justify-center"
+      className={`hidden lg:flex w-2/5 shrink-0 flex-col items-center p-10 relative overflow-hidden ${
+        showChat
+          ? "pt-[8%]"
+          : showTrial
+            ? "justify-start pt-24 xl:justify-center xl:pt-10"
+            : "justify-center"
       }`}
     >
       {/* Decorative circles (non-orbit, non-chat, non-trial steps) */}
@@ -1090,11 +1091,7 @@ function OnboardingIllustrationPanel() {
         </div>
       )}
 
-      <div
-        className={`relative z-10 flex flex-col items-center ${
-          showTrial ? "w-full" : ""
-        }`}
-      >
+      <div className="relative z-10 flex flex-col items-center">
         {showChat ? (
           <ChatPreview />
         ) : showOrbit ? (

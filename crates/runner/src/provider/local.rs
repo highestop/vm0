@@ -98,27 +98,6 @@ impl LocalProvider {
 }
 
 impl LocalProvider {
-    fn find_job_file(&self, run_id: RunId) -> Option<Option<PathBuf>> {
-        self.queue.find_job_file(run_id)
-    }
-
-    fn remove_job_file_if_present(&self, run_id: RunId) -> bool {
-        let Some(path) = self.find_job_file(run_id) else {
-            return false;
-        };
-        let Some(path) = path else {
-            return true;
-        };
-        match std::fs::remove_file(&path) {
-            Ok(()) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
-            Err(e) => {
-                warn!(run_id = %run_id, path = %path.display(), error = %e, "local: failed to remove job file after result failure");
-                false
-            }
-        }
-    }
-
     /// Find the first unclaimed job in the supported profile partitions.
     fn find_unclaimed_job(&self) -> Option<JobCandidate> {
         if self.supported_profiles.is_empty() {
@@ -425,7 +404,7 @@ impl JobProvider for LocalProvider {
     ) {
         self.cancel_scanner.remove_owned_claim(run_id).await;
         if !self.write_result(run_id, exit_code, error) {
-            if self.remove_job_file_if_present(run_id) {
+            if self.queue.remove_job_file_if_present(run_id) {
                 let _ =
                     std::fs::remove_file(local_queue::cancel_path(self.queue.group_dir(), run_id));
                 let _ =
@@ -1041,6 +1020,38 @@ mod tests {
         assert!(
             !cancel_path.exists(),
             "cancel file should not be stranded after terminal cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_result_failure_keeps_state_when_job_scan_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancel = CancellationToken::new();
+        let provider = default_provider(dir.path(), cancel, empty_cancel_tokens());
+
+        let run_id = RunId::new_v4();
+        let claim_path = local_queue::claim_path(dir.path(), run_id);
+        let cancel_path = local_queue::cancel_path(dir.path(), run_id);
+        let result_dir = local_queue::results_dir(dir.path());
+        std::fs::create_dir_all(claim_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cancel_path.parent().unwrap()).unwrap();
+
+        std::fs::write(&claim_path, b"").unwrap();
+        std::fs::write(&cancel_path, b"").unwrap();
+        std::fs::write(&result_dir, b"not a directory").unwrap();
+        std::fs::write(local_queue::jobs_dir(dir.path()), b"not a directory").unwrap();
+
+        provider
+            .complete(run_id, 0, None, None, None, CompletionAuth::local())
+            .await;
+
+        assert!(
+            claim_path.exists(),
+            "claim should stay when job-file cleanup cannot verify retry state"
+        );
+        assert!(
+            cancel_path.exists(),
+            "cancel file should stay when job-file cleanup cannot verify retry state"
         );
     }
 

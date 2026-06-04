@@ -373,6 +373,25 @@ def _block_registry_unavailable(
     )
 
 
+def _block_invalid_registry_vm(
+    flow: http.HTTPFlow,
+    invalid_vm: registry.InvalidVmEntry,
+) -> None:
+    flow.metadata[metadata_keys.FIREWALL_ACTION] = "BLOCK"
+    flow.metadata[metadata_keys.FIREWALL_ERROR] = "invalid_registry_vm"
+    flow.response = http.Response.make(
+        503,
+        json.dumps(
+            {
+                "error": "invalid_registry_vm",
+                "message": invalid_vm.message,
+                "reason": invalid_vm.reason,
+            }
+        ).encode(),
+        {"Content-Type": "application/json"},
+    )
+
+
 # ============================================================================
 # TLS ClientHello Handler
 # ============================================================================
@@ -392,7 +411,7 @@ def tls_clienthello(data: tls.ClientHelloData) -> None:
     if isinstance(registry_state, registry.RegistryUnavailable):
         return
 
-    if client_ip not in registry_state.vms:
+    if client_ip not in registry_state.vms and client_ip not in registry_state.invalid_vms:
         # Not a registered VM - pass through without MITM interception
         # This is critical for CIDR-based rules where all VM traffic is redirected
         data.ignore_connection = True
@@ -411,8 +430,9 @@ async def request(flow: http.HTTPFlow) -> None:
     Intercept request: inject firewall auth headers for configured firewall rules.
 
     Order:
-    1. VM0 API auto-allow (agent must always reach the platform)
-    2. Firewall match (inject auth headers for allowed requests)
+    1. Registry gate (block unavailable or invalid registered VM state)
+    2. VM0 API auto-allow (agent must always reach the platform)
+    3. Firewall match (inject auth headers for allowed requests)
     """
     # Get client IP (source VM)
     client_ip = flow.client_conn.peername[0] if flow.client_conn.peername else None
@@ -430,6 +450,10 @@ async def request(flow: http.HTTPFlow) -> None:
     # the registry file loaded successfully; unavailable registry is blocked above.
     vm_info = registry_state.vms.get(client_ip)
     if vm_info is None:
+        invalid_vm = registry_state.invalid_vms.get(client_ip)
+        if invalid_vm is not None:
+            _block_invalid_registry_vm(flow, invalid_vm)
+            return
         # Not a registered VM, pass through without proxying
         return
     compiled_firewalls = registry_state.compiled_firewalls.get(client_ip)
@@ -470,11 +494,11 @@ async def request(flow: http.HTTPFlow) -> None:
 
         hostname = trusted_authority.host.lower()
 
-        # --- Step 1: Auto-allow VM0 API requests ---
+        # --- Step 2: Auto-allow VM0 API requests ---
         # The agent MUST be able to communicate with the platform (heartbeat,
         # logs, CLI auth, etc.). Exception: `/api/test/*` routes exist only to
         # exercise the firewall pipeline itself (e.g. the test-oauth provider),
-        # so they must go through Step 2 and get their auth injected by the
+        # so they must go through Step 3 and get their auth injected by the
         # matching firewall — otherwise the E2E tests that back them would
         # auto-allow past the thing they're supposed to exercise.
         api_url = get_api_url()
@@ -489,7 +513,7 @@ async def request(flow: http.HTTPFlow) -> None:
                 flow.metadata[metadata_keys.FIREWALL_ACTION] = "ALLOW"
                 return
 
-        # --- Step 2: Firewall match with permission check ---
+        # --- Step 3: Firewall match with permission check ---
         # Match base URL, then check permission rules before injecting auth headers.
         if compiled_firewalls:
             result = matching.match_compiled_firewall_request(
@@ -963,7 +987,9 @@ def tcp_start(flow: tcp.TCPFlow) -> None:
         return
 
     vm_info = registry_state.vms.get(client_ip)
-    if not vm_info:
+    if vm_info is None:
+        if client_ip in registry_state.invalid_vms:
+            flow.kill()
         return
 
     flow.metadata[metadata_keys.VM_RUN_ID] = vm_info.get("runId", "")

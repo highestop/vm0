@@ -2,9 +2,12 @@
 
 import json
 
+import pytest
+
 import flow_metadata_keys as metadata_keys
 import mitm_addon
 import registry
+from tests.auth_state_helpers import has_auth_state
 from tests.request_handler_helpers import _single_firewall_vm, _write_registry
 
 
@@ -53,10 +56,10 @@ async def test_registry_unavailable_blocks_vm0_api_auto_allow(registry_file, rea
 async def test_vm0_api_test_paths_skip_auto_allow(tmp_path, real_flow, mitm_ctx, headers):
     """`/api/test/*` routes exist to exercise the firewall pipeline itself.
 
-    If they fell into Step 1's auto-allow fast path, the test-oauth E2E
+    If they fell into Step 2's auto-allow fast path, the test-oauth E2E
     test would never get proxy-injected Authorization headers and the
     pipeline it's supposed to exercise would be silently bypassed. The
-    carve-out drops these paths into Step 2 so the registered firewall
+    carve-out drops these paths into Step 3 so the registered firewall
     runs `handle_firewall_request`.
     """
     reg_path = _write_registry(
@@ -82,8 +85,8 @@ async def test_vm0_api_test_paths_skip_auto_allow(tmp_path, real_flow, mitm_ctx,
     with mitm_ctx(registry_path=str(reg_path), api_url="https://api.vm0.ai"):
         await mitm_addon.request(flow)
 
-    # Carve-out took effect: Step 2 ran and the real handle_firewall_request
-    # entered (firewall_base is written at auth.py:327 up-front).  Step 1's
+    # Carve-out took effect: Step 3 ran and the real handle_firewall_request
+    # entered (firewall_base is written at auth.py:327 up-front).  Step 2's
     # auto-allow would have returned without writing firewall_base.
     assert flow.metadata["firewall_base"] == "https://api.vm0.ai/api/test/oauth-provider"
 
@@ -120,6 +123,101 @@ async def test_registry_unavailable_blocks_before_auth_injection(tmp_path, real_
     assert flow.metadata["firewall_action"] == "BLOCK"
     assert flow.metadata["firewall_error"] == "registry_unavailable"
     assert "firewall_base" not in flow.metadata
+
+
+@pytest.mark.parametrize(
+    ("run_id_value", "expected_reason", "expected_message"),
+    [
+        ("", "empty_run_id", "proxy registry VM entry runId must be non-empty"),
+        ("  \t", "empty_run_id", "proxy registry VM entry runId must be non-empty"),
+        (
+            " run-abc ",
+            "invalid_run_id",
+            "proxy registry VM entry runId must not include leading or trailing whitespace",
+        ),
+        (None, "missing_run_id", "proxy registry VM entry is missing runId"),
+        (123, "invalid_run_id", "proxy registry VM entry runId must be a string"),
+    ],
+)
+async def test_invalid_registered_vm_blocks_before_auth_injection(
+    tmp_path,
+    real_flow,
+    mitm_ctx,
+    fake_firewall_headers,
+    run_id_value,
+    expected_reason,
+    expected_message,
+):
+    vm_info = _single_firewall_vm(
+        tmp_path,
+        api_entry={
+            "base": "https://api.github.com",
+            "auth": {"headers": {"Authorization": "Bearer secret"}},
+            "permissions": [{"name": "full-access", "rules": ["ANY /{path+}"]}],
+        },
+        network_policy={
+            "allow": ["full-access"],
+            "deny": [],
+            "ask": [],
+            "unknownPolicy": "allow",
+        },
+    )
+    if run_id_value is None:
+        del vm_info["runId"]
+    else:
+        vm_info["runId"] = run_id_value
+    reg_path = _write_registry(tmp_path, client_ip="10.200.0.5", vm_info=vm_info)
+    flow = real_flow(with_response=False, client_ip="10.200.0.5", host="api.github.com")
+
+    with (
+        mitm_ctx(registry_path=str(reg_path), api_url="https://api.vm0.ai"),
+        fake_firewall_headers() as auth_fetch,
+    ):
+        await mitm_addon.request(flow)
+
+    assert flow.response is not None
+    assert flow.response.status_code == 503
+    assert json.loads(flow.response.content) == {
+        "error": "invalid_registry_vm",
+        "message": expected_message,
+        "reason": expected_reason,
+    }
+    auth_fetch.assert_not_called()
+    assert not has_auth_state(("", "https://api.github.com"))
+    assert "vm_run_id" not in flow.metadata
+    assert "firewall_base" not in flow.metadata
+    assert flow.metadata["firewall_action"] == "BLOCK"
+    assert flow.metadata["firewall_error"] == "invalid_registry_vm"
+
+
+async def test_invalid_registered_vm_non_object_blocks_before_auth_injection(
+    tmp_path,
+    real_flow,
+    mitm_ctx,
+    fake_firewall_headers,
+):
+    reg_path = tmp_path / "registry.json"
+    reg_path.write_text(json.dumps({"vms": {"10.200.0.5": "broken"}, "updatedAt": 0}))
+    flow = real_flow(with_response=False, client_ip="10.200.0.5", host="api.github.com")
+
+    with (
+        mitm_ctx(registry_path=str(reg_path), api_url="https://api.vm0.ai"),
+        fake_firewall_headers() as auth_fetch,
+    ):
+        await mitm_addon.request(flow)
+
+    assert flow.response is not None
+    assert flow.response.status_code == 503
+    assert json.loads(flow.response.content) == {
+        "error": "invalid_registry_vm",
+        "message": "proxy registry VM entry must be an object",
+        "reason": "invalid_vm_entry",
+    }
+    auth_fetch.assert_not_called()
+    assert "vm_run_id" not in flow.metadata
+    assert "firewall_base" not in flow.metadata
+    assert flow.metadata["firewall_action"] == "BLOCK"
+    assert flow.metadata["firewall_error"] == "invalid_registry_vm"
 
 
 async def test_tracks_start_time(registry_file, real_flow, mitm_ctx):

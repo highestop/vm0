@@ -2,20 +2,24 @@
  * Integration tests for the ChatArtifactSidebar feature switch behavior.
  *
  * Covers the ON path that issue #15027 introduces: inline .txt/.md
- * attachments collapse to anchor chips, clicking them writes the
- * ?artifact= URL parameter, and the page-level slot then renders the
- * sidebar component. The OFF path is covered by the existing
+ * attachments render as thumbnail anchors, plain clicks still open the modal
+ * lightbox, and explicit sidebar opens write the ?artifact= URL parameter.
+ * The OFF path is covered by the existing
  * zero-attachment-preview.test.tsx file.
  */
 
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { StoreProvider } from "ccstate-react";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage } from "../../../__tests__/page-helper.ts";
 import { search } from "../../../signals/location.ts";
 import { setPageSignal$ } from "../../../signals/page-signal.ts";
+import {
+  closeLightbox$,
+  lightboxUrl$,
+} from "../../../signals/zero-page/zero-attachment-chips.ts";
 import { AttachmentPreview } from "../zero-attachment-preview.tsx";
 import {
   ArtifactSidebarSlot,
@@ -24,6 +28,7 @@ import {
 import {
   artifactFullscreen$,
   clearArtifactPreview$,
+  currentArtifactInboxThreadId$,
   currentArtifactRef$,
 } from "../../../signals/zero-page/zero-artifact-sidebar.ts";
 
@@ -41,14 +46,15 @@ function setup(path = "/chats/thread-1") {
   // ArtifactSidebar reads pageSignal$ for fetch cancellation; tests render
   // it outside of normal page setup, so we have to seed it explicitly.
   context.store.set(setPageSignal$, context.signal);
+  context.store.set(closeLightbox$);
 }
 
 function renderWithStore(node: React.ReactNode) {
   return render(<StoreProvider value={context.store}>{node}</StoreProvider>);
 }
 
-describe("chatArtifactSidebar: inline anchor chip behavior", () => {
-  it("renders a .txt attachment as an anchor chip when the switch is on", () => {
+describe("chatArtifactSidebar: inline thumbnail anchor behavior", () => {
+  it("renders a .txt attachment as a thumbnail anchor when the switch is on", () => {
     setup();
     renderWithStore(
       <AttachmentPreview
@@ -62,11 +68,20 @@ describe("chatArtifactSidebar: inline anchor chip behavior", () => {
     const chip = screen.getByTestId("attachment-preview-text");
     expect(chip.tagName).toBe("A");
     expect(chip).toHaveAttribute("href", "https://example.com/notes.txt");
+    expect(chip).toHaveClass("group/doc-preview", "w-fit");
+    expect(chip.firstElementChild).toHaveClass(
+      "aspect-[4/3]",
+      "w-[144px]",
+      "sm:w-[168px]",
+    );
+    expect(
+      within(chip).getByTestId("attachment-preview-text-icon"),
+    ).toBeInTheDocument();
     // The inline <pre> body should NOT be present on the ON path.
     expect(screen.queryByText(/notes\.txt/)).toBeInTheDocument();
   });
 
-  it("renders a .md attachment as an anchor chip when the switch is on", () => {
+  it("renders a .md attachment as a thumbnail anchor when the switch is on", () => {
     setup();
     renderWithStore(
       <AttachmentPreview
@@ -80,9 +95,14 @@ describe("chatArtifactSidebar: inline anchor chip behavior", () => {
     const chip = screen.getByTestId("attachment-preview-markdown");
     expect(chip.tagName).toBe("A");
     expect(chip).toHaveAttribute("href", "https://example.com/readme.md");
+    expect(chip.firstElementChild).toHaveClass(
+      "aspect-[4/3]",
+      "w-[144px]",
+      "sm:w-[168px]",
+    );
   });
 
-  it("opens the artifact pane and writes ?artifact= on plain click", () => {
+  it("opens the attachment lightbox on plain click", () => {
     setup();
     renderWithStore(
       <AttachmentPreview
@@ -96,16 +116,13 @@ describe("chatArtifactSidebar: inline anchor chip behavior", () => {
     const chip = screen.getByTestId("attachment-preview-text");
     fireEvent.click(chip);
 
-    const ref = context.store.get(currentArtifactRef$);
-    expect(ref).toStrictEqual({
-      source: "url",
-      url: "https://example.com/notes.txt",
+    expect(context.store.get(lightboxUrl$)).toStrictEqual({
       kind: "text",
       filename: "notes.txt",
+      url: "https://example.com/notes.txt",
     });
-    expect(search()).toContain(
-      "artifact=https%3A%2F%2Fexample.com%2Fnotes.txt",
-    );
+    expect(context.store.get(currentArtifactRef$)).toBeNull();
+    expect(search()).not.toContain("artifact=");
   });
 
   it("does not intercept cmd+click (modifier-click navigates natively)", () => {
@@ -132,6 +149,7 @@ describe("chatArtifactSidebar: inline anchor chip behavior", () => {
     // (handled by the browser) is left intact.
     expect(search()).not.toContain("artifact=");
     expect(context.store.get(currentArtifactRef$)).toBeNull();
+    expect(context.store.get(lightboxUrl$)).toBeNull();
   });
 });
 
@@ -160,6 +178,9 @@ describe("chatArtifactSidebar: sidebar slot rendering", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-1?artifact=https%3A%2F%2Fexample.com%2Fnotes.txt",
+      featureSwitches: {
+        [FeatureSwitchKey.ChatArtifactSidebar]: false,
+      },
       withoutRender: true,
     });
     context.store.set(setPageSignal$, context.signal);
@@ -181,22 +202,47 @@ describe("chatArtifactSidebar: sidebar slot rendering", () => {
 
   it("clears the artifact pane state", () => {
     setup(
-      "/chats/thread-1?artifact=https%3A%2F%2Fexample.com%2Fnotes.txt&artifact-fullscreen=1",
+      "/chats/thread-1?artifacts=thread-1&artifact=https%3A%2F%2Fexample.com%2Fnotes.txt&artifact-fullscreen=1",
     );
 
+    expect(context.store.get(currentArtifactInboxThreadId$)).toBe("thread-1");
     expect(context.store.get(currentArtifactRef$)).not.toBeNull();
     expect(context.store.get(artifactFullscreen$)).toBeTruthy();
 
     context.store.set(clearArtifactPreview$);
 
+    expect(context.store.get(currentArtifactInboxThreadId$)).toBeNull();
     expect(context.store.get(currentArtifactRef$)).toBeNull();
     expect(context.store.get(artifactFullscreen$)).toBeFalsy();
+    expect(search()).not.toContain("artifacts=");
     expect(search()).not.toContain("artifact=");
     expect(search()).not.toContain("artifact-fullscreen=");
   });
 });
 
 describe("chatArtifactSidebar: fullscreen toggle", () => {
+  it("renders video artifacts inside a padded stage card", () => {
+    setup("/chats/thread-1?artifact=https%3A%2F%2Fexample.com%2Fclip.mp4");
+    renderWithStore(
+      <ArtifactSidebar
+        artifactRef={{
+          source: "url",
+          url: "https://example.com/clip.mp4",
+          kind: "video",
+          filename: "clip.mp4",
+        }}
+      />,
+    );
+
+    const stage = screen.getByTestId("artifact-sidebar-stage");
+    const videoStage = screen.getByTestId("artifact-sidebar-video-stage");
+    const video = screen.getByTestId("artifact-sidebar-body-video");
+
+    expect(stage).toHaveClass("bg-muted/30", "p-5");
+    expect(videoStage).toHaveClass("rounded-xl", "border", "bg-black");
+    expect(video).toHaveClass("aspect-video", "object-contain");
+  });
+
   it("toggles fullscreen state when the fullscreen button is clicked", () => {
     setup("/chats/thread-1?artifact=https%3A%2F%2Fexample.com%2Fnotes.txt");
     renderWithStore(
@@ -239,31 +285,56 @@ describe("chatArtifactSidebar: image preview zoom controls", () => {
 
   it("renders the zoom toolbar on the image body at 100%", () => {
     renderImageSidebar();
+    const stage = screen.getByTestId("artifact-sidebar-stage");
+    expect(stage).toHaveClass("overflow-hidden");
+    expect(stage).not.toHaveClass("p-5");
+    expect(stage.firstElementChild).toHaveClass("max-w-none");
+    expect(screen.getByTestId("artifact-sidebar-body-image")).toHaveClass(
+      "max-h-full",
+      "max-w-full",
+    );
     expect(
       screen.getByTestId("artifact-sidebar-image-zoom-controls"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("artifact-sidebar-image-reset-zoom"),
     ).toBeInTheDocument();
     expect(
       screen.getByTestId("artifact-sidebar-image-zoom-level").textContent,
     ).toBe("100%");
   });
 
-  it("zooms in, zooms out, and resets back to 100%", () => {
+  it("zooms in and zooms out", () => {
     renderImageSidebar();
     const zoomIn = screen.getByTestId("artifact-sidebar-image-zoom-in");
     const zoomOut = screen.getByTestId("artifact-sidebar-image-zoom-out");
-    const reset = screen.getByTestId("artifact-sidebar-image-zoom-reset");
     const level = screen.getByTestId("artifact-sidebar-image-zoom-level");
 
     fireEvent.click(zoomIn);
-    expect(level.textContent).toBe("125%");
+    expect(level.textContent).toBe("115%");
     fireEvent.click(zoomIn);
-    expect(level.textContent).toBe("150%");
-
-    fireEvent.click(reset);
-    expect(level.textContent).toBe("100%");
+    expect(level.textContent).toBe("130%");
 
     fireEvent.click(zoomOut);
-    expect(level.textContent).toBe("75%");
+    expect(level.textContent).toBe("115%");
+
+    fireEvent.click(screen.getByTestId("artifact-sidebar-image-reset-zoom"));
+    expect(level.textContent).toBe("100%");
+  });
+
+  it("resets image zoom before toggling fullscreen", () => {
+    renderImageSidebar();
+
+    fireEvent.click(screen.getByTestId("artifact-sidebar-image-zoom-in"));
+    expect(
+      screen.getByTestId("artifact-sidebar-image-zoom-level").textContent,
+    ).toBe("115%");
+
+    fireEvent.click(screen.getByTestId("artifact-sidebar-fullscreen-toggle"));
+    expect(context.store.get(artifactFullscreen$)).toBeTruthy();
+    expect(
+      screen.getByTestId("artifact-sidebar-image-zoom-level").textContent,
+    ).toBe("100%");
   });
 
   it("disables zoom out at min zoom and zoom in at max zoom", () => {
@@ -271,13 +342,13 @@ describe("chatArtifactSidebar: image preview zoom controls", () => {
     const zoomIn = screen.getByTestId("artifact-sidebar-image-zoom-in");
     const zoomOut = screen.getByTestId("artifact-sidebar-image-zoom-out");
 
-    // Step is 0.25; min is 0.5 (so 2 outs from 1 reaches min), max is 3 (8 ins).
-    for (let i = 0; i < 2; i += 1) {
+    // Step is 0.15; min is 0.5 and max is 3.
+    for (let i = 0; i < 4; i += 1) {
       fireEvent.click(zoomOut);
     }
     expect(zoomOut).toBeDisabled();
 
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < 17; i += 1) {
       fireEvent.click(zoomIn);
     }
     expect(zoomIn).toBeDisabled();

@@ -4,6 +4,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   useGet,
   useSet,
@@ -16,6 +17,8 @@ import { pageSignal$ } from "../../signals/page-signal.ts";
 import { rootSignal$ } from "../../signals/root-signal.ts";
 import {
   IconAlertCircle,
+  IconArrowsDiagonal,
+  IconArrowsDiagonalMinimize2,
   IconHandStop,
   IconPhoto,
   IconChartLine,
@@ -38,6 +41,7 @@ import {
   IconMessageCircle,
   IconPackage,
   IconPresentation,
+  IconSearch,
   IconTag,
   IconX,
   IconClock,
@@ -70,6 +74,7 @@ import type {
 import { PRESENTATION_TEMPLATE_ITEMS } from "@vm0/core";
 import type { UserPermissionGrantResponse } from "@vm0/api-contracts/contracts/zero-user-permission-grants";
 import { isSupportedRunModel } from "@vm0/api-contracts/contracts/model-providers";
+import { IN_VITEST } from "../../env.ts";
 import emptyChatImg from "./assets/empty-chat.webp";
 import emptyArtifactImg from "./assets/empty-artifact.webp";
 import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
@@ -103,15 +108,15 @@ import {
 import {
   AttachmentLightbox,
   CsvPreviewTable,
-  downloadAttachmentUrl,
   FileAttachmentChip,
   getAttachmentRawUrl,
   parseCsvRows,
+  PreviewableAudioAttachmentChip,
   PreviewableFileAttachmentChip,
   publicAttachmentUrl,
   TextPreviewLoader,
 } from "./zero-attachment-chips.tsx";
-import { ArtifactSidebarSlot } from "./zero-artifact-sidebar.tsx";
+import { ArtifactSidebar } from "./zero-artifact-sidebar.tsx";
 import {
   classifyChatAttachment,
   contentTypeForBodyPreviewKind,
@@ -128,20 +133,41 @@ import {
 import type { PermissionActionBlock } from "../../signals/chat-page/permission-action-block.ts";
 import { AttachmentPreview } from "./zero-attachment-preview.tsx";
 import { FilePreviewIcon } from "./zero-file-preview-icon.tsx";
+import {
+  ArtifactDownloadMenu,
+  ArtifactShareButton,
+  type ArtifactDownloadSyncTarget,
+} from "./zero-artifact-actions.tsx";
 import { ConnectorIcon } from "./components/settings/connector-icons.tsx";
 import { ConnectModal } from "./components/settings/add-connection-dialog.tsx";
-import { lightboxUrl$ as attachmentLightboxUrl$ } from "../../signals/zero-page/zero-attachment-chips.ts";
 import {
+  lightboxUrl$ as attachmentLightboxUrl$,
+  type AttachmentArtifactMetadata,
+} from "../../signals/zero-page/zero-attachment-chips.ts";
+import {
+  artifactFullscreen$,
+  artifactInboxQuery$,
+  artifactInboxSearchOpen$,
+  artifactInboxSection$,
+  backToArtifactInbox$,
+  type ArtifactInboxSection,
+  type ArtifactRef,
   chatArtifactSidebarEnabled$,
+  closeArtifact$,
+  currentArtifactInboxThreadId$,
   currentArtifactRef$,
+  openArtifactFromInbox$,
+  openArtifactInbox$,
+  openAudioLightboxOrArtifact$ as openAttachmentAudioLightbox$,
+  setArtifactInboxQuery$,
+  setArtifactInboxSection$,
   openDocumentLightboxOrArtifact$ as openAttachmentDocumentLightbox$,
   openImageLightboxOrArtifact$ as openAttachmentImageLightbox$,
   openVideoLightboxOrArtifact$ as openAttachmentVideoLightbox$,
+  toggleArtifactFullscreen$,
+  toggleArtifactInboxSearch$,
 } from "../../signals/zero-page/zero-artifact-sidebar.ts";
-import {
-  writeToClipboard,
-  type ChatClipboardAttachment,
-} from "../../signals/zero-page/clipboard.ts";
+import type { ChatClipboardAttachment } from "../../signals/zero-page/clipboard.ts";
 import { connectors$ } from "../../signals/external/connectors.ts";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import {
@@ -225,7 +251,6 @@ import { sidebarChatThreads$ } from "../../signals/chat-page/optimistic-chat-thr
 import {
   type ArtifactGoogleDriveSyncFile,
   syncArtifactFilesToGoogleDrive,
-  syncArtifactFileToGoogleDrive,
   waitForGoogleDriveAndSyncArtifacts$,
 } from "../../signals/chat-page/artifact-google-drive-sync.ts";
 import { zeroConnectorOauthStartContract } from "@vm0/api-contracts/contracts/zero-connectors";
@@ -278,8 +303,12 @@ function ArtifactsButton({ thread }: { thread: ChatThreadSignals }) {
 }
 
 function ArtifactsButtonInner({ thread }: { thread: ChatThreadSignals }) {
-  const open = useGet(thread.artifactsDrawerOpen$);
+  const drawerOpen = useGet(thread.artifactsDrawerOpen$);
+  const sidebarEnabled = useGet(chatArtifactSidebarEnabled$);
+  const inboxThreadId = useGet(currentArtifactInboxThreadId$);
   const setOpen = useSet(thread.setArtifactsDrawerOpen$);
+  const openInbox = useSet(openArtifactInbox$);
+  const open = sidebarEnabled ? inboxThreadId === thread.threadId : drawerOpen;
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -288,6 +317,10 @@ function ArtifactsButtonInner({ thread }: { thread: ChatThreadSignals }) {
           <button
             type="button"
             onClick={() => {
+              if (sidebarEnabled) {
+                openInbox(thread.threadId);
+                return;
+              }
               setOpen(true);
             }}
             className={cn(
@@ -1123,6 +1156,18 @@ type ChatArtifactItem = {
 
 type ArtifactPreviewKind = "image" | "video" | "audio" | "document" | "file";
 
+const ARTIFACT_INBOX_SECTIONS = [
+  { key: "all", label: "All" },
+  { key: "media", label: "Media" },
+  { key: "docs", label: "Docs" },
+  { key: "sites", label: "Sites" },
+] as const satisfies readonly {
+  key: ArtifactInboxSection;
+  label: string;
+}[];
+
+type ArtifactInboxSectionEntry = (typeof ARTIFACT_INBOX_SECTIONS)[number];
+
 function artifactItemKey(item: ChatArtifactItem): string {
   return `${item.runId}:${item.file.id}:${item.file.url}`;
 }
@@ -1168,6 +1213,104 @@ function flattenArtifactRuns(
   });
 }
 
+function artifactFileKindLabel(file: ChatThreadArtifactFile): string {
+  const documentKind = getArtifactDocumentPreviewKind(file);
+  if (documentKind === "html") {
+    return "Hosted site";
+  }
+  if (documentKind === "pdf") {
+    return "PDF";
+  }
+  if (documentKind === "markdown") {
+    return "Markdown";
+  }
+  if (documentKind === "json") {
+    return "JSON";
+  }
+  if (documentKind === "csv") {
+    return "Data";
+  }
+  if (documentKind === "text") {
+    return "Text";
+  }
+
+  const previewKind = getArtifactPreviewKind(file);
+  switch (previewKind) {
+    case "image": {
+      return "Image";
+    }
+    case "video": {
+      return "Video";
+    }
+    case "audio": {
+      return "Audio";
+    }
+    case "document": {
+      return "Document";
+    }
+    case "file": {
+      return "File";
+    }
+  }
+}
+
+function artifactMatchesInboxSection(
+  item: ChatArtifactItem,
+  section: ArtifactInboxSection,
+): boolean {
+  if (section === "all") {
+    return true;
+  }
+
+  const documentKind = getArtifactDocumentPreviewKind(item.file);
+  if (section === "sites") {
+    return documentKind === "html";
+  }
+  if (section === "docs") {
+    return documentKind !== null && documentKind !== "html";
+  }
+
+  const previewKind = getArtifactPreviewKind(item.file);
+  return (
+    previewKind === "image" ||
+    previewKind === "video" ||
+    previewKind === "audio"
+  );
+}
+
+function artifactInboxSectionsForItems(
+  items: readonly ChatArtifactItem[],
+): readonly ArtifactInboxSectionEntry[] {
+  return ARTIFACT_INBOX_SECTIONS.filter((entry) => {
+    return (
+      entry.key === "all" ||
+      items.some((item) => {
+        return artifactMatchesInboxSection(item, entry.key);
+      })
+    );
+  });
+}
+
+function resolveVisibleArtifactInboxSection(
+  section: ArtifactInboxSection,
+  sections: readonly ArtifactInboxSectionEntry[],
+): ArtifactInboxSection {
+  return sections.some((entry) => {
+    return entry.key === section;
+  })
+    ? section
+    : "all";
+}
+
+function artifactMatchesSearch(item: ChatArtifactItem, query: string): boolean {
+  if (query.length === 0) {
+    return true;
+  }
+  const haystack =
+    `${item.file.filename} ${item.file.contentType}`.toLowerCase();
+  return haystack.includes(query);
+}
+
 function ArtifactFileIcon({
   file,
   size = "sm",
@@ -1186,14 +1329,54 @@ function ArtifactFileIcon({
 }
 
 function ArtifactPreviewBadge({ file }: { file: ChatThreadArtifactFile }) {
-  if (getArtifactPreviewKind(file) === "image") {
+  const previewKind = getArtifactPreviewKind(file);
+  const publicUrl = publicAttachmentUrl(file.url);
+
+  if (previewKind === "image") {
     return (
       <img
-        src={file.url}
+        src={publicUrl}
         alt=""
         aria-hidden="true"
         className="h-full w-full object-cover"
       />
+    );
+  }
+
+  if (previewKind === "video") {
+    return (
+      <video
+        src={videoPosterFrameUrl(publicUrl)}
+        preload="metadata"
+        muted
+        playsInline
+        aria-hidden="true"
+        className="h-full w-full object-cover"
+        data-testid="artifact-video-preview-badge"
+      />
+    );
+  }
+
+  if (getArtifactDocumentPreviewKind(file) === "html") {
+    return (
+      <span
+        className="relative block h-full w-full overflow-hidden bg-background"
+        aria-hidden="true"
+        data-testid="artifact-html-preview-badge"
+      >
+        <iframe
+          src={IN_VITEST ? undefined : publicUrl}
+          srcDoc={
+            IN_VITEST ? "<!doctype html><html><body></body></html>" : undefined
+          }
+          title={`${file.filename} artifact thumbnail`}
+          sandbox="allow-scripts"
+          tabIndex={-1}
+          loading="lazy"
+          scrolling="no"
+          className="pointer-events-none absolute left-0 top-0 h-[400%] w-[400%] origin-top-left scale-[0.25] border-0 bg-background"
+        />
+      </span>
     );
   }
 
@@ -1379,17 +1562,6 @@ function ArtifactPreviewOpenOverlay({
   );
 }
 
-async function copyArtifactLinkToClipboard(
-  file: ChatThreadArtifactFile,
-): Promise<void> {
-  const copied = await writeToClipboard(publicAttachmentUrl(file.url));
-  if (copied) {
-    toast.success("Link copied");
-    return;
-  }
-  toast.error("Failed to copy link");
-}
-
 async function downloadArtifactItemsAsZip(params: {
   readonly items: readonly ChatArtifactItem[];
   readonly signal: AbortSignal;
@@ -1465,6 +1637,43 @@ function artifactItemsToGoogleDriveFiles(
 
 function isArtifactSyncedToGoogleDrive(item: ChatArtifactItem): boolean {
   return item.file.googleDriveSync?.status === "synced";
+}
+
+function artifactDownloadSyncTargetFromItem(params: {
+  agentId: string | null | undefined;
+  item: ChatArtifactItem;
+  onSyncSuccess: () => void;
+  threadId: string;
+}): ArtifactDownloadSyncTarget {
+  return {
+    agentId: params.agentId,
+    fileId: params.item.file.id,
+    filename: params.item.file.filename,
+    onSyncSuccess: params.onSyncSuccess,
+    runId: params.item.runId,
+    synced: isArtifactSyncedToGoogleDrive(params.item),
+    threadId: params.threadId,
+  };
+}
+
+function artifactLightboxMetadataFromItem(params: {
+  agentId: string | null | undefined;
+  item: ChatArtifactItem;
+  onSyncSuccess: () => void;
+  threadId: string;
+}): AttachmentArtifactMetadata {
+  return {
+    agentId: params.agentId,
+    contentType: params.item.file.contentType,
+    createdAt: params.item.file.createdAt,
+    fileId: params.item.file.id,
+    filename: params.item.file.filename,
+    googleDriveSynced: isArtifactSyncedToGoogleDrive(params.item),
+    onSyncSuccess: params.onSyncSuccess,
+    runId: params.item.runId,
+    size: params.item.file.size,
+    threadId: params.threadId,
+  };
 }
 
 type WaitForGoogleDriveAndSyncArtifactsFn = (
@@ -1605,139 +1814,37 @@ function ArtifactGoogleDriveConnectMenuItem({
   );
 }
 
-function ArtifactPreviewIconButton({
-  ariaLabel,
-  children,
-  disabled = false,
-  onClick,
-  tooltip,
-}: {
-  ariaLabel: string;
-  children: ReactNode;
-  disabled?: boolean;
-  onClick: () => void;
-  tooltip: string;
-}) {
-  return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-disabled={disabled}
-            aria-label={ariaLabel}
-            onClick={() => {
-              if (!disabled) {
-                onClick();
-              }
-            }}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-              disabled &&
-                "cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
-            )}
-          >
-            {children}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p className="text-xs">{tooltip}</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
 function ArtifactPreviewActions({
   item,
-  googleDriveConnected,
   agentId,
   threadId,
   onSyncSuccess,
 }: {
   item: ChatArtifactItem;
-  googleDriveConnected: boolean;
   agentId: string | null | undefined;
   threadId: string;
   onSyncSuccess: () => void;
 }) {
-  const createClient = useGet(zeroClient$);
-  const waitForGoogleDriveAndSyncArtifacts = useSet(
-    waitForGoogleDriveAndSyncArtifacts$,
-  );
-  const pageSignal = useGet(pageSignal$);
   const { file } = item;
-  const synced = isArtifactSyncedToGoogleDrive(item);
-  const syncTooltip = synced
-    ? "Synced to Google Drive"
-    : googleDriveConnected
-      ? "Sync to Google Drive"
-      : CONNECT_GOOGLE_DRIVE_ARTIFACT_UPLOAD_TOOLTIP;
-  const syncAriaLabel = synced
-    ? `${file.filename} is synced to Google Drive`
-    : `Sync ${file.filename} to Google Drive`;
+  const syncTarget = artifactDownloadSyncTargetFromItem({
+    agentId,
+    item,
+    onSyncSuccess,
+    threadId,
+  });
 
   return (
     <div className="flex shrink-0 items-center gap-1">
-      <ArtifactPreviewIconButton
-        ariaLabel={`Copy link for ${file.filename}`}
-        tooltip="Copy link"
-        onClick={() => {
-          detach(
-            copyArtifactLinkToClipboard(file),
-            Reason.DomCallback,
-            "artifact copy link",
-          );
-        }}
-      >
-        <IconLink size={16} stroke={1.5} />
-      </ArtifactPreviewIconButton>
-      <ArtifactPreviewIconButton
+      <ArtifactShareButton
+        ariaLabel={`Share ${file.filename}`}
+        url={file.url}
+      />
+      <ArtifactDownloadMenu
         ariaLabel={`Download ${file.filename}`}
-        tooltip="Download"
-        onClick={() => {
-          detach(
-            downloadAttachmentUrl(file.url, pageSignal, file.filename),
-            Reason.DomCallback,
-            "artifact download",
-          );
-        }}
-      >
-        <IconDownload size={16} stroke={1.5} />
-      </ArtifactPreviewIconButton>
-      <ArtifactPreviewIconButton
-        ariaLabel={syncAriaLabel}
-        disabled={synced}
-        tooltip={syncTooltip}
-        onClick={() => {
-          if (googleDriveConnected) {
-            syncArtifactFilesAndRefresh({
-              sync: syncArtifactFileToGoogleDrive({
-                createClient,
-                threadId,
-                runId: item.runId,
-                fileId: item.file.id,
-                filename: item.file.filename,
-                signal: pageSignal,
-              }),
-              onSyncSuccess,
-              reason: "artifact google drive sync",
-            });
-            return;
-          }
-          startGoogleDriveConnectAndSync({
-            agentId,
-            createClient,
-            files: artifactItemsToGoogleDriveFiles([item]),
-            pageSignal,
-            threadId,
-            waitForGoogleDriveAndSyncArtifacts,
-            onSyncComplete: onSyncSuccess,
-          });
-        }}
-      >
-        <IconBrandGoogleDrive size={16} stroke={1.5} />
-      </ArtifactPreviewIconButton>
+        filename={file.filename}
+        syncTarget={syncTarget}
+        url={file.url}
+      />
     </div>
   );
 }
@@ -1835,6 +1942,9 @@ type ChatImagePreviewLinkProps = {
   placeholderClassName: string;
   url: string;
 };
+
+const CHAT_INLINE_MEDIA_PREVIEW_CLASS =
+  "inline-flex aspect-[16/10] w-[min(100%,400px)] items-center justify-center rounded-lg border border-foreground/10 shadow-sm transition-all duration-200 hover:scale-[1.015] hover:border-foreground/20 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30";
 
 function ChatImagePreviewLink({
   alt,
@@ -1986,11 +2096,61 @@ function ChatVideoPreviewButton({
   );
 }
 
-function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
+function ArtifactAudioPreviewButton({
+  file,
+  onOpen,
+}: {
+  file: ChatThreadArtifactFile;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.currentTarget.blur();
+        onOpen();
+      }}
+      className="group/audio-preview flex h-full w-full flex-col items-center justify-center gap-4 bg-gradient-to-br from-slate-900 via-stone-900 to-cyan-950 px-8 text-white"
+      aria-label={`Preview ${file.filename}`}
+      title={file.filename}
+      data-testid="artifact-audio-preview-button"
+    >
+      <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-sm transition-transform group-hover/audio-preview:scale-105">
+        <ArtifactFileIcon file={file} size="md" />
+      </span>
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white shadow-lg transition-transform group-hover/audio-preview:scale-105">
+        <IconPlayerPlay size={20} stroke={1.8} />
+      </span>
+      <span className="max-w-[260px] truncate text-sm font-medium">
+        {file.filename}
+      </span>
+    </button>
+  );
+}
+
+function ArtifactPreviewFrame({
+  agentId,
+  item,
+  onSyncSuccess,
+  threadId,
+}: {
+  agentId: string | null | undefined;
+  item: ChatArtifactItem;
+  onSyncSuccess: () => void;
+  threadId: string;
+}) {
   const openImageLightbox = useSet(openAttachmentImageLightbox$);
   const openDocumentLightbox = useSet(openAttachmentDocumentLightbox$);
   const openVideoLightbox = useSet(openAttachmentVideoLightbox$);
+  const openAudioLightbox = useSet(openAttachmentAudioLightbox$);
+  const { file } = item;
   const previewKind = getArtifactPreviewKind(file);
+  const artifact = artifactLightboxMetadataFromItem({
+    agentId,
+    item,
+    onSyncSuccess,
+    threadId,
+  });
 
   if (previewKind === "image") {
     return (
@@ -2000,7 +2160,11 @@ function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
         imageClassName="h-full w-full object-contain"
         linkClassName="flex h-full w-full items-center justify-center bg-muted"
         onPreview={() => {
-          openImageLightbox(file.url);
+          openImageLightbox({
+            url: file.url,
+            filename: file.filename,
+            artifact,
+          });
         }}
         placeholderClassName="h-full w-full"
         url={file.url}
@@ -2018,6 +2182,7 @@ function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
           openVideoLightbox({
             url: file.url,
             filename: file.filename,
+            artifact,
           });
         }}
         posterClassName="h-full w-full"
@@ -2029,15 +2194,16 @@ function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
 
   if (previewKind === "audio") {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-muted/40 px-8">
-        <audio
-          src={file.url}
-          controls
-          preload="metadata"
-          className="w-full max-w-[480px]"
-          aria-label={`Audio preview for ${file.filename}`}
-        />
-      </div>
+      <ArtifactAudioPreviewButton
+        file={file}
+        onOpen={() => {
+          openAudioLightbox({
+            url: file.url,
+            filename: file.filename,
+            artifact,
+          });
+        }}
+      />
     );
   }
 
@@ -2056,6 +2222,7 @@ function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
         kind: documentPreviewKind,
         url: file.url,
         filename: file.filename,
+        artifact,
       });
     };
 
@@ -2100,13 +2267,11 @@ function ArtifactPreviewFrame({ file }: { file: ChatThreadArtifactFile }) {
 
 function ArtifactPreviewPanel({
   item,
-  googleDriveConnected,
   agentId,
   onSyncSuccess,
   threadId,
 }: {
   item: ChatArtifactItem;
-  googleDriveConnected: boolean;
   agentId: string | null | undefined;
   onSyncSuccess: () => void;
   threadId: string;
@@ -2116,7 +2281,12 @@ function ArtifactPreviewPanel({
   return (
     <div className="min-w-0 overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm">
       <div className="h-[260px] border-b border-border/60 bg-muted/30">
-        <ArtifactPreviewFrame file={file} />
+        <ArtifactPreviewFrame
+          agentId={agentId}
+          item={item}
+          onSyncSuccess={onSyncSuccess}
+          threadId={threadId}
+        />
       </div>
       <div className="flex items-start gap-3 px-3 py-3">
         <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
@@ -2127,13 +2297,16 @@ function ArtifactPreviewPanel({
             {file.filename}
           </p>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{artifactFileKindLabel(file)}</span>
+            <span aria-hidden>·</span>
             <span>{formatBytes(file.size)}</span>
+            <span aria-hidden>·</span>
+            <span>{formatArtifactTime(file.createdAt)}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <ArtifactPreviewActions
             item={item}
-            googleDriveConnected={googleDriveConnected}
             agentId={agentId}
             threadId={threadId}
             onSyncSuccess={onSyncSuccess}
@@ -2260,6 +2433,360 @@ function ArtifactFileRow({
   );
 }
 
+function ChatArtifactInboxHeader({
+  count,
+  fullscreen,
+  searchOpen,
+  onClose,
+  onToggleSearch,
+  onToggleFullscreen,
+}: {
+  count: number | null;
+  fullscreen: boolean;
+  searchOpen: boolean;
+  onClose: () => void;
+  onToggleSearch: () => void;
+  onToggleFullscreen: () => void;
+}) {
+  return (
+    <div className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border/60 px-4 py-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <h2 className="truncate text-sm font-medium text-foreground">
+          Artifacts
+        </h2>
+        {count !== null && (
+          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            {count}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onToggleSearch}
+        aria-label="Search artifacts"
+        aria-pressed={searchOpen}
+        className={cn(
+          "inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
+          searchOpen && "bg-muted/60 text-foreground",
+        )}
+      >
+        <IconSearch size={16} />
+      </button>
+      <button
+        type="button"
+        onClick={onToggleFullscreen}
+        aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        data-testid="artifact-inbox-fullscreen-toggle"
+        className="hidden h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground xl:inline-flex"
+      >
+        {fullscreen ? (
+          <IconArrowsDiagonalMinimize2 size={16} />
+        ) : (
+          <IconArrowsDiagonal size={16} />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close artifacts"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+      >
+        <IconX size={16} />
+      </button>
+    </div>
+  );
+}
+
+function ArtifactInboxTabs({
+  section,
+  sections,
+  setSection,
+}: {
+  section: ArtifactInboxSection;
+  sections: readonly ArtifactInboxSectionEntry[];
+  setSection: (value: ArtifactInboxSection) => void;
+}) {
+  return (
+    <div
+      className="grid rounded-lg bg-muted/70 p-1"
+      style={{
+        gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))`,
+      }}
+      role="tablist"
+      aria-label="Artifact sections"
+    >
+      {sections.map((entry) => {
+        const selected = section === entry.key;
+        return (
+          <button
+            key={entry.key}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            onClick={() => {
+              setSection(entry.key);
+            }}
+            className={cn(
+              "h-8 rounded-md px-2 text-xs font-medium transition-colors",
+              selected
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {entry.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ArtifactInboxSearch({
+  query,
+  setQuery,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+}) {
+  return (
+    <label className="relative block">
+      <span className="sr-only">Search artifacts</span>
+      <IconSearch
+        size={15}
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+      />
+      <input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.currentTarget.value);
+        }}
+        className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring"
+        placeholder="Search"
+        autoComplete="off"
+        autoFocus
+      />
+    </label>
+  );
+}
+
+function ArtifactInboxRow({
+  item,
+  onOpen,
+}: {
+  item: ChatArtifactItem;
+  onOpen: () => void;
+}) {
+  const { file } = item;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`Open artifact ${file.filename}`}
+      className="group flex w-full min-w-0 items-center gap-3 rounded-lg border border-border/60 bg-background/80 p-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
+      <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground">
+        <ArtifactPreviewBadge file={file} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          className="block truncate text-sm font-medium text-foreground"
+          title={file.filename}
+        >
+          {file.filename}
+        </span>
+        <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <span>{artifactFileKindLabel(file)}</span>
+          <span aria-hidden>·</span>
+          <span>{formatBytes(file.size)}</span>
+          <span aria-hidden>·</span>
+          <span>{formatArtifactTime(file.createdAt)}</span>
+        </span>
+      </span>
+      <IconChevronRight
+        size={16}
+        className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+      />
+    </button>
+  );
+}
+
+function ChatArtifactInboxBody({ thread }: { thread: ChatThreadSignals }) {
+  const loadable = useLastLoadable(thread.artifacts$);
+  const section = useGet(artifactInboxSection$);
+  const query = useGet(artifactInboxQuery$);
+  const searchOpen = useGet(artifactInboxSearchOpen$);
+  const setSection = useSet(setArtifactInboxSection$);
+  const setQuery = useSet(setArtifactInboxQuery$);
+  const openArtifact = useSet(openArtifactFromInbox$);
+
+  if (loadable.state === "loading") {
+    return (
+      <div className="flex flex-col gap-3">
+        {Array.from({ length: 5 }, (_, i) => {
+          return <Skeleton key={i} className="h-[74px] rounded-lg" />;
+        })}
+      </div>
+    );
+  }
+
+  if (loadable.state === "hasError") {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+        Failed to load artifacts
+      </div>
+    );
+  }
+
+  if (loadable.state !== "hasData") {
+    return null;
+  }
+
+  const items = flattenArtifactRuns(loadable.data);
+  if (items.length === 0) {
+    return (
+      <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border/70 p-8 text-center">
+        <img
+          src={emptyArtifactImg}
+          alt=""
+          role="presentation"
+          loading="lazy"
+          className="h-24 w-24 object-contain opacity-80"
+        />
+        <p className="text-sm text-muted-foreground">
+          No uploaded files in this chat yet.
+        </p>
+      </div>
+    );
+  }
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const sections = artifactInboxSectionsForItems(items);
+  const activeSection = resolveVisibleArtifactInboxSection(section, sections);
+  const visibleItems = items.filter((item) => {
+    return (
+      artifactMatchesInboxSection(item, activeSection) &&
+      artifactMatchesSearch(item, normalizedQuery)
+    );
+  });
+
+  return (
+    <div className="flex min-h-full flex-col gap-4">
+      <ArtifactInboxTabs
+        section={activeSection}
+        sections={sections}
+        setSection={setSection}
+      />
+      {(searchOpen || query.length > 0) && (
+        <ArtifactInboxSearch query={query} setQuery={setQuery} />
+      )}
+      {visibleItems.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+          No artifacts match this view.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {visibleItems.map((item) => {
+            return (
+              <ArtifactInboxRow
+                key={artifactItemKey(item)}
+                item={item}
+                onOpen={() => {
+                  openArtifact({
+                    threadId: thread.threadId,
+                    url: item.file.url,
+                  });
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatArtifactInboxList({ thread }: { thread: ChatThreadSignals }) {
+  const loadable = useLastLoadable(thread.artifacts$);
+  const setArtifactsRealtimeRef = useSet(thread.setArtifactsRealtimeRef$);
+  const fullscreen = useGet(artifactFullscreen$);
+  const searchOpen = useGet(artifactInboxSearchOpen$);
+  const toggleFullscreen = useSet(toggleArtifactFullscreen$);
+  const toggleSearch = useSet(toggleArtifactInboxSearch$);
+  const close = useSet(closeArtifact$);
+  const count =
+    loadable.state === "hasData"
+      ? flattenArtifactRuns(loadable.data).length
+      : null;
+
+  const inbox = (
+    <div
+      className={cn(
+        fullscreen
+          ? "fixed inset-0 z-[100] flex flex-col bg-background"
+          : "flex h-full w-full min-h-0 flex-col border-l border-border/60 bg-background",
+        "animate-in fade-in duration-[180ms] ease",
+      )}
+      data-testid="artifact-inbox"
+    >
+      <ChatArtifactInboxHeader
+        count={count}
+        fullscreen={fullscreen}
+        searchOpen={searchOpen}
+        onToggleSearch={toggleSearch}
+        onToggleFullscreen={toggleFullscreen}
+        onClose={close}
+      />
+      <div
+        ref={setArtifactsRealtimeRef}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+      >
+        <ChatArtifactInboxBody thread={thread} />
+      </div>
+    </div>
+  );
+  return fullscreen && typeof document !== "undefined"
+    ? createPortal(inbox, document.body)
+    : inbox;
+}
+
+function ChatArtifactInboxSlot({
+  artifactRef,
+  leftThread,
+  rightThread,
+}: {
+  artifactRef: ArtifactRef | null;
+  leftThread: ChatThreadSignals | null;
+  rightThread: ChatThreadSignals | null;
+}) {
+  const inboxThreadId = useGet(currentArtifactInboxThreadId$);
+  const backToInbox = useSet(backToArtifactInbox$);
+  const close = useSet(closeArtifact$);
+  const thread =
+    [leftThread, rightThread].find((candidate) => {
+      return candidate?.threadId === inboxThreadId;
+    }) ??
+    leftThread ??
+    rightThread;
+
+  if (artifactRef) {
+    return (
+      <ArtifactSidebar
+        artifactRef={artifactRef}
+        thread={thread ?? undefined}
+        onBack={inboxThreadId ? backToInbox : undefined}
+        onClose={close}
+      />
+    );
+  }
+
+  if (!thread || !inboxThreadId) {
+    return null;
+  }
+
+  return <ChatArtifactInboxList thread={thread} />;
+}
+
 function ChatArtifactsDrawerContent({ thread }: { thread: ChatThreadSignals }) {
   const loadable = useLastLoadable(thread.artifacts$);
   const connectorList = useLastResolved(connectors$);
@@ -2331,7 +2858,6 @@ function ChatArtifactsDrawerContent({ thread }: { thread: ChatThreadSignals }) {
       {selectedItem && (
         <ArtifactPreviewPanel
           item={selectedItem}
-          googleDriveConnected={googleDriveConnected}
           agentId={agentId}
           onSyncSuccess={refreshArtifactSyncStatus}
           threadId={thread.threadId}
@@ -2449,7 +2975,9 @@ export function ZeroChatThreadPage() {
   const setKeyboardScrollRoot = useSet(setChatKeyboardScrollRoot$);
   const sidebarEnabled = useGet(chatArtifactSidebarEnabled$);
   const artifactRef = useGet(currentArtifactRef$);
-  const artifactSidebarOpen = sidebarEnabled && artifactRef !== null;
+  const artifactInboxThreadId = useGet(currentArtifactInboxThreadId$);
+  const artifactPanelOpen =
+    sidebarEnabled && (artifactRef !== null || artifactInboxThreadId !== null);
   // Lifted from ChatThread so the keyboard handler's sidebarChatThreads$
   // snapshot survives keyed ChatThread remounts during thread navigation.
   // Otherwise a second mod+shift+arrow press lands on a freshly mounted
@@ -2494,18 +3022,30 @@ export function ZeroChatThreadPage() {
       <div className="flex flex-1 min-h-0 bg-transparent">
         <div
           className={
-            artifactSidebarOpen
-              ? "hidden xl:flex flex-1 basis-0 min-w-0 min-h-0"
-              : "flex flex-1 min-w-0 min-h-0"
+            artifactPanelOpen
+              ? "hidden xl:flex flex-1 basis-0 min-w-0 min-h-0 transition-[flex-basis,width] duration-[240ms] ease"
+              : "flex flex-1 min-w-0 min-h-0 transition-[flex-basis,width] duration-[240ms] ease"
           }
         >
           {threadArea}
         </div>
-        {artifactSidebarOpen && (
-          <div className="flex flex-1 basis-0 min-w-0 min-h-0">
-            <ArtifactSidebarSlot />
-          </div>
-        )}
+        <div
+          className={cn(
+            "flex min-h-0 min-w-0 overflow-hidden transition-[flex-basis,width] duration-[240ms] ease",
+            artifactPanelOpen
+              ? "flex-1 basis-0 xl:w-[min(760px,48vw)] xl:flex-none xl:basis-[min(760px,48vw)]"
+              : "pointer-events-none w-0 flex-none basis-0",
+          )}
+          aria-hidden={!artifactPanelOpen}
+        >
+          {artifactPanelOpen && (
+            <ChatArtifactInboxSlot
+              artifactRef={artifactRef}
+              leftThread={leftThread}
+              rightThread={rightThread}
+            />
+          )}
+        </div>
       </div>
       {!sidebarEnabled && leftThread && (
         <ChatArtifactsDrawer thread={leftThread} />
@@ -3747,12 +4287,12 @@ function BodyContentBlocks({
               key={block.id}
               alt={block.preview.filename}
               ariaLabel={`Preview ${block.preview.filename}`}
-              imageClassName="max-h-48 max-w-full object-contain"
-              linkClassName="w-fit max-w-full rounded-lg border border-foreground/10"
+              imageClassName="h-full w-full object-contain"
+              linkClassName={`${CHAT_INLINE_MEDIA_PREVIEW_CLASS} bg-muted/30`}
               onPreview={() => {
                 openLightbox(block.preview.url);
               }}
-              placeholderClassName="h-48 w-64 max-w-full"
+              placeholderClassName="h-full w-full"
               url={block.preview.url}
             />
           );
@@ -3763,7 +4303,7 @@ function BodyContentBlocks({
             <ChatVideoPreviewButton
               key={block.id}
               ariaLabel={`Preview ${block.preview.filename}`}
-              buttonClassName="w-fit max-w-full rounded-lg border border-foreground/10"
+              buttonClassName={CHAT_INLINE_MEDIA_PREVIEW_CLASS}
               filename={block.preview.filename}
               onPreview={() => {
                 openVideoLightbox({
@@ -3771,7 +4311,7 @@ function BodyContentBlocks({
                   filename: block.preview.filename,
                 });
               }}
-              posterClassName="h-48 w-64 max-w-full"
+              posterClassName="h-full w-full"
               url={block.preview.url}
               videoClassName="h-full w-full object-contain"
             />
@@ -4857,12 +5397,12 @@ function UserMessageAttachments({
               key={a.url}
               alt={a.filename}
               ariaLabel={`Preview ${a.filename}`}
-              imageClassName="h-9 max-w-[72px] object-cover"
-              linkClassName="rounded-lg border border-foreground/10 transition-colors hover:border-foreground/25"
+              imageClassName="h-full w-full object-contain"
+              linkClassName={`${CHAT_INLINE_MEDIA_PREVIEW_CLASS} bg-muted/30`}
               onPreview={() => {
                 onImageClick(a.url);
               }}
-              placeholderClassName="h-9 w-[72px]"
+              placeholderClassName="h-full w-full"
               url={a.url}
             />
           );
@@ -4872,7 +5412,7 @@ function UserMessageAttachments({
             <ChatVideoPreviewButton
               key={a.url}
               ariaLabel={`Preview ${a.filename}`}
-              buttonClassName="rounded-lg border border-foreground/10 transition-colors hover:border-foreground/25"
+              buttonClassName={CHAT_INLINE_MEDIA_PREVIEW_CLASS}
               filename={a.filename}
               onPreview={() => {
                 openVideoLightbox({
@@ -4880,9 +5420,9 @@ function UserMessageAttachments({
                   filename: a.filename,
                 });
               }}
-              posterClassName="h-9 w-[72px]"
+              posterClassName="h-full w-full"
               url={a.url}
-              videoClassName="h-full w-full object-cover"
+              videoClassName="h-full w-full object-contain"
             />
           );
         }
@@ -4900,6 +5440,16 @@ function UserMessageAttachments({
               filename={a.filename}
               url={a.url}
               kind={a.kind}
+            />
+          );
+        }
+        if (a.kind === "audio") {
+          return (
+            <PreviewableAudioAttachmentChip
+              key={a.url}
+              filename={a.filename}
+              url={a.url}
+              contentType={a.contentType}
             />
           );
         }

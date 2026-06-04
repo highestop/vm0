@@ -12,6 +12,7 @@ import {
 import { mockApi } from "../../../mocks/msw-contract.ts";
 import { hasSubscription, triggerAblyEvent } from "../../../mocks/ably.ts";
 import { updateChatArtifacts } from "../../../mocks/mock-helpers.ts";
+import { search } from "../../../signals/location.ts";
 import {
   chatMessagesContract,
   chatThreadArtifactsContract,
@@ -34,6 +35,12 @@ import {
 import { mockChatLifecycle, PLACEHOLDER } from "./chat-test-helpers.ts";
 
 const context = testContext();
+
+function chatArtifactSidebarOff() {
+  return {
+    [FeatureSwitchKey.ChatArtifactSidebar]: false,
+  };
+}
 
 function queryRoleByText(
   role: Parameters<typeof queryAllByRoleFast>[0],
@@ -60,6 +67,15 @@ function queryRoleByAriaLabel(
   return queryAllByRoleFast(role).find((element) => {
     return element.getAttribute("aria-label") === label;
   });
+}
+
+function getRoleByAriaLabel(
+  role: Parameters<typeof queryAllByRoleFast>[0],
+  label: string,
+): HTMLElement {
+  const element = queryRoleByAriaLabel(role, label);
+  expect(element).toBeDefined();
+  return element!;
 }
 
 function mockConnectorOauthStart() {
@@ -145,6 +161,7 @@ describe("zero chat thread page display - permission action card", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const card = await waitFor(() => {
@@ -180,6 +197,7 @@ describe("zero chat thread page display - permission action card", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const card = await waitFor(() => {
@@ -208,6 +226,7 @@ describe("zero chat thread page display - permission action card", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const card = await waitFor(() => {
@@ -238,7 +257,11 @@ describe("zero chat thread page display - attachment image preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     const previewLink = await waitFor(() => {
       return screen.getByLabelText("Preview photo.png");
@@ -247,6 +270,7 @@ describe("zero chat thread page display - attachment image preview", () => {
       "href",
       "https://example.com/photo.png",
     );
+    expect(previewLink).toHaveClass("w-[min(100%,400px)]", "aspect-[16/10]");
     const previewImage = within(previewLink).getByAltText("photo.png");
     expect(previewImage).toBeInTheDocument();
     expect(
@@ -263,7 +287,8 @@ describe("zero chat thread page display - attachment image preview", () => {
 });
 
 describe("zero chat thread page display - attachment audio chip", () => {
-  it("renders audio attachment as a compact download chip", async () => {
+  it("renders audio attachment as a compact preview chip", async () => {
+    const user = userEvent.setup();
     mockChatLifecycle({
       chatMessages: [
         {
@@ -283,16 +308,27 @@ describe("zero chat thread page display - attachment audio chip", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
-
-    const download = await waitFor(() => {
-      return screen.getByLabelText("Download clip.mp3");
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
-    expect(download).toHaveAttribute("type", "button");
-    expect(download).not.toHaveAttribute("href");
+
+    const preview = await waitFor(() => {
+      return screen.getByLabelText("Open audio preview for clip.mp3");
+    });
+    expect(preview).toHaveAttribute("type", "button");
+    expect(preview).not.toHaveAttribute("href");
     expect(
-      within(download).getByTestId("attachment-chip-file-icon"),
+      within(preview).getByTestId("attachment-chip-file-icon"),
     ).toBeInTheDocument();
+
+    await user.click(preview);
+
+    const lightbox = await screen.findByTestId("attachment-lightbox");
+    expect(
+      within(lightbox).getByLabelText("Audio preview for clip.mp3"),
+    ).toHaveAttribute("src", "https://example.com/clip.mp3");
   });
 });
 
@@ -320,7 +356,11 @@ describe("zero chat thread page display - attachment document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(
@@ -368,7 +408,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(
@@ -402,7 +446,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByText("notes")).toBeInTheDocument();
@@ -456,7 +504,11 @@ describe("zero chat thread page display - body link document preview", () => {
         ],
       });
 
-      detachedSetupPage({ context, path: "/chats/thread-test-1" });
+      detachedSetupPage({
+        context,
+        path: "/chats/thread-test-1",
+        featureSwitches: chatArtifactSidebarOff(),
+      });
 
       const preview = await screen.findByTestId("attachment-preview-file");
       expect(
@@ -722,7 +774,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId("attachment-preview-json")).toBeInTheDocument();
@@ -759,7 +815,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId("attachment-preview-pdf")).toBeInTheDocument();
@@ -844,7 +904,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId("attachment-preview-text")).toBeInTheDocument();
@@ -903,7 +967,11 @@ describe("zero chat thread page display - body link document preview", () => {
         ],
       });
 
-      detachedSetupPage({ context, path: "/chats/thread-test-1" });
+      detachedSetupPage({
+        context,
+        path: "/chats/thread-test-1",
+        featureSwitches: chatArtifactSidebarOff(),
+      });
 
       await waitFor(() => {
         const textPreview = screen.getByTestId("attachment-preview-text");
@@ -930,7 +998,11 @@ describe("zero chat thread page display - body link document preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       const preview = screen.getByTestId("attachment-preview-file");
@@ -1118,13 +1190,18 @@ describe("zero chat thread page display - attachment video preview", () => {
       ],
     });
 
-    detachedSetupPage({ context, path: "/chats/thread-test-1" });
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     const previewButton = await waitFor(() => {
       return screen.getByLabelText("Preview clip.mp4");
     });
     const posterVideo = previewButton.querySelector("video");
 
+    expect(previewButton).toHaveClass("w-[min(100%,400px)]", "aspect-[16/10]");
     expect(
       within(previewButton).getByTestId("chat-video-preview-poster"),
     ).toBeInTheDocument();
@@ -1144,11 +1221,51 @@ describe("zero chat thread page display - attachment video preview", () => {
     });
     const video = within(lightbox).getByLabelText("Video preview for clip.mp4");
 
+    expect(lightbox).toHaveClass("zero-dialog-enter-overlay");
+    expect(
+      within(lightbox).getByTestId("attachment-lightbox-panel"),
+    ).toHaveClass("zero-dialog-enter-content");
     expect(video).toHaveAttribute("src", videoUrl);
     expect(video).toHaveAttribute("controls");
     expect((video as HTMLVideoElement).autoplay).toBeTruthy();
-    expect(within(lightbox).getByLabelText("Copy link")).toBeInTheDocument();
+    expect(within(lightbox).getByLabelText("Share")).toBeInTheDocument();
     expect(within(lightbox).getByLabelText("Download")).toBeInTheDocument();
+  });
+
+  it("uses the padded artifact dialog stage for video previews when enabled", async () => {
+    const videoUrl = "https://example.com/clip.mp4";
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: `[Attached file: clip.mp4](${videoUrl})\nDownload with: curl ${videoUrl}\n`,
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.ChatArtifactSidebar]: true,
+      },
+    });
+
+    await userEvent.click(await screen.findByLabelText("Preview clip.mp4"));
+
+    const lightbox = await screen.findByTestId("attachment-lightbox");
+    const stage = within(lightbox).getByTestId("artifact-dialog-stage");
+    const videoStage = within(lightbox).getByTestId(
+      "artifact-dialog-video-stage",
+    );
+    const video = within(videoStage).getByLabelText(
+      "Video preview for clip.mp4",
+    );
+
+    expect(stage).toHaveClass("bg-muted/30", "p-5");
+    expect(videoStage).toHaveClass("rounded-xl", "border", "bg-black");
+    expect(video).toHaveClass("aspect-video", "object-contain");
   });
 });
 
@@ -1354,6 +1471,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const button = await waitFor(() => {
@@ -1419,6 +1537,330 @@ describe("zero chat thread page display - artifacts drawer", () => {
     });
   });
 
+  it("opens the artifact inbox sidebar when the sidebar feature is enabled", async () => {
+    const user = userEvent.setup();
+    let artifactsRequests = 0;
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: "Create files",
+          runId: "run-artifact-inbox",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    server.use(
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        artifactsRequests += 1;
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-artifact-inbox",
+              files: [
+                {
+                  id: "file-image",
+                  filename: "chart.png",
+                  contentType: "image/png",
+                  size: 4096,
+                  url: "https://example.com/chart.png",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+                {
+                  id: "file-data",
+                  filename: "data.csv",
+                  contentType: "text/csv",
+                  size: 2048,
+                  url: "https://example.com/data.csv",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+                {
+                  id: "file-video",
+                  filename: "demo.mp4",
+                  contentType: "video/mp4",
+                  size: 16_384,
+                  url: "https://example.com/demo.mp4",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+                {
+                  id: "file-site",
+                  filename: "landing.html",
+                  contentType: "text/html",
+                  size: 8192,
+                  url: "https://preview.sites.vm7.io",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+    );
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.ChatArtifactSidebar]: true,
+      },
+    });
+
+    const button = await waitFor(() => {
+      return screen.getByLabelText("Open artifacts");
+    });
+    expect(artifactsRequests).toBe(0);
+    await user.click(button);
+
+    const inbox = await screen.findByTestId("artifact-inbox");
+    expect(inbox).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Artifacts" })).toBeNull();
+    expect(artifactsRequests).toBeGreaterThan(0);
+    expect(search()).toContain("artifacts=thread-test-1");
+    expect(
+      getRoleByAriaLabel("button", "Open artifact chart.png"),
+    ).toBeInTheDocument();
+    expect(
+      getRoleByAriaLabel("button", "Open artifact data.csv"),
+    ).toBeInTheDocument();
+    expect(
+      getRoleByAriaLabel("button", "Open artifact landing.html"),
+    ).toBeInTheDocument();
+    const videoRow = getRoleByAriaLabel("button", "Open artifact demo.mp4");
+    expect(
+      within(videoRow).getByTestId("artifact-video-preview-badge"),
+    ).toHaveAttribute("src", "https://example.com/demo.mp4#t=0.001");
+    const siteRow = getRoleByAriaLabel("button", "Open artifact landing.html");
+    expect(
+      within(siteRow).getByTestId("artifact-html-preview-badge"),
+    ).toBeInTheDocument();
+    expect(within(inbox).queryByText("Live")).not.toBeInTheDocument();
+
+    await user.click(getRoleByText("tab", "Sites"));
+    expect(
+      getRoleByAriaLabel("button", "Open artifact landing.html"),
+    ).toBeInTheDocument();
+    expect(
+      queryRoleByAriaLabel("button", "Open artifact chart.png"),
+    ).toBeUndefined();
+
+    await user.click(getRoleByText("tab", "Docs"));
+    expect(
+      getRoleByAriaLabel("button", "Open artifact data.csv"),
+    ).toBeInTheDocument();
+    expect(
+      queryRoleByAriaLabel("button", "Open artifact landing.html"),
+    ).toBeUndefined();
+
+    await user.click(getRoleByText("tab", "Media"));
+    await user.click(getRoleByAriaLabel("button", "Open artifact chart.png"));
+
+    const sidebar = await screen.findByTestId("artifact-sidebar");
+    expect(sidebar).toBeInTheDocument();
+    expect(screen.getByLabelText("Back to all artifacts")).toBeInTheDocument();
+    expect(within(sidebar).getByText("chart.png")).toBeInTheDocument();
+    expect(
+      within(sidebar).getByText(/Image · PNG · 4\.0 KB · Generated/u),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("artifact-sidebar-image-zoom-controls"),
+    ).toBeInTheDocument();
+    expect(search()).toContain(
+      "artifact=https%3A%2F%2Fexample.com%2Fchart.png",
+    );
+
+    await user.click(screen.getByTestId("artifact-sidebar-fullscreen-toggle"));
+    expect(screen.getByTestId("artifact-sidebar")).toHaveClass("fixed");
+    expect(search()).toContain("artifact-fullscreen=1");
+
+    await user.click(screen.getByLabelText("Back to all artifacts"));
+    await expect(
+      screen.findByTestId("artifact-inbox"),
+    ).resolves.toBeInTheDocument();
+    expect(search()).toContain("artifacts=thread-test-1");
+    expect(search()).not.toContain("artifact=");
+    expect(search()).not.toContain("artifact-fullscreen=");
+
+    await user.click(screen.getByTestId("artifact-inbox-fullscreen-toggle"));
+    expect(screen.getByTestId("artifact-inbox")).toHaveClass("fixed");
+
+    await user.click(screen.getByLabelText("Close artifacts"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("artifact-inbox")).not.toBeInTheDocument();
+    });
+    expect(search()).not.toContain("artifacts=");
+  });
+
+  it("opens chat previews in a modal before split view", async () => {
+    const user = userEvent.setup();
+    const imageUrl =
+      "https://www.vm0.ai/f/user_123/3a474c61-ffe4-4e56-b9e7-0185b3dba9f7/chart.png";
+    server.use(
+      http.get(imageUrl, () => {
+        return new HttpResponse("png", {
+          headers: { "Content-Type": "image/png" },
+        });
+      }),
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-chat-preview-artifact",
+              files: [
+                {
+                  id: "file-image",
+                  filename: "chart.png",
+                  contentType: "image/png",
+                  size: 4096,
+                  url: imageUrl,
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+    );
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "assistant",
+          content: `Generated chart:\n\n${imageUrl}`,
+          runId: "run-chat-preview-artifact",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.ChatArtifactSidebar]: true,
+      },
+    });
+
+    await user.click(await screen.findByLabelText("Preview chart.png"));
+
+    const lightbox = await screen.findByTestId("attachment-lightbox");
+    expect(lightbox).toBeInTheDocument();
+    expect(lightbox).toHaveClass("zero-dialog-enter-overlay");
+    expect(
+      within(lightbox).getByTestId("attachment-lightbox-panel"),
+    ).toHaveClass("zero-dialog-enter-content");
+    const stage = within(lightbox).getByTestId("artifact-dialog-stage");
+    expect(stage).toHaveClass("overflow-hidden");
+    expect(stage).not.toHaveClass("p-5");
+    expect(stage.firstElementChild).toHaveClass("max-w-none");
+    expect(within(lightbox).getByTestId("artifact-dialog-card")).toHaveClass(
+      "h-full",
+      "min-h-0",
+    );
+    expect(
+      within(lightbox).getByTestId("artifact-dialog-card"),
+    ).not.toHaveClass("border");
+    expect(
+      within(lightbox).getByTestId("artifact-dialog-image-stage"),
+    ).toHaveClass("h-full", "overflow-hidden");
+    expect(screen.getByRole("dialog", { name: "chart.png preview" })).toBe(
+      lightbox,
+    );
+    expect(within(lightbox).getByText("chart.png")).toBeInTheDocument();
+    expect(
+      within(lightbox).getByText(/Image · PNG · 4\.0 KB · Generated/u),
+    ).toBeInTheDocument();
+    expect(
+      within(lightbox).queryByTestId("attachment-lightbox-file-icon"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("artifact-inbox")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("artifact-sidebar")).not.toBeInTheDocument();
+    expect(search()).not.toContain("artifacts=");
+    expect(search()).not.toContain("artifact=");
+
+    await user.click(within(lightbox).getByLabelText("Zoom in"));
+    expect(within(lightbox).getByText("115%")).toBeInTheDocument();
+
+    await user.click(within(lightbox).getByLabelText("Enter fullscreen"));
+    const fullscreenLightbox = await screen.findByTestId("attachment-lightbox");
+    await waitFor(() => {
+      expect(within(fullscreenLightbox).getByText("100%")).toBeInTheDocument();
+    });
+    expect(
+      within(fullscreenLightbox).getByLabelText("Exit fullscreen"),
+    ).toBeInTheDocument();
+
+    await user.click(
+      within(fullscreenLightbox).getByLabelText("Open in split view"),
+    );
+
+    await expect(
+      screen.findByTestId("artifact-sidebar"),
+    ).resolves.toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("attachment-lightbox"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("artifact-inbox")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Back to all artifacts")).toBeNull();
+    expect(search()).not.toContain("artifacts=");
+    expect(search()).toContain(
+      "artifact=https%3A%2F%2Fwww.vm0.ai%2Ff%2Fuser_123%2F3a474c61-ffe4-4e56-b9e7-0185b3dba9f7%2Fchart.png",
+    );
+  });
+
+  it("only shows artifact inbox filters for existing artifact types", async () => {
+    const user = userEvent.setup();
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: "Create an image",
+          runId: "run-artifact-inbox-media",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    server.use(
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-artifact-inbox-media",
+              files: [
+                {
+                  id: "file-image",
+                  filename: "chart.png",
+                  contentType: "image/png",
+                  size: 4096,
+                  url: "https://example.com/chart.png",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+    );
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.ChatArtifactSidebar]: true,
+      },
+    });
+
+    await user.click(await screen.findByLabelText("Open artifacts"));
+
+    await expect(
+      screen.findByTestId("artifact-inbox"),
+    ).resolves.toBeInTheDocument();
+    expect(getRoleByText("tab", "All")).toBeInTheDocument();
+    expect(getRoleByText("tab", "Media")).toBeInTheDocument();
+    expect(queryRoleByText("tab", "Docs")).toBeUndefined();
+    expect(queryRoleByText("tab", "Sites")).toBeUndefined();
+  });
+
   it("opens artifacts from the mobile top bar icon", async () => {
     mockChatLifecycle({
       chatMessages: [
@@ -1455,6 +1897,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     click(
@@ -1516,6 +1959,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     click(
@@ -1579,6 +2023,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     click(
@@ -1639,6 +2084,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     click(
@@ -1825,6 +2271,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const button = await waitFor(() => {
@@ -1833,14 +2280,27 @@ describe("zero chat thread page display - artifacts drawer", () => {
     click(button);
 
     await waitFor(() => {
-      expect(
-        screen.getByLabelText("Copy link for chart.png"),
-      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Share chart.png")).toBeInTheDocument();
     });
-    await user.click(screen.getByLabelText("Copy link for chart.png"));
+    await user.click(screen.getByLabelText("Share chart.png"));
     expect(writeTextSpy).toHaveBeenCalledWith(publicFileUrl);
 
-    await user.click(screen.getByLabelText("Sync chart.png to Google Drive"));
+    const downloadButton = screen.getByLabelText("Download chart.png");
+    await user.hover(downloadButton);
+    await waitFor(() => {
+      expect(
+        getRoleByText("menuitem", "Upload to Google Drive"),
+      ).toBeInTheDocument();
+    });
+    fireEvent.pointerLeave(downloadButton);
+    await waitFor(() => {
+      expect(
+        queryRoleByText("menuitem", "Upload to Google Drive"),
+      ).toBeUndefined();
+    });
+
+    await user.click(downloadButton);
+    await user.click(await screen.findByText("Upload to Google Drive"));
 
     await waitFor(() => {
       expect(syncBodies).toStrictEqual([
@@ -1850,11 +2310,13 @@ describe("zero chat thread page display - artifacts drawer", () => {
         },
       ]);
     });
+    await user.click(downloadButton);
     await waitFor(() => {
       expect(
-        screen.getByLabelText("chart.png is synced to Google Drive"),
+        getRoleByText("menuitem", "Synced to Google Drive"),
       ).toHaveAttribute("aria-disabled", "true");
     });
+    await user.keyboard("{Escape}");
 
     await user.click(screen.getByLabelText("More artifact actions"));
     await user.click(screen.getByText("Sync all to Google Drive"));
@@ -1979,6 +2441,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const button = await waitFor(() => {
@@ -2090,6 +2553,7 @@ describe("zero chat thread page display - artifacts drawer", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-test-1",
+      featureSwitches: chatArtifactSidebarOff(),
     });
 
     const button = await waitFor(() => {
@@ -2097,13 +2561,19 @@ describe("zero chat thread page display - artifacts drawer", () => {
     });
     click(button);
 
-    const syncButton = await waitFor(() => {
-      return screen.getByLabelText(
-        "Sync disconnected-chart.png to Google Drive",
-      );
+    const downloadButton = await waitFor(() => {
+      return screen.getByLabelText("Download disconnected-chart.png");
     });
 
-    await user.click(syncButton);
+    await user.click(downloadButton);
+    const connectGoogleDriveItem = await screen.findByText(
+      "Connect Google Drive",
+    );
+    await user.hover(connectGoogleDriveItem);
+    await expect(
+      screen.findAllByText("Connect Google Drive to upload artifacts"),
+    ).resolves.not.toHaveLength(0);
+    await user.click(connectGoogleDriveItem);
     await waitFor(() => {
       expect(openSpy).toHaveBeenCalledWith(
         "about:blank",

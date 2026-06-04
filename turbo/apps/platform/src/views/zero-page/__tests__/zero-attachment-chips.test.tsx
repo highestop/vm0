@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw";
 import { toast } from "@vm0/ui/components/ui/sonner";
 import { chatMessagesContract } from "@vm0/api-contracts/contracts/chat-threads";
 import { zeroUploadsContract } from "@vm0/api-contracts/contracts/zero-uploads";
+import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import { detachedSetupPage, click } from "../../../__tests__/page-helper.ts";
@@ -29,6 +30,12 @@ const context = testContext();
 const mockApi = createMockApi(context);
 const attachmentLogger = getLoggers()["zero-attachment-chips"];
 const attachmentLoggerLevel = attachmentLogger?.level;
+
+function chatArtifactSidebarOff() {
+  return {
+    [FeatureSwitchKey.ChatArtifactSidebar]: false,
+  };
+}
 
 beforeEach(() => {
   if (attachmentLogger) {
@@ -254,7 +261,11 @@ describe("chat-i-059: image preview button opens lightbox", () => {
     );
     mockChatAPI();
 
-    detachedSetupPage({ context, path: "/" });
+    detachedSetupPage({
+      context,
+      path: "/",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument();
@@ -295,7 +306,11 @@ describe("chat-i-059: image preview button opens lightbox", () => {
     );
     mockChatAPI();
 
-    detachedSetupPage({ context, path: "/" });
+    detachedSetupPage({
+      context,
+      path: "/",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument();
@@ -331,7 +346,7 @@ describe("chat-i-059: image preview button opens lightbox", () => {
     expect(screen.getByText("100%")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Zoom in"));
     await waitFor(() => {
-      expect(screen.getByText("125%")).toBeInTheDocument();
+      expect(screen.getByText("115%")).toBeInTheDocument();
     });
 
     await user.click(screen.getByLabelText("Zoom out"));
@@ -341,7 +356,7 @@ describe("chat-i-059: image preview button opens lightbox", () => {
 
     await user.click(screen.getByLabelText("Zoom in"));
     await waitFor(() => {
-      expect(screen.getByText("125%")).toBeInTheDocument();
+      expect(screen.getByText("115%")).toBeInTheDocument();
     });
     await user.click(screen.getByLabelText("Reset zoom"));
     await waitFor(() => {
@@ -350,7 +365,7 @@ describe("chat-i-059: image preview button opens lightbox", () => {
 
     fireEvent.keyDown(document, { key: "=", metaKey: true });
     await waitFor(() => {
-      expect(screen.getByText("125%")).toBeInTheDocument();
+      expect(screen.getByText("115%")).toBeInTheDocument();
     });
 
     fireEvent.keyDown(document, { key: "-", metaKey: true });
@@ -549,7 +564,11 @@ describe("chat-i-066: lightbox download fetches blobs", () => {
     );
     mockChatAPI();
 
-    detachedSetupPage({ context, path: "/" });
+    detachedSetupPage({
+      context,
+      path: "/",
+      featureSwitches: chatArtifactSidebarOff(),
+    });
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument();

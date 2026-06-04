@@ -1006,12 +1006,15 @@ class TestReportConnectorUsage:
             "Param url=example.com",
             "Pipe|example.com",
             "Visit EXAMPLE.COM",
+            "Visit 123.com",
             "Visit blog.example.co.uk",
             "Open example.com/path/to/resource?search=foo&lang=en",
             "Open example.com:443/path",
             "Open xn--r8jz45g.xn--q9jyb4c",
             "IDN 例え.みんな",
             "Accent mañana.com",
+            "Sharp S faß.de",
+            "Fullwidth compatibility \uff26\uff2f\uff2f.com",
         ],
     )
     def test_tweet_create_with_url_stays_on_with_url_bucket(self, tmp_path, real_flow, text):
@@ -1047,6 +1050,7 @@ class TestReportConnectorUsage:
             "Plus suffix example.com+tag",
             "At suffix example.com@user",
             "Unknown example.notatld",
+            "Fullwidth unknown \uff26\uff2f\uff2f.notatld",
             "Underscore foo_bar.example.com",
             "Leading hyphen -bad.com",
             "Trailing hyphen bad-.com",

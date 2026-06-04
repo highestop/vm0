@@ -1122,6 +1122,7 @@ export {
   zeroBillingAutoRechargeContract,
   zeroBillingInvoicesContract,
   zeroBillingDowngradeContract,
+  zeroBillingRestoreContract,
   zeroBillingRedeemContract,
   type ZeroBillingStatusContract,
   type ZeroBillingCheckoutContract,
@@ -1129,6 +1130,7 @@ export {
   type ZeroBillingAutoRechargeContract,
   type ZeroBillingInvoicesContract,
   type ZeroBillingDowngradeContract,
+  type ZeroBillingRestoreContract,
   type ZeroBillingRedeemContract,
   // Inferred types
   type BillingStatusResponse,

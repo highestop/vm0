@@ -286,6 +286,11 @@ describe("zero chat template picker", () => {
       expectPresentationTemplate(sendCapture.generationTemplate());
     });
     await waitFor(() => {
+      expect(
+        screen.getByLabelText(`Message template ${template.title}`),
+      ).toBeInTheDocument();
+    });
+    await waitFor(() => {
       expect(screen.getByLabelText("Template")).toHaveAttribute(
         "aria-pressed",
         "false",
@@ -352,6 +357,11 @@ describe("zero chat template picker", () => {
 
     await waitFor(() => {
       expectPresentationTemplate(sendCapture.generationTemplate());
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText(`Message template ${template.title}`),
+      ).toBeInTheDocument();
     });
     await waitFor(() => {
       expect(screen.getByLabelText("Template")).toHaveAttribute(

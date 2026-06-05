@@ -1015,6 +1015,11 @@ export {
 } from "./zero-feature-switches";
 export { zeroMemoryContract, type ZeroMemoryContract } from "./zero-memory";
 export {
+  zeroMemoryDevRefreshContract,
+  type MemoryDevRefreshResponse,
+  type ZeroMemoryDevRefreshContract,
+} from "./zero-memory-dev-refresh";
+export {
   zeroSecretsContract,
   zeroSecretsByNameContract,
   zeroVariablesContract,

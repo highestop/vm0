@@ -133,6 +133,10 @@ import { userFeatureSwitchOverrides } from "./feature-switches.service";
 import { dispatchRunCallbacks } from "./agent-run-callback.service";
 import { drainOrgQueue$ } from "./zero-run-queue.service";
 import { notifyRunnerJob } from "./runner-dispatch.service";
+import {
+  connectorRuntimeCredentialStatus,
+  type ConnectorCredentialStatus,
+} from "./connector-credential-status.service";
 import { logger } from "../../lib/log";
 import { recordSandboxOperation } from "../external/sandbox-op-log";
 
@@ -1642,6 +1646,8 @@ function filterSecretConnectorMetadataMap(args: {
 interface StoredConnectorRuntimeRow {
   readonly connectorType: ConnectorType;
   readonly authMethod: string;
+  readonly needsReconnect: boolean;
+  readonly tokenExpiresAt: Date | null;
 }
 
 interface ConnectorEnvBindingSet {
@@ -1675,20 +1681,47 @@ function emptyConnectorRuntimeContext(): ConnectorRuntimeContext {
 }
 
 function allowedStoredConnectorRows(
-  rows: readonly { readonly type: string; readonly authMethod: string }[],
+  rows: readonly {
+    readonly type: string;
+    readonly authMethod: string;
+    readonly needsReconnect: boolean;
+    readonly tokenExpiresAt: Date | null;
+  }[],
   allowedConnectorTypes: readonly ConnectorType[] | undefined,
+  now: Date,
 ): readonly StoredConnectorRuntimeRow[] {
   const validRows = rows.flatMap((row) => {
     const parsed = connectorTypeSchema.safeParse(row.type);
     return parsed.success
-      ? [{ connectorType: parsed.data, authMethod: row.authMethod }]
+      ? [
+          {
+            connectorType: parsed.data,
+            authMethod: row.authMethod,
+            needsReconnect: row.needsReconnect,
+            tokenExpiresAt: row.tokenExpiresAt,
+          },
+        ]
       : [];
   });
-  if (!allowedConnectorTypes) {
-    return validRows;
-  }
   return validRows.filter((row) => {
-    return allowedConnectorTypes.includes(row.connectorType);
+    return (
+      (!allowedConnectorTypes ||
+        allowedConnectorTypes.includes(row.connectorType)) &&
+      storedConnectorRuntimeCredentialStatus(row, now) === "available"
+    );
+  });
+}
+
+function storedConnectorRuntimeCredentialStatus(
+  row: StoredConnectorRuntimeRow,
+  now: Date,
+): ConnectorCredentialStatus {
+  return connectorRuntimeCredentialStatus({
+    type: row.connectorType,
+    authMethod: row.authMethod,
+    storedNeedsReconnect: row.needsReconnect,
+    tokenExpiresAt: row.tokenExpiresAt,
+    now,
   });
 }
 
@@ -1912,7 +1945,12 @@ async function loadStoredConnectorContext(
       sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`,
     );
     const connectorRows = await tx
-      .select({ type: connectors.type, authMethod: connectors.authMethod })
+      .select({
+        type: connectors.type,
+        authMethod: connectors.authMethod,
+        needsReconnect: connectors.needsReconnect,
+        tokenExpiresAt: connectors.tokenExpiresAt,
+      })
       .from(connectors)
       .where(
         and(
@@ -1927,6 +1965,7 @@ async function loadStoredConnectorContext(
     const allowedConnectorRows = allowedStoredConnectorRows(
       connectorRows,
       args.allowedConnectorTypes,
+      nowDate(),
     );
     if (allowedConnectorRows.length === 0) {
       return emptyConnectorRuntimeContext();

@@ -17,6 +17,7 @@ import {
   zeroConnectorOauthStartContract,
   zeroConnectorsMainContract,
 } from "@vm0/api-contracts/contracts/zero-connectors";
+import type { ConnectorResponse } from "@vm0/api-contracts/contracts/connector-schemas";
 import { server } from "../../../mocks/server.ts";
 import { testContext } from "../../../signals/__tests__/test-helpers.ts";
 import {
@@ -101,7 +102,7 @@ function mockConnectorOauthStart() {
   );
 }
 
-function manualGrantConnectorResponse(type: ConnectorType) {
+function manualGrantConnectorResponse(type: ConnectorType): ConnectorResponse {
   return {
     id: crypto.randomUUID(),
     type,
@@ -110,7 +111,8 @@ function manualGrantConnectorResponse(type: ConnectorType) {
     externalUsername: null,
     externalEmail: null,
     oauthScopes: null,
-    needsReconnect: false,
+    connectionStatus: "connected",
+    tokenExpiresAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -143,6 +145,40 @@ describe("connect modal - display", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Connected")).toBeInTheDocument();
+    });
+  });
+
+  it("shows future non-refreshable expiry in hours", async () => {
+    mockConnectors([
+      {
+        type: "gitlab",
+        authMethod: "api-token",
+        tokenExpiresAt: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+      },
+    ]);
+
+    await openConnectModal("gitlab");
+
+    await waitFor(() => {
+      expect(screen.getByText("Expires in 3 hours")).toBeInTheDocument();
+    });
+  });
+
+  it("shows sub-hour non-refreshable expiry without rounding up", async () => {
+    mockConnectors([
+      {
+        type: "gitlab",
+        authMethod: "api-token",
+        tokenExpiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      },
+    ]);
+
+    await openConnectModal("gitlab");
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Expires in less than 1 hour"),
+      ).toBeInTheDocument();
     });
   });
 });
@@ -182,7 +218,8 @@ describe("connect modal - content by auth method", () => {
           externalUsername: "device-user",
           externalEmail: null,
           oauthScopes: ["read"],
-          needsReconnect: false,
+          connectionStatus: "connected",
+          tokenExpiresAt: null,
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
@@ -241,7 +278,8 @@ describe("connect modal - content by auth method", () => {
           externalUsername: "device-user",
           externalEmail: null,
           oauthScopes: ["read"],
-          needsReconnect: false,
+          connectionStatus: "connected",
+          tokenExpiresAt: null,
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },

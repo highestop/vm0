@@ -79,6 +79,10 @@ import {
 } from "./auth-state-lock.service";
 import { loadUserFeatureSwitchContext } from "./feature-switches.service";
 import { resolveOrgCreditAvailability } from "./zero-run-admission.service";
+import {
+  connectorRuntimeCredentialStatusForAccess,
+  type ConnectorCredentialStatus,
+} from "./connector-credential-status.service";
 
 type AccessSecretSource = "connector" | "model-provider";
 type FirewallAuthFailureReason = "upstream_provider" | "reconnect_required";
@@ -210,6 +214,23 @@ function tokenRefreshFailed(
     status: 502,
     body: {
       error,
+    },
+  };
+}
+
+function connectorReconnectRequired(
+  failedConnectors: readonly string[],
+): ResolveFirewallAuthResult {
+  const connectorList = failedConnectors.join(", ");
+  return {
+    status: 502,
+    body: {
+      error: {
+        message: `Connector credential requires reconnect for: ${connectorList}.`,
+        code: "TOKEN_REFRESH_FAILED",
+        connectors: failedConnectors,
+        failureReason: "reconnect_required",
+      },
     },
   };
 }
@@ -2533,6 +2554,60 @@ function hasUnavailableAccessSource(args: {
   });
 }
 
+function connectorAccessCredentialStatus(
+  connectorAccess: ConnectorAccessState,
+  nowSeconds: number,
+): ConnectorCredentialStatus {
+  return connectorRuntimeCredentialStatusForAccess({
+    storedNeedsReconnect: connectorAccess.needsReconnect,
+    tokenExpiresAt:
+      connectorAccess.tokenExpiresAt === null
+        ? null
+        : new Date(connectorAccess.tokenExpiresAt * 1000),
+    now: new Date(nowSeconds * 1000),
+    isRefreshable: connectorAccess.accessMetadata.kind === "refresh-token",
+  });
+}
+
+function connectorAccessSourcesWithReconnectRequiredStatus(args: {
+  readonly secretConnectorMap: Record<string, string> | undefined;
+  readonly secretConnectorMetadataMap:
+    | Record<string, SecretConnectorMetadata>
+    | undefined;
+  readonly referencedKeys: Set<string>;
+  readonly connectorAccessByType: ReadonlyMap<string, ConnectorAccessState>;
+}): readonly string[] {
+  if (!args.secretConnectorMap) {
+    return [];
+  }
+  const nowSeconds = Math.floor(nowDate().getTime() / 1000);
+  const reconnectRequiredConnectorTypes = new Set<string>();
+  for (const key of args.referencedKeys) {
+    const connectorType = args.secretConnectorMap[key];
+    if (!connectorType) {
+      continue;
+    }
+    const metadata = resolveRefreshMetadata(
+      connectorType,
+      args.secretConnectorMetadataMap?.[key],
+    );
+    if (metadata.sourceType !== "connector") {
+      continue;
+    }
+    const connectorAccess = args.connectorAccessByType.get(connectorType);
+    if (!connectorAccess || !isSelectedAccessSecretKey(key, connectorAccess)) {
+      continue;
+    }
+    if (
+      connectorAccessCredentialStatus(connectorAccess, nowSeconds) ===
+      "reconnect-required"
+    ) {
+      reconnectRequiredConnectorTypes.add(connectorType);
+    }
+  }
+  return [...reconnectRequiredConnectorTypes];
+}
+
 function hasMissingUnresolvableSecrets(args: {
   readonly secrets: Record<string, string>;
   readonly referencedKeys: Set<string>;
@@ -2622,6 +2697,19 @@ async function prepareFirewallAuthResolutionContext(args: {
     })
   ) {
     return { ok: false, response: connectorNotConfigured() };
+  }
+  const reconnectRequiredConnectorTypes =
+    connectorAccessSourcesWithReconnectRequiredStatus({
+      secretConnectorMap: args.body.secretConnectorMap,
+      secretConnectorMetadataMap: args.body.secretConnectorMetadataMap,
+      referencedKeys: referenced.secrets,
+      connectorAccessByType,
+    });
+  if (reconnectRequiredConnectorTypes.length > 0) {
+    return {
+      ok: false,
+      response: connectorReconnectRequired(reconnectRequiredConnectorTypes),
+    };
   }
   await syncStaticConnectorAccessSecrets({
     db: args.db,

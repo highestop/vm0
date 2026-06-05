@@ -11,6 +11,7 @@ import {
   type ConnectorDisplayCategory,
 } from "@vm0/connectors/connectors";
 import {
+  getConnectorAuthMethodAccessMetadata,
   getConnectorAuthMethod,
   getConfiguredConnectorAuthMethodIds,
   getConnectorTags,
@@ -56,6 +57,11 @@ const { get$: hiddenConnectorTypesRaw$, set$: setHiddenConnectorTypes$ } =
 type PostConnectOptions = {
   readonly showPermissionDialog?: boolean;
 };
+export type ConnectorConnectionStatus =
+  | "not-connected"
+  | "connected"
+  | "scope-mismatch"
+  | "reconnect-required";
 
 // ---------------------------------------------------------------------------
 // Derived state
@@ -80,9 +86,16 @@ export interface ConnectorTypeWithStatus {
   usedByAgent?: boolean;
   /** True if stored grant scopes don't cover all currently required scopes. */
   scopeMismatch: boolean;
-  /** True if OAuth token refresh failed and user needs to reconnect. */
-  needsReconnect: boolean;
+  /** User-facing connection state derived from API state and scope coverage. */
+  connectionStatus: ConnectorConnectionStatus;
+  /** Stored credential expiry returned by the API. */
+  tokenExpiresAt: string | null;
+  /** True when the selected auth method can refresh runtime access. */
+  authMethodSupportsRefresh: boolean;
 }
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 type ConnectorConnectLaunchMode = "oauth-auth-code" | "modal";
 
@@ -172,6 +185,70 @@ export function getOnlyAvailableAuthCodeAuthMethod(
   return getAvailableAuthCodeAuthMethod(type, availableAuthMethods, authMethod);
 }
 
+function connectorAuthMethodSupportsRefresh(
+  type: ConnectorType,
+  authMethod: string,
+): boolean {
+  return (
+    getConnectorAuthMethodAccessMetadata(type, authMethod)?.kind ===
+    "refresh-token"
+  );
+}
+
+function connectorTokenExpiresAtMs(
+  connector: ConnectorTypeWithStatus,
+): number | null {
+  if (!connector.tokenExpiresAt) {
+    return null;
+  }
+  const value = Date.parse(connector.tokenExpiresAt);
+  return Number.isFinite(value) ? value : null;
+}
+
+export function connectorCurrentConnectionStatus(
+  connector: ConnectorTypeWithStatus,
+  nowMs = Date.now(),
+): ConnectorConnectionStatus {
+  if (connector.connectionStatus === "not-connected") {
+    return "not-connected";
+  }
+  if (!connector.authMethodSupportsRefresh) {
+    const tokenExpiresAtMs = connectorTokenExpiresAtMs(connector);
+    if (tokenExpiresAtMs !== null && tokenExpiresAtMs <= nowMs) {
+      return "reconnect-required";
+    }
+  }
+  return connector.connectionStatus;
+}
+
+function formatExpiryCountdown(value: number, unit: "day" | "hour"): string {
+  return `Expires in ${value} ${unit}${value === 1 ? "" : "s"}`;
+}
+
+export function connectorExpiryCountdownText(
+  connector: ConnectorTypeWithStatus,
+  nowMs = Date.now(),
+): string | null {
+  if (
+    connectorCurrentConnectionStatus(connector, nowMs) !== "connected" ||
+    connector.authMethodSupportsRefresh
+  ) {
+    return null;
+  }
+  const tokenExpiresAtMs = connectorTokenExpiresAtMs(connector);
+  if (tokenExpiresAtMs === null) {
+    return null;
+  }
+  const remainingMs = tokenExpiresAtMs - nowMs;
+  if (remainingMs >= DAY_MS) {
+    return formatExpiryCountdown(Math.ceil(remainingMs / DAY_MS), "day");
+  }
+  if (remainingMs < HOUR_MS) {
+    return "Expires in less than 1 hour";
+  }
+  return formatExpiryCountdown(Math.ceil(remainingMs / HOUR_MS), "hour");
+}
+
 function buildConnectorTypeStatus(params: {
   readonly type: ConnectorType;
   readonly connector: ConnectorResponse | null;
@@ -195,6 +272,13 @@ function buildConnectorTypeStatus(params: {
     return !!method?.featureFlag && method.showExperimentalLabel !== false;
   });
   const connected = params.connector !== null;
+  const apiConnectionStatus = params.connector?.connectionStatus ?? null;
+  const authMethodSupportsRefresh =
+    params.connector !== null &&
+    connectorAuthMethodSupportsRefresh(
+      params.type,
+      params.connector.authMethod,
+    );
   const scopeMismatch =
     params.connector !== null &&
     !hasRequiredConnectorAuthMethodScopes(
@@ -202,6 +286,15 @@ function buildConnectorTypeStatus(params: {
       params.connector.authMethod,
       params.connector.oauthScopes,
     );
+  let connectionStatus: ConnectorConnectionStatus = "not-connected";
+  if (params.connector !== null) {
+    connectionStatus = "connected";
+    if (apiConnectionStatus === "reconnect-required") {
+      connectionStatus = "reconnect-required";
+    } else if (scopeMismatch) {
+      connectionStatus = "scope-mismatch";
+    }
+  }
 
   return {
     type: params.type,
@@ -216,7 +309,9 @@ function buildConnectorTypeStatus(params: {
     connector: params.connector,
     availableAuthMethods,
     scopeMismatch,
-    needsReconnect: params.connector?.needsReconnect ?? false,
+    connectionStatus,
+    tokenExpiresAt: params.connector?.tokenExpiresAt ?? null,
+    authMethodSupportsRefresh,
   };
 }
 

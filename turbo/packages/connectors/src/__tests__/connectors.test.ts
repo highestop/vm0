@@ -1890,6 +1890,12 @@ describe("getAvailableConnectorAuthMethodIds", () => {
     ).toStrictEqual(["api-token"]);
   });
 
+  it("exposes Ashby API-token auth without a feature switch", () => {
+    expect(getAvailableConnectorAuthMethodIds("ashby", {})).toStrictEqual([
+      "api-token",
+    ]);
+  });
+
   it("exposes Base44 OAuth without a feature switch", () => {
     expect(getAvailableConnectorAuthMethodIds("base44", {})).toStrictEqual([
       "oauth",
@@ -2502,6 +2508,12 @@ describe("getConnectorEnvBindingEntries", () => {
   it("returns correct env binding entries for API-token-only connector", () => {
     expect(envBindingsForSingleMethod("axiom", "api-token")).toEqual({
       AXIOM_TOKEN: "$secrets.AXIOM_TOKEN",
+    });
+  });
+
+  it("returns correct env binding entries for Ashby", () => {
+    expect(envBindingsForSingleMethod("ashby", "api-token")).toEqual({
+      ASHBY_TOKEN: "$secrets.ASHBY_TOKEN",
     });
   });
 

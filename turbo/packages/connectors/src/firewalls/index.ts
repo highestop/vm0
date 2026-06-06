@@ -718,6 +718,8 @@ export type NonFirewallConnectorType =
   | "cloudinary" // SHA signature in form body + api_key param
   | "minio" // AWS Signature V4
   // Other
+  | "daytona"
+  | "modal"
   | "test-oauth-device"; // internal provider capability test connector
 
 /**

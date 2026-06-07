@@ -636,6 +636,17 @@ function withAutoMemoryMissingRootPolicy(
   };
 }
 
+function withCanonicalAutoMemoryMissingRootPolicy(
+  artifacts: readonly ContextArtifact[],
+  framework: SupportedFramework,
+): readonly ContextArtifact[] {
+  return artifacts.map((artifact) => {
+    return isCanonicalAutoMemoryArtifact(artifact, framework)
+      ? withAutoMemoryMissingRootPolicy(artifact)
+      : artifact;
+  });
+}
+
 function claimsAutoMemorySlot(
   artifact: ContextArtifact,
   framework: SupportedFramework,
@@ -718,7 +729,10 @@ function artifactsForRun(args: {
   }
 
   return {
-    artifacts,
+    artifacts: withCanonicalAutoMemoryMissingRootPolicy(
+      artifacts,
+      args.framework,
+    ),
   };
 }
 

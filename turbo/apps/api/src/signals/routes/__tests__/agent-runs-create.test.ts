@@ -1710,7 +1710,7 @@ describe("POST /api/agent/runs", () => {
     ]);
   });
 
-  it("does not add missing root policy to canonical memory artifacts", async () => {
+  it("adds missing root policy to canonical memory artifacts", async () => {
     const fx = await fixture();
     const compose = await createCompose({ fixture: fx });
 
@@ -1754,7 +1754,7 @@ describe("POST /api/agent/runs", () => {
     });
     expect(
       executionContext.storageManifest.artifacts[0]?.missingRootPolicy,
-    ).toBeUndefined();
+    ).toBe("preserveParentVersion");
   });
 
   it("keeps user-authored canonical memory mount overrides strict", async () => {
@@ -1822,7 +1822,7 @@ describe("POST /api/agent/runs", () => {
     ]);
   });
 
-  it("does not add missing root policy for continued canonical memory artifacts", async () => {
+  it("adds missing root policy for continued canonical memory artifacts", async () => {
     const fx = await fixture();
     const compose = await createCompose({ fixture: fx });
 
@@ -1883,7 +1883,7 @@ describe("POST /api/agent/runs", () => {
           artifact.mountPath === CANONICAL_CLAUDE_MEMORY_MOUNT_PATH
         );
       })?.missingRootPolicy,
-    ).toBeUndefined();
+    ).toBe("preserveParentVersion");
   });
 
   it("includes compose artifacts and volumes in the runner storage manifest", async () => {
@@ -2564,7 +2564,7 @@ describe("POST /api/agent/runs", () => {
     expect(run?.resumedFromCheckpointId).toBe(checkpoint.id);
   });
 
-  it("does not add missing root policy when resuming legacy checkpoint artifacts", async () => {
+  it("adds missing root policy when resuming legacy checkpoint artifacts", async () => {
     const fx = await fixture();
     const compose = await createCompose({ fixture: fx });
     const first = await accept(
@@ -2632,10 +2632,10 @@ describe("POST /api/agent/runs", () => {
           artifact.mountPath === CANONICAL_CLAUDE_MEMORY_MOUNT_PATH
         );
       })?.missingRootPolicy,
-    ).toBeUndefined();
+    ).toBe("preserveParentVersion");
   });
 
-  it("does not add missing root policy to canonical memory checkpoint artifacts", async () => {
+  it("adds missing root policy to canonical memory checkpoint artifacts", async () => {
     const fx = await fixture();
     const compose = await createCompose({ fixture: fx });
     const first = await accept(
@@ -2712,7 +2712,7 @@ describe("POST /api/agent/runs", () => {
           artifact.mountPath === CANONICAL_CLAUDE_MEMORY_MOUNT_PATH
         );
       })?.missingRootPolicy,
-    ).toBeUndefined();
+    ).toBe("preserveParentVersion");
   });
 
   it("preserves missing root policy from continued canonical memory checkpoint artifacts", async () => {

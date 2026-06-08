@@ -361,6 +361,7 @@ const ZERO_BILLING_CREDIT_CHECKOUT_REWRITE_SOURCE =
 const ZERO_BILLING_DOWNGRADE_REWRITE_SOURCE = "/api/zero/billing/downgrade";
 const ZERO_BILLING_INVOICES_REWRITE_SOURCE = "/api/zero/billing/invoices";
 const ZERO_BILLING_PORTAL_REWRITE_SOURCE = "/api/zero/billing/portal";
+const ZERO_BILLING_REDEEM_CODE_REWRITE_SOURCE = "/api/zero/billing/redeem-code";
 const ZERO_BILLING_REDEEM_REWRITE_SOURCE = "/api/zero/billing/redeem/:campaign";
 const ZERO_BILLING_REDEEM_PATH_RE = /^\/api\/zero\/billing\/redeem\/[^/]+$/;
 const ZERO_BILLING_RESTORE_REWRITE_SOURCE = "/api/zero/billing/restore";
@@ -711,6 +712,7 @@ export const API_BACKEND_REWRITES = [
   [ZERO_BILLING_DOWNGRADE_REWRITE_SOURCE, "/api/zero/billing/downgrade"],
   [ZERO_BILLING_INVOICES_REWRITE_SOURCE, "/api/zero/billing/invoices"],
   [ZERO_BILLING_PORTAL_REWRITE_SOURCE, "/api/zero/billing/portal"],
+  [ZERO_BILLING_REDEEM_CODE_REWRITE_SOURCE, "/api/zero/billing/redeem-code"],
   [
     ZERO_BILLING_REDEEM_REWRITE_SOURCE,
     "/api/zero/billing/redeem/:campaign",

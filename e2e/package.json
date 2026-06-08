@@ -13,12 +13,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@clerk/testing": "^2.0.34",
+    "@clerk/testing": "^2.0.35",
     "@playwright/test": "^1.60.0",
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.2",
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "tsx": "^4.22.3"
+    "tsx": "^4.22.4"
   }
 }

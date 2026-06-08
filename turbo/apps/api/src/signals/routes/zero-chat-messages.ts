@@ -90,7 +90,6 @@ interface NormalSendBody {
   readonly hasTextContent?: boolean;
   readonly attachFiles?: AttachFile[];
   readonly clientMessageId?: string;
-  readonly forceNewSession?: boolean;
   readonly debugNoMockClaude?: boolean;
   readonly debugNoMockCodex?: boolean;
   readonly revokesMessageId?: string;
@@ -140,6 +139,11 @@ interface WebChatPriorRun {
   readonly messages: readonly WebChatPriorRunMessage[];
 }
 
+interface LatestThreadSession {
+  readonly sessionId: string;
+  readonly selectedModel: string | null;
+}
+
 interface WebChatIncompleteRoundMessage {
   readonly role: "user" | "assistant";
   readonly content: string | null;
@@ -175,7 +179,6 @@ interface NormalSendArgs {
 interface PreparedNormalSend {
   readonly db: Db;
   readonly agent: AgentForChatSend;
-  readonly forceNewSession: boolean;
   readonly thread: ResolvedThread;
   readonly priorContext: string;
   readonly generationTemplatePrompt: string;
@@ -255,7 +258,7 @@ interface ExistingClientMessageIdRow {
 
 const sendBody$ = bodyResultOf(chatMessagesContract.send);
 // Existing web chat threads carry a small recent-run window in the system
-// prompt. Session compatibility is handled separately by forceNewSession.
+// prompt. Session compatibility is decided server-side from the target model.
 const RECENT_CHAT_RUN_LIMIT = 10;
 const WEB_CHAT_PRIOR_MESSAGE_CHAR_CAP = 4000;
 const WEB_CHAT_INCOMPLETE_MESSAGE_CHAR_CAP = 4000;
@@ -691,18 +694,21 @@ async function loadAgentForChatSend(
   return agent;
 }
 
-async function latestSessionIdForThread(
+async function latestSessionForThread(
   db: Db,
   threadId: string,
-): Promise<string | undefined> {
+): Promise<LatestThreadSession | undefined> {
   const rows = await db
-    .select({ result: agentRuns.result })
+    .select({
+      result: agentRuns.result,
+      selectedModel: zeroRuns.selectedModel,
+    })
     .from(zeroRuns)
     .innerJoin(agentRuns, eq(zeroRuns.id, agentRuns.id))
     // D7: only web-source runs join the thread's session-continuity chain, so a
     // chat-mode scheduled run (triggerSource "schedule") never resumes a web
     // session and a later web turn never resumes a scheduled one. The 'web'
-    // filter (before .limit) is mirrored in latestSessionIdForThreadFromDb
+    // filter (before .limit) is mirrored in latestSessionForThreadFromDb
     // (internal-callbacks-chat.ts) and latestSessionIdForThread
     // (chat-thread-v1-send.service.ts) — keep them in sync. This is a
     // continuity filter ONLY; it must NOT be copied into activeRunExistsForThread.
@@ -717,10 +723,47 @@ async function latestSessionIdForThread(
 
   for (const row of rows) {
     if (hasAgentSessionId(row.result)) {
-      return row.result.agentSessionId;
+      return {
+        sessionId: row.result.agentSessionId,
+        selectedModel: row.selectedModel,
+      };
     }
   }
   return undefined;
+}
+
+async function selectedModelForSessionDecision(params: {
+  readonly db: Db;
+  readonly orgId: string;
+  readonly userId: string;
+  readonly modelSelection: IncomingModelSelection;
+  readonly threadSelectedModel: string | null;
+}): Promise<string | null> {
+  if (params.modelSelection !== undefined) {
+    return (
+      params.modelSelection?.selectedModel ??
+      (
+        await resolveDefaultModelFirstPin(
+          params.db,
+          params.orgId,
+          params.userId,
+        )
+      ).selectedModel
+    );
+  }
+  return params.threadSelectedModel;
+}
+
+function shouldStartNewSessionForSelectedModel(params: {
+  readonly latestSession: LatestThreadSession | undefined;
+  readonly nextSelectedModel: string | null;
+}): boolean {
+  return (
+    params.latestSession?.selectedModel !== undefined &&
+    params.latestSession.selectedModel !== null &&
+    params.nextSelectedModel !== null &&
+    params.latestSession.selectedModel !== params.nextSelectedModel
+  );
 }
 
 async function getLatestRunsByThreadId(
@@ -1095,21 +1138,46 @@ async function persistThreadPinIfUnset(
   return pin;
 }
 
+async function persistThreadPinForExplicitSelection(
+  db: Db,
+  threadId: string,
+  pin: ThreadModelPin,
+): Promise<ThreadModelPin> {
+  if (!pin.selectedModel) {
+    await db
+      .update(chatThreads)
+      .set({
+        ...modelOnlyModelFirstPin(null),
+        updatedAt: nowDate(),
+      })
+      .where(eq(chatThreads.id, threadId));
+    return pin;
+  }
+  await db
+    .update(chatThreads)
+    .set({
+      ...modelOnlyModelFirstPin(pin.selectedModel),
+      updatedAt: nowDate(),
+    })
+    .where(eq(chatThreads.id, threadId));
+  return pin;
+}
+
 async function resolveRunModelPin(params: {
   readonly db: Db;
   readonly orgId: string;
   readonly userId: string;
   readonly threadId: string;
   readonly modelSelection: IncomingModelSelection;
-  readonly forceNewSession: boolean;
 }): Promise<
   | ThreadModelPin
   | ReturnType<typeof providerDeleted>
   | ReturnType<typeof badRequestMessage>
 > {
-  const existing = params.forceNewSession
-    ? null
-    : await existingModelFirstThreadPin(params.db, params.threadId);
+  const existing =
+    params.modelSelection === undefined
+      ? await existingModelFirstThreadPin(params.db, params.threadId)
+      : null;
   if (existing) {
     const pin = await resolveStoredModelFirstPin({
       db: params.db,
@@ -1134,16 +1202,16 @@ async function resolveRunModelPin(params: {
   if ("status" in pin) {
     return pin;
   }
-  return persistThreadPinIfUnset(params.db, params.threadId, pin);
+  return params.modelSelection === undefined
+    ? persistThreadPinIfUnset(params.db, params.threadId, pin)
+    : persistThreadPinForExplicitSelection(params.db, params.threadId, pin);
 }
 
 async function validateModelSelection(params: {
   readonly db: Db;
   readonly orgId: string;
   readonly userId: string;
-  readonly threadId: string | undefined;
   readonly modelSelection: IncomingModelSelection;
-  readonly forceNewSession: boolean;
 }): Promise<ReturnType<typeof badRequestMessage> | undefined> {
   if (params.modelSelection) {
     const pin = await resolveModelSelectionPin({
@@ -1155,28 +1223,6 @@ async function validateModelSelection(params: {
     if ("status" in pin) {
       return pin;
     }
-  }
-
-  if (
-    params.forceNewSession ||
-    params.threadId === undefined ||
-    params.modelSelection === undefined
-  ) {
-    return undefined;
-  }
-
-  const existing = await existingModelFirstThreadPin(
-    params.db,
-    params.threadId,
-  );
-  if (!existing?.selectedModel) {
-    return undefined;
-  }
-  if (
-    params.modelSelection === null ||
-    existing.selectedModel !== params.modelSelection.selectedModel
-  ) {
-    return badRequestMessage("Cannot change model on an existing thread");
   }
   return undefined;
 }
@@ -1207,9 +1253,7 @@ async function maybePersistExplicitModelFirstSelection(params: {
   readonly db: Db;
   readonly orgId: string;
   readonly userId: string;
-  readonly threadId: string;
   readonly modelSelection: IncomingModelSelection;
-  readonly forceNewSession: boolean;
 }): Promise<boolean> {
   if (!params.modelSelection) {
     return false;
@@ -1217,12 +1261,6 @@ async function maybePersistExplicitModelFirstSelection(params: {
   if (
     params.modelSelection.modelProviderId !== MODEL_FIRST_SELECTION_PROVIDER_ID
   ) {
-    return false;
-  }
-  const existing = params.forceNewSession
-    ? null
-    : await existingModelFirstThreadPin(params.db, params.threadId);
-  if (existing) {
     return false;
   }
   await updateUserModelPreference(
@@ -1299,12 +1337,13 @@ async function createChatThread(
 
 async function resolveThread(params: {
   readonly db: Db;
+  readonly orgId: string;
   readonly userId: string;
   readonly agentId: string;
   readonly existingThreadId: string | undefined;
   readonly clientThreadId: string | undefined;
   readonly initialPin: ThreadModelPin;
-  readonly forceNewSession: boolean;
+  readonly modelSelection: IncomingModelSelection;
 }): Promise<ResolvedThread | ReturnType<typeof notFound>> {
   if (!params.existingThreadId) {
     const thread = await createChatThread(params.db, {
@@ -1326,7 +1365,7 @@ async function resolveThread(params: {
   }
 
   const [thread] = await params.db
-    .select({ id: chatThreads.id })
+    .select({ id: chatThreads.id, selectedModel: chatThreads.selectedModel })
     .from(chatThreads)
     .where(
       and(
@@ -1339,16 +1378,24 @@ async function resolveThread(params: {
     return notFound("Chat thread not found");
   }
 
-  const [sessionId, incompleteRows] = await Promise.all([
-    params.forceNewSession
-      ? Promise.resolve(undefined)
-      : latestSessionIdForThread(params.db, thread.id),
+  const [latestSession, incompleteRows] = await Promise.all([
+    latestSessionForThread(params.db, thread.id),
     getIncompleteRoundsSinceLastSuccess(params.db, thread.id),
   ]);
+  const startNewSession = shouldStartNewSessionForSelectedModel({
+    latestSession,
+    nextSelectedModel: await selectedModelForSessionDecision({
+      db: params.db,
+      orgId: params.orgId,
+      userId: params.userId,
+      modelSelection: params.modelSelection,
+      threadSelectedModel: thread.selectedModel,
+    }),
+  });
   return {
     threadId: thread.id,
-    sessionId,
-    incompleteContext: params.forceNewSession
+    sessionId: startNewSession ? undefined : latestSession?.sessionId,
+    incompleteContext: startNewSession
       ? ""
       : buildWebChatIncompleteContext(
           groupIncompleteRoundsByRunId(incompleteRows),
@@ -1373,34 +1420,6 @@ async function prepareRecentChatContext(
   return buildWebChatPriorRunsContext(
     await getLatestRunsByThreadId(db, threadId, RECENT_CHAT_RUN_LIMIT),
   );
-}
-
-async function resetThreadModelPinForNewSession(
-  db: Db,
-  threadId: string,
-): Promise<void> {
-  await db
-    .update(chatThreads)
-    .set({
-      modelProviderId: null,
-      modelProviderType: null,
-      modelProviderCredentialScope: null,
-      selectedModel: null,
-      updatedAt: nowDate(),
-    })
-    .where(eq(chatThreads.id, threadId));
-}
-
-async function maybeResetThreadModelPinForNewSession(params: {
-  readonly db: Db;
-  readonly threadId: string;
-  readonly forceNewSession: boolean;
-  readonly isNewThread: boolean;
-}): Promise<void> {
-  if (!params.forceNewSession || params.isNewThread) {
-    return;
-  }
-  await resetThreadModelPinForNewSession(params.db, params.threadId);
 }
 
 function appendUnassociatedUserMessage(params: {
@@ -1904,14 +1923,11 @@ const prepareNormalSend$ = command(
       return forbidden("Only the private agent owner can run this agent");
     }
 
-    const forceNewSession = args.body.forceNewSession === true;
     const modelError = await validateModelSelection({
       db,
       orgId: args.orgId,
       userId: args.userId,
-      threadId: args.body.threadId,
       modelSelection: args.body.modelSelection,
-      forceNewSession,
     });
     signal.throwIfAborted();
     if (modelError) {
@@ -1926,12 +1942,13 @@ const prepareNormalSend$ = command(
 
     const thread = await resolveThread({
       db,
+      orgId: args.orgId,
       userId: args.userId,
       agentId: args.body.agentId,
       existingThreadId: args.body.threadId,
       clientThreadId: args.body.clientThreadId,
       initialPin: emptyModelFirstThreadPin(),
-      forceNewSession,
+      modelSelection: args.body.modelSelection,
     });
     signal.throwIfAborted();
     if ("status" in thread) {
@@ -1945,29 +1962,18 @@ const prepareNormalSend$ = command(
       thread.incompleteContext,
     );
     signal.throwIfAborted();
-    await maybeResetThreadModelPinForNewSession({
-      db,
-      threadId: thread.threadId,
-      forceNewSession,
-      isNewThread: thread.isNewThread,
-    });
-    signal.throwIfAborted();
-
     const persistedExplicitSelection =
       await maybePersistExplicitModelFirstSelection({
         db,
         orgId: args.orgId,
         userId: args.userId,
-        threadId: thread.threadId,
         modelSelection: args.body.modelSelection,
-        forceNewSession,
       });
     signal.throwIfAborted();
 
     return {
       db,
       agent,
-      forceNewSession,
       thread,
       priorContext,
       generationTemplatePrompt: generationTemplatePrompt.prompt,
@@ -2255,7 +2261,6 @@ const createNormalChatRun$ = command(
       userId: args.userId,
       threadId: prepared.thread.threadId,
       modelSelection: args.body.modelSelection,
-      forceNewSession: prepared.forceNewSession,
     });
     signal.throwIfAborted();
     if ("status" in modelPin) {

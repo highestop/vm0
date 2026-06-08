@@ -173,6 +173,7 @@ const CONNECTOR_ICON_COLORFUL = {
   manus: true,
   meshy: true,
   "meta-ads": true,
+  metabase: true,
   minimax: true,
   minio: true,
   miro: true,

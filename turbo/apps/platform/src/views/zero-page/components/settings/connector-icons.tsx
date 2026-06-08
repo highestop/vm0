@@ -152,6 +152,7 @@ const CONNECTOR_ICON_COLORFUL = {
   honcho: true,
   hubspot: true,
   "hugging-face": true,
+  hunter: true,
   imgur: true,
   instagram: true,
   instantly: true,

@@ -2194,6 +2194,145 @@ describe("zero chat thread page display - artifact sidebar", () => {
     await user.keyboard("{Escape}");
   });
 
+  it("hides presentation PPTX download when the feature switch is disabled", async () => {
+    const user = userEvent.setup();
+    const fileUrl = "https://demo-deck.sites.vm0.io";
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: "Create slides",
+          runId: "run-presentation-artifact",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    setMockConnectors([]);
+    server.use(
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-presentation-artifact",
+              files: [
+                {
+                  id: fileUrl,
+                  filename: "demo-deck.html",
+                  contentType: "text/html",
+                  size: 4096,
+                  url: fileUrl,
+                  artifactKind: "presentation-html",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+    );
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.PresentationHtmlPptxDownload]: false,
+      },
+    });
+
+    click(await screen.findByLabelText("Open artifacts"));
+    await user.click(
+      await screen.findByLabelText("Open artifact demo-deck.html"),
+    );
+    const downloadButton = await screen.findByLabelText("Download artifact");
+    await user.click(downloadButton);
+
+    await waitFor(() => {
+      expect(queryRoleByText("menuitem", "Download")).toBeInTheDocument();
+    });
+    expect(queryRoleByText("menuitem", "Download (.pptx)")).toBeUndefined();
+  });
+
+  it("downloads presentation HTML artifacts as PPTX when the feature switch is enabled", async () => {
+    const user = userEvent.setup();
+    const fileUrl = "https://demo-deck.sites.vm0.io";
+    let presentationHtmlRequested = false;
+    const presentationHtml = `
+      <!doctype html>
+      <html>
+        <head><title>Demo deck</title></head>
+        <body>
+          <section data-vm0-slide>
+            <h1>Demo deck</h1>
+          </section>
+        </body>
+      </html>
+    `;
+    mockChatLifecycle({
+      chatMessages: [
+        {
+          role: "user",
+          content: "Create slides",
+          runId: "run-presentation-artifact",
+          createdAt: "2026-03-10T00:00:00Z",
+        },
+      ],
+    });
+    setMockConnectors([]);
+    server.use(
+      mockApi(chatThreadArtifactsContract.list, ({ respond }) => {
+        return respond(200, {
+          runs: [
+            {
+              runId: "run-presentation-artifact",
+              files: [
+                {
+                  id: fileUrl,
+                  filename: "demo-deck.html",
+                  contentType: "text/html",
+                  size: 4096,
+                  url: fileUrl,
+                  artifactKind: "presentation-html",
+                  createdAt: "2026-03-10T00:00:00Z",
+                },
+              ],
+            },
+          ],
+        });
+      }),
+      http.get(fileUrl, () => {
+        presentationHtmlRequested = true;
+        return HttpResponse.html(presentationHtml);
+      }),
+      http.get("/__vm0-dev-artifact-fetch", ({ request }) => {
+        const requestUrl = new URL(request.url);
+        if (requestUrl.searchParams.get("url") !== fileUrl) {
+          return new HttpResponse(null, { status: 404 });
+        }
+        presentationHtmlRequested = true;
+        return HttpResponse.html(presentationHtml);
+      }),
+    );
+
+    detachedSetupPage({
+      context,
+      path: "/chats/thread-test-1",
+      featureSwitches: {
+        [FeatureSwitchKey.PresentationHtmlPptxDownload]: true,
+      },
+    });
+
+    click(await screen.findByLabelText("Open artifacts"));
+    await user.click(
+      await screen.findByLabelText("Open artifact demo-deck.html"),
+    );
+    await user.click(await screen.findByLabelText("Download artifact"));
+    await user.click(await screen.findByText("Download (.pptx)"));
+
+    await waitFor(() => {
+      expect(presentationHtmlRequested).toBeTruthy();
+    });
+  });
+
   it("opens Google Drive OAuth in a new tab and syncs after the connector event", async () => {
     const user = userEvent.setup();
     const fileUrl = "https://example.com/disconnected-chart.png";

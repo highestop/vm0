@@ -181,6 +181,7 @@ const CONNECTOR_ICON_COLORFUL = {
   monday: true,
   n8n: true,
   neon: true,
+  netdata: true,
   openweather: true,
   pandadoc: true,
   pdf4me: true,

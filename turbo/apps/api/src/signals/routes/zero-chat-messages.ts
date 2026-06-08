@@ -2372,7 +2372,7 @@ const createNormalChatRun$ = command(
   },
 );
 
-const sendNormalMessage$ = command(
+export const sendNormalMessage$ = command(
   async ({ set }, args: NormalSendArgs, signal: AbortSignal) => {
     const prepared = await set(prepareNormalSend$, args, signal);
     signal.throwIfAborted();

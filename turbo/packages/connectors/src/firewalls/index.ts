@@ -247,7 +247,12 @@ import { spotifyFirewall } from "./spotify.generated";
 import { stravaFirewall } from "./strava.generated";
 import { strapiFirewall } from "./strapi.generated";
 import { streakFirewall } from "./streak.generated";
-import { stripeFirewall } from "./stripe.generated";
+import {
+  stripeCategories,
+  stripeCategoryOrder,
+  stripeDefaultAllowed,
+  stripeFirewall,
+} from "./stripe.generated";
 import { supabaseFirewall } from "./supabase.generated";
 import { supadataFirewall } from "./supadata.generated";
 import { supermemoryFirewall } from "./supermemory.generated";
@@ -659,6 +664,7 @@ const CONNECTOR_CATEGORIES: Partial<
   clerk: { categories: clerkCategories, displayOrder: clerkCategoryOrder },
   gmail: { categories: gmailCategories, displayOrder: gmailCategoryOrder },
   slack: { categories: slackCategories, displayOrder: slackCategoryOrder },
+  stripe: { categories: stripeCategories, displayOrder: stripeCategoryOrder },
   vercel: { categories: vercelCategories, displayOrder: vercelCategoryOrder },
 };
 
@@ -775,6 +781,7 @@ const DEFAULT_ALLOWED: Partial<
   clerk: clerkDefaultAllowed,
   gmail: gmailDefaultAllowed,
   slack: slackDefaultAllowed,
+  stripe: stripeDefaultAllowed,
 };
 
 /**

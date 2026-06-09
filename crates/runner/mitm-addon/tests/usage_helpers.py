@@ -7,6 +7,7 @@ import json
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
@@ -59,6 +60,25 @@ def install_recording_usage_timer(
         flush_owner_lock=flush_owner_lock,
     )
     return timers
+
+
+@contextlib.contextmanager
+def fresh_usage_executor_context() -> Iterator[ThreadPoolExecutor]:
+    """Install a temporary usage executor and restore the original on exit."""
+    original = usage.webhook.usage_executor
+    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="usage-test")
+    usage.webhook.usage_executor = executor
+    try:
+        yield executor
+    finally:
+        usage.webhook.usage_executor = executor
+        try:
+            try:
+                usage.flush_usage_events(trigger="shutdown")
+            finally:
+                executor.shutdown(wait=True)
+        finally:
+            usage.webhook.usage_executor = original
 
 
 @dataclass(frozen=True)

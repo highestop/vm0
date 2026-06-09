@@ -213,6 +213,7 @@ const CONNECTOR_ICON_COLORFUL = {
   reportei: true,
   revenuecat: true,
   salesforce: true,
+  scrapeninja: true,
   serpapi: true,
   servicenow: true,
   shopify: true,

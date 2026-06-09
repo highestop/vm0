@@ -129,6 +129,12 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     description: "Enable the Stripe payment connector integration",
     enabled: false,
   },
+  [FeatureSwitchKey.AwsConnector]: {
+    maintainer: "ethan@vm0.ai",
+    description: "Enable the temporary AWS remote login connector",
+    enabled: false,
+    enabledOrgIdHashes: STAFF_ORG_ID_HASHES,
+  },
   [FeatureSwitchKey.PosthogConnector]: {
     maintainer: "ethan@vm0.ai",
     description: "Enable the PostHog analytics connector",

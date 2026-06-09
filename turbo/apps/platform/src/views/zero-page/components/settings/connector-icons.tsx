@@ -215,6 +215,7 @@ const CONNECTOR_ICON_COLORFUL = {
   revenuecat: true,
   salesforce: true,
   scrapeninja: true,
+  segment: true,
   sendgrid: true,
   serpapi: true,
   servicenow: true,

@@ -61,7 +61,7 @@ import type {
   GenerationTemplateRequest,
   ChatThreadGithubPr,
 } from "@vm0/api-contracts/contracts/chat-threads";
-import { PRESENTATION_TEMPLATE_ITEMS } from "@vm0/core";
+import { PRESENTATION_TEMPLATE_ITEMS, VIDEO_STYLE_PRESETS } from "@vm0/core";
 import type {
   UserPermissionGrantExpiresIn,
   UserPermissionGrantResponse,
@@ -4659,6 +4659,12 @@ function generationTemplateLabel(
   if (!value) {
     return null;
   }
+  if (value.type === "video") {
+    const item = VIDEO_STYLE_PRESETS.find((candidate) => {
+      return candidate.id === value.selection.stylePresetId;
+    });
+    return item?.nameEn ?? formatTemplateIdLabel(value.selection.stylePresetId);
+  }
   const item = PRESENTATION_TEMPLATE_ITEMS.find((candidate) => {
     return (
       candidate.designSystemId === value.selection.designSystemId &&
@@ -4674,6 +4680,9 @@ function generationTemplateTypeLabel(
   if (!value) {
     return null;
   }
+  if (value.type === "video") {
+    return "Video";
+  }
   return "Slides";
 }
 
@@ -4684,7 +4693,9 @@ function UserMessageGenerationTemplate({
 }) {
   const features = useLastResolved(featureSwitch$);
   const templateLabelEnabled =
-    features?.[FeatureSwitchKey.ChatTemplatePicker] ?? false;
+    generationTemplate?.type === "video"
+      ? (features?.[FeatureSwitchKey.VideoTemplatePicker] ?? false)
+      : (features?.[FeatureSwitchKey.ChatTemplatePicker] ?? false);
   if (!templateLabelEnabled) {
     return null;
   }

@@ -149,6 +149,7 @@ import { mailsac } from "./connectors/mailsac";
 import { make } from "./connectors/make";
 import { manus } from "./connectors/manus";
 import { mapbox } from "./connectors/mapbox";
+import { massive } from "./connectors/massive";
 import { mathpix } from "./connectors/mathpix";
 import { mem0 } from "./connectors/mem0";
 import { mercury } from "./connectors/mercury";
@@ -212,6 +213,7 @@ import { runway } from "./connectors/runway";
 import { salesforce } from "./connectors/salesforce";
 import { scrapeninja } from "./connectors/scrapeninja";
 import { segment } from "./connectors/segment";
+import { semrush } from "./connectors/semrush";
 import { sendgrid } from "./connectors/sendgrid";
 import { serpapi } from "./connectors/serpapi";
 import { servicenow } from "./connectors/servicenow";
@@ -1129,6 +1131,7 @@ const CONNECTOR_TYPES_DEF = defineConnectors({
   ...make,
   ...manus,
   ...mapbox,
+  ...massive,
   ...mathpix,
   ...mem0,
   ...mercury,
@@ -1192,6 +1195,7 @@ const CONNECTOR_TYPES_DEF = defineConnectors({
   ...salesforce,
   ...scrapeninja,
   ...segment,
+  ...semrush,
   ...sendgrid,
   ...serpapi,
   ...servicenow,

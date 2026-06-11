@@ -495,7 +495,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       createInner$,
     ),
@@ -506,7 +506,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:read",
+        requiredCapability: "automation:read",
       },
       listInner$,
     ),
@@ -517,7 +517,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:read",
+        requiredCapability: "automation:read",
       },
       showInner$,
     ),
@@ -528,7 +528,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       updateInner$,
     ),
@@ -539,7 +539,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:delete",
+        requiredCapability: "automation:delete",
       },
       deleteInner$,
     ),
@@ -550,7 +550,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       enableInner$,
     ),
@@ -561,7 +561,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       disableInner$,
     ),
@@ -582,7 +582,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       addTriggerInner$,
     ),
@@ -593,7 +593,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:read",
+        requiredCapability: "automation:read",
       },
       listTriggersInner$,
     ),
@@ -604,7 +604,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:read",
+        requiredCapability: "automation:read",
       },
       showTriggerInner$,
     ),
@@ -615,7 +615,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:delete",
+        requiredCapability: "automation:delete",
       },
       removeTriggerInner$,
     ),
@@ -626,7 +626,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       enableTriggerInner$,
     ),
@@ -637,7 +637,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       disableTriggerInner$,
     ),
@@ -648,7 +648,7 @@ export const automationsV2Routes: readonly RouteEntry[] = [
       {
         requireOrganization: true,
         missingOrganizationStatus: 401,
-        requiredCapability: "schedule:write",
+        requiredCapability: "automation:write",
       },
       rotateSecretInner$,
     ),

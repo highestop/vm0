@@ -727,17 +727,17 @@ class TestXConnectorUsage:
             body=json.dumps({"data": [{"id": "u1"}]}).encode(),
             permission="tweet.read",
             rule="GET /2/tweets/{id}/retweeted_by",
-            request_body=gzip.compress(b'{"unused": true}'),
+            request_body=b"not gzip request content",
             request_encoding="gzip",
         )
         flow.metadata["original_url"] = "https://api.x.com/2/tweets/123/retweeted_by?max_results=10"
 
         with patch(
-            "mitmproxy.net.encoding.decode",
-            side_effect=AssertionError("request body should not be decoded"),
-        ):
+            "usage.providers.connectors.x.billing_body.decode_request_body_for_billing"
+        ) as decode_request_body:
             p = self._call_and_get_single_billing(flow)
 
+        decode_request_body.assert_not_called()
         assert p["category"] == "user.read"
         assert p["quantity"] == 1
 

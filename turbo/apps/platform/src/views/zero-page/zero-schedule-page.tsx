@@ -482,9 +482,9 @@ function DeleteScheduleDialogContainer() {
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete schedule?</DialogTitle>
+          <DialogTitle>Delete automation?</DialogTitle>
           <DialogDescription>
-            This will permanently delete the schedule{" "}
+            This will permanently delete the automation{" "}
             <span className="font-medium text-foreground">
               {pendingDelete?.name}
             </span>

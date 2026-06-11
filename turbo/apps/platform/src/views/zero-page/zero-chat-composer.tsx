@@ -142,6 +142,8 @@ import {
   setPendingConnectType$,
   composerSavingType$,
   setComposerSavingType$,
+  clearComputerUsePopoverCloseSuppression$,
+  computerUsePopoverOpen$,
   addDialogSearch$,
   setAddDialogSearch$,
   popoverSearch$,
@@ -162,6 +164,7 @@ import {
   setTemplatePickerPreviewSlug$,
   templatePickerPreviewSlideIndex$,
   setTemplatePickerPreviewSlideIndex$,
+  setComputerUsePopoverOpen$,
   templateCardHover$,
   setTemplateCardHover$,
   type TemplatePickerVideoGroup,
@@ -271,6 +274,7 @@ interface ZeroChatComposerProps {
     loading: boolean;
     selectedHostId: string | null;
     onChange: (hostId: string | null) => void;
+    onRefresh: () => void;
     downloadUrl: string;
   };
   /** When true, render a skeleton in the model picker slot. */
@@ -2773,9 +2777,27 @@ function ComputerUsePopoverButton({
   computerUse: ComposerComputerUse;
 }) {
   const active = computerUse.selectedHostId !== null;
+  const open = useGet(computerUsePopoverOpen$);
+  const setOpen = useSet(setComputerUsePopoverOpen$);
+  const clearCloseSuppression = useSet(
+    clearComputerUsePopoverCloseSuppression$,
+  );
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setOpen(true);
+      computerUse.onRefresh();
+      window.setTimeout(() => {
+        clearCloseSuppression();
+      }, 300);
+      return;
+    }
+
+    setOpen(false);
+  };
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <TooltipProvider delayDuration={300}>
         <Tooltip>
           <PopoverTrigger asChild>

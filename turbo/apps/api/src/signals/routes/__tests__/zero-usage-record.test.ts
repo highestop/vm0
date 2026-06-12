@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { zeroUsageRecordContract } from "@vm0/api-contracts/contracts/zero-usage-record";
-import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
-import { userFeatureSwitches } from "@vm0/db/schema/user-feature-switches";
 import { createStore } from "ccstate";
 
 import { accept, setupApp, testContext } from "../../../__tests__/test-helpers";
@@ -20,7 +18,6 @@ import {
   seedUsageFixture$,
   type UsageFixture,
 } from "./helpers/zero-usage";
-import { writeDb$ } from "../../external/db";
 
 const context = testContext();
 const store = createStore();
@@ -71,24 +68,6 @@ function createdAt(minutesAgo: number): Date {
   return new Date(nowDate().getTime() - minutesAgo * 60 * 1000);
 }
 
-async function enableCreditUsageRecords(fixture: UsageFixture): Promise<void> {
-  const db = store.set(writeDb$);
-  await db.insert(userFeatureSwitches).values({
-    orgId: fixture.orgId,
-    userId: fixture.userId,
-    switches: { [FeatureSwitchKey.CreditUsageRecords]: true },
-  });
-}
-
-async function disableCreditUsageRecords(fixture: UsageFixture): Promise<void> {
-  const db = store.set(writeDb$);
-  await db.insert(userFeatureSwitches).values({
-    orgId: fixture.orgId,
-    userId: fixture.userId,
-    switches: { [FeatureSwitchKey.CreditUsageRecords]: false },
-  });
-}
-
 describe("GET /api/zero/usage/record", () => {
   const track = createFixtureTracker<UsageFixture>((fixture) => {
     return store.set(deleteUsageFixture$, fixture, context.signal);
@@ -131,7 +110,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
     mocks.clerk.session(fixture.userId, fixture.orgId, "org:admin");
 
     const response = await accept(
@@ -150,34 +128,10 @@ describe("GET /api/zero/usage/record", () => {
     });
   });
 
-  it("returns 403 for ranged usage when credit usage records are disabled", async () => {
-    const fixture = await track(
-      store.set(seedUsageFixture$, {}, context.signal),
-    );
-    await disableCreditUsageRecords(fixture);
-    mocks.clerk.session(fixture.userId, fixture.orgId);
-
-    const response = await accept(
-      apiClient().get({
-        query: { range: "7d", tz: "UTC" },
-        headers: authHeaders(),
-      }),
-      [403],
-    );
-
-    expect(response.body).toStrictEqual({
-      error: {
-        message: "Credit usage records are not enabled",
-        code: "FORBIDDEN",
-      },
-    });
-  });
-
   it("returns rows across sources ordered by recent activity", async () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const older = await store.set(
       seedChatThreadRun$,
@@ -293,7 +247,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const chat = await store.set(
       seedChatThreadRun$,
@@ -364,7 +317,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const chat = await store.set(
       seedChatThreadRun$,
@@ -454,7 +406,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const legacyRun = await store.set(
       seedRun$,
@@ -506,7 +457,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     for (const minutesAgo of [30, 20, 10]) {
       const chat = await store.set(
@@ -554,7 +504,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const today = await store.set(
       seedChatThreadRun$,
@@ -646,7 +595,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const previousDay = await store.set(
       seedChatThreadRun$,
@@ -721,7 +669,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
     const teammateId = `user_${randomUUID()}`;
     mockClerkUserLookup();
 
@@ -793,7 +740,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
 
     const run = await store.set(
       seedChatThreadRun$,
@@ -880,7 +826,6 @@ describe("GET /api/zero/usage/record", () => {
     const fixture = await track(
       store.set(seedUsageFixture$, {}, context.signal),
     );
-    await enableCreditUsageRecords(fixture);
     mocks.clerk.session(fixture.userId, fixture.orgId);
 
     const response = await accept(

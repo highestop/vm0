@@ -58,19 +58,6 @@ const HISTORY_THREAD_ID = "b0000000-0000-4000-a000-000000000705";
 const CHAT_PATH = `/chats/${THREAD_ID}`;
 const AGENT_CHAT_PATH = `/agents/${AGENT_ID}/chat`;
 
-function expectTextBefore(
-  container: HTMLElement,
-  before: string,
-  after: string,
-) {
-  const text = container.textContent ?? "";
-  const beforeIndex = text.indexOf(before);
-  const afterIndex = text.indexOf(after);
-  expect(beforeIndex).toBeGreaterThanOrEqual(0);
-  expect(afterIndex).toBeGreaterThanOrEqual(0);
-  expect(beforeIndex).toBeLessThan(afterIndex);
-}
-
 interface QueuedMessageCapture {
   content?: string;
   hasTextContent?: boolean;
@@ -195,6 +182,18 @@ async function expectQueuedMessages(contents: string[]): Promise<void> {
       expect(queuedMessages[index]).toHaveTextContent(content);
     }
   });
+}
+
+function expectTextBefore(
+  container: HTMLElement,
+  beforeText: string,
+  afterText: string,
+): void {
+  const before = within(container).getByText(beforeText);
+  const after = within(container).getByText(afterText);
+  expect(
+    before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 }
 
 function makeMessage(id: string, text: string): PagedChatMessage {
@@ -1527,7 +1526,7 @@ describe("chat lifecycle", () => {
     });
   });
 
-  it("shows run credit usage after read aloud with friendly popover details", async () => {
+  it("shows run credit usage with friendly popover details", async () => {
     const user = userEvent.setup({ delay: null });
     mockChatLifecycle(context, {
       threadId: "thread-usage-chip",
@@ -1582,7 +1581,6 @@ describe("chat lifecycle", () => {
       context,
       path: "/chats/thread-usage-chip",
       featureSwitches: {
-        [FeatureSwitchKey.AudioOutput]: true,
         [FeatureSwitchKey.ChatRunUsage]: true,
       },
     });
@@ -1591,16 +1589,8 @@ describe("chat lifecycle", () => {
     const actions = credit.closest('[data-testid="chat-message-actions"]');
     expect(actions).not.toBeNull();
     const copy = within(actions as HTMLElement).getByLabelText("Copy message");
-    const readAloud = within(actions as HTMLElement).getByLabelText(
-      "Read aloud",
-    );
     expect(
-      copy.compareDocumentPosition(readAloud) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      readAloud.compareDocumentPosition(credit) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      copy.compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.pointerEnter(credit);
@@ -1716,43 +1706,6 @@ describe("chat lifecycle", () => {
     });
   });
 
-  it("keeps completed chat work visible when folding is disabled", async () => {
-    mockChatLifecycle(context, {
-      threadId: "thread-work-folding-disabled",
-      chatMessages: [
-        {
-          role: "user",
-          content: "Audit the launch checklist",
-          runId: "run-work-folding-disabled",
-          createdAt: "2026-06-09T10:00:00Z",
-        },
-        {
-          role: "assistant",
-          content: "The launch checklist is ready.",
-          runId: "run-work-folding-disabled",
-          runLifecycleEvent: "completed",
-          createdAt: "2026-06-09T10:00:55Z",
-        },
-      ],
-    });
-
-    detachedSetupPage({
-      context,
-      path: "/chats/thread-work-folding-disabled",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: false },
-    });
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("Audit the launch checklist"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText("The launch checklist is ready."),
-      ).toBeInTheDocument();
-      expect(screen.queryByLabelText("Expand work history")).toBeNull();
-    });
-  });
-
   it("keeps chat work visible while the run is active", async () => {
     mockChatLifecycle(context, {
       threadId: "thread-work-folding-running",
@@ -1776,7 +1729,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-running",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     await waitFor(() => {
@@ -1832,7 +1784,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-completed-before-active",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     const expandButtons = await screen.findAllByLabelText(
@@ -1884,7 +1835,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-completed",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     const expandButton = await screen.findByLabelText("Expand work history");
@@ -1980,7 +1930,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-completion-marker",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     const expandButton = await screen.findByLabelText("Expand work history");
@@ -2053,7 +2002,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-each-run",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     const expandButtons = await screen.findAllByLabelText(
@@ -2135,7 +2083,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-user-final-only",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     await waitFor(() => {
@@ -2162,7 +2109,6 @@ describe("chat lifecycle", () => {
     detachedSetupPage({
       context,
       path: "/chats/thread-work-folding-single-message",
-      featureSwitches: { [FeatureSwitchKey.ChatCompletedWorkFolding]: true },
     });
 
     await waitFor(() => {
@@ -3848,76 +3794,6 @@ describe("chat lifecycle", () => {
       expect(
         screen.getByText("Upgrade or downgrade anytime."),
       ).toBeInTheDocument();
-    });
-  });
-
-  it("sends readable assistant content to audio output", async () => {
-    const user = userEvent.setup({ delay: null });
-    const threadId = "audio-output-thread";
-    const runId = "a0000000-0000-4000-a000-000000000401";
-    const assistantReply = [
-      "## Launch notes",
-      "- **Ship** the preview",
-      "- [Open dashboard](https://example.com)",
-      "",
-      "```ts",
-      "const hidden = true;",
-      "```",
-    ].join("\n");
-    let capturedTtsBody: unknown = null;
-
-    context.mocks.browser.audioContext();
-    context.mocks.http.post("*/api/zero/voice-io/tts", async ({ request }) => {
-      capturedTtsBody = await request.json();
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([0, 0, 1, 0, 2, 0]));
-            controller.close();
-          },
-        }),
-        { headers: { "Content-Type": "audio/pcm" } },
-      );
-    });
-    mockChatLifecycle(context, {
-      threadId,
-      threadTitle: "Audio output",
-      chatMessages: [
-        {
-          id: "msg-audio-output-user",
-          role: "user",
-          content: "Read the launch notes",
-          runId,
-          createdAt: "2026-06-09T10:00:00Z",
-        },
-        {
-          id: "msg-audio-output-assistant",
-          role: "assistant",
-          content: assistantReply,
-          runId,
-          createdAt: "2026-06-09T10:01:00Z",
-        },
-      ],
-    });
-
-    detachedSetupPage({
-      context,
-      path: `/chats/${threadId}`,
-      featureSwitches: { [FeatureSwitchKey.AudioOutput]: true },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Launch notes")).toBeInTheDocument();
-      expect(screen.getByLabelText("Read aloud")).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByLabelText("Read aloud"));
-
-    await waitFor(() => {
-      expect(capturedTtsBody).toStrictEqual({
-        text: "Launch notes\nShip the preview\nOpen dashboard",
-      });
-      expect(screen.getByLabelText("Read aloud")).toBeInTheDocument();
     });
   });
 

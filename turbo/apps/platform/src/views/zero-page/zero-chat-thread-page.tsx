@@ -27,11 +27,9 @@ import {
   IconPhoto,
   IconChartLine,
   IconPlayerPlay,
-  IconPlayerStop,
   IconVideo,
   IconCopy,
   IconCheck,
-  IconVolume2,
   IconArrowDown,
   IconArrowUpRight,
   IconChevronRight,
@@ -87,11 +85,6 @@ import { FeatureSwitchKey } from "@vm0/connectors/feature-switch-key";
 import { CONNECTOR_TYPES } from "@vm0/connectors/connectors";
 import type { FirewallPolicyValue } from "@vm0/connectors/firewall-types";
 import { featureSwitch$ } from "../../signals/external/feature-switch.ts";
-import { playTts$, stopTts$ } from "../../signals/voice-io/voice-io-tts.ts";
-import {
-  autoReadEnabled$,
-  toggleAutoRead$,
-} from "../../signals/voice-io/voice-io-settings.ts";
 import { Markdown } from "../components/markdown.tsx";
 import { detach, Reason, onDomEventFn } from "../../signals/utils.ts";
 import {
@@ -1082,10 +1075,7 @@ function GithubPrTrackingDock({ thread }: { thread: ChatThreadSignals }) {
 
 function ChatThreadHeader({ thread }: { thread: ChatThreadSignals }) {
   const threadDataLoadable = useLastLoadable(thread.threadData$);
-  const autoRead = useGet(autoReadEnabled$);
-  const toggleAutoReadFn = useSet(toggleAutoRead$);
   const features = useLastResolved(featureSwitch$);
-  const audioOutputEnabled = features?.[FeatureSwitchKey.AudioOutput] ?? false;
   const githubPrTrackingEnabled =
     features?.[FeatureSwitchKey.ChatGithubPrTracking] ?? false;
   const agentId =
@@ -1113,33 +1103,6 @@ function ChatThreadHeader({ thread }: { thread: ChatThreadSignals }) {
         <ArtifactsButton thread={thread} />
         {githubPrTrackingEnabled && agentId && (
           <GithubPrTrackingButton thread={thread} agentId={agentId} />
-        )}
-        {audioOutputEnabled && (
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleAutoReadFn();
-                  }}
-                  className={cn(
-                    "p-1.5 rounded-md transition-colors duration-150",
-                    autoRead
-                      ? "text-primary bg-primary/10"
-                      : "text-muted-foreground/60 hover:text-foreground hover:bg-accent",
-                  )}
-                  aria-label="Toggle auto-read"
-                  aria-pressed={autoRead}
-                >
-                  <IconVolume2 size={18} stroke={1.5} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {autoRead ? "Auto-read on" : "Auto-read off"}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
         )}
       </div>
     </header>
@@ -2363,12 +2326,7 @@ function ChatThreadMessagesMain({
     groups.length === 0 &&
     !messagesLoading &&
     !skeletonVisible;
-  const features = useLastResolved(featureSwitch$);
-  const completedWorkFoldingEnabled =
-    features?.[FeatureSwitchKey.ChatCompletedWorkFolding] ?? false;
-  const completedWorkFolding = completedWorkFoldingEnabled
-    ? buildCompletedWorkFolding(activeGroups)
-    : null;
+  const completedWorkFolding = buildCompletedWorkFolding(activeGroups);
   const completedWorkExpandedKeys = useGet(completedWorkExpandedKeys$);
   const toggleCompletedWorkExpanded = useSet(toggleCompletedWorkExpanded$);
   const visibleGroups = completedWorkFolding?.visibleGroups ?? activeGroups;
@@ -5814,19 +5772,13 @@ function PagedGroupPrimaryActions({
   hasContent,
   usage,
   copied,
-  audioOutputEnabled,
-  isPlayingThis,
   onCopy,
-  onTts,
 }: {
   firstRunId: string | undefined;
   hasContent: boolean;
   usage: ChatMessageUsagePayload | undefined;
   copied: boolean;
-  audioOutputEnabled: boolean;
-  isPlayingThis: boolean;
   onCopy: () => void;
-  onTts: () => void;
 }) {
   return (
     <div className="flex items-center gap-1" data-testid="chat-message-actions">
@@ -5872,29 +5824,6 @@ function PagedGroupPrimaryActions({
           </Tooltip>
         </TooltipProvider>
       )}
-      {hasContent && firstRunId && audioOutputEnabled && (
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={onTts}
-                className="p-1 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-accent transition-colors duration-150"
-                aria-label={isPlayingThis ? "Stop reading" : "Read aloud"}
-              >
-                {isPlayingThis ? (
-                  <IconPlayerStop size={18} stroke={1.5} />
-                ) : (
-                  <IconVolume2 size={18} stroke={1.5} />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isPlayingThis ? "Stop reading" : "Read aloud"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
       {usage && firstRunId && <RunUsageChip runId={firstRunId} usage={usage} />}
     </div>
   );
@@ -5915,16 +5844,12 @@ function PagedGroupActions({
   const copyMessage = useSet(thread.copyMessage$);
 
   const features = useLastResolved(featureSwitch$);
-  const audioOutputEnabled = features?.[FeatureSwitchKey.AudioOutput] ?? false;
   const usageEnabled = features?.[FeatureSwitchKey.ChatRunUsage] ?? false;
   const firstRunId = group.messages.find((m) => {
     return m.runId;
   })?.runId;
   const usage = usageEnabled ? group.usage : undefined;
   const hasContent = content.length > 0;
-  const [ttsLoadable, playTts] = useLoadableSet(playTts$);
-  const isPlayingThis = ttsLoadable.state === "loading";
-  const stopTts = useSet(stopTts$);
 
   if (group.role === "user") {
     return null;
@@ -5944,17 +5869,6 @@ function PagedGroupActions({
     );
   };
 
-  const handleTts = () => {
-    if (!firstRunId) {
-      return;
-    }
-    if (isPlayingThis) {
-      stopTts();
-    } else {
-      detach(playTts(content, pageSignal), Reason.DomCallback);
-    }
-  };
-
   return (
     <div className="@[900px]:grid @[900px]:grid-cols-[36px_minmax(0,1fr)] @[900px]:gap-2.5 @[900px]:-ml-[46px]">
       <div className="hidden @[900px]:block" />
@@ -5964,10 +5878,7 @@ function PagedGroupActions({
           hasContent={hasContent}
           usage={usage}
           copied={copied}
-          audioOutputEnabled={audioOutputEnabled}
-          isPlayingThis={isPlayingThis}
           onCopy={handleCopy}
-          onTts={handleTts}
         />
       </div>
     </div>

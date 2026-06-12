@@ -1880,13 +1880,32 @@ describe("RUN-04: agent run telemetry families", () => {
     expect(contextRead.body.firewalls).toHaveLength(1);
     expect(contextRead.body.volumes).toHaveLength(1);
 
-    // Sparse snapshots drop non-string and null values entirely.
-    dispatchAxiomQueries({ [runId]: { runContext: [{ runId }] } });
-    const sparseContext = await api.requestRunContext(actor, runId, [200]);
-    if (sparseContext.status !== 200) {
-      throw new Error("Expected the sparse run context read to succeed");
+    // Legacy dynamic map fields are ignored now that run context snapshots
+    // are entries-only.
+    dispatchAxiomQueries({
+      [runId]: {
+        runContext: [
+          {
+            runId,
+            environment: { LEGACY_IGNORED: "legacy-map" },
+            networkPolicies: {
+              legacyIgnored: {
+                allow: ["legacy"],
+                deny: [],
+                ask: [],
+                unknownPolicy: "allow",
+              },
+            },
+            featureFlags: { legacyIgnored: true },
+          },
+        ],
+      },
+    });
+    const legacyOnlyContext = await api.requestRunContext(actor, runId, [200]);
+    if (legacyOnlyContext.status !== 200) {
+      throw new Error("Expected the legacy-only run context read to succeed");
     }
-    expect(sparseContext.body).toMatchObject({
+    expect(legacyOnlyContext.body).toMatchObject({
       runId,
       sessionId: null,
       environment: {},

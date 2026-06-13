@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, not, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { agentComposes } from "@vm0/db/schema/agent-compose";
@@ -116,9 +116,34 @@ async function lockChatUsageMigrationTest(tx: DbTransaction): Promise<void> {
   );
 }
 
+async function recreateLegacyUsageRunUniqueIndex(
+  tx: DbTransaction,
+  retainedRunIds: readonly string[],
+): Promise<void> {
+  await tx.execute(sql`LOCK TABLE ${chatMessages} IN SHARE ROW EXCLUSIVE MODE`);
+  await tx
+    .delete(chatMessages)
+    .where(
+      and(
+        isNotNull(chatMessages.usagePayload),
+        not(inArray(chatMessages.runId, retainedRunIds)),
+      ),
+    );
+  await tx.execute(
+    sql`DROP INDEX IF EXISTS "chat_messages_usage_run_id_unique"`,
+  );
+  await tx.execute(sql`
+    CREATE UNIQUE INDEX "chat_messages_usage_run_id_unique"
+    ON "chat_messages" USING btree ("run_id")
+    WHERE "chat_messages"."usage_payload" IS NOT NULL
+  `);
+}
+
 describe("migration 0454 backfill chat usage messages", () => {
   it("inserts missing usage messages after their run messages and stays idempotent", async () => {
     await runInRollbackTransaction(async (tx) => {
+      await lockChatUsageMigrationTest(tx);
+
       const orgId = uniqueId("org");
       const userId = uniqueId("user");
 
@@ -335,12 +360,11 @@ describe("migration 0454 backfill chat usage messages", () => {
         })
         .returning({ id: chatMessages.id });
 
-      await lockChatUsageMigrationTest(tx);
-      await tx.execute(sql`
-        CREATE UNIQUE INDEX IF NOT EXISTS "chat_messages_usage_run_id_unique"
-        ON "chat_messages" USING btree ("run_id")
-        WHERE "chat_messages"."usage_payload" IS NOT NULL
-      `);
+      await recreateLegacyUsageRunUniqueIndex(tx, [
+        targetRunId,
+        pendingRunId,
+        existingRunId,
+      ]);
       await tx.execute(sql.raw(migrationSql));
       await tx.execute(sql.raw(migrationSql));
 

@@ -63,6 +63,16 @@ Firewall and auth context
 - ``FIREWALL_ERROR``: optional ``str`` error code for auth, forwarding, or
   registry failures. It is orthogonal to ``FIREWALL_ACTION``: an ``ALLOW``
   decision can still have an auth or forwarding error.
+- ``CONNECTOR_DIAGNOSTIC_TYPE``: optional ``str`` connector type for a generic
+  connector availability diagnostic. The request hook records this for an
+  inactive built-in connector candidate; network logs expose it only after the
+  response/error hook turns the candidate into an agent-visible diagnostic.
+- ``CONNECTOR_DIAGNOSTIC_REASON``: optional ``str`` generic diagnostic reason.
+  First-version diagnostics use ``not_configured_for_run``.
+- ``CONNECTOR_DIAGNOSTIC_ENV_NAMES``: optional ``list[str]`` env aliases that
+  would normally expose connector credentials. Names only; never values.
+- ``CONNECTOR_DIAGNOSTIC_BASE``: optional ``str`` matched static built-in base
+  URL that produced the diagnostic.
 - ``AUTH_RESOLVED_SECRETS``: ``list[str]`` from successful auth resolution.
   Read by network-log firewall metadata.
 - ``AUTH_REFRESHED_CONNECTORS``: ``list[str]`` from successful auth resolution.
@@ -141,6 +151,10 @@ FIREWALL_PARAMS: Final = "firewall_params"
 FIREWALL_BILLABLE: Final = "firewall_billable"
 FIREWALL_ACTION: Final = "firewall_action"
 FIREWALL_ERROR: Final = "firewall_error"
+CONNECTOR_DIAGNOSTIC_TYPE: Final = "connector_diagnostic_type"
+CONNECTOR_DIAGNOSTIC_REASON: Final = "connector_diagnostic_reason"
+CONNECTOR_DIAGNOSTIC_ENV_NAMES: Final = "connector_diagnostic_env_names"
+CONNECTOR_DIAGNOSTIC_BASE: Final = "connector_diagnostic_base"
 AUTH_RESOLVED_SECRETS: Final = "auth_resolved_secrets"
 AUTH_REFRESHED_CONNECTORS: Final = "auth_refreshed_connectors"
 AUTH_REFRESHED_SECRETS: Final = "auth_refreshed_secrets"

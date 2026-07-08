@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.24.0](https://github.com/highestop/vm0/compare/desktop-v0.23.5...desktop-v0.24.0) (2026-07-08)
+
+
+### Features
+
+* **desktop:** crash-resilient bootstrap entry owning the auto-updater ([#19942](https://github.com/highestop/vm0/issues/19942)) ([a5abf1b](https://github.com/highestop/vm0/commit/a5abf1b1cfa2e10a22de92c914d44e325b38ca07)), closes [#19927](https://github.com/highestop/vm0/issues/19927)
+
+
+### Bug Fixes
+
+* **desktop:** bundle filesystem mcp sdk dependency ([#20023](https://github.com/highestop/vm0/issues/20023)) ([abe9a2f](https://github.com/highestop/vm0/commit/abe9a2f02b9df1c6597c13cc3e6b3787d272b52e))
+* hide filesystem plugin behind developer tools ([#19957](https://github.com/highestop/vm0/issues/19957)) ([557f830](https://github.com/highestop/vm0/commit/557f830dde44ceb9c0cfe5eee675eea63176df1b))
+
+
+### CI
+
+* smoke-test packaged desktop app launch to catch startup crashes ([#19932](https://github.com/highestop/vm0/issues/19932)) ([3c5b7b2](https://github.com/highestop/vm0/commit/3c5b7b22984bd805b346987491d73a9d02db6161))
+
+
+### Refactoring
+
+* reduce fallback slop in runtime guards ([#20275](https://github.com/highestop/vm0/issues/20275)) ([73e668c](https://github.com/highestop/vm0/commit/73e668ce7135504b171be98ca2832d09b433f34b))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @vm0/api-contracts bumped to 1.168.0
+
 ## [0.23.5](https://github.com/vm0-ai/vm0/compare/desktop-v0.23.4...desktop-v0.23.5) (2026-07-08)
 
 

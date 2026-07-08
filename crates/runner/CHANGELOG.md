@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.139.0](https://github.com/highestop/vm0/compare/runner-rs-v0.138.1...runner-rs-v0.139.0) (2026-07-08)
+
+
+### Features
+
+* add Google Meet transcript-generated workflow trigger ([#19789](https://github.com/highestop/vm0/issues/19789)) ([91aef71](https://github.com/highestop/vm0/commit/91aef711953cb2107c62ae7d2d3a7f9da38a071f))
+* add platform client headers to runner requests ([#20577](https://github.com/highestop/vm0/issues/20577)) ([dee5306](https://github.com/highestop/vm0/commit/dee53066bbc014e302a85aa085136b408e2df833))
+* add playstation connector ([#20459](https://github.com/highestop/vm0/issues/20459)) ([588ee8b](https://github.com/highestop/vm0/commit/588ee8b242242277e752c91f64a1b9698b6d3afd))
+* add steam player connector ([#20359](https://github.com/highestop/vm0/issues/20359)) ([830096d](https://github.com/highestop/vm0/commit/830096d68b93cd490769ed98c0c91090bcde6f31))
+* allow maskdb connection replacement through firewall ([#20376](https://github.com/highestop/vm0/issues/20376)) ([193489f](https://github.com/highestop/vm0/commit/193489f270fb447c1c114ef0480fb97e13f5f992))
+* preload runner builtin firewall catalog ([#20535](https://github.com/highestop/vm0/issues/20535)) ([72eec90](https://github.com/highestop/vm0/commit/72eec90baafa5c7600c59184ee3746249154a0dc))
+* refresh active connector permission policies ([#20035](https://github.com/highestop/vm0/issues/20035)) ([8d7cec2](https://github.com/highestop/vm0/commit/8d7cec2537cd512d12bd3e550abc43c07cb2026a))
+* support zstd session history blobs ([#20341](https://github.com/highestop/vm0/issues/20341)) ([c4188fa](https://github.com/highestop/vm0/commit/c4188fa5b28587f197998421ac5032c228913c25))
+
+
+### Bug Fixes
+
+* add builtin firewall fallback telemetry ([#20603](https://github.com/highestop/vm0/issues/20603)) ([8c99cfb](https://github.com/highestop/vm0/commit/8c99cfbe7327e0e50bad252fdf773d7ff7c8f000))
+* allow maskdb aggregate queries through firewall ([#20083](https://github.com/highestop/vm0/issues/20083)) ([18ab86f](https://github.com/highestop/vm0/commit/18ab86f8e78ada958f1a2f94cbc940dc51227212))
+* coalesce runner direct candidate bursts ([#19969](https://github.com/highestop/vm0/issues/19969)) ([1135a51](https://github.com/highestop/vm0/commit/1135a514c5e5ca21bb0b929885e98e9061fe581b))
+* diagnose shared-base connector ownership before auth ([#19964](https://github.com/highestop/vm0/issues/19964)) ([d87b6ea](https://github.com/highestop/vm0/commit/d87b6ea41b76b65960f0c9949d1e03bd85d9a1bb))
+* **mitm-addon:** define json prefix probe contract ([#20479](https://github.com/highestop/vm0/issues/20479)) ([8461618](https://github.com/highestop/vm0/commit/846161861a95c87504eca0397c593759dffccfed))
+* **mitm-addon:** detach auth base forwards from executor shutdown ([#20529](https://github.com/highestop/vm0/issues/20529)) ([323833a](https://github.com/highestop/vm0/commit/323833af1318279b31062d044cecae21d229bfd3))
+* **mitm-addon:** suppress ambiguous shared-base diagnostics ([#20169](https://github.com/highestop/vm0/issues/20169)) ([ff9177d](https://github.com/highestop/vm0/commit/ff9177d0abf6896ad49ba871f7287c8139a26e50))
+* move runner bootstrap payloads out of env ([#19989](https://github.com/highestop/vm0/issues/19989)) ([847d8d2](https://github.com/highestop/vm0/commit/847d8d24372d84568133007db87c44a0ebd72b95))
+* **runner:** guard service activation image artifacts ([#20227](https://github.com/highestop/vm0/issues/20227)) ([90b5196](https://github.com/highestop/vm0/commit/90b519609f54f32970a1342c97d2520b3d03c93e))
+* **runner:** prevent service drain restarts ([#20496](https://github.com/highestop/vm0/issues/20496)) ([1a250e4](https://github.com/highestop/vm0/commit/1a250e4d8e01157eb14d7fc4b35a6a63e916d43f))
+* **runner:** protect retained config image refs during gc ([#20172](https://github.com/highestop/vm0/issues/20172)) ([07e35c2](https://github.com/highestop/vm0/commit/07e35c23262ca656ad5390fca9535a95a514ecb1))
+* **runner:** skip zstd streaming usage decode ([#20457](https://github.com/highestop/vm0/issues/20457)) ([0ef3d91](https://github.com/highestop/vm0/commit/0ef3d918690e65554dbe86a958c4080aaf71ecc5))
+* snapshot runner service activation config ([#20284](https://github.com/highestop/vm0/issues/20284)) ([2eb26b5](https://github.com/highestop/vm0/commit/2eb26b585fdfbe2e1e6aa71d1a1bba5994016afe))
+* stabilize codex zero byok polling ([#20381](https://github.com/highestop/vm0/issues/20381)) ([b5cf0b4](https://github.com/highestop/vm0/commit/b5cf0b49a3823ab467bafbe73c475d614730db81))
+* validate runner config image artifacts under locks ([#20095](https://github.com/highestop/vm0/issues/20095)) ([3d2adce](https://github.com/highestop/vm0/commit/3d2adce2dcf933ad4c4fd7deb1e4f45a857cf61f))
+
+
+### Documentation
+
+* clarify auth base forwarder test helpers ([#20052](https://github.com/highestop/vm0/issues/20052)) ([1d48da3](https://github.com/highestop/vm0/commit/1d48da3d204818fd11d4f23ba60c0dd960cd5bc9))
+* correct r2 cache gc request cost ([#20224](https://github.com/highestop/vm0/issues/20224)) ([e9ccda4](https://github.com/highestop/vm0/commit/e9ccda460b5edb76b31fbb5a38c703f9eba1f6a6))
+* document runner state file contract ([#20452](https://github.com/highestop/vm0/issues/20452)) ([6760c0e](https://github.com/highestop/vm0/commit/6760c0e86965ffbc15af8b6cf50d7e448a7d1cba))
+* **mitm-addon:** document usage buffer flush signals ([#20500](https://github.com/highestop/vm0/issues/20500)) ([1f1c0c3](https://github.com/highestop/vm0/commit/1f1c0c317730654db43e49ed97ab2bbd2640d596))
+
+
+### Refactoring
+
+* accept empty artifact manifests without archive urls ([#20525](https://github.com/highestop/vm0/issues/20525)) ([1ce8bfd](https://github.com/highestop/vm0/commit/1ce8bfd954a2c9c0d963dd0a46e34b31fdceb73f))
+* centralize firewall base url malformed checks ([#20090](https://github.com/highestop/vm0/issues/20090)) ([2aab7f4](https://github.com/highestop/vm0/commit/2aab7f43daf38d0a86a2a8bcff99f12e18cb873a))
+* centralize mitm idna dot separators ([#20088](https://github.com/highestop/vm0/issues/20088)) ([c61d218](https://github.com/highestop/vm0/commit/c61d2187a906f645463705527014681ce98e794b))
+* centralize run payload field validation ([#20225](https://github.com/highestop/vm0/issues/20225)) ([8a293a7](https://github.com/highestop/vm0/commit/8a293a762a48b4828780e8e99ca59e48ca915415))
+* clarify runner profile availability contract ([#20171](https://github.com/highestop/vm0/issues/20171)) ([ef94c04](https://github.com/highestop/vm0/commit/ef94c04b34a0eacb9a3ddc7ffd1cabc419c19113))
+* clarify sandbox process pid naming ([#20372](https://github.com/highestop/vm0/issues/20372)) ([c32d846](https://github.com/highestop/vm0/commit/c32d846f655bd32dea0fde2a561a34eb014128dd))
+* document mitm hook state ownership ([#20517](https://github.com/highestop/vm0/issues/20517)) ([695971e](https://github.com/highestop/vm0/commit/695971e09a8e4c4e2552e659e4ace4bae7a8ad29))
+* **mitm-addon:** add flow metadata boundaries ([#20552](https://github.com/highestop/vm0/issues/20552)) ([9787277](https://github.com/highestop/vm0/commit/97872771829f96ec3daf03868d6905b32038d6ee))
+* **mitm-addon:** extract flow metadata key linter ([#20503](https://github.com/highestop/vm0/issues/20503)) ([0c0e806](https://github.com/highestop/vm0/commit/0c0e80694a4cc010dcac437de735eb27af8c1a0c))
+* **mitm-addon:** extract local response construction ([#20554](https://github.com/highestop/vm0/issues/20554)) ([9495f55](https://github.com/highestop/vm0/commit/9495f55419face681f2a63c7cb8e9e3bb87e10e6))
+* **mitm-addon:** extract request classification owner ([#20587](https://github.com/highestop/vm0/issues/20587)) ([a571d98](https://github.com/highestop/vm0/commit/a571d98dd8d4a3a456306fa41edf710f877ec176))
+* **mitm-addon:** extract tcp logging owner ([#20543](https://github.com/highestop/vm0/issues/20543)) ([deb5fbc](https://github.com/highestop/vm0/commit/deb5fbc86cf29ae4dc0b56cb870858a8090a88a3))
+* **mitm-addon:** split flow metadata key linter ([#20545](https://github.com/highestop/vm0/issues/20545)) ([9b51a50](https://github.com/highestop/vm0/commit/9b51a50a180c1e3ac62ab4357e11b9359e863b43))
+* organize restore session tests by contract ([#20046](https://github.com/highestop/vm0/issues/20046)) ([90565da](https://github.com/highestop/vm0/commit/90565da90671ec7c4c960c2a000a1dd952accd2e))
+* remove runner profile compatibility fields ([#20255](https://github.com/highestop/vm0/issues/20255)) ([7972fa3](https://github.com/highestop/vm0/commit/7972fa3a2aa317e99ba40503b5d6dae35e0d6df8))
+* **runner:** centralize job candidate defaults ([#20092](https://github.com/highestop/vm0/issues/20092)) ([bfa917c](https://github.com/highestop/vm0/commit/bfa917c064ca5599ebd35ee78264b665a66a0e27))
+* **runner:** centralize workspace cache gc traversal ([#20226](https://github.com/highestop/vm0/issues/20226)) ([23d52a6](https://github.com/highestop/vm0/commit/23d52a65d63e3c10463fc2d9cfbe63e7c9144a50))
+* **runner:** split network log manager ownership ([#20454](https://github.com/highestop/vm0/issues/20454)) ([c7a7c0b](https://github.com/highestop/vm0/commit/c7a7c0bac780febd0e2631056d54b3a183b64f24))
+* share runner status file reader ([#20096](https://github.com/highestop/vm0/issues/20096)) ([df6d7d6](https://github.com/highestop/vm0/commit/df6d7d62c1dfbd3a6ff5fe11179f25f47b1006b2))
+
+
+### Performance Improvements
+
+* add direct ably claim timing telemetry ([#20579](https://github.com/highestop/vm0/issues/20579)) ([3167db5](https://github.com/highestop/vm0/commit/3167db5f5a44b4c72fd07ebf6b162d2e41b1cad9))
+* add guarded storage cache miss passthrough ([#20094](https://github.com/highestop/vm0/issues/20094)) ([7d14271](https://github.com/highestop/vm0/commit/7d14271aa51f9d47ead4e2ac4f289ca326cbea20))
+* add session history attribution telemetry ([#20497](https://github.com/highestop/vm0/issues/20497)) ([2daa651](https://github.com/highestop/vm0/commit/2daa6519837d9f2ca3bbc640e2f1d8e8cc135630))
+* add session history telemetry buckets ([#19953](https://github.com/highestop/vm0/issues/19953)) ([27309a2](https://github.com/highestop/vm0/commit/27309a250f9374e3e8a1d46fa4476d57b248522d))
+* add storage miss attribution telemetry ([#20200](https://github.com/highestop/vm0/issues/20200)) ([606892b](https://github.com/highestop/vm0/commit/606892bc50a64df8e93208e5946a9aecd373c26a))
+* **mitm-addon:** negotiate safe response encodings ([#19951](https://github.com/highestop/vm0/issues/19951)) ([c80fdba](https://github.com/highestop/vm0/commit/c80fdbabe57e88312280782a180710b2b4eb333e))
+* reuse codex zstd session history ([#20450](https://github.com/highestop/vm0/issues/20450)) ([e9b1a48](https://github.com/highestop/vm0/commit/e9b1a48e0e36b8ae75bceab667fd8d6f70fd2ede))
+* **runner:** adapt active input idle polling ([#20250](https://github.com/highestop/vm0/issues/20250)) ([bbe0608](https://github.com/highestop/vm0/commit/bbe0608afc5f90d874b5d71eaba1cf431a576952))
+* **runner:** avoid cloning active input queue path ([#20228](https://github.com/highestop/vm0/issues/20228)) ([441500f](https://github.com/highestop/vm0/commit/441500faf98533b2ffff8103a6f1aba085fd153a))
+* **runner:** avoid preflight guest payload materialization ([#20165](https://github.com/highestop/vm0/issues/20165)) ([6094b05](https://github.com/highestop/vm0/commit/6094b0566638303a687fdc7c178eef50841d3610))
+* **runner:** avoid sorting local queue discovery ([#20251](https://github.com/highestop/vm0/issues/20251)) ([9eea0de](https://github.com/highestop/vm0/commit/9eea0deca3e4ab64e2b827c76d3c9065959fb2a3))
+* **runner:** reduce local queue discovery churn ([#20285](https://github.com/highestop/vm0/issues/20285)) ([6aecc89](https://github.com/highestop/vm0/commit/6aecc8979aa6c20bf57e82a2a3c24c3f7bceb7fa))
+* skip empty artifact uploads during run creation ([#20447](https://github.com/highestop/vm0/issues/20447)) ([85f5231](https://github.com/highestop/vm0/commit/85f5231cceb002fdcbf8faf826d8ca7df7332a39))
+* skip session affinity delay without viable holder ([#20030](https://github.com/highestop/vm0/issues/20030)) ([c96b651](https://github.com/highestop/vm0/commit/c96b6516047d448edb72a82d20a546871ed0dcfa))
+* stage agent instructions before guest download ([#20353](https://github.com/highestop/vm0/issues/20353)) ([14f3236](https://github.com/highestop/vm0/commit/14f32364245d047fb3b77058800513f902deaba2))
+
 ## [0.138.1](https://github.com/vm0-ai/vm0/compare/runner-rs-v0.138.0...runner-rs-v0.138.1) (2026-07-08)
 
 

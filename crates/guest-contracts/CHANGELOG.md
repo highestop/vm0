@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.5](https://github.com/highestop/vm0/compare/guest-contracts-v0.3.4...guest-contracts-v0.3.5) (2026-07-08)
+
+
+### Bug Fixes
+
+* move runner bootstrap payloads out of env ([#19989](https://github.com/highestop/vm0/issues/19989)) ([847d8d2](https://github.com/highestop/vm0/commit/847d8d24372d84568133007db87c44a0ebd72b95))
+
+
+### Refactoring
+
+* centralize run payload field validation ([#20225](https://github.com/highestop/vm0/issues/20225)) ([8a293a7](https://github.com/highestop/vm0/commit/8a293a762a48b4828780e8e99ca59e48ca915415))
+
 ## [0.3.4](https://github.com/vm0-ai/vm0/compare/guest-contracts-v0.3.3...guest-contracts-v0.3.4) (2026-07-05)
 
 

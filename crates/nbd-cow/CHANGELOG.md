@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.58](https://github.com/highestop/vm0/compare/nbd-cow-v0.4.57...nbd-cow-v0.4.58) (2026-07-08)
+
+
+### Bug Fixes
+
+* **nbd-cow:** harden device lock files ([#20249](https://github.com/highestop/vm0/issues/20249)) ([dc76129](https://github.com/highestop/vm0/commit/dc76129c9ce603ec597af310038aa188dbd388ce))
+
+
+### Performance Improvements
+
+* **nbd-cow:** stream bitmap serialization ([#20317](https://github.com/highestop/vm0/issues/20317)) ([3a02a98](https://github.com/highestop/vm0/commit/3a02a9842cc34eb9323662e4588f7c539eaa1566))
+
 ## [0.4.57](https://github.com/vm0-ai/vm0/compare/nbd-cow-v0.4.56...nbd-cow-v0.4.57) (2026-07-06)
 
 

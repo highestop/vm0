@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.49.0](https://github.com/highestop/vm0/compare/guest-agent-v0.48.0...guest-agent-v0.49.0) (2026-07-08)
+
+
+### Features
+
+* add platform client headers to runner requests ([#20577](https://github.com/highestop/vm0/issues/20577)) ([dee5306](https://github.com/highestop/vm0/commit/dee53066bbc014e302a85aa085136b408e2df833))
+* write zstd session history blobs ([#20392](https://github.com/highestop/vm0/issues/20392)) ([3e5215d](https://github.com/highestop/vm0/commit/3e5215d916ca250c866480be2cb5e60382867ac6))
+
+
+### Bug Fixes
+
+* move runner bootstrap payloads out of env ([#19989](https://github.com/highestop/vm0/issues/19989)) ([847d8d2](https://github.com/highestop/vm0/commit/847d8d24372d84568133007db87c44a0ebd72b95))
+* prevent compressed session history identity fallback ([#20434](https://github.com/highestop/vm0/issues/20434)) ([8eba6a0](https://github.com/highestop/vm0/commit/8eba6a07a04b47653e89d6a12c307cd16521ca69))
+
+
+### Documentation
+
+* clarify codex app-server client contract ([#20541](https://github.com/highestop/vm0/issues/20541)) ([4f1ff80](https://github.com/highestop/vm0/commit/4f1ff80721e9effd8d8571b7ece4cb77a681c6de))
+
+
+### Refactoring
+
+* centralize run payload field validation ([#20225](https://github.com/highestop/vm0/issues/20225)) ([8a293a7](https://github.com/highestop/vm0/commit/8a293a762a48b4828780e8e99ca59e48ca915415))
+* unify session history source resolution ([#20320](https://github.com/highestop/vm0/issues/20320)) ([c680f9e](https://github.com/highestop/vm0/commit/c680f9ef8ccad70de72869ee56b519ebd9af6688))
+
+
+### Performance Improvements
+
+* **guest-agent:** avoid buffering reasoning text twice ([#20373](https://github.com/highestop/vm0/issues/20373)) ([a234c82](https://github.com/highestop/vm0/commit/a234c829366b4c5ba2eeb1229b5a98498bada848))
+* reuse codex zstd session history ([#20450](https://github.com/highestop/vm0/issues/20450)) ([e9b1a48](https://github.com/highestop/vm0/commit/e9b1a48e0e36b8ae75bceab667fd8d6f70fd2ede))
+
 ## [0.48.0](https://github.com/vm0-ai/vm0/compare/guest-agent-v0.47.5...guest-agent-v0.48.0) (2026-07-08)
 
 

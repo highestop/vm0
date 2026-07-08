@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.15](https://github.com/highestop/vm0/compare/guest-mock-claude-v0.21.14...guest-mock-claude-v0.21.15) (2026-07-08)
+
+
+### Refactoring
+
+* **guest-mock-claude:** split jsonl integration tests ([#20375](https://github.com/highestop/vm0/issues/20375)) ([91e3989](https://github.com/highestop/vm0/commit/91e3989d94adc90bec8d5eb23407755a16edc349))
+
 ## [0.21.14](https://github.com/vm0-ai/vm0/compare/guest-mock-claude-v0.21.13...guest-mock-claude-v0.21.14) (2026-07-08)
 
 ## [0.21.13](https://github.com/vm0-ai/vm0/compare/guest-mock-claude-v0.21.12...guest-mock-claude-v0.21.13) (2026-07-07)

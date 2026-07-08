@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.32](https://github.com/highestop/vm0/compare/guest-common-v0.2.31...guest-common-v0.2.32) (2026-07-08)
+
+
+### Documentation
+
+* clarify guest logging sinks ([#20027](https://github.com/highestop/vm0/issues/20027)) ([bd1af03](https://github.com/highestop/vm0/commit/bd1af03d01668b707b23df85372d5512a013e046))
+
 ## [0.2.31](https://github.com/vm0-ai/vm0/compare/guest-common-v0.2.30...guest-common-v0.2.31) (2026-07-05)
 
 ## [0.2.30](https://github.com/vm0-ai/vm0/compare/guest-common-v0.2.29...guest-common-v0.2.30) (2026-07-03)

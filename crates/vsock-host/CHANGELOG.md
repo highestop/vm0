@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.53](https://github.com/highestop/vm0/compare/vsock-host-v0.17.52...vsock-host-v0.17.53) (2026-07-08)
+
+
+### Refactoring
+
+* migrate supervised cancel fixtures ([#20336](https://github.com/highestop/vm0/issues/20336)) ([b3e4b64](https://github.com/highestop/vm0/commit/b3e4b64d933ecc87d65b95595ae0150a27479a56))
+* migrate supervised lifecycle fixtures ([#20319](https://github.com/highestop/vm0/issues/20319)) ([a932ccc](https://github.com/highestop/vm0/commit/a932ccc70c066f9783d4e052e99e84b73f86a2e9))
+* **vsock-host:** use supervised output startup fixture ([#20335](https://github.com/highestop/vm0/issues/20335)) ([1d15b80](https://github.com/highestop/vm0/commit/1d15b80d425f49cc2456ace202bdbf329a05f4ef))
+
+
+### Performance Improvements
+
+* build vsock frames outside writer lock ([#20480](https://github.com/highestop/vm0/issues/20480)) ([4160b0f](https://github.com/highestop/vm0/commit/4160b0f6cafd2e29b559996f32ce4c862e390de7))
+
 ## [0.17.52](https://github.com/vm0-ai/vm0/compare/vsock-host-v0.17.51...vsock-host-v0.17.52) (2026-07-07)
 
 

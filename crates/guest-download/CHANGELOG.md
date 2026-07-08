@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.20.55](https://github.com/highestop/vm0/compare/guest-download-v0.20.54...guest-download-v0.20.55) (2026-07-08)
+
+
+### Refactoring
+
+* clean up empty artifact compatibility ([#20574](https://github.com/highestop/vm0/issues/20574)) ([dc86eae](https://github.com/highestop/vm0/commit/dc86eae0bf05e3c6a5787c330b9490548c3512a4))
+
+
+### Performance Improvements
+
+* add storage miss attribution telemetry ([#20200](https://github.com/highestop/vm0/issues/20200)) ([606892b](https://github.com/highestop/vm0/commit/606892bc50a64df8e93208e5946a9aecd373c26a))
+* attribute guest-download overlap conflicts ([#20305](https://github.com/highestop/vm0/issues/20305)) ([feeae9f](https://github.com/highestop/vm0/commit/feeae9fb391bbdc1d01663cd3f61935f5a1202ae))
+* skip empty artifact uploads during run creation ([#20447](https://github.com/highestop/vm0/issues/20447)) ([85f5231](https://github.com/highestop/vm0/commit/85f5231cceb002fdcbf8faf826d8ca7df7332a39))
+* stage agent instructions before guest download ([#20353](https://github.com/highestop/vm0/issues/20353)) ([14f3236](https://github.com/highestop/vm0/commit/14f32364245d047fb3b77058800513f902deaba2))
+
 ## [0.20.54](https://github.com/vm0-ai/vm0/compare/guest-download-v0.20.53...guest-download-v0.20.54) (2026-07-08)
 
 

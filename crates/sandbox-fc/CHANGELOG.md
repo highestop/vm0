@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.37.98](https://github.com/highestop/vm0/compare/sandbox-fc-v0.37.97...sandbox-fc-v0.37.98) (2026-07-08)
+
+
+### Bug Fixes
+
+* reject oversized control frames before write ([#20342](https://github.com/highestop/vm0/issues/20342)) ([5818c83](https://github.com/highestop/vm0/commit/5818c835c2ba77aa2daf97248c06a423998370d0))
+
+
+### Documentation
+
+* clarify netns pool idle retention policy ([#20282](https://github.com/highestop/vm0/issues/20282)) ([b567c37](https://github.com/highestop/vm0/commit/b567c3740d6a02551c1cc27f5c6b36c33e1a3ef8))
+
+
+### Refactoring
+
+* clarify sandbox process pid naming ([#20372](https://github.com/highestop/vm0/issues/20372)) ([c32d846](https://github.com/highestop/vm0/commit/c32d846f655bd32dea0fde2a561a34eb014128dd))
+
+
+### Performance Improvements
+
+* **sandbox-fc:** refill netns pool to buffer ([#20248](https://github.com/highestop/vm0/issues/20248)) ([5cf9419](https://github.com/highestop/vm0/commit/5cf9419a4d10dfcfed5cb4c2b8c664ffe1f90b92))
+
 ## [0.37.97](https://github.com/vm0-ai/vm0/compare/sandbox-fc-v0.37.96...sandbox-fc-v0.37.97) (2026-07-07)
 
 ## [0.37.96](https://github.com/vm0-ai/vm0/compare/sandbox-fc-v0.37.95...sandbox-fc-v0.37.96) (2026-07-06)

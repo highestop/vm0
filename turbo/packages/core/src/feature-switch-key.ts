@@ -73,6 +73,7 @@ export enum FeatureSwitchKey {
   ChatTranslation = "chatTranslation",
   ChatDesktopSelection = "chatDesktopSelection",
   VoiceInputV2 = "voiceInputV2",
+  ComposerCreateCommands = "composerCreateCommands",
   ComposerImageAnnotation = "composerImageAnnotation",
   GradientColorThemes = "gradientColorThemes",
   AvatarComposerV2 = "avatarComposerV2",

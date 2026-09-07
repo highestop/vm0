@@ -18399,6 +18399,12 @@ describe("CHAT-02: generation templates and attachments", () => {
       selection: { templateId },
     };
 
+    await updateFeatureSwitchesForUser(
+      context,
+      { ...actor, orgId },
+      { [FeatureSwitchKey.PresentationTemplates]: false },
+    );
+
     const switchedOff = await chat.requestSendEvent(
       actor,
       {

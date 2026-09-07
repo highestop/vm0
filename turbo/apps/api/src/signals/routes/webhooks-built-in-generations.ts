@@ -282,13 +282,14 @@ function falPayloadBody(payload: unknown): FalWebhookPayload | null {
   };
 }
 
-const FAL_UNEXPECTED_STATUS_CODE = /^Unexpected status code: ([1-5]\d{2})$/u;
+const FAL_STATUS_CODE_ERROR =
+  /^(?:Invalid|Unexpected) status code: ([1-5]\d{2})$/u;
 
 function falProviderHttpStatus(error: unknown): number | undefined {
   if (typeof error !== "string") {
     return undefined;
   }
-  const match = FAL_UNEXPECTED_STATUS_CODE.exec(error.trim());
+  const match = FAL_STATUS_CODE_ERROR.exec(error.trim());
   return match ? Number(match[1]) : undefined;
 }
 
@@ -538,6 +539,37 @@ const FAL_STRUCTURED_FAILURE_RULES: readonly FalStructuredFailureRule[] = [
   },
 ];
 
+function allowedFalProviderErrorType(value: unknown): string | undefined {
+  const rule = FAL_STRUCTURED_FAILURE_RULES.find((candidate) => {
+    return candidate.providerErrorType === value;
+  });
+  if (rule) {
+    return rule.providerErrorType;
+  }
+  // Legacy validation type in Fal's documented ERROR webhook envelope:
+  // https://fal.ai/docs/documentation/model-apis/inference/webhooks
+  if (value === "value_error.missing") {
+    return "value_error.missing";
+  }
+  return undefined;
+}
+
+function falProviderErrorTypeForLog(body: unknown): string | undefined {
+  if (!isRecord(body)) {
+    return undefined;
+  }
+  const entries = Array.isArray(body.detail) ? body.detail : [body.detail];
+  for (const entry of entries) {
+    if (isRecord(entry)) {
+      const providerErrorType = allowedFalProviderErrorType(entry.type);
+      if (providerErrorType !== undefined) {
+        return providerErrorType;
+      }
+    }
+  }
+  return undefined;
+}
+
 function falFailureLocationMatches(
   location: readonly (string | number)[],
   expected: string,
@@ -558,18 +590,20 @@ function falGenerationFailure(
   type: BuiltInGenerationWebhookJob["type"],
   payload: FalWebhookPayload,
 ): FalGenerationFailure {
+  const providerErrorType = falProviderErrorTypeForLog(payload.body);
   const diagnostics = isRecord(payload.body)
     ? falFailureDetailDiagnostics(payload.body.detail)
     : [];
-  if (
-    type === "image" &&
-    diagnostics.some((diagnostic) => {
-      return (
-        diagnostic.message ===
-        normalizeFalFailureMessage(FAL_OUTPUT_SAFETY_FILTER_MESSAGE)
-      );
-    })
-  ) {
+  const outputSafetyDiagnostic =
+    type === "image"
+      ? diagnostics.find((diagnostic) => {
+          return (
+            diagnostic.message ===
+            normalizeFalFailureMessage(FAL_OUTPUT_SAFETY_FILTER_MESSAGE)
+          );
+        })
+      : undefined;
+  if (outputSafetyDiagnostic) {
     return {
       error: {
         message: FAL_OUTPUT_SAFETY_FILTER_MESSAGE,
@@ -581,7 +615,9 @@ function falGenerationFailure(
       classificationSource: "normalized_message_exact",
       expected: true,
       providerHttpStatus: payload.providerHttpStatus,
-      providerErrorType: undefined,
+      providerErrorType:
+        allowedFalProviderErrorType(outputSafetyDiagnostic.providerErrorType) ??
+        providerErrorType,
     };
   }
   if (type === "image") {
@@ -621,7 +657,7 @@ function falGenerationFailure(
       classificationSource: "fallback",
       expected: false,
       providerHttpStatus: payload.providerHttpStatus,
-      providerErrorType: undefined,
+      providerErrorType,
     };
   }
   return {
@@ -635,7 +671,7 @@ function falGenerationFailure(
     classificationSource: "fallback",
     expected: false,
     providerHttpStatus: payload.providerHttpStatus,
-    providerErrorType: undefined,
+    providerErrorType,
   };
 }
 
@@ -1418,7 +1454,7 @@ const postFalBuiltInGenerationWebhook$ = command(
           type: job.type,
           providerStatus: status,
           providerHttpStatus: failure.providerHttpStatus,
-          providerErrorType: failure.providerErrorType,
+          providerErrorType: failure.providerErrorType ?? "unknown",
           failureKind: failure.kind,
           failureStage: failure.stage,
           classificationSource: failure.classificationSource,
@@ -1431,7 +1467,7 @@ const postFalBuiltInGenerationWebhook$ = command(
           expected: failure.expected,
         };
         if (failure.expected) {
-          L.debug(
+          L.info(
             "Fal built-in generation webhook reported failed generation",
             fields,
           );

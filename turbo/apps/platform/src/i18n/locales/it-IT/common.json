@@ -2046,10 +2046,7 @@
       },
       "format": {
         "auto": "Automatico",
-        "filter": "Filtra i riferimenti di stile per formato",
-        "landscape": "Orizzontale · 16:9",
-        "output": "Formato di uscita",
-        "portrait": "Verticale · 9:16"
+        "output": "Formato di uscita"
       },
       "heading": "Crea il tuo video introduttivo",
       "help": "Aggiungi materiali, descrivi il tuo obiettivo o fai entrambe le cose. Al resto pensa Okou.",
@@ -2063,8 +2060,17 @@
       },
       "style": {
         "auto": "Lascia scegliere a Okou",
-        "autoDescription": "Adatta la direzione visiva alle tue istruzioni e ai tuoi materiali",
-        "emptyFormat": "Nessun riferimento di stile corrisponde a questo formato.",
+        "browseGroups": "Esplora per stile",
+        "description": "Lo stile definisce scene, transizioni, testi in sovrimpressione e ritmo.",
+        "groups": {
+          "cinematic": "Cinema e fotografia",
+          "handmade": "Artigianato e materiali",
+          "iconic-artist": "Arte e design",
+          "other": "Altri stili",
+          "pop-culture": "Cultura pop",
+          "print": "Stampa ed editoria",
+          "retro-tech": "Tecnologia rétro e interfacce"
+        },
         "heading": "Scegli un riferimento di stile",
         "label": "Riferimento di stile",
         "preview": "Anteprima di {{title}}",

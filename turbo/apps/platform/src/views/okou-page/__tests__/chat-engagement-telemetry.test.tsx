@@ -5,11 +5,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { click } from "../../../__tests__/page-helper.ts";
 import {
-  buttonByLabel,
   buttonByText,
   context,
   setupPage,
 } from "./chat-lifecycle-test-helpers.ts";
+import {
+  findWorkHistoryRangeOption,
+  getWorkHistoryRangeOption,
+} from "./chat-run-test-fixtures.ts";
 import { mockChatLifecycle } from "./chat-test-helpers.ts";
 
 type Capture = (
@@ -95,10 +98,8 @@ describe("chat engagement telemetry", () => {
       },
     });
 
-    const expandWork = await waitFor(() => {
-      return buttonByLabel("Expand work history");
-    });
-    expect(expandWork).toHaveTextContent(/^Working for /);
+    const expandWork = await findWorkHistoryRangeOption("All");
+    expect(screen.getByText(/^Working for /)).toBeVisible();
     expect(queryMessageBody("Checking the launch brief.")).toBeNull();
 
     click(expandWork);
@@ -110,7 +111,7 @@ describe("chat engagement telemetry", () => {
       ["chat_work_history_expanded", { work_status: "active" }],
     ]);
 
-    click(buttonByLabel("Collapse work history"));
+    click(getWorkHistoryRangeOption("Recent"));
 
     await waitFor(() => {
       expect(queryMessageBody("Checking the launch brief.")).toBeNull();
@@ -118,7 +119,7 @@ describe("chat engagement telemetry", () => {
     expect(capturedEvents("chat_work_history_expanded")).toHaveLength(1);
   });
 
-  it("reports expanding completed work history through the legacy fold", async () => {
+  it("reports expanding completed work history through the range control", async () => {
     const threadId = "e7000000-0000-4000-a000-000000000102";
     mockChatLifecycle(context, {
       threadId,
@@ -148,12 +149,16 @@ describe("chat engagement telemetry", () => {
       ],
     });
 
-    await setupPage({ context, path: `/chats/${threadId}` });
-
-    const expandWork = await waitFor(() => {
-      return buttonByLabel("Expand work history");
+    await setupPage({
+      context,
+      path: `/chats/${threadId}`,
+      featureSwitches: {
+        [FeatureSwitchKey.ChatRunWorkFolding]: true,
+      },
     });
-    expect(expandWork).toHaveTextContent("Worked for 20s");
+
+    const expandWork = await findWorkHistoryRangeOption("All");
+    expect(screen.getByText("Worked for 20s")).toBeVisible();
 
     click(expandWork);
 

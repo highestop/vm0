@@ -14,6 +14,7 @@ import {
   mockResizeObserver,
   setupPage,
 } from "./chat-lifecycle-test-helpers.ts";
+import { findWorkHistoryRangeOption } from "./chat-run-test-fixtures.ts";
 
 const THREAD_IDS = {
   overview: "b0000000-0000-4000-a000-000000000821",
@@ -519,13 +520,7 @@ test("The conversation locator follows folded goal continuation work", async () 
     );
   });
 
-  const expand = await waitFor(() => {
-    const button = queryAllByRoleFast("button").find((candidate) => {
-      return candidate.getAttribute("aria-label") === "Expand work history";
-    });
-    expect(button).toBeDefined();
-    return button!;
-  });
+  const expand = await findWorkHistoryRangeOption("All");
   await userEvent.click(expand);
   await screen.findByText("Checked the first deployment region");
   expect(

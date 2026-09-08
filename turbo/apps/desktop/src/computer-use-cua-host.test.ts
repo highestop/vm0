@@ -135,16 +135,11 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
   };
   const config = resolveDesktopConfig(undefined, "okou");
   const api = "https://api.vm0.ai";
-  const cookies = { cookies: { get: async () => [] } };
   const addClientHeaders = createDesktopClientHeaderInjector({
-    product: "okou",
     clientVersion: "1.2.3",
   });
   const auth = new DesktopAuthSession({
-    product: "okou",
     apiBaseUrl: api,
-    cookieUrls: [config.webUrl, config.platformUrl],
-    cookieSource: cookies,
     addClientHeaders,
     tokenUrl: buildDesktopAuthTokenUrl(config.authUrl),
     selectOrgUrl: buildDesktopAuthSelectOrgUrl(config.authUrl, true),
@@ -193,7 +188,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", li
           clearTimeout: clear,
           commandClock,
         },
-        { product: "okou", session: cookies, getAuthSession: () => auth },
+        { getAuthSession: () => auth },
       ),
   });
   notify = () => {

@@ -6301,6 +6301,15 @@ function TemplatePickerDialog({
           closeTemplatePicker();
         }
       }}
+      onOpenChangeComplete={(open) => {
+        if (!open) {
+          return;
+        }
+        ownPreviewResources(runtime, pageSignal);
+        if (!isPreviewing) {
+          prewarmTemplatePreviewsForCategory(selectedCategory);
+        }
+      }}
     >
       <DialogContent
         closeLabel={t(($) => {
@@ -6315,13 +6324,7 @@ function TemplatePickerDialog({
         onKeyDownCapture={
           isPreviewing ? handleTemplateDetailTabKeyDown : undefined
         }
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          ownPreviewResources(runtime, pageSignal);
-          if (!isPreviewing) {
-            prewarmTemplatePreviewsForCategory(selectedCategory);
-          }
-        }}
+        initialFocus={false}
       >
         <div
           inert={isPreviewing}

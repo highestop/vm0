@@ -77,6 +77,29 @@ describe("google drive artifact recovery contract", () => {
   });
 });
 
+describe("chat thread indicators contract", () => {
+  it("keeps queued thread detail additive across API and Platform versions", () => {
+    const threadId = "11111111-1111-4111-8111-111111111111";
+    const legacyResponse = {
+      agents: {},
+      threads: { [threadId]: "active" as const },
+    };
+    const queuedResponse = {
+      ...legacyResponse,
+      queuedThreadIds: [threadId],
+    };
+    const previousSchema = z.object({
+      agents: z.record(z.string().uuid(), z.enum(["active", "unread"])),
+      threads: z.record(z.string().uuid(), z.enum(["active", "unread"])),
+    });
+    const currentSchema = chatThreadsContract.indicators.responses[200];
+
+    expect(currentSchema.parse(legacyResponse)).toStrictEqual(legacyResponse);
+    expect(previousSchema.parse(queuedResponse)).toStrictEqual(legacyResponse);
+    expect(currentSchema.parse(queuedResponse)).toStrictEqual(queuedResponse);
+  });
+});
+
 describe("chat message response contract", () => {
   const workflowId = "11111111-1111-4111-8111-111111111111";
 

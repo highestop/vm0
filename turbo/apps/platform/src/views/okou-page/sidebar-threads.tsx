@@ -131,6 +131,17 @@ function SessionStateIndicator({
   if (state === "running") {
     return <RunningIndicator />;
   }
+  if (state === "queued") {
+    return (
+      <span
+        role="img"
+        aria-label={t(($) => {
+          return $.activity.statuses.queued;
+        })}
+        className="h-2 w-2 rounded-full bg-sky-300"
+      />
+    );
+  }
   if (state === "unread") {
     return (
       <span

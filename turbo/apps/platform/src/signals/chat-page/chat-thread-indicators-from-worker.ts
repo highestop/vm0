@@ -23,3 +23,10 @@ export const sidebarActiveThreadIds$ = computed(
     );
   },
 );
+
+export const sidebarQueuedThreadIds$ = computed(
+  async (get): Promise<ReadonlySet<string>> => {
+    const indicators = await get(chatThreadIndicatorsFromWorker$);
+    return new Set(indicators.queuedThreadIds ?? []);
+  },
+);

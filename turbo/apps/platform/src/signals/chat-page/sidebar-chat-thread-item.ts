@@ -3,7 +3,10 @@ import { pathParams$, searchParams$ } from "../route.ts";
 import { setSidebarExpanded$ } from "../okou-page/nav.ts";
 import { setPendingDeleteThreadId$ } from "../okou-page/sidebar-state.ts";
 import { threadMeta } from "./chat-thread-event-sourcing.ts";
-import { sidebarActiveThreadIds$ } from "./chat-thread-indicators-from-worker.ts";
+import {
+  sidebarActiveThreadIds$,
+  sidebarQueuedThreadIds$,
+} from "./chat-thread-indicators-from-worker.ts";
 import { pinChatThread$, unpinChatThread$ } from "./chat-event.ts";
 import {
   currentLeftThread$,
@@ -18,7 +21,11 @@ import { markChatThreadUnread$ } from "./chat-thread-mark-unread.ts";
 import { sidebarDraftThreadIds$ } from "./sidebar-draft-threads.ts";
 import { sidebarUnreadThreadIds$ } from "./sidebar-unread-threads.ts";
 
-export type SidebarChatThreadIndicatorState = "running" | "unread" | "draft";
+export type SidebarChatThreadIndicatorState =
+  | "running"
+  | "queued"
+  | "unread"
+  | "draft";
 
 export type SidebarChatThreadPaneIndicator = "main" | "sidebar";
 export type SidebarChatThreadTargetPane = "main" | "sidebar";
@@ -95,7 +102,9 @@ function createSidebarChatThreadItemSignals(
     indicatorState$: computed(
       async (get): Promise<SidebarChatThreadIndicatorState | null> => {
         if ((await get(sidebarActiveThreadIds$)).has(threadId)) {
-          return "running";
+          return (await get(sidebarQueuedThreadIds$)).has(threadId)
+            ? "queued"
+            : "running";
         }
         if (await get(unread$)) {
           return "unread";

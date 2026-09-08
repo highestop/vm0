@@ -312,6 +312,7 @@ export const indicatorSchema = z.enum(["active", "unread"]);
 const indicatorsSchema = z.object({
   agents: z.record(z.string().uuid(), indicatorSchema),
   threads: z.record(z.string().uuid(), indicatorSchema),
+  queuedThreadIds: z.array(z.string().uuid()).optional(),
 });
 
 const chatThreadEventIdSchema = z.string().uuid();
@@ -1185,7 +1186,7 @@ export const chatThreadsContract = c.router({
       401: apiErrorSchema,
     },
     summary:
-      "Get active and unread indicators for the caller's agents and chat threads in the current organization.",
+      "Get active, queued, and unread indicators for the caller's agents and chat threads in the current organization.",
   },
   snapshot: {
     method: "GET",

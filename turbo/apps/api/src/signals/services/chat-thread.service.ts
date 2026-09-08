@@ -53,7 +53,10 @@ import {
   sql,
 } from "drizzle-orm";
 
-import { zodEnumDriverValueDecoder } from "../../lib/db-structured-result";
+import {
+  pgBooleanDecoder,
+  zodEnumDriverValueDecoder,
+} from "../../lib/db-structured-result";
 import { now, nowDate } from "../../lib/time";
 import { type Db, db$, type ReadonlyDb, writeDb$ } from "../external/db";
 import { inferMimetype } from "./chat-event-shared.service";
@@ -359,12 +362,13 @@ export function chatThreadUnreads(args: {
 }
 
 /**
- * Active and unread indicators for the user's agents and threads in the
- * current organization. Active threads are complete; unread threads are the
- * latest 50 terminal markers from the last seven days. Active threads are
- * computed once and reused to keep unread classification within one database
- * snapshot. Unread agent aggregates take precedence so unread actions remain
- * available while another thread for the same agent is active.
+ * Active, queued, and unread indicators for the user's agents and threads in
+ * the current organization. Active threads are complete; queued thread ids
+ * refine active threads whose work has not been admitted yet. Unread threads
+ * are the latest 50 terminal markers from the last seven days. Active threads
+ * are computed once and reused to keep unread classification within one
+ * database snapshot. Unread agent aggregates take precedence so unread
+ * actions remain available while another thread for the same agent is active.
  */
 export function chatIndicators(args: {
   readonly userId: string;
@@ -375,9 +379,12 @@ export function chatIndicators(args: {
     const unreadCutoff = new Date(now() - INDICATOR_UNREAD_LOOKBACK_MS);
     const activeThreads = db.$with("active_threads").as(
       db
-        .selectDistinct({
+        .select({
           threadId: chatThreads.id,
           agentId: chatThreads.agentId,
+          queuedOnly: sql`bool_and(${agentRuns.status} = 'queued')`
+            .mapWith(pgBooleanDecoder)
+            .as("queued_only"),
         })
         .from(agentRuns)
         .innerJoin(chatThreads, eq(chatThreads.id, agentRuns.chatThreadId))
@@ -389,7 +396,8 @@ export function chatIndicators(args: {
             inArray(agentRuns.status, [...ACTIVE_RUN_STATUSES]),
             isNotNull(agentRuns.triggerSource),
           ),
-        ),
+        )
+        .groupBy(chatThreads.id, chatThreads.agentId),
     );
     const lastRunFinish = latestRunFinishEventSubquery(db, chatThreads.id);
     const unreadThreads = db.$with("unread_threads").as(
@@ -430,6 +438,7 @@ export function chatIndicators(args: {
             threadId: activeThreads.threadId,
             agentId: activeThreads.agentId,
             indicator: sql`'active'`.mapWith(indicatorDecoder).as("indicator"),
+            queuedOnly: activeThreads.queuedOnly,
           })
           .from(activeThreads),
         db
@@ -437,6 +446,7 @@ export function chatIndicators(args: {
             threadId: unreadThreads.threadId,
             agentId: unreadThreads.agentId,
             indicator: sql`'unread'`.mapWith(indicatorDecoder).as("indicator"),
+            queuedOnly: sql`false`.mapWith(pgBooleanDecoder).as("queued_only"),
           })
           .from(unreadThreads),
       ),
@@ -448,8 +458,12 @@ export function chatIndicators(args: {
 
     const agentIndicators: Record<string, Indicator> = {};
     const threads: Record<string, Indicator> = {};
+    const queuedThreadIds: string[] = [];
     for (const row of rows) {
       threads[row.threadId] = row.indicator;
+      if (row.indicator === "active" && row.queuedOnly) {
+        queuedThreadIds.push(row.threadId);
+      }
       if (
         row.agentId !== null &&
         (row.indicator === "unread" ||
@@ -458,7 +472,7 @@ export function chatIndicators(args: {
         agentIndicators[row.agentId] = row.indicator;
       }
     }
-    return { agents: agentIndicators, threads };
+    return { agents: agentIndicators, threads, queuedThreadIds };
   });
 }
 

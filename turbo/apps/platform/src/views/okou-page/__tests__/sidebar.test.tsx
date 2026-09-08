@@ -2124,10 +2124,21 @@ test("Recognize and pin sidebar conversation states", async () => {
       createThread(INCIDENT_THREAD_ID, "Incident notes"),
       createThread(AUTOMATION_THREAD_ID, "Running analysis"),
       createThread(ARCHIVED_THREAD_ID, "Draft brief"),
+      createThread(RESEARCH_THREAD_ID, "Queued synthesis"),
     ],
     [],
-    [AUTOMATION_THREAD_ID],
+    [AUTOMATION_THREAD_ID, RESEARCH_THREAD_ID],
   );
+  context.mocks.api(chatThreadsContract.indicators, ({ respond }) => {
+    return respond(200, {
+      agents: {},
+      threads: {
+        [AUTOMATION_THREAD_ID]: "active",
+        [RESEARCH_THREAD_ID]: "active",
+      },
+      queuedThreadIds: [RESEARCH_THREAD_ID],
+    });
+  });
   context.mocks.api(chatThreadsContract.drafts, ({ respond }) => {
     return respond(200, { draftThreadIds: [ARCHIVED_THREAD_ID] });
   });
@@ -2154,6 +2165,9 @@ test("Recognize and pin sidebar conversation states", async () => {
       within(threadRowByTitle("Running analysis")).getByLabelText("Running"),
     ).toBeInTheDocument();
     expect(
+      within(threadRowByTitle("Queued synthesis")).getByLabelText("Queued"),
+    ).toBeInTheDocument();
+    expect(
       within(threadRowByTitle("Draft brief")).getByLabelText("Draft"),
     ).toBeInTheDocument();
   });
@@ -2163,12 +2177,19 @@ test("Recognize and pin sidebar conversation states", async () => {
   expect(
     within(threadRowByTitle("Draft brief")).getByLabelText("Draft"),
   ).toHaveAttribute("role", "img");
+  expect(
+    within(threadRowByTitle("Queued synthesis")).getByLabelText("Queued"),
+  ).toHaveClass("bg-sky-300");
+  expect(
+    within(threadRowByTitle("Queued synthesis")).queryByLabelText("Running"),
+  ).not.toBeInTheDocument();
 
   // Touch rows never hover, so the state indicator has to be the menu trigger
   // itself; otherwise running, unread, and draft chats lose every row action.
   for (const [title, label] of [
     ["Incident notes", "Unread"],
     ["Running analysis", "Running"],
+    ["Queued synthesis", "Queued"],
     ["Draft brief", "Draft"],
   ] as const) {
     const row = threadRowByTitle(title);

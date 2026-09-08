@@ -2503,6 +2503,7 @@ describe("CHAT-01 chat thread read state", () => {
         [runningRun.threadId]: "active",
         [queuedRun.threadId]: "active",
       },
+      queuedThreadIds: [queuedRun.threadId],
     });
 
     chatCallbacks.mockChatOutputEvents([]);
@@ -2527,6 +2528,7 @@ describe("CHAT-01 chat thread read state", () => {
         [runningRun.threadId]: "unread",
         [queuedRun.threadId]: "active",
       },
+      queuedThreadIds: [],
     });
   }, 120_000);
 
@@ -2562,6 +2564,7 @@ describe("CHAT-01 chat thread read state", () => {
           [recentRun.threadId]: "unread",
           [activeRun.threadId]: "active",
         },
+        queuedThreadIds: [],
       });
     });
   }, 120_000);
@@ -2654,6 +2657,7 @@ describe("CHAT-01 chat thread read state", () => {
         [completedRun.threadId]: "unread",
         [completeGoalRun.threadId]: "unread",
       },
+      queuedThreadIds: [],
     });
 
     chatCallbacks.mockChatOutputEvents([]);
@@ -2687,6 +2691,7 @@ describe("CHAT-01 chat thread read state", () => {
         [completedRun.threadId]: "unread",
         [completeGoalRun.threadId]: "unread",
       },
+      queuedThreadIds: [],
     });
   }, 120_000);
 

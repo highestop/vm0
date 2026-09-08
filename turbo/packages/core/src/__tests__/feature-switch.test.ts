@@ -27,6 +27,7 @@ describe("FeatureSwitchKey", () => {
     expect(FeatureSwitchKey.TestOauthConnector).toBe("_testOauthConnector");
     expect(FeatureSwitchKey.SshAccess).toBe("_sshAccess");
     expect(FeatureSwitchKey.ChatRunWorkFolding).toBe("chatRunWorkFolding");
+    expect(FeatureSwitchKey.AgentMessageMath).toBe("agentMessageMath");
     expect(FeatureSwitchKey.ProgressiveArtifactPreview).toBe(
       "progressiveArtifactPreview",
     );
@@ -193,6 +194,7 @@ describe("getAllFeatureStates", () => {
     expect(staffOrgStates[FeatureSwitchKey.Lab]).toBe(true);
     expect(staffOrgStates[FeatureSwitchKey.ChatErrorRecovery]).toBe(true);
     expect(staffOrgStates[FeatureSwitchKey.ChatRunWorkFolding]).toBe(true);
+    expect(staffOrgStates[FeatureSwitchKey.AgentMessageMath]).toBe(true);
     expect(staffOrgStates[FeatureSwitchKey.ProgressiveArtifactPreview]).toBe(
       true,
     );
@@ -220,6 +222,7 @@ describe("getAllFeatureStates", () => {
     expect(otherOrgStates[FeatureSwitchKey.Lab]).toBe(false);
     expect(otherOrgStates[FeatureSwitchKey.ChatErrorRecovery]).toBe(false);
     expect(otherOrgStates[FeatureSwitchKey.ChatRunWorkFolding]).toBe(false);
+    expect(otherOrgStates[FeatureSwitchKey.AgentMessageMath]).toBe(false);
     expect(otherOrgStates[FeatureSwitchKey.ProgressiveArtifactPreview]).toBe(
       false,
     );

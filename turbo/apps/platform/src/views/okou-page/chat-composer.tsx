@@ -1,3 +1,4 @@
+import { withChatScrollLayout } from "../components/chat-scroll-layout.tsx";
 import {
   useComposerConnectorActions,
   type ComposerConnectorActions,
@@ -670,9 +671,9 @@ function PendingItemsStrip({ signals }: { signals: ComposerSignals }) {
           },
         );
   if (count === 0 && !activeGoal) {
-    return null;
+    return withChatScrollLayout(null);
   }
-  return (
+  return withChatScrollLayout(
     <div className="relative z-0 mx-5 -mb-6 overflow-hidden rounded-xl bg-gray-50 dark:bg-gray-100">
       {count > 0 ? (
         <PendingItemsStripHeader
@@ -744,7 +745,7 @@ function PendingItemsStrip({ signals }: { signals: ComposerSignals }) {
           />
         ) : null}
       </div>
-    </div>
+    </div>,
   );
 }
 
@@ -9843,7 +9844,7 @@ function ComposerTemporaryModelNotice({
     !defaultSelection ||
     (!modelChanged && !serviceTierChanged)
   ) {
-    return null;
+    return withChatScrollLayout(null);
   }
   const updating = updateLoadable.state === "loading";
   const modelName = getModelDisplayName(selection.selectedModel);
@@ -9870,7 +9871,7 @@ function ComposerTemporaryModelNotice({
       Reason.DomCallback,
     );
   };
-  return (
+  return withChatScrollLayout(
     <ComposerModelScopeCard
       label={t(($) => {
         return $.chat.composer.modelForThisChat;
@@ -9878,7 +9879,7 @@ function ComposerTemporaryModelNotice({
       model={scopedModelLabel}
       updating={updating}
       onUseForFutureChats={useForFutureChats}
-    />
+    />,
   );
 }
 
@@ -9897,12 +9898,12 @@ function ComposerTemporaryVideoModelNotice({
   );
   const pageSignal = useGet(pageSignal$);
   if (!userPreference) {
-    return null;
+    return withChatScrollLayout(null);
   }
   const defaultVideoModel =
     userPreference.selectedVideoModel ?? DEFAULT_VIDEO_MODEL;
   if (!selection || selection === defaultVideoModel) {
-    return null;
+    return withChatScrollLayout(null);
   }
   const updating = updateLoadable.state === "loading";
   const useForFutureChats = () => {
@@ -9911,7 +9912,7 @@ function ComposerTemporaryVideoModelNotice({
     }
     detach(updateDefaultVideoModel(selection, pageSignal), Reason.DomCallback);
   };
-  return (
+  return withChatScrollLayout(
     <ComposerModelScopeCard
       label={t(($) => {
         return $.chat.composer.videoModelForThisChat;
@@ -9919,7 +9920,7 @@ function ComposerTemporaryVideoModelNotice({
       model={getModelDisplayName(selection)}
       updating={updating}
       onUseForFutureChats={useForFutureChats}
-    />
+    />,
   );
 }
 
@@ -9936,12 +9937,12 @@ function ComposerTemporaryImageModelNotice({
   );
   const pageSignal = useGet(pageSignal$);
   if (!userPreference) {
-    return null;
+    return withChatScrollLayout(null);
   }
   const defaultImageModel =
     userPreference.selectedImageModel ?? DEFAULT_IMAGE_MODEL;
   if (!selection || selection === defaultImageModel) {
-    return null;
+    return withChatScrollLayout(null);
   }
   const updating = updateLoadable.state === "loading";
   const useForFutureChats = () => {
@@ -9950,7 +9951,7 @@ function ComposerTemporaryImageModelNotice({
     }
     detach(updateDefaultImageModel(selection, pageSignal), Reason.DomCallback);
   };
-  return (
+  return withChatScrollLayout(
     <ComposerModelScopeCard
       label={t(($) => {
         return $.chat.composer.imageModelForThisChat;
@@ -9958,7 +9959,7 @@ function ComposerTemporaryImageModelNotice({
       model={IMAGE_MODEL_CONFIGS[selection].label}
       updating={updating}
       onUseForFutureChats={useForFutureChats}
-    />
+    />,
   );
 }
 
@@ -9972,25 +9973,27 @@ function ComposerTemporaryModelNoticeSlot({
   const imageModelSignals = signals.imageModel;
   const videoModelSignals = signals.videoModel;
   if (!enabled) {
-    return null;
+    return withChatScrollLayout(null);
   }
   // One card at a time: it belongs to whichever model the composer is
   // currently pointed at, matching the pressed state of the two mode chips.
   if (imageModelSignals && mediaModelCategory === "image") {
-    return (
+    return withChatScrollLayout(
       <ComposerTemporaryImageModelNotice
         imageModelSignals={imageModelSignals}
-      />
+      />,
     );
   }
   if (videoModelSignals && mediaModelCategory === "video") {
-    return (
+    return withChatScrollLayout(
       <ComposerTemporaryVideoModelNotice
         videoModelSignals={videoModelSignals}
-      />
+      />,
     );
   }
-  return <ComposerTemporaryModelNotice signals={signals} />;
+  return withChatScrollLayout(
+    <ComposerTemporaryModelNotice signals={signals} />,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -10133,9 +10136,9 @@ function ComposerAttachments({ signals }: { signals: ComposerSignals }) {
   const notifyDraftChanged = useComposerDraftChange(signals);
 
   if (attachments.length === 0) {
-    return null;
+    return withChatScrollLayout(null);
   }
-  return (
+  return withChatScrollLayout(
     <AttachmentChips
       attachments={attachments}
       annotationSignals={signals.imageAnnotation}
@@ -10144,7 +10147,7 @@ function ComposerAttachments({ signals }: { signals: ComposerSignals }) {
         removeAttachment(attachment);
         notifyDraftChanged();
       }}
-    />
+    />,
   );
 }
 
@@ -10506,7 +10509,7 @@ function ComposerFooter({
           : capture
             ? "recording"
             : voiceDraft?.status;
-  return (
+  return withChatScrollLayout(
     <div
       className={cn(
         "flex items-center justify-between gap-1 px-4 pb-4 pt-1 sm:gap-2",
@@ -10557,7 +10560,7 @@ function ComposerFooter({
           </div>
         </>
       )}
-    </div>
+    </div>,
   );
 }
 

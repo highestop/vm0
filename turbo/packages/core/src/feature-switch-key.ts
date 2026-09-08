@@ -35,6 +35,7 @@ export enum FeatureSwitchKey {
   OkouDebug = "_debug",
   SharedWorkerRealtime = "sharedWorkerRealtime",
   Banking = "banking",
+  SlackRead = "slackRead",
   Lab = "_lab",
   StripeInvoicePaidWorkflowAutomations = "stripeInvoicePaidWorkflowAutomations",
   OfficialWorkflows = "officialWorkflows",

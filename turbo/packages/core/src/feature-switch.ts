@@ -199,13 +199,6 @@ const FEATURE_SWITCHES: Record<FeatureSwitchKey, FeatureSwitch> = {
     enabled: false,
     enabledOrgIdHashes: STAFF_ORG_ID_HASHES,
   },
-  [FeatureSwitchKey.SharedWorkerRealtime]: {
-    maintainer: "ethan@okou.ai",
-    description:
-      "Route application realtime subscriptions through the SharedWorker",
-    enabled: false,
-    enabledOrgIdHashes: STAFF_ORG_ID_HASHES,
-  },
   [FeatureSwitchKey.Banking]: {
     maintainer: "linghan@okou.ai",
     description:

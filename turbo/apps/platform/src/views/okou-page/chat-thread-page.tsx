@@ -5072,7 +5072,7 @@ function AssistantRecoveryActions({
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="col-start-2 row-start-2 flex max-w-full flex-wrap items-center gap-2 @[640px]:col-start-3 @[640px]:row-start-1 @[640px]:ml-auto @[640px]:shrink-0 @[640px]:justify-end @[640px]:self-center">
       {hasResetAction && (
         <Button
           type="button"
@@ -5193,29 +5193,26 @@ function AssistantErrorRecoveryCard({
     <div
       role="status"
       data-testid="assistant-error-recovery"
-      className="okou-chat-card flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-2.5 text-foreground"
+      className="okou-chat-card grid min-h-[88px] w-full grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2.5 gap-y-3 px-3.5 py-3 text-foreground @[640px]:grid-cols-[auto_minmax(0,1fr)_auto] @[640px]:items-center"
     >
-      <div className="flex min-w-0 flex-[1_1_16rem] items-center gap-2.5">
-        {recovery.kind === "usage-limit" ||
-        recovery.kind === "execution-timeout" ? (
-          <Clock size={16} className="shrink-0 text-brand-text" />
-        ) : (
-          <Coffee size={16} className="shrink-0 text-brand-text" />
-        )}
-        <span className="shrink-0 text-[0.9375rem] font-medium leading-6">
-          {title}
-        </span>
-        {/* The row is the point on desktop; on a phone a half-truncated
-            sentence is worse than none, and the title already carries it. */}
-        <span className="hidden min-w-0 flex-1 truncate text-sm text-muted-foreground sm:block">
+      {recovery.kind === "usage-limit" ||
+      recovery.kind === "execution-timeout" ? (
+        <Clock
+          size={16}
+          className="col-start-1 row-start-1 mt-1 shrink-0 self-start text-brand-text"
+        />
+      ) : (
+        <Coffee
+          size={16}
+          className="col-start-1 row-start-1 mt-1 shrink-0 self-start text-brand-text"
+        />
+      )}
+      <div className="col-start-2 row-start-1 min-w-0">
+        <div className="text-[0.9375rem] font-medium leading-6">{title}</div>
+        <p className="mt-0.5 text-sm leading-5 text-muted-foreground">
           {description}
-        </span>
-        {resetText && (
-          <span className="hidden shrink-0 items-center gap-1.5 text-sm font-medium text-foreground sm:inline-flex">
-            <Clock size={16} className="text-muted-foreground" />
-            {resetText}
-          </span>
-        )}
+          {resetText ? ` ${resetText}` : null}
+        </p>
       </div>
       <AssistantRecoveryActions recovery={recovery} thread={thread} />
     </div>

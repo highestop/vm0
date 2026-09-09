@@ -27,7 +27,7 @@ import {
 import { organizationAuthContext$ } from "../auth/auth-context";
 import { authRoute } from "../auth/auth-route";
 import { requestSignal$ } from "../context/hono";
-import { bodyResultOf, pathParamsOf } from "../context/request";
+import { bodyResultOf, pathParamsOf, queryOf } from "../context/request";
 import {
   clerk$,
   createClerkReadContext,
@@ -212,6 +212,24 @@ function checkoutRedirectsAllowed(
   );
 }
 
+function billingPreviewReturnUrlAllowed(
+  previewEnabled: boolean,
+  returnUrl: string | undefined,
+): boolean {
+  return (
+    !previewEnabled ||
+    (returnUrl !== undefined && billingRedirectAllowed(returnUrl))
+  );
+}
+
+function hasPaidUsagePack(
+  memberUsagePacks: readonly MemberUsagePack[],
+): boolean {
+  return memberUsagePacks.some((selection) => {
+    return selection.usagePackUsd !== 0;
+  });
+}
+
 async function validateUsagePackSubscriptionMembers(
   args: {
     readonly clerk: ClerkClient;
@@ -361,36 +379,45 @@ function usagePackCheckoutAllocations(
       return item.usagePackUsd;
     }),
   );
-  return selections.map((selection) => {
-    if (!catalogSelections.has(selection.usagePackUsd)) {
-      throw new Error(
-        `Usage pack $${selection.usagePackUsd} is missing from the catalog`,
-      );
-    }
-    const stripePriceId = activeUsagePackPriceId(selection.usagePackUsd);
-    if (!stripePriceId) {
-      throw new Error(
-        `Usage pack $${selection.usagePackUsd} Price is not configured`,
-      );
-    }
-    if (memberIdSet.has(selection.memberId)) {
-      return {
-        usagePackUsd: selection.usagePackUsd,
-        stripePriceId,
-        userId: selection.memberId,
-      };
-    }
-    if (!invitationIdSet.has(selection.memberId)) {
-      throw new Error(
-        `Usage pack owner ${selection.memberId} is no longer eligible`,
-      );
-    }
-    return {
-      usagePackUsd: selection.usagePackUsd,
-      stripePriceId,
-      invitationId: selection.memberId,
-    };
-  });
+  return selections.flatMap(
+    (selection): readonly UsagePackCheckoutAllocation[] => {
+      if (selection.usagePackUsd === 0) {
+        return [];
+      }
+      if (!catalogSelections.has(selection.usagePackUsd)) {
+        throw new Error(
+          `Usage pack $${selection.usagePackUsd} is missing from the catalog`,
+        );
+      }
+      const stripePriceId = activeUsagePackPriceId(selection.usagePackUsd);
+      if (!stripePriceId) {
+        throw new Error(
+          `Usage pack $${selection.usagePackUsd} Price is not configured`,
+        );
+      }
+      if (memberIdSet.has(selection.memberId)) {
+        return [
+          {
+            usagePackUsd: selection.usagePackUsd,
+            stripePriceId,
+            userId: selection.memberId,
+          },
+        ];
+      }
+      if (!invitationIdSet.has(selection.memberId)) {
+        throw new Error(
+          `Usage pack owner ${selection.memberId} is no longer eligible`,
+        );
+      }
+      return [
+        {
+          usagePackUsd: selection.usagePackUsd,
+          stripePriceId,
+          invitationId: selection.memberId,
+        },
+      ];
+    },
+  );
 }
 
 async function loadUsagePackCheckoutAllocations(
@@ -723,11 +750,17 @@ const usagePackCheckoutAuthed$ = command(
     if (!bodyResult.ok) {
       return bodyResult.response;
     }
-    if (bodyResult.data.previewToken) {
+    const body = bodyResult.data;
+    if (!hasPaidUsagePack(body.memberUsagePacks)) {
+      return badRequestMessage(
+        "At least one member must have a paid usage pack",
+      );
+    }
+    if (body.previewToken) {
       return await set(
         confirmUsagePackPurchaseForOrg$,
         auth.orgId,
-        bodyResult.data.previewToken,
+        body.previewToken,
         signal,
       );
     }
@@ -738,7 +771,6 @@ const usagePackCheckoutAuthed$ = command(
     }
     signal.throwIfAborted();
 
-    const body = bodyResult.data;
     const previewEnabled = body.supportsInAppPreview === true;
     const clerk = get(clerk$);
     const resolvedAttribution = await checkoutAttribution(
@@ -855,7 +887,10 @@ const usagePackCatalogAuthed$ = command(
     }
     const usagePacks = await loadUsagePackCatalog();
     signal.throwIfAborted();
-    return { status: 200 as const, body: { usagePacks: [...usagePacks] } };
+    return {
+      status: 200 as const,
+      body: { usagePacks: [...usagePacks], supportsFreeMembers: true },
+    };
   },
 );
 
@@ -956,9 +991,7 @@ const usagePackChangePreviewAuthed$ = command(
     }
     const previewEnabled = bodyResult.data.supportsInAppPreview === true;
     if (
-      previewEnabled &&
-      (!bodyResult.data.returnUrl ||
-        !billingRedirectAllowed(bodyResult.data.returnUrl))
+      !billingPreviewReturnUrlAllowed(previewEnabled, bodyResult.data.returnUrl)
     ) {
       return badRequestMessage(
         "returnUrl must match the platform origin for in-app billing",
@@ -1136,7 +1169,7 @@ async function usagePackMigrationSchemasAvailable(
 }
 
 const usagePackMigrationGetAuthed$ = command(
-  async ({ set }, signal: AbortSignal) => {
+  async ({ get, set }, signal: AbortSignal) => {
     const access = await set(usagePackManagementAccess$, signal);
     if (!access.allowed) {
       return access.response;
@@ -1154,7 +1187,21 @@ const usagePackMigrationGetAuthed$ = command(
     if (result.status === "conflict") {
       return conflict("Another subscription update is in progress");
     }
-    return { status: 200 as const, body: result.state };
+    const query = get(queryOf(billingUsagePackMigrationContract.get));
+    // Loaded browsers require at least one paid selection in configuration.
+    // Preserve their optional-field response until they opt in to Free members.
+    const configuration = result.state.configuration;
+    return {
+      status: 200 as const,
+      body: {
+        ...result.state,
+        configuration:
+          configuration?.memberUsagePacks.length === 0 &&
+          !query?.supportsFreeMembers
+            ? undefined
+            : configuration,
+      },
+    };
   },
 );
 
@@ -1459,11 +1506,14 @@ const usagePackSubscriptionChangePreviewAuthed$ = command(
     if (!bodyResult.ok) {
       return bodyResult.response;
     }
+    if (!hasPaidUsagePack(bodyResult.data.memberUsagePacks)) {
+      return badRequestMessage(
+        "At least one member must have a paid usage pack",
+      );
+    }
     const previewEnabled = bodyResult.data.supportsInAppPreview === true;
     if (
-      previewEnabled &&
-      (!bodyResult.data.returnUrl ||
-        !billingRedirectAllowed(bodyResult.data.returnUrl))
+      !billingPreviewReturnUrlAllowed(previewEnabled, bodyResult.data.returnUrl)
     ) {
       return badRequestMessage(
         "returnUrl must match the platform origin for in-app billing",

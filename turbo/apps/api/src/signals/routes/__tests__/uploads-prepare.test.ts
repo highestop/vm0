@@ -171,7 +171,7 @@ describe("POST /api/uploads/prepare", () => {
     const response = await setupApp({ context, routes: uploadsTestRoutes })(
       uploadsContract,
     ).prepare({
-      body: validBody(),
+      body: { ...validBody(), purpose: "artifact" },
       headers: { authorization: `Bearer ${token}` },
       extraHeaders: { origin: "https://app.okou.ai" },
     });
@@ -184,7 +184,10 @@ describe("POST /api/uploads/prepare", () => {
       /^https:\/\/a\.okou\.io\/[0-9a-z]{10}\.txt$/u,
     );
     expect(response.body).toMatchObject({
-      uploadHeaders: { "x-amz-meta-public-brand": "okou" },
+      uploadHeaders: {
+        "x-amz-meta-artifact-purpose": "artifact",
+        "x-amz-meta-public-brand": "okou",
+      },
     });
   });
 

@@ -37,6 +37,7 @@ const ARTIFACT_ID_METADATA_KEY = "artifact-id";
 const ARTIFACT_FILENAME_METADATA_KEY = "filename";
 const ARTIFACT_USER_ID_METADATA_KEY = "user-id";
 const ARTIFACT_PUBLIC_BRAND_METADATA_KEY = "public-brand";
+const ARTIFACT_PURPOSE_METADATA_KEY = "artifact-purpose";
 const CLOUDFLARE_IMAGE_RESIZE_PATH_PREFIX = "/cdn-cgi/image/";
 const PUBLIC_ARTIFACT_PATH_PREFIX = "/artifacts/";
 
@@ -65,6 +66,7 @@ export interface ResolvedArtifactObject {
   readonly contentType: string;
   readonly size: number;
   readonly lastModified: Date | undefined;
+  readonly purpose?: "artifact";
 }
 
 function publicArtifactPath(pathname: string): string | null {
@@ -154,13 +156,25 @@ export function artifactObjectMetadata(
   id: string,
   filename: string,
   publicBrand: PublicBrand,
+  purpose?: "artifact",
 ): Readonly<Record<string, string>> {
   return {
     [ARTIFACT_ID_METADATA_KEY]: id,
     [ARTIFACT_FILENAME_METADATA_KEY]: encodeURIComponent(filename),
     [ARTIFACT_USER_ID_METADATA_KEY]: encodeURIComponent(userId),
     [ARTIFACT_PUBLIC_BRAND_METADATA_KEY]: publicBrand,
+    ...(purpose ? { [ARTIFACT_PURPOSE_METADATA_KEY]: purpose } : {}),
   };
+}
+
+function artifactPurposeFromMetadata(
+  metadata: Readonly<Record<string, string>>,
+): "artifact" | undefined {
+  const purpose = metadata[ARTIFACT_PURPOSE_METADATA_KEY];
+  if (purpose === undefined || purpose === "artifact") {
+    return purpose;
+  }
+  throw new Error(`Invalid artifact purpose: ${purpose}`);
 }
 
 function publicBrandFromMetadata(
@@ -204,6 +218,7 @@ export const allocateArtifactObject$ = command(
       readonly userId: string;
       readonly filename: string;
       readonly publicBrand: PublicBrand;
+      readonly purpose?: "artifact";
       readonly id?: string;
       readonly variant?: string;
     },
@@ -236,6 +251,7 @@ export const allocateArtifactObject$ = command(
             id,
             args.filename,
             args.publicBrand,
+            args.purpose,
           ),
         };
       }
@@ -252,7 +268,8 @@ export const allocateArtifactObject$ = command(
             head.metadata[ARTIFACT_ID_METADATA_KEY] === id &&
             head.metadata[ARTIFACT_USER_ID_METADATA_KEY] ===
               encodeURIComponent(args.userId) &&
-            filenameFromMetadata(head.metadata) === args.filename
+            filenameFromMetadata(head.metadata) === args.filename &&
+            artifactPurposeFromMetadata(head.metadata) === args.purpose
           ) {
             const publicBrand = publicBrandFromMetadata(head.metadata);
             return {
@@ -265,6 +282,7 @@ export const allocateArtifactObject$ = command(
                 id,
                 args.filename,
                 publicBrand,
+                args.purpose,
               ),
             };
           }
@@ -405,6 +423,7 @@ function resolvedV2ArtifactObjectFromHead(args: {
   const filename =
     filenameFromMetadata(args.head.metadata) ?? filenameFromLegacyKey(args.key);
   const publicBrand = publicBrandFromMetadata(args.head.metadata);
+  const purpose = artifactPurposeFromMetadata(args.head.metadata);
   return {
     key: args.key,
     url: buildFileUrlFromKey(args.key, publicBrand),
@@ -413,6 +432,7 @@ function resolvedV2ArtifactObjectFromHead(args: {
     contentType: args.head.contentType ?? inferMimetype(filename),
     size,
     lastModified,
+    ...(purpose ? { purpose } : {}),
   };
 }
 

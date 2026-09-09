@@ -87,7 +87,10 @@ const completeInner$ = command(async ({ get, set }, signal: AbortSignal) => {
       url,
       s3Key: s3Object.key,
       publicBrand: s3Object.publicBrand,
-      metadata: lastModified ? { lastModified } : {},
+      metadata: {
+        ...(lastModified ? { lastModified } : {}),
+        ...(s3Object.purpose ? { uploadPurpose: s3Object.purpose } : {}),
+      },
     },
     signal,
   );

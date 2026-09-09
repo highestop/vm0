@@ -80,6 +80,7 @@ export function uploadedArtifactObject(args: UploadedArtifactIdentity) {
         contentType: record.contentType,
         size: head.contentLength,
         lastModified: head.lastModified,
+        purpose: "artifact" as const,
         isPrivate: true,
       };
     }

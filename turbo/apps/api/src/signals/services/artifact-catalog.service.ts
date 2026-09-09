@@ -57,9 +57,9 @@ import { runOwnedChatEventForRunCondition } from "./chat-event-type.service";
 const ARTIFACT_CATALOG_DEFAULT_LIMIT = 60;
 
 /**
- * `generatedBy` markers written by the built-in generation pipelines. They are
- * the only signal that separates an officially generated image or video from an
- * ordinary upload that happens to share a content type.
+ * `generatedBy` markers written by the built-in generation pipelines. Explicit
+ * artifact uploads carry a separate purpose marker so output images can be
+ * distinguished from ordinary uploads that happen to share a content type.
  */
 const OFFICIAL_IMAGE_MARKER = "zero-official-image";
 const OFFICIAL_VIDEO_MARKER = "zero-official-video";
@@ -108,12 +108,17 @@ function metadataString(
 }
 
 /**
- * The catalog kind a stored file maps to. Ordinary uploads of every media type
- * stay `file`; only the official generation pipelines produce `image`/`video`.
+ * The catalog kind a stored file maps to. Ordinary media uploads stay `file`;
+ * built-in media generation and explicit image artifact outputs receive their
+ * dedicated kinds.
  */
 function fileArtifactKind(row: CatalogFileRow): "file" | "image" | "video" {
   const generatedBy = metadataString(row.metadata, "generatedBy");
-  if (generatedBy === OFFICIAL_IMAGE_MARKER) {
+  if (
+    generatedBy === OFFICIAL_IMAGE_MARKER ||
+    (metadataString(row.metadata, "uploadPurpose") === "artifact" &&
+      fileContentType(row).startsWith("image/"))
+  ) {
     return "image";
   }
   if (
@@ -123,6 +128,11 @@ function fileArtifactKind(row: CatalogFileRow): "file" | "image" | "video" {
     return "video";
   }
   return "file";
+}
+
+function fileContentType(row: CatalogFileRow): string {
+  const filename = row.filename ?? row.externalId;
+  return row.contentType ?? inferMimetype(filename);
 }
 
 /**
@@ -197,8 +207,7 @@ function fileThumbnail(row: CatalogFileRow): ArtifactThumbnail | null {
   if (row.previewImageUrl) {
     return { url: row.previewImageUrl };
   }
-  const filename = row.filename ?? row.externalId;
-  const contentType = row.contentType ?? inferMimetype(filename);
+  const contentType = fileContentType(row);
   if (row.url && contentType.startsWith("image/")) {
     return { url: row.url };
   }
@@ -342,7 +351,7 @@ async function upsertArtifact(args: UpsertArtifactArgs): Promise<void> {
     });
 }
 
-async function upsertGeneratedMediaEntity(
+async function upsertMediaEntity(
   args: {
     readonly db: Db;
     readonly kind: "image" | "video";
@@ -669,7 +678,7 @@ async function syncArtifactCatalogFile(
   const entityId =
     kind === "file"
       ? row.id
-      : await upsertGeneratedMediaEntity({ db, kind, row }, signal);
+      : await upsertMediaEntity({ db, kind, row }, signal);
   if (!entityId) {
     return;
   }

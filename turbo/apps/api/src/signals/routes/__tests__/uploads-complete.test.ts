@@ -156,8 +156,63 @@ function addUploadObject(
   });
 }
 
+function publicArtifactStorageKey(url: string): string {
+  const pathname = new URL(url).pathname.replace(/^\/+/u, "");
+  return pathname.startsWith("artifacts/") ? pathname : `artifacts/${pathname}`;
+}
+
+function uploadObjectMetadata(
+  headers: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const prefix = "x-amz-meta-";
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => {
+      if (!name.startsWith(prefix)) {
+        throw new Error(`Expected an S3 metadata header, received ${name}`);
+      }
+      return [name.slice(prefix.length), value];
+    }),
+  );
+}
+
+async function stagePreparedRunUpload(
+  fixture: RunUploadFixture,
+  args: {
+    readonly filename: string;
+    readonly contentType: string;
+    readonly size: number;
+    readonly purpose?: "artifact";
+  },
+) {
+  const prepared = await accept(
+    setupApp({ context, routes: uploadsPrepareRoutes })(
+      uploadsContract,
+    ).prepare({
+      headers: { authorization: fixture.bearer },
+      body: {
+        filename: args.filename,
+        contentType: args.contentType,
+        size: args.size,
+        ...(args.purpose ? { purpose: args.purpose } : {}),
+      },
+    }),
+    [200],
+  );
+  if (!("uploadHeaders" in prepared.body)) {
+    throw new Error("Expected a single-part artifact upload");
+  }
+  fixture.objectStore.addObject({
+    bucket: "test-user-artifacts",
+    key: publicArtifactStorageKey(prepared.body.url),
+    size: args.size,
+    contentType: prepared.body.contentType,
+    metadata: uploadObjectMetadata(prepared.body.uploadHeaders),
+  });
+  return prepared.body;
+}
+
 describe("POST /api/uploads/complete", () => {
-  it("records a private artifact from an agent run in the catalog with its authenticated URL", async () => {
+  it("records a private image artifact from an agent run in the image catalog", async () => {
     const fixture = await createRunUploadFixture({ chatThread: true });
     mockEnv("OKOU_API_BACKEND_URL", "https://api.okou.ai");
     createRouteMocks(context).clerk.session(
@@ -179,8 +234,8 @@ describe("POST /api/uploads/complete", () => {
       ).prepare({
         headers: { authorization: fixture.bearer },
         body: {
-          filename: "private-report.pdf",
-          contentType: "application/pdf",
+          filename: "private-render.png",
+          contentType: "image/png",
           size: 1234,
           purpose: "artifact",
         },
@@ -191,7 +246,7 @@ describe("POST /api/uploads/complete", () => {
       expect(command).toBeInstanceOf(HeadObjectCommand);
       return Promise.resolve({
         ContentLength: 1234,
-        ContentType: "application/pdf",
+        ContentType: "image/png",
       });
     });
     const response = await chat.completeUploadWithBearer(
@@ -200,13 +255,13 @@ describe("POST /api/uploads/complete", () => {
       [200],
     );
     expect(response.body).toMatchObject({
-      url: artifactReferencePath(prepared.body.id, "private-report.pdf"),
+      url: artifactReferencePath(prepared.body.id, "private-render.png"),
     });
     const catalog = await chat.listArtifactCatalog(fixture.actor, {
-      kind: "file",
+      kind: "image",
     });
     const artifact = catalog.artifacts.find((entry) => {
-      return entry.title === "private-report.pdf";
+      return entry.title === "private-render.png";
     });
     expect(artifact).toBeDefined();
     if (!artifact) {
@@ -217,7 +272,95 @@ describe("POST /api/uploads/complete", () => {
       artifact.id,
     );
     expect(detail).toMatchObject({
-      file: { url: prepared.body.url, filename: "private-report.pdf" },
+      kind: "image",
+      file: { url: prepared.body.url, filename: "private-render.png" },
+      model: null,
+      provider: null,
+    });
+  });
+
+  it("lists public image artifact outputs as images without reclassifying image inputs", async () => {
+    const fixture = await createRunUploadFixture({ chatThread: true });
+    const outputUrls = new Map<string, string>();
+    const imageOutputs = [
+      { filename: "render.jpg", contentType: "image/jpeg" },
+      { filename: "diagram.png", contentType: "image/png" },
+      { filename: "logo.svg", contentType: "image/svg+xml" },
+    ] as const;
+    for (const image of imageOutputs) {
+      const prepared = await stagePreparedRunUpload(fixture, {
+        ...image,
+        size: 128,
+        purpose: "artifact",
+      });
+      const completed = await chat.completeUploadWithBearer(
+        fixture.bearer,
+        { id: prepared.id },
+        [200],
+      );
+      if (completed.status !== 200) {
+        throw new Error("Expected image artifact upload to complete");
+      }
+      outputUrls.set(image.filename, completed.body.url);
+    }
+
+    const input = await stagePreparedRunUpload(fixture, {
+      filename: "reference.png",
+      contentType: "image/png",
+      size: 128,
+    });
+    await chat.completeUploadWithBearer(
+      fixture.bearer,
+      { id: input.id },
+      [200],
+    );
+
+    const images = await chat.listArtifactCatalog(fixture.actor, {
+      kind: "image",
+    });
+    expect(images.artifacts).toHaveLength(imageOutputs.length);
+    for (const output of imageOutputs) {
+      const url = outputUrls.get(output.filename);
+      if (!url) {
+        throw new Error(`Expected output URL for ${output.filename}`);
+      }
+      expect(images.artifacts).toContainEqual(
+        expect.objectContaining({
+          kind: "image",
+          title: output.filename,
+          thumbnail: { url },
+        }),
+      );
+    }
+
+    const files = await chat.listArtifactCatalog(fixture.actor, {
+      kind: "file",
+    });
+    expect(files.artifacts).toStrictEqual([
+      expect.objectContaining({ kind: "file", title: "reference.png" }),
+    ]);
+
+    const svg = images.artifacts.find((artifact) => {
+      return artifact.title === "logo.svg";
+    });
+    if (!svg) {
+      throw new Error("Expected the SVG output in the image catalog");
+    }
+    const svgUrl = outputUrls.get("logo.svg");
+    if (!svgUrl) {
+      throw new Error("Expected the SVG output URL");
+    }
+    await expect(
+      chat.getArtifactCatalogEntry(fixture.actor, svg.id),
+    ).resolves.toMatchObject({
+      kind: "image",
+      file: {
+        filename: "logo.svg",
+        contentType: "image/svg+xml",
+        url: svgUrl,
+      },
+      model: null,
+      provider: null,
     });
   });
 

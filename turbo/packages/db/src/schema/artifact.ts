@@ -125,8 +125,8 @@ export const artifactCatalogPendingFiles = pgTable(
 );
 
 /**
- * Kind entity for officially generated images. References the stored file
- * instead of copying its URL or storage state.
+ * Kind entity for cataloged images. References the stored file instead of
+ * copying its URL or storage state.
  */
 export const imageArtifacts = pgTable(
   "image_artifacts",

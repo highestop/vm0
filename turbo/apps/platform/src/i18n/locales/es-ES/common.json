@@ -1696,7 +1696,6 @@
       "saving": "Guardando...",
       "send": "Enviar",
       "stop": "Detener",
-      "undo": "Deshacer",
       "view": "Ver"
     },
     "actionUnavailable": {
@@ -2648,10 +2647,7 @@
     },
     "toasts": {
       "copied": "Copiado",
-      "deleted": "Chat eliminado",
-      "pinned": "Chat fijado",
-      "pinUpdateFailed": "No se pudo confirmar el cambio. Actualiza la página para comprobar el estado guardado.",
-      "unpinned": "Chat desfijado"
+      "deleted": "Chat eliminado"
     },
     "translation": {
       "action": "Traducir",

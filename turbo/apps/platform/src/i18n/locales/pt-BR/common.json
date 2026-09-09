@@ -1696,7 +1696,6 @@
       "saving": "Salvando...",
       "send": "Enviar",
       "stop": "Parar",
-      "undo": "Desfazer",
       "view": "Ver"
     },
     "actionUnavailable": {
@@ -2648,10 +2647,7 @@
     },
     "toasts": {
       "copied": "Copiado",
-      "deleted": "Conversa excluída",
-      "pinned": "Conversa fixada",
-      "pinUpdateFailed": "Não foi possível confirmar a alteração. Atualize a página para verificar o estado salvo.",
-      "unpinned": "Conversa desafixada"
+      "deleted": "Conversa excluída"
     },
     "translation": {
       "action": "Traduzir",

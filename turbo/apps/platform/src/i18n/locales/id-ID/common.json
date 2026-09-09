@@ -1671,7 +1671,6 @@
       "saving": "Menyimpan...",
       "send": "Kirim",
       "stop": "Hentikan",
-      "undo": "Urungkan",
       "view": "Lihat"
     },
     "actionUnavailable": {
@@ -2595,10 +2594,7 @@
     },
     "toasts": {
       "copied": "Disalin",
-      "deleted": "Chat dihapus",
-      "pinned": "Chat disematkan",
-      "pinUpdateFailed": "Perubahan sematan belum dapat dikonfirmasi. Muat ulang untuk memeriksa status yang tersimpan.",
-      "unpinned": "Sematan chat dilepas"
+      "deleted": "Chat dihapus"
     },
     "translation": {
       "action": "Terjemahkan",

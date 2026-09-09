@@ -2624,7 +2624,7 @@
     "voice": {
       "checkingLimit": "Checking voice input limit",
       "cleanupFailed": "Text was added, but the saved recording could not be removed.",
-      "confirmRecording": "OK",
+      "confirmRecording": "Done",
       "discarding": "Removing voice draft...",
       "input": "Voice input",
       "inputLimitReached": "Voice input limit reached. Upgrade to Pro or Team for higher limits.",
@@ -2637,10 +2637,13 @@
       "removeDraft": "Remove voice draft",
       "restoreFailed": "Couldn’t load your voice draft. Try again.",
       "retry": "Retry",
+      "retryingSavedAudio": "Retrying saved audio",
       "retryReady": "Your recording is kept. Retry transcription.",
+      "returningToComposer": "Returning to composer",
       "starting": "Starting voice input",
       "stopRecording": "Stop recording",
       "storageFailed": "Audio could not be saved. Retry can recover only audio already saved on this device.",
+      "textTakingShape": "Text is taking shape",
       "transcribing": "Transcribing",
       "transcribingProgress": "Transcribing...",
       "transcriptionFailed": "Voice transcription failed. Try again."

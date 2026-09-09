@@ -2669,7 +2669,7 @@
     "voice": {
       "checkingLimit": "Verificando limite da entrada de voz",
       "cleanupFailed": "O texto foi adicionado, mas não foi possível remover a gravação salva.",
-      "confirmRecording": "OK",
+      "confirmRecording": "Concluído",
       "discarding": "Removendo rascunho de voz...",
       "input": "Entrada de voz",
       "inputLimitReached": "Limite de entrada de voz atingido. Faça upgrade para Pro ou Team para aumentar os limites.",
@@ -2682,10 +2682,13 @@
       "removeDraft": "Remover rascunho de voz",
       "restoreFailed": "Não foi possível carregar seu rascunho de voz. Tente novamente.",
       "retry": "Tentar novamente",
+      "retryingSavedAudio": "Tentando novamente o áudio salvo",
       "retryReady": "Sua gravação foi mantida. Tente transcrever novamente.",
+      "returningToComposer": "Voltando ao campo de texto",
       "starting": "Iniciando entrada de voz",
       "stopRecording": "Parar gravação",
       "storageFailed": "Não foi possível salvar o áudio. Tentar novamente recupera apenas o áudio já salvo neste dispositivo.",
+      "textTakingShape": "O texto está tomando forma",
       "transcribing": "Transcrevendo",
       "transcribingProgress": "Transcrevendo...",
       "transcriptionFailed": "Falha na transcrição de voz. Tente novamente."

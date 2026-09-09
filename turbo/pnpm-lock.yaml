@@ -89,7 +89,7 @@ patchedDependencies:
     hash: 2d9f733c595c2a567c36c780172a57e284c6d1f440d3a7e76041389ae08c6680
     path: patches/@earendil-works__pi-agent-core@0.85.1.patch
   '@earendil-works/pi-ai@0.85.1':
-    hash: d461e2a67a093537d21af37e8ebe3428475a43714523c664796f6b3fb6eedffe
+    hash: 09ad5ee7fadcae6ba310bdce2f50dc96ddaec57c060edf0be72f40dd09797668
     path: patches/@earendil-works__pi-ai@0.85.1.patch
   '@earendil-works/pi-coding-agent@0.85.1':
     hash: 7845aa2cc2c62908db74168513b9a2df083f1eedc398fe74edf4ede237ded8f9
@@ -1178,16 +1178,31 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.85.1
-        version: 0.85.1(patch_hash=d461e2a67a093537d21af37e8ebe3428475a43714523c664796f6b3fb6eedffe)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
+        version: 0.85.1(patch_hash=09ad5ee7fadcae6ba310bdce2f50dc96ddaec57c060edf0be72f40dd09797668)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
       '@earendil-works/pi-coding-agent':
         specifier: 0.85.1
         version: 0.85.1(patch_hash=7845aa2cc2c62908db74168513b9a2df083f1eedc398fe74edf4ede237ded8f9)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
       '@okouai/api-contracts':
         specifier: workspace:*
         version: link:../api-contracts
+      '@okouai/connectors':
+        specifier: workspace:*
+        version: link:../connectors
+      '@smithy/node-http-handler':
+        specifier: 4.7.3
+        version: 4.7.3
       gpt-tokenizer:
         specifier: ^3.4.0
         version: 3.4.0
+      http-proxy-agent:
+        specifier: 7.0.2
+        version: 7.0.2
+      https-proxy-agent:
+        specifier: 7.0.6
+        version: 7.0.6
+      undici:
+        specifier: 7.29.0
+        version: 7.29.0
       yaml:
         specifier: '>=2.8.3'
         version: 2.9.0
@@ -9438,6 +9453,10 @@ packages:
     resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.29.0:
+    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+    engines: {node: '>=20.18.1'}
+
   undici@8.10.2:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
@@ -10557,7 +10576,7 @@ snapshots:
   '@earendil-works/pi-agent-core@0.85.1(patch_hash=2d9f733c595c2a567c36c780172a57e284c6d1f440d3a7e76041389ae08c6680)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)':
     dependencies:
       '@earendil-works/chord': 0.85.1
-      '@earendil-works/pi-ai': 0.85.1(patch_hash=d461e2a67a093537d21af37e8ebe3428475a43714523c664796f6b3fb6eedffe)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
+      '@earendil-works/pi-ai': 0.85.1(patch_hash=09ad5ee7fadcae6ba310bdce2f50dc96ddaec57c060edf0be72f40dd09797668)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
       '@earendil-works/pi-telemetry': 0.85.1
       diff: 8.0.4
       ignore: 7.0.5
@@ -10571,7 +10590,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.85.1(patch_hash=d461e2a67a093537d21af37e8ebe3428475a43714523c664796f6b3fb6eedffe)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)':
+  '@earendil-works/pi-ai@0.85.1(patch_hash=09ad5ee7fadcae6ba310bdce2f50dc96ddaec57c060edf0be72f40dd09797668)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.123.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -10595,7 +10614,7 @@ snapshots:
     dependencies:
       '@earendil-works/chord': 0.85.1
       '@earendil-works/pi-agent-core': 0.85.1(patch_hash=2d9f733c595c2a567c36c780172a57e284c6d1f440d3a7e76041389ae08c6680)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
-      '@earendil-works/pi-ai': 0.85.1(patch_hash=d461e2a67a093537d21af37e8ebe3428475a43714523c664796f6b3fb6eedffe)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
+      '@earendil-works/pi-ai': 0.85.1(patch_hash=09ad5ee7fadcae6ba310bdce2f50dc96ddaec57c060edf0be72f40dd09797668)(@modelcontextprotocol/sdk@1.30.0(zod@4.3.6))(ws@8.21.1)(zod@4.3.6)
       '@earendil-works/pi-tui': 0.85.1
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -18641,6 +18660,8 @@ snapshots:
   undici-types@7.10.0: {}
 
   undici@7.28.0: {}
+
+  undici@7.29.0: {}
 
   undici@8.10.2: {}
 

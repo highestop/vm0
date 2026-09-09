@@ -142,6 +142,7 @@ const usagePackPurchasePreviewResponseSchema =
   });
 
 const googleAdsPaidConversionSchema = z.object({
+  googleAdsAccountId: z.string().optional(),
   transactionId: z.string().min(1),
   valueUsd: z.number().positive(),
 });

@@ -28,6 +28,9 @@ import {
   artifactDeliveryRecordSchema,
 } from "@okouai/api-contracts/contracts/artifact-delivery";
 
+const PRIVATE_ARTIFACT_CACHE_CONTROL =
+  "private, max-age=31536000, must-revalidate";
+
 export interface S3Object {
   readonly key: string;
   readonly size: number;
@@ -920,10 +923,50 @@ export function generatePresignedGetUrl(
       filename,
       responseCacheControl:
         bucket === env("R2_PRIVATE_ARTIFACTS_BUCKET_NAME")
-          ? "private, no-store"
+          ? PRIVATE_ARTIFACT_CACHE_CONTROL
           : undefined,
     },
   );
+}
+
+/** Use the same clock for the signature and its advertised expiration. */
+export function generateArtifactPreviewUrl(
+  bucket: string,
+  key: string,
+  options: {
+    readonly expiresIn: number;
+    readonly signingDate: Date;
+    readonly filename?: string;
+  },
+): Computed<Promise<{ url: string; expiresAt: string }>> {
+  return computed(async (get) => {
+    const { expiresIn, filename } = options;
+    const signingDate = new Date(
+      Math.floor(options.signingDate.getTime() / 1000) * 1000,
+    );
+    const url = await get(
+      generatePresignedGetUrlWithClient(
+        s3ClientForBucket(bucket, true),
+        bucket,
+        key,
+        expiresIn,
+        {
+          filename,
+          signingDate,
+          responseCacheControl:
+            bucket === env("R2_PRIVATE_ARTIFACTS_BUCKET_NAME")
+              ? PRIVATE_ARTIFACT_CACHE_CONTROL
+              : undefined,
+        },
+      ),
+    );
+    return {
+      url,
+      expiresAt: new Date(
+        signingDate.getTime() + expiresIn * 1000,
+      ).toISOString(),
+    };
+  });
 }
 
 function generatePresignedGetUrlWithClient(
@@ -934,6 +977,7 @@ function generatePresignedGetUrlWithClient(
   options?: {
     readonly filename?: string;
     readonly responseCacheControl?: string;
+    readonly signingDate?: Date;
   },
 ): Computed<Promise<string>> {
   return computed((get): Promise<string> => {
@@ -950,7 +994,10 @@ function generatePresignedGetUrlWithClient(
           }
         : {}),
     });
-    return getSignedUrl(client, command, { expiresIn });
+    return getSignedUrl(client, command, {
+      expiresIn,
+      ...(options?.signingDate ? { signingDate: options.signingDate } : {}),
+    });
   });
 }
 

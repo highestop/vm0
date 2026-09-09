@@ -578,6 +578,11 @@
       "unavailable": "{{kind}} preview unavailable.",
       "videoLabel": "Video preview for {{filename}}"
     },
+    "sharing": {
+      "shareOrganization": "Share to organization",
+      "sharePublic": "Share to Public",
+      "unavailable": "This artifact is unavailable or you do not have access."
+    },
     "sidebar": {
       "openSharedConversation": "Open shared conversation",
       "panelTitle": "Artifacts",

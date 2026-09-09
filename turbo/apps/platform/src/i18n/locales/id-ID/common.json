@@ -577,6 +577,11 @@
       "unavailable": "Pratinjau {{kind}} tidak tersedia.",
       "videoLabel": "Pratinjau video untuk {{filename}}"
     },
+    "sharing": {
+      "shareOrganization": "Bagikan ke organisasi",
+      "sharePublic": "Bagikan ke publik",
+      "unavailable": "Artefak ini tidak tersedia atau Anda tidak memiliki akses."
+    },
     "sidebar": {
       "openSharedConversation": "Buka percakapan yang dibagikan",
       "panelTitle": "Artefak",

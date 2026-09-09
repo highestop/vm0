@@ -596,6 +596,11 @@
       "unavailable": "Aperçu {{kind}} indisponible.",
       "videoLabel": "Aperçu vidéo pour {{filename}}"
     },
+    "sharing": {
+      "shareOrganization": "Partager avec l’organisation",
+      "sharePublic": "Partager publiquement",
+      "unavailable": "Cet artefact n’est pas disponible ou vous n’y avez pas accès."
+    },
     "sidebar": {
       "openSharedConversation": "Ouvrir la conversation partagée",
       "panelTitle": "Artéfacts",

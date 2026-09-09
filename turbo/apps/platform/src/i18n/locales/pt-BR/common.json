@@ -596,6 +596,11 @@
       "unavailable": "Visualização de {{kind}} indisponível.",
       "videoLabel": "Visualização de vídeo de {{filename}}"
     },
+    "sharing": {
+      "shareOrganization": "Compartilhar com a organização",
+      "sharePublic": "Compartilhar publicamente",
+      "unavailable": "Este artefato não está disponível ou você não tem acesso."
+    },
     "sidebar": {
       "openSharedConversation": "Abrir conversa compartilhada",
       "panelTitle": "Artefatos",

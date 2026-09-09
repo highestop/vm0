@@ -578,6 +578,11 @@
       "unavailable": "{{kind}}-Vorschau nicht verfügbar.",
       "videoLabel": "Videovorschau für {{filename}}"
     },
+    "sharing": {
+      "shareOrganization": "Mit der Organisation teilen",
+      "sharePublic": "Öffentlich teilen",
+      "unavailable": "Dieses Artefakt ist nicht verfügbar oder du hast keinen Zugriff."
+    },
     "sidebar": {
       "openSharedConversation": "Geteilte Unterhaltung öffnen",
       "panelTitle": "Artefakte",

@@ -577,6 +577,11 @@
       "unavailable": "{{kind}} 미리보기를 사용할 수 없습니다.",
       "videoLabel": "{{filename}} 비디오 미리보기"
     },
+    "sharing": {
+      "shareOrganization": "조직에 공유",
+      "sharePublic": "공개적으로 공유",
+      "unavailable": "이 아티팩트를 사용할 수 없거나 액세스 권한이 없습니다."
+    },
     "sidebar": {
       "openSharedConversation": "공유된 대화 열기",
       "panelTitle": "아티팩트",

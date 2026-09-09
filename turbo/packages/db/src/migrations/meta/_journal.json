@@ -120,6 +120,13 @@
       "when": 1788925772586,
       "tag": "1094_archive_retired_goals",
       "breakpoints": true
+    },
+    {
+      "idx": 1095,
+      "version": "7",
+      "when": 1788929076141,
+      "tag": "1095_blue_lake",
+      "breakpoints": true
     }
   ]
 }

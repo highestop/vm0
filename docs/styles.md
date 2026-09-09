@@ -52,6 +52,27 @@ touch compatibility; it preserves the existing media-aware text hover utility.
 Migrate consumers individually and retain the legacy definition until its last
 consumer is removed.
 
+### Page surfaces
+
+`surfaceVariants` from `@okouai/ui` owns the shared page-surface treatment. Use it on the existing native element, or pass its classes to `Card`; it does not add a wrapper or change button, form, link, scroll, or overflow semantics. Its `className` option composes layout utilities. `radius` is `standard` by default or `compact`; `interactive` opts a whole surface into the pointer hover overlay and defaults to `false`. A surface containing separate interactive children can keep the default treatment.
+
+| Decision        | Shared token / utility                                    | Theme contract                                                                                       |
+| --------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Fill            | `bg-card`                                                 | Existing semantic card fill in each theme                                                            |
+| Border          | `--color-surface-border`, `--border-width-surface`        | Gray 400 at 0.7 CSS pixels; the browser rounds for its device scale                                  |
+| Radius          | `rounded-surface`, `rounded-surface-compact`              | 1.25rem and a fixed 12px respectively in every theme                                                 |
+| Elevation       | `shadow-surface` via `--surface-shadow`                   | Neutral lift in Light/Dark; the gradient theme uses the canonical state-layer hue with reduced alpha |
+| Pointer overlay | `bg-state-hover-overlay`                                  | The shared interaction-state overlay painted above the opaque card fill                              |
+| Transition      | `transition-[background-color] duration-150 ease-surface` | Background color only, 150ms, CSS `ease`                                                             |
+
+The variant uses `border-(length:--border-width-surface)` so class merging recognizes the border width independently of its color. Shared `cn()` registers the custom radius and shadow scales with `tailwind-merge`, keeping composition with existing UI primitives consistent with Tailwind generation. Register new named scales there when the class merger cannot otherwise identify their property group.
+
+The pointer overlay reuses the shared `bg-state-hover-overlay` token rather than declaring a surface-specific one, so one interaction-state decision keeps one owner. Like the choice variant, it applies through `[&:hover]` to preserve the existing touch-browser hover contract as well as pointer hover, and it does not replace the card fill with a translucent background. Radius, border, shadow, and transition decisions belong to this variant; use layout utilities for padding, size, alignment, and overflow.
+
+Integration and connector tests scope controls through the documented `data-slot="integration-card"` and `data-slot="connector-card"` component boundaries. These slots carry no styles; tests must not locate surfaces through utility or legacy class names.
+
+The `okou-card` selector and its consumers have been removed. This equivalent migration also removes background, border, shadow, and focus-ring overrides that the old unlayered selector had suppressed; activating those overrides would be a separate visual change. Existing `--okou-card-*` variables still consumed by other legacy components remain frozen until those components migrate; they are not a supported API for new surfaces.
+
 ## Exception boundary
 
 Only two exception kinds exist:

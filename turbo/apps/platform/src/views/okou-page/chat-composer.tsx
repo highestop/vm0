@@ -125,6 +125,7 @@ import {
 } from "@okouai/ui/components/ui/tooltip";
 import { cn } from "@okouai/ui/lib/utils";
 import {
+  surfaceVariants,
   ElapsedTime,
   getShortcutLabel,
   processShortcut,
@@ -7097,6 +7098,7 @@ function CustomConnectorCatalogCard({
   const { t } = useTranslation();
   return (
     <button
+      data-slot="connector-card"
       type="button"
       aria-label={t(
         ($) => {
@@ -7104,7 +7106,10 @@ function CustomConnectorCatalogCard({
         },
         { connector: connector.displayName },
       )}
-      className="okou-card cursor-pointer overflow-hidden text-left"
+      className={surfaceVariants({
+        interactive: true,
+        className: "overflow-hidden text-left",
+      })}
       onClick={onConnect}
     >
       <span className="flex items-center gap-2.5 px-5 pb-1 pt-4">

@@ -2347,8 +2347,7 @@ const completeConnectorOAuthAuthCodeFlow$ = command(
         {
           topic: "connector:changed",
           loopCommand$: onMatchingConnectorChanged$,
-          catchUpCommand$: completionAvailable$,
-          options: { runOnSubscribe: true },
+          initializeCommand$: completionAvailable$,
         },
         waitSignal,
       );

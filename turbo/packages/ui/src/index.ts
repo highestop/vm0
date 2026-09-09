@@ -24,11 +24,10 @@ export {
 } from "./components/ui/multi-select-combobox";
 export {
   Dialog,
-  DialogPortal,
-  DialogOverlay,
   DialogClose,
   DialogTrigger,
   DialogContent,
+  DialogBody,
   DialogHeader,
   DialogFooter,
   DialogTitle,

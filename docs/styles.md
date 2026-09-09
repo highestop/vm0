@@ -71,6 +71,36 @@ Commands run from `turbo`. An invalid Git reference, unreadable baseline, or mal
 
 ## Enforcement and feedback
 
+### Dialog viewport ownership
+
+`DialogContent` owns the Base UI viewport and popup. Windowed dialogs are
+centered inside the four safe-area insets plus a 24 px gutter. Fullscreen
+dialogs paint to the viewport edges while their content and close control stay
+inside the safe-area insets. The environment values come from the existing
+`--sat`, `--sar`, `--sab`, `--sal`, and `--okou-viewport-height` properties;
+the shared primitive also works with native `env()` insets outside Platform.
+
+Callers select `maxWidth`, `smMaxWidth`, `height`, and `mode`. The popup fills
+the available safe width and is capped by `maxWidth` (default `lg`);
+`smMaxWidth` changes that upper bound only from the shared `sm` breakpoint.
+Width caps never set a fixed width or determine height. Preserve existing
+breakpoints and units when migrating: `sm:max-w-[480px]` becomes
+`smMaxWidth={480}`, and `max-w-[25rem]` becomes `maxWidth="25rem"`.
+The artifact preview uses `maxWidth={1440} height={1000}`. Every variant is
+capped by the available viewport, so increasing a cap cannot increase the
+safe boundary.
+
+The popup does not accept `className`, `style`, or `render`. Use
+`contentClassName` for the inner layout and `DialogBody` for a scrolling body
+below a fixed header. `contentClassName` remains subject to the style policy.
+The shared inner container protects vertical scrolling even when caller layout
+classes include `overflow-hidden`. Short panels must keep their footer actions
+reachable by scrolling; clipping the popup to its safe boundary is not enough.
+Use `showCloseButton` instead of CSS selectors that hide the close control.
+Business code must import the shared dialog rather than Base UI's dialog
+primitives; ESLint enforces this boundary. Preserve Base UI's focus, nested
+portal, outside-press, and animation-completion ownership when changing it.
+
 Run the complete check from `turbo`:
 
 ```bash

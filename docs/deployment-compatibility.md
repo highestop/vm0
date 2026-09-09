@@ -447,6 +447,34 @@ canonical executions without a release or test rollback. This does not prove
 that old fixed API deployments are non-writable or authorize Goal archival;
 those remain separate gates in [EPIC #32653](https://github.com/vm0-ai/vm0/issues/32653).
 
+### Usage pack visibility compatibility retirement
+
+`showUsagePack` has an explicit API writer and billing response starting with
+commit `65ac0518bde2310887470cb0874aeae06c0c0397`, first released in
+`api-v1.570.0` (`22c62b9e92f42078ae314e505b983a62eda35dac`). Its
+[API production promotion](https://github.com/vm0-ai/vm0/actions/runs/34227208941/job/102068385804)
+completed on 2026-09-08 at 12:54:51 UTC. The later `api-v1.572.1` artifact
+(`561b7d6bf0da6ccca2542c0f9cd053d67151ba31`) also completed
+[API production promotion](https://github.com/vm0-ai/vm0/actions/runs/34297728653/job/102298538957)
+on 2026-09-09 at 01:11:34 UTC.
+
+Migration `1092` removes the temporary legacy-writer trigger and function after
+this rollout. The billing response now requires the flag, and the frontend
+reads it directly. The existing Okou Goal retirement rollback floor requires
+commit `6d391117e4fead19e2105136fb2792a6e77801d8`, which descends from the
+explicit usage-pack writer commit. Its first compatible release is API 1.571.1,
+so every permitted rollback target also contains the required writer and
+response. The resolver runs from current `main` and rejects older targets before
+artifact resolution, including entries still retained in the rollback dashboard.
+Keep this enforced boundary when retiring the usage-pack compatibility bridge;
+all other deployment and Runner rollback checks continue to apply.
+
+The cleanup retains existing visibility values, the physical
+`member_invite_usage_pack_required` column and its ORM declaration, and all
+existing admin requirements. It does not change usage-pack balances or purchase
+eligibility. Further legacy-column retirement remains tracked in
+[issue #32575](https://github.com/vm0-ai/vm0/issues/32575).
+
 ### Workflow automation connector-account projections
 
 Connector-backed workflow event automations persist account authority in an

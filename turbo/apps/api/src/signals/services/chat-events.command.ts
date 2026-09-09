@@ -464,6 +464,19 @@ interface NormalSendFeatureSwitches {
   readonly featureSwitchContext: FeatureSwitchContext;
 }
 
+function initialThinkingForSend(
+  args: NormalSendArgs,
+  switches: NormalSendFeatureSwitches,
+): boolean {
+  return (
+    args.agentRunPreCreateSource === undefined &&
+    !isFeatureEnabled(
+      FeatureSwitchKey.ThreadActivitySummary,
+      switches.featureSwitchContext,
+    )
+  );
+}
+
 interface RuntimeNormalSendBody extends Omit<
   CanonicalNormalSendBody,
   "userMessage"
@@ -2798,7 +2811,7 @@ const prepareNormalSend$ = command(
       videoRunOptions: templateContext.videoRunOptions,
       computerUseHostGrant: computerAccess.computerUseHostGrant,
       persistedExplicitSelection,
-      initialThinkingEnabled: args.agentRunPreCreateSource === undefined,
+      initialThinkingEnabled: initialThinkingForSend(args, featureSwitches),
       attachFileMetadata,
       runConfiguration,
       clientEventPrechecked: preflight.prechecked,
